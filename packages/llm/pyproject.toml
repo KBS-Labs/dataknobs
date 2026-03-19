@@ -66,9 +66,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = [
-    "--cov=dataknobs_llm",
-]
+addopts = []
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests (requires external services)",

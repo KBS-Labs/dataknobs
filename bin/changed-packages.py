@@ -170,7 +170,7 @@ def detect_changes(base_ref: str = "main") -> dict:
     if all_triggered:
         return {
             "packages": ALL_PACKAGES,
-            "docs_changed": docs_changed or all_triggered,
+            "docs_changed": docs_changed,
             "directly_changed": sorted(directly_changed),
             "mode": "all",
         }

@@ -439,6 +439,7 @@ fi
 
 # Initialize status tracking
 STYLE_STATUS=0
+LINT_STATUS=0
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
 TEST_STATUS=0
@@ -550,6 +551,14 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # Build common test flags
         TEST_FLAGS="$TEST_PARALLEL_FLAG $TEST_VERBOSITY_FLAG"
 
+        # Always capture failure and skip reasons in output files for the summary
+        # -rf = show FAILED lines, -rs = show SKIPPED reasons
+        if [ -z "$PYTEST_ARGS" ]; then
+            PYTEST_ARGS="-rfs"
+        else
+            PYTEST_ARGS="-rfs $PYTEST_ARGS"
+        fi
+
         # Helper: run unit tests for a single package, saving artifacts.
         # Uses per-package coverage filenames to avoid race conditions in concurrent mode.
         # Args: $1=package name, $2=cov_report_type (optional override)
@@ -583,6 +592,11 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
             if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
                 print_error "Unit tests failed for $pkg"
+                # Show failed test names inline (strip ANSI codes first)
+                if [ -f "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" ]; then
+                    sed 's/\x1b\[[0-9;]*m//g' "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>/dev/null | \
+                        grep -E '^FAILED ' | sed 's/^/    /' || true
+                fi
                 return $test_exit
             else
                 print_success "Unit tests passed for $pkg"
@@ -619,6 +633,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # Each package gets its own COVERAGE_FILE and output file to avoid races.
             # Skip per-package XML reports to avoid write collisions — XML is generated
             # from combined .coverage data in the coverage combining phase.
+            # Limit concurrency to avoid CPU contention breaking timing-sensitive tests.
+            MAX_CONCURRENT=3
             unit_pids=()
             unit_pkgs=()
             for pkg in $PACKAGES_TO_TEST; do
@@ -626,10 +642,20 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                     run_unit_for_pkg "$pkg" "none" &
                     unit_pids+=($!)
                     unit_pkgs+=("$pkg")
+
+                    # Throttle: when we hit MAX_CONCURRENT, wait for one to finish
+                    if [ ${#unit_pids[@]} -ge $MAX_CONCURRENT ]; then
+                        # Wait for the oldest job
+                        wait "${unit_pids[0]}" 2>/dev/null || {
+                            UNIT_TEST_STATUS=1
+                        }
+                        unit_pids=("${unit_pids[@]:1}")
+                        unit_pkgs=("${unit_pkgs[@]:1}")
+                    fi
                 fi
             done
 
-            # Wait for all and collect results
+            # Wait for remaining jobs
             for idx in "${!unit_pids[@]}"; do
                 wait "${unit_pids[$idx]}" 2>/dev/null || {
                     UNIT_TEST_STATUS=1
@@ -643,15 +669,26 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
                 print_status "Running integration tests for $pkg..."
                 local_exit=0
+
+                # Use per-package coverage file
+                export COVERAGE_FILE="$PROJECT_ROOT/.coverage.integration.$pkg"
+
                 if [ -n "$PYTEST_ARGS" ]; then
                     $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 else
                     $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 fi
 
+                unset COVERAGE_FILE
+
                 if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
                     INTEGRATION_TEST_STATUS=$local_exit
                     print_error "Integration tests failed for $pkg"
+                    # Show failed test names inline (strip ANSI codes first)
+                    if [ -f "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" ]; then
+                        sed 's/\x1b\[[0-9;]*m//g' "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>/dev/null | \
+                            grep -E '^FAILED ' | sed 's/^/    /' || true
+                    fi
                 else
                     print_success "Integration tests passed for $pkg"
                 fi
@@ -659,7 +696,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 if [ -f "coverage.xml" ]; then
                     mv coverage.xml "$ARTIFACTS_DIR/coverage-integration-$pkg.xml"
                 fi
-                if [ -f ".coverage" ]; then
+                if [ -f "$PROJECT_ROOT/.coverage.integration.$pkg" ]; then
+                    mv "$PROJECT_ROOT/.coverage.integration.$pkg" "$ARTIFACTS_DIR/.coverage.integration.$pkg"
+                elif [ -f ".coverage" ]; then
                     mv .coverage "$ARTIFACTS_DIR/.coverage.integration.$pkg"
                 fi
             fi
@@ -682,6 +721,53 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             print_success "Integration tests passed"
         else
             print_error "Integration tests failed"
+        fi
+
+        # Surface test failure details from output files
+        if [ $TEST_STATUS -ne 0 ]; then
+            echo ""
+            echo -e "${RED}── Test Failure Details ──${NC}"
+
+            # Collect all FAILED lines from unit and integration output files
+            # Strip ANSI codes before matching since pytest uses colored output
+            for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+                if [ -f "$output_file" ]; then
+                    failed_lines=$(sed 's/\x1b\[[0-9;]*m//g' "$output_file" 2>/dev/null | grep -E '^FAILED ' || true)
+                    if [ -n "$failed_lines" ]; then
+                        pkg_label=$(basename "$output_file" .txt | sed 's/.*-output-//')
+                        test_type=$(basename "$output_file" .txt | sed 's/-test-output-.*//')
+                        echo -e "  ${YELLOW}$test_type ($pkg_label):${NC}"
+                        echo "$failed_lines" | sed 's/^/    /'
+                    fi
+                fi
+            done
+
+            echo -e "${RED}──────────────────────────${NC}"
+            echo ""
+        fi
+
+        # Surface skip summary from output files (unique reasons with counts)
+        skip_summary=""
+        for output_file in "$ARTIFACTS_DIR"/unit-test-output-*.txt "$ARTIFACTS_DIR"/integration-test-output-*.txt; do
+            if [ -f "$output_file" ]; then
+                skips=$(sed 's/\x1b\[[0-9;]*m//g' "$output_file" 2>/dev/null | grep -E '^SKIPPED ' || true)
+                if [ -n "$skips" ]; then
+                    pkg_label=$(basename "$output_file" .txt | sed 's/.*-output-//')
+                    test_type=$(basename "$output_file" .txt | sed 's/-test-output-.*//')
+                    # Extract unique skip reasons (part after the last ": ")
+                    unique_reasons=$(echo "$skips" | sed 's/.*: //' | sort | uniq -c | sort -rn)
+                    if [ -n "$unique_reasons" ]; then
+                        skip_summary="${skip_summary}\n  ${YELLOW}${test_type} (${pkg_label}):${NC}\n$(echo "$unique_reasons" | sed 's/^ */    /')\n"
+                    fi
+                fi
+            fi
+        done
+
+        if [ -n "$skip_summary" ]; then
+            echo ""
+            echo -e "${YELLOW}── Skipped Tests ──${NC}"
+            echo -e "$skip_summary"
+            echo -e "${YELLOW}───────────────────${NC}"
         fi
     else
         # Dev mode: Run combined tests without polluting artifacts
@@ -780,9 +866,11 @@ if [ "$PR_MODE" = "yes" ]; then
                 fi
             fi
             
-            # Generate combined HTML report for easier viewing
-            if uv run coverage html -d htmlcov 2>/dev/null; then
-                print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
+            # Generate combined HTML report (full mode only — slow)
+            if [ "$RUN_MODE" = "full" ]; then
+                if uv run coverage html -d htmlcov 2>/dev/null; then
+                    print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
+                fi
             fi
             
             # Generate terminal report to show combined coverage

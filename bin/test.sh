@@ -45,22 +45,27 @@ fi
 
 # Build extra pytest args for parallel execution and verbosity
 build_extra_args() {
-    local extra=""
+    local parts=()
     if [ "$PARALLEL" = "yes" ]; then
-        extra="-n auto --dist loadscope"
+        # PYTEST_WORKERS controls xdist worker count (default: 4)
+        # Using a fixed count rather than "auto" to avoid oversubscription
+        # when multiple packages run concurrently
+        local workers="${PYTEST_WORKERS:-4}"
+        parts+=("-n" "$workers" "--dist" "loadscope")
     fi
     case "$VERBOSITY" in
-        quiet)   extra="$extra -q" ;;
-        verbose) extra="$extra -v" ;;
+        quiet)   parts+=("-q") ;;
+        verbose) parts+=("-v") ;;
     esac
-    echo "$extra"
+    echo "${parts[*]}"
 }
 
 # Consolidated function to execute pytest with proper error handling
 execute_pytest() {
-    local cmd="$1"
+    # Collapse multiple spaces in command string for clean display
+    local cmd=$(echo "$1" | tr -s ' ')
     local context="${2:-tests}"  # Optional context for warning message
-    
+
     echo -e "${CYAN}Command: $cmd${NC}"
     
     local test_result
