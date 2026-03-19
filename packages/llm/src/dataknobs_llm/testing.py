@@ -40,7 +40,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Union
 
 from .llm.base import (
@@ -62,8 +62,10 @@ __all__ = [
     "CallTracker",
     "CapturedCall",
     "CapturingProvider",
+    "ConfigurableExtractor",
     "ErrorResponse",
     "ResponseSequenceBuilder",
+    "SimpleExtractionResult",
     "extraction_response",
     "llm_message_from_dict",
     "llm_message_to_dict",
@@ -366,6 +368,103 @@ class ResponseSequenceBuilder:
         """
         provider.set_responses(self._responses)
         return provider
+
+
+# =============================================================================
+# Schema extraction testing constructs
+# =============================================================================
+
+
+@dataclass
+class SimpleExtractionResult:
+    """Test-friendly extraction result matching SchemaExtractor's interface.
+
+    Use this instead of mocking ``ExtractionResult`` from
+    ``dataknobs_llm.extraction``.  The ``is_confident`` property uses the
+    same threshold (0.8) and error check as the production result class.
+
+    Example:
+        >>> result = SimpleExtractionResult(
+        ...     data={"name": "Alice"}, confidence=0.9
+        ... )
+        >>> result.is_confident
+        True
+    """
+
+    data: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.9
+    errors: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_confident(self) -> bool:
+        """Whether extraction meets confidence threshold (>= 0.8, no errors)."""
+        return self.confidence >= 0.8 and not self.errors
+
+
+class ConfigurableExtractor:
+    """Test extractor that returns pre-configured results.
+
+    Supports both single-result mode (same result every call) and
+    sequence mode (different result per call).  After the sequence is
+    exhausted, the last result is repeated.
+
+    All calls are recorded in ``extract_calls`` for verification.
+
+    Example — single result::
+
+        extractor = ConfigurableExtractor(
+            result_data={"name": "Alice"}, confidence=0.9,
+        )
+
+    Example — sequence of results::
+
+        extractor = ConfigurableExtractor(results=[
+            SimpleExtractionResult(data={"name": "Alice"}, confidence=0.5),
+            SimpleExtractionResult(data={"topic": "math"}, confidence=0.9),
+        ])
+
+    Example — recording extractor (capture inputs, return empty)::
+
+        extractor = ConfigurableExtractor(confidence=0.0)
+        # ... run code that calls extractor.extract() ...
+        assert extractor.extract_calls[0]["schema"] == expected_schema
+    """
+
+    def __init__(
+        self,
+        results: list[SimpleExtractionResult] | None = None,
+        result_data: dict[str, Any] | None = None,
+        confidence: float = 0.9,
+    ) -> None:
+        if results is not None:
+            self._results = results
+        else:
+            self._results = [
+                SimpleExtractionResult(
+                    data=result_data or {}, confidence=confidence,
+                )
+            ]
+        self.call_index = 0
+        self.extract_calls: list[dict[str, Any]] = []
+
+    async def extract(
+        self,
+        text: str,
+        schema: dict[str, Any],
+        context: dict[str, Any] | None = None,
+        model: str | None = None,
+    ) -> SimpleExtractionResult:
+        """Return next result in sequence and record the call."""
+        self.extract_calls.append({
+            "text": text,
+            "schema": schema,
+            "context": context,
+            "model": model,
+        })
+        idx = min(self.call_index, len(self._results) - 1)
+        self.call_index += 1
+        return self._results[idx]
 
 
 # =============================================================================

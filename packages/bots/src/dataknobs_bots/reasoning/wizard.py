@@ -1850,14 +1850,53 @@ class WizardReasoning(ReasoningStrategy):
             # If an intent was detected, skip clarification/validation and
             # proceed to transition evaluation so the detour can fire.
             if "_intent" not in wizard_state.data:
-                # Handle low confidence: check if required fields can be
-                # satisfied from existing state + this extraction.
+                # ── Always normalize and merge extracted data ──
+                # Partial data must accumulate across turns even when
+                # extraction confidence is low.  Without this, multi-turn
+                # gather stages enter a dead loop where wizard_state.data
+                # stays {} and can_satisfy never becomes True.
+                schema = stage.get("schema")
+                if schema and extraction.data:
+                    extraction.data = self._normalize_extracted_data(
+                        extraction.data, schema
+                    )
+
+                # Merge extracted data, tracking which keys are new or
+                # changed so we can decide whether to show a confirmation
+                # template before allowing a transition.
+                new_data_keys: set[str] = set()
+                for k, v in extraction.data.items():
+                    if v is not None:
+                        if (
+                            k not in wizard_state.data
+                            or wizard_state.data[k] != v
+                        ):
+                            new_data_keys.add(k)
+                            wizard_state.data[k] = v
+                    elif k not in wizard_state.data:
+                        wizard_state.data[k] = v
+
+                # Apply schema defaults for properties the user didn't
+                # mention.  This ensures template conditions (e.g.
+                # ``{% if difficulty %}``) evaluate True when defaults
+                # exist in the schema definition.
+                default_keys = self._apply_schema_defaults(
+                    wizard_state, stage
+                )
+                if default_keys:
+                    new_data_keys |= default_keys
+
+                # ── Confidence gate ──
+                # After merge, check whether we have enough data to
+                # proceed.  If confidence is low and required fields are
+                # still missing, ask for clarification — but the partial
+                # data is preserved in wizard_state.data for the next turn.
                 if not extraction.is_confident:
-                    schema = stage.get("schema", {})
-                    required_fields = schema.get("required", [])
+                    required_fields = (
+                        schema.get("required", []) if schema else []
+                    )
                     can_satisfy = all(
                         wizard_state.data.get(f) is not None
-                        or extraction.data.get(f) is not None
                         for f in required_fields
                     )
 
@@ -1886,40 +1925,14 @@ class WizardReasoning(ReasoningStrategy):
                 # Reset clarification attempts on viable extraction
                 wizard_state.clarification_attempts = 0
 
-                # Normalize extracted data against schema before merging
-                schema = stage.get("schema")
-                if schema and extraction.data:
-                    extraction.data = self._normalize_extracted_data(
-                        extraction.data, schema
-                    )
-
-                # Merge extracted data, tracking which keys are new or
-                # changed so we can decide whether to show a confirmation
-                # template before allowing a transition.
-                new_data_keys: set[str] = set()
-                for k, v in extraction.data.items():
-                    if v is not None:
-                        if (
-                            k not in wizard_state.data
-                            or wizard_state.data[k] != v
-                        ):
-                            new_data_keys.add(k)
-                            wizard_state.data[k] = v
-                    elif k not in wizard_state.data:
-                        wizard_state.data[k] = v
-
-                # Update field-extraction tasks
-                self._update_field_tasks(wizard_state, extraction.data)
-
-                # Apply schema defaults for properties the user didn't
-                # mention.  This ensures template conditions (e.g.
-                # ``{% if difficulty %}``) evaluate True when defaults
-                # exist in the schema definition.
-                default_keys = self._apply_schema_defaults(
-                    wizard_state, stage
-                )
-                if default_keys:
-                    new_data_keys |= default_keys
+                # Update field-extraction tasks from the full accumulated
+                # state.  This runs after the confidence gate so tasks are
+                # not marked complete on clarification turns (where the
+                # early return fires before reaching this line).  We pass
+                # wizard_state.data (not extraction.data) because fields
+                # merged during prior clarification turns also need their
+                # tasks marked complete once the wizard proceeds.
+                self._update_field_tasks(wizard_state, wizard_state.data)
 
                 # ── Collection mode handling ──
                 # When a stage is in "collection" mode, extracted data
