@@ -14,6 +14,8 @@ from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_grounding import (
     MergeFilter,
     SchemaGroundingFilter,
+    _has_negation,
+    _word_in_text,
     significant_words,
 )
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
@@ -25,7 +27,6 @@ from dataknobs_llm.llm.providers.echo import EchoProvider
 from dataknobs_llm.prompts import ConfigPromptLibrary
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder
 from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for SchemaGroundingFilter
@@ -856,4 +857,361 @@ class TestAdditionalEdgeCases:
             "count", 5, 3,
             "I want 5 items",
             {"type": "integer"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# P2: Word-boundary matching (replaces substring `in` checks)
+# ---------------------------------------------------------------------------
+
+
+class TestWordBoundaryMatching:
+    """All grounding checks use word-boundary matching, not substring."""
+
+    def setup_method(self) -> None:
+        self.f = SchemaGroundingFilter()
+
+    def test_word_in_text_helper_matches_whole_word(self) -> None:
+        assert _word_in_text("base", "the base is ready")
+        assert not _word_in_text("base", "use a database")
+
+    def test_word_in_text_helper_case_sensitive(self) -> None:
+        assert _word_in_text("tutor", "find a tutor")
+        assert not _word_in_text("tutor", "find a Tutor")  # case matters
+
+    def test_boolean_base_not_in_database(self) -> None:
+        """'base' from description should not match 'database'."""
+        assert not self.f.should_merge(
+            "kb_enabled", True, False,
+            "use a database for storage",
+            {"type": "boolean", "description": "Whether knowledge base is enabled"},
+        )
+
+    def test_boolean_log_not_in_catalog(self) -> None:
+        """'log' from 'logging' should not match 'catalog'."""
+        assert not self.f.should_merge(
+            "logging_enabled", True, False,
+            "add to catalog",
+            {"type": "boolean", "description": "Enable logging"},
+        )
+
+    def test_enum_tutor_not_in_tutored(self) -> None:
+        """Enum 'tutor' should not match 'tutored'."""
+        assert not self.f.should_merge(
+            "intent", "tutor", "quiz",
+            "I was tutored yesterday",
+            {"type": "string", "enum": ["tutor", "quiz"]},
+        )
+
+    def test_enum_tutor_matches_standalone(self) -> None:
+        """Enum 'tutor' should match when standalone."""
+        assert self.f.should_merge(
+            "intent", "tutor", "quiz",
+            "make it a tutor",
+            {"type": "string", "enum": ["tutor", "quiz"]},
+        )
+
+    def test_empty_string_name_not_in_rename(self) -> None:
+        """'name' from description should not match 'rename'."""
+        assert not self.f.should_merge(
+            "domain_name", "", "My Bot",
+            "rename the project, skip the rest",
+            {"type": "string", "description": "The domain name"},
+        )
+
+    def test_array_element_word_boundary(self) -> None:
+        """Array element 'search' should not match 'researching'."""
+        assert not self.f.should_merge(
+            "tools", ["search"], ["calculator"],
+            "I was researching options",
+            {"type": "array"},
+        )
+
+    def test_array_element_matches_standalone(self) -> None:
+        """Array element 'search' should match when standalone."""
+        assert self.f.should_merge(
+            "tools", ["search"], ["calculator"],
+            "enable the search tool",
+            {"type": "array"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# P3: Boolean value-direction checking
+# ---------------------------------------------------------------------------
+
+
+class TestBooleanValueDirection:
+    """Boolean grounding checks extracted value against negation signals."""
+
+    def setup_method(self) -> None:
+        self.f = SchemaGroundingFilter()
+        self.kb_prop: dict[str, Any] = {
+            "type": "boolean",
+            "description": "Whether knowledge base is enabled",
+        }
+
+    # -- Basic direction checking --
+
+    def test_false_with_negation_is_grounded(self) -> None:
+        """False + negation keyword → grounded (user said 'no KB')."""
+        assert self.f.should_merge(
+            "kb_enabled", False, True,
+            "no knowledge base please",
+            self.kb_prop,
+        )
+
+    def test_true_with_negation_is_not_grounded(self) -> None:
+        """True + negation keyword → NOT grounded (hallucinated True)."""
+        assert not self.f.should_merge(
+            "kb_enabled", True, False,
+            "no knowledge base please",
+            self.kb_prop,
+        )
+
+    def test_true_without_negation_is_grounded(self) -> None:
+        """True + no negation → grounded (user affirmed the field)."""
+        assert self.f.should_merge(
+            "kb_enabled", True, False,
+            "enable the knowledge base",
+            self.kb_prop,
+        )
+
+    def test_false_without_negation_is_not_grounded(self) -> None:
+        """False + no negation → NOT grounded (hallucinated False)."""
+        assert not self.f.should_merge(
+            "kb_enabled", False, True,
+            "enable the knowledge base",
+            self.kb_prop,
+        )
+
+    def test_field_not_mentioned_is_not_grounded(self) -> None:
+        """Field keywords absent → not grounded regardless of value."""
+        assert not self.f.should_merge(
+            "kb_enabled", True, False,
+            "make it a tutor instead",
+            self.kb_prop,
+        )
+
+    # -- check_direction: false disables direction checking --
+
+    def test_check_direction_false_allows_any_value(self) -> None:
+        """check_direction: false means field-mention is sufficient."""
+        prop: dict[str, Any] = {
+            **self.kb_prop,
+            "x-extraction": {"check_direction": False},
+        }
+        # True even though there's negation — direction not checked
+        assert self.f.should_merge(
+            "kb_enabled", True, False,
+            "no knowledge base please",
+            prop,
+        )
+
+    # -- Custom negation keywords --
+
+    def test_custom_negation_keywords(self) -> None:
+        """Custom negation_keywords override the default set."""
+        prop: dict[str, Any] = {
+            **self.kb_prop,
+            "x-extraction": {"negation_keywords": ["nope", "nah"]},
+        }
+        # "no" is in default set but NOT in custom set → not negation
+        assert self.f.should_merge(
+            "kb_enabled", True, False,
+            "no knowledge base please",
+            prop,
+        )
+        # "nah" IS in custom set → negation detected
+        assert self.f.should_merge(
+            "kb_enabled", False, True,
+            "nah, skip the knowledge base",
+            prop,
+        )
+
+    # -- Negation proximity --
+
+    def test_negation_proximity_blocks_distant_negation(self) -> None:
+        """Proximity check: 'no' far from field keyword should not count."""
+        prop: dict[str, Any] = {
+            **self.kb_prop,
+            "x-extraction": {"negation_proximity": 2},
+        }
+        # "no" is 6+ words from "knowledge" → not within proximity
+        assert not self.f.should_merge(
+            "kb_enabled", False, True,
+            "no I really do want a knowledge base",
+            prop,
+        )
+
+    def test_negation_proximity_allows_nearby_negation(self) -> None:
+        """Proximity check: 'no' near field keyword should count."""
+        prop: dict[str, Any] = {
+            **self.kb_prop,
+            "x-extraction": {"negation_proximity": 2},
+        }
+        # "no" is 1 word from "knowledge" → within proximity=2
+        assert self.f.should_merge(
+            "kb_enabled", False, True,
+            "no knowledge base",
+            prop,
+        )
+
+    def test_negation_proximity_zero_means_anywhere(self) -> None:
+        """Proximity 0 (default) means negation anywhere counts."""
+        prop: dict[str, Any] = {
+            **self.kb_prop,
+            "x-extraction": {"negation_proximity": 0},
+        }
+        # "no" is far from "knowledge" but proximity=0 → still counts
+        assert self.f.should_merge(
+            "kb_enabled", False, True,
+            "no I really do want a knowledge base",
+            prop,
+        )
+
+
+# ---------------------------------------------------------------------------
+# P4: Empty array clearing via negation keywords
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyArrayClearing:
+    """Empty arrays can be grounded via negation keywords."""
+
+    def setup_method(self) -> None:
+        self.f = SchemaGroundingFilter()
+        self.tools_prop: dict[str, Any] = {
+            "type": "array",
+            "description": "Available tools",
+        }
+
+    def test_empty_array_grounded_with_negation(self) -> None:
+        """'no tools' → empty array is grounded."""
+        assert self.f.should_merge(
+            "tools", [], ["search", "calculator"],
+            "no tools needed",
+            self.tools_prop,
+        )
+
+    def test_empty_array_not_grounded_without_negation(self) -> None:
+        """Field keyword present but no negation → not grounded."""
+        assert not self.f.should_merge(
+            "tools", [], ["search"],
+            "I want better tools",
+            self.tools_prop,
+        )
+
+    def test_empty_array_not_grounded_no_field_keyword(self) -> None:
+        """No field keyword at all → not grounded."""
+        assert not self.f.should_merge(
+            "tools", [], ["search"],
+            "make it a tutor",
+            self.tools_prop,
+        )
+
+    def test_empty_array_grounded_with_field_name_negation(self) -> None:
+        """Field name keyword + negation → grounded."""
+        assert self.f.should_merge(
+            "tools_enabled", [], ["search"],
+            "remove all tools please",
+            {"type": "array"},
+        )
+
+    def test_empty_array_with_empty_allowed(self) -> None:
+        """empty_allowed: true bypasses negation check for arrays."""
+        prop: dict[str, Any] = {
+            **self.tools_prop,
+            "x-extraction": {"empty_allowed": True},
+        }
+        assert self.f.should_merge(
+            "tools", [], ["search"],
+            "make it a tutor",  # No negation, no field keyword
+            prop,
+        )
+
+    def test_empty_array_custom_negation_keywords(self) -> None:
+        """Custom negation_keywords for array clearing."""
+        prop: dict[str, Any] = {
+            **self.tools_prop,
+            "x-extraction": {"negation_keywords": ["drop", "ditch"]},
+        }
+        # "no" is NOT in custom set → should not ground
+        assert not self.f.should_merge(
+            "tools", [], ["search"],
+            "no tools needed",
+            prop,
+        )
+        # "drop" IS in custom set → should ground
+        assert self.f.should_merge(
+            "tools", [], ["search"],
+            "drop the tools",
+            prop,
+        )
+
+    def test_empty_array_with_proximity(self) -> None:
+        """Proximity check applies to empty array negation."""
+        prop: dict[str, Any] = {
+            **self.tools_prop,
+            "x-extraction": {"negation_proximity": 2},
+        }
+        # "no" within 2 words of "tools"
+        assert self.f.should_merge(
+            "tools", [], ["search"],
+            "no tools needed",
+            prop,
+        )
+        # "no" far from "tools"
+        assert not self.f.should_merge(
+            "tools", [], ["search"],
+            "no I actually want some tools",
+            prop,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helper function tests
+# ---------------------------------------------------------------------------
+
+
+class TestHasNegation:
+    """Tests for the _has_negation helper."""
+
+    def test_negation_present_no_proximity(self) -> None:
+        assert _has_negation("no thanks", frozenset({"no", "skip"}))
+
+    def test_negation_absent(self) -> None:
+        assert not _has_negation("yes please", frozenset({"no", "skip"}))
+
+    def test_proximity_nearby(self) -> None:
+        assert _has_negation(
+            "no knowledge base",
+            frozenset({"no"}),
+            field_keywords={"knowledge"},
+            proximity=2,
+        )
+
+    def test_proximity_too_far(self) -> None:
+        assert not _has_negation(
+            "no I really do want a knowledge base",
+            frozenset({"no"}),
+            field_keywords={"knowledge"},
+            proximity=2,
+        )
+
+    def test_proximity_zero_ignores_distance(self) -> None:
+        assert _has_negation(
+            "no I really do want a knowledge base",
+            frozenset({"no"}),
+            field_keywords={"knowledge"},
+            proximity=0,
+        )
+
+    def test_proximity_with_no_field_keywords_falls_back(self) -> None:
+        """field_keywords=None with proximity>0 falls back to presence."""
+        assert _has_negation(
+            "no thanks for that",
+            frozenset({"no"}),
+            field_keywords=None,
+            proximity=5,
         )

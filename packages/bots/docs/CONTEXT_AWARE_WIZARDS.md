@@ -320,10 +320,10 @@ Extraction grounding verifies each extracted value against the user's actual mes
 | Schema Type | Grounding Strategy |
 |-------------|-------------------|
 | `string` | Word overlap between value and message (configurable threshold) |
-| `string` + `enum` | Enum value appears in the message |
-| `boolean` | Field-related keywords (from description + field name) found in message |
-| `integer`/`number` | The literal number appears in the message |
-| `array` | At least one element appears in the message |
+| `string` + `enum` | Enum value appears as a whole word in the message |
+| `boolean` | Field-related keywords found in message; by default also checks value direction --- `False` requires negation keywords, `True` requires their absence |
+| `integer`/`number` | The literal number appears as a whole word in the message |
+| `array` | At least one element appears as a whole word in the message; empty arrays grounded via field keyword + negation keyword |
 
 The merge decision is conservative:
 
@@ -378,6 +378,12 @@ schema:
       x-extraction:
         empty_allowed: true           # allow "" as intentional "no value"
         overlap_threshold: 0.3        # lower threshold for this field
+    kb_enabled:
+      type: boolean
+      description: "Whether knowledge base is enabled"
+      x-extraction:
+        check_direction: true         # verify True/False via negation (default)
+        negation_proximity: 3         # negation must be within 3 words of field keyword
 ```
 
 **Supported `x-extraction` hints:**
@@ -385,8 +391,11 @@ schema:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `grounding` | `"exact"` / `"fuzzy"` / `"skip"` | Override grounding strategy |
-| `empty_allowed` | `true` / `false` | Allow empty string to overwrite existing values |
+| `empty_allowed` | `true` / `false` | Allow empty string/array to overwrite existing values |
 | `overlap_threshold` | `float` | Per-field word overlap ratio override |
+| `check_direction` | `true` / `false` | Boolean fields: verify value direction via negation detection (default `true`) |
+| `negation_keywords` | `list[str]` | Override the default negation keyword set for this field |
+| `negation_proximity` | `int` | Max word distance between negation and field keyword (`0` = anywhere in message; default `0`) |
 
 ### Custom Merge Filters
 
@@ -397,7 +406,8 @@ settings:
   merge_filter: mypackage.filters.ConfigBotMergeFilter
 ```
 
-The class must implement the `MergeFilter` protocol:
+The class must implement the `MergeFilter` protocol
+(`from dataknobs_bots.reasoning.wizard_grounding import MergeFilter`):
 
 ```python
 class MergeFilter(Protocol):
