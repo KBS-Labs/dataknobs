@@ -11,7 +11,6 @@ happen unconditionally before the confidence check. The confidence check now
 only gates the clarification response, not the merge.
 """
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -20,56 +19,7 @@ from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
-
-
-# ---------------------------------------------------------------------------
-# Test extractor that returns a sequence of results
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class SimpleExtractionResult:
-    """Simple extraction result for testing."""
-
-    data: dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.9
-    errors: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_confident(self) -> bool:
-        return self.confidence >= 0.8 and not self.errors
-
-
-class SequenceExtractor:
-    """Extractor that returns a sequence of configured results.
-
-    Each call to extract() returns the next result in the sequence.
-    After the sequence is exhausted, returns the last result repeatedly.
-    """
-
-    def __init__(self, results: list[SimpleExtractionResult]) -> None:
-        self.results = results
-        self.call_index = 0
-        self.extract_calls: list[dict[str, Any]] = []
-
-    async def extract(
-        self,
-        text: str,
-        schema: dict[str, Any],
-        context: dict[str, Any] | None = None,
-        model: str | None = None,
-    ) -> SimpleExtractionResult:
-        """Return next result in sequence and record the call."""
-        self.extract_calls.append({
-            "text": text,
-            "schema": schema,
-            "context": context,
-            "model": model,
-        })
-        idx = min(self.call_index, len(self.results) - 1)
-        self.call_index += 1
-        return self.results[idx]
+from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
 
 
 # ---------------------------------------------------------------------------
@@ -151,10 +101,10 @@ GATHER_WITH_DEFAULTS_CONFIG: dict[str, Any] = {
 
 def _build_wizard(
     config: dict[str, Any],
-    extractor: SequenceExtractor,
+    extractor: ConfigurableExtractor,
     **kwargs: Any,
 ) -> WizardReasoning:
-    """Build a WizardReasoning with a SequenceExtractor."""
+    """Build a WizardReasoning with a ConfigurableExtractor."""
     loader = WizardConfigLoader()
     wizard_fsm = loader.load_from_dict(config)
     return WizardReasoning(
@@ -210,7 +160,7 @@ class TestPartialDataAccumulation:
         manager, conv_provider = conversation_manager_pair
 
         # Turn 1: extract 2/3 fields with low confidence
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},
                 confidence=0.5,
@@ -247,7 +197,7 @@ class TestPartialDataAccumulation:
 
         # Turn 1: 2/3 fields, low confidence → clarification
         # Turn 2: 3rd field, low confidence → now all satisfied → advance
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},
                 confidence=0.5,
@@ -292,7 +242,7 @@ class TestPartialDataAccumulation:
         """
         manager, conv_provider = conversation_manager_pair
 
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice"},
                 confidence=0.5,
@@ -324,7 +274,7 @@ class TestPartialDataAccumulation:
         """
         manager, conv_provider = conversation_manager_pair
 
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},
                 confidence=0.5,
@@ -360,7 +310,7 @@ class TestPartialDataAccumulation:
         manager, conv_provider = conversation_manager_pair
 
         # Extract 2/3 required fields; 3rd has a schema default ("beginner")
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},
                 confidence=0.5,
@@ -390,7 +340,7 @@ class TestPartialDataAccumulation:
         """
         manager, conv_provider = conversation_manager_pair
 
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},
                 confidence=0.5,
@@ -433,7 +383,7 @@ class TestPartialDataAccumulation:
         """
         manager, conv_provider = conversation_manager_pair
 
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math", "level": "advanced"},
                 confidence=0.95,
@@ -457,18 +407,17 @@ class TestPartialDataAccumulation:
         self,
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
-        """When accumulated state already satisfies all required fields
-        and a subsequent turn extracts nothing new with low confidence,
-        the wizard should still advance (not ask for clarification).
+        """When partial data from a prior turn plus the remaining field
+        from a new low-confidence turn accumulate to satisfy all required
+        fields, the wizard should advance without requesting clarification.
 
         This tests the can_satisfy=True branch under is_confident=False:
-        state was populated by prior turns, new extraction is empty,
-        but can_satisfy checks wizard_state.data which already has
-        everything needed.
+        turn 1 merges 2/3 fields, turn 2 merges the 3rd with very low
+        confidence (0.3), and the accumulated state passes can_satisfy.
         """
         manager, conv_provider = conversation_manager_pair
 
-        extractor = SequenceExtractor([
+        extractor = ConfigurableExtractor([
             # Turn 1: 2/3 fields, low confidence → clarification
             SimpleExtractionResult(
                 data={"name": "Alice", "topic": "math"},

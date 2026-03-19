@@ -4,13 +4,13 @@ Tests for _strip_schema_defaults (removing defaults before extraction) and
 _apply_schema_defaults (applying defaults to wizard state after extraction).
 """
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
 
 
 @pytest.fixture
@@ -268,45 +268,9 @@ class TestStripSchemaDefaults:
         assert "default" not in result["properties"]["c"]
 
 
-@dataclass
-class SimpleExtractionResult:
-    """Simple extraction result for testing."""
-
-    data: dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.0
-    errors: list[str] = field(default_factory=list)
-
-    @property
-    def is_confident(self) -> bool:
-        return self.confidence >= 0.8 and not self.errors
-
-
-class RecordingExtractor:
-    """Extractor that records the schema it receives.
-
-    This is not a mock - it's a real extractor implementation that
-    captures inputs for verification. It returns a valid extraction
-    result structure.
-    """
-
-    def __init__(self) -> None:
-        self.received_schema: dict[str, Any] | None = None
-        self.received_text: str | None = None
-        self.received_context: dict[str, Any] | None = None
-
-    async def extract(
-        self,
-        text: str,
-        schema: dict[str, Any],
-        context: dict[str, Any] | None = None,
-        model: str | None = None,
-    ) -> SimpleExtractionResult:
-        """Record inputs and return empty extraction."""
-        self.received_schema = schema
-        self.received_text = text
-        self.received_context = context
-        # Return valid result with no extracted data
-        return SimpleExtractionResult(data={}, confidence=0.5)
+def _recording_extractor() -> ConfigurableExtractor:
+    """Create an extractor that records inputs and returns empty low-confidence results."""
+    return ConfigurableExtractor(confidence=0.5)
 
 
 class TestSchemaDefaultsIntegration:
@@ -315,7 +279,7 @@ class TestSchemaDefaultsIntegration:
     @pytest.mark.asyncio
     async def test_extractor_receives_schema_without_defaults(self) -> None:
         """Extractor should receive schema with defaults stripped."""
-        extractor = RecordingExtractor()
+        extractor = _recording_extractor()
 
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -346,14 +310,14 @@ class TestSchemaDefaultsIntegration:
         await reasoning._extract_data("some message", stage, llm=None)
 
         # Verify extractor received schema without default
-        assert extractor.received_schema is not None
-        assert "default" not in extractor.received_schema["properties"]["provider"]
-        assert extractor.received_schema["properties"]["model"]["type"] == "string"
+        assert len(extractor.extract_calls) > 0
+        assert "default" not in extractor.extract_calls[0]["schema"]["properties"]["provider"]
+        assert extractor.extract_calls[0]["schema"]["properties"]["model"]["type"] == "string"
 
     @pytest.mark.asyncio
     async def test_extraction_result_has_no_autofilled_defaults(self) -> None:
         """Verify that extraction doesn't produce values from schema defaults."""
-        extractor = RecordingExtractor()
+        extractor = _recording_extractor()
 
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -387,7 +351,7 @@ class TestSchemaDefaultsIntegration:
             llm=None,
         )
 
-        # RecordingExtractor returns empty data
+        # ConfigurableExtractor returns empty data
         # In real usage, even a real extractor shouldn't fill defaults
         assert "provider" not in result.data
         assert "model" not in result.data

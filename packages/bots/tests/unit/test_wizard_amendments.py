@@ -4,68 +4,13 @@ Post-completion amendments allow users to make changes after the wizard
 has completed, re-opening the wizard at the relevant stage.
 """
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-
-@dataclass
-class SimpleExtractionResult:
-    """Simple extraction result for testing.
-
-    Mimics the interface of dataknobs_llm.extraction.ExtractionResult.
-    """
-
-    data: dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.9
-    errors: list[str] = field(default_factory=list)
-
-    @property
-    def is_confident(self) -> bool:
-        return self.confidence >= 0.8 and not self.errors
-
-
-class ConfigurableExtractor:
-    """Extractor that returns configured results for testing.
-
-    This is a real extractor implementation that returns pre-configured
-    results, useful for testing extraction-dependent logic.
-    """
-
-    def __init__(
-        self, result_data: dict[str, Any] | None = None, confidence: float = 0.9
-    ):
-        """Initialize with configured result.
-
-        Args:
-            result_data: Data to return from extraction
-            confidence: Confidence score to return
-        """
-        self.result_data = result_data or {}
-        self.confidence = confidence
-        self.extract_calls: list[dict[str, Any]] = []
-
-    async def extract(
-        self,
-        text: str,
-        schema: dict[str, Any],
-        context: dict[str, Any] | None = None,
-        model: str | None = None,
-    ) -> SimpleExtractionResult:
-        """Return configured result and record the call."""
-        self.extract_calls.append({
-            "text": text,
-            "schema": schema,
-            "context": context,
-            "model": model,
-        })
-        return SimpleExtractionResult(
-            data=self.result_data, confidence=self.confidence
-        )
+from dataknobs_llm.testing import ConfigurableExtractor
 
 
 @pytest.fixture

@@ -1925,10 +1925,14 @@ class WizardReasoning(ReasoningStrategy):
                 # Reset clarification attempts on viable extraction
                 wizard_state.clarification_attempts = 0
 
-                # Update field-extraction tasks only after the confidence
-                # gate — marking tasks complete on a clarification turn
-                # would be premature.
-                self._update_field_tasks(wizard_state, extraction.data)
+                # Update field-extraction tasks from the full accumulated
+                # state.  This runs after the confidence gate so tasks are
+                # not marked complete on clarification turns (where the
+                # early return fires before reaching this line).  We pass
+                # wizard_state.data (not extraction.data) because fields
+                # merged during prior clarification turns also need their
+                # tasks marked complete once the wizard proceeds.
+                self._update_field_tasks(wizard_state, wizard_state.data)
 
                 # ── Collection mode handling ──
                 # When a stage is in "collection" mode, extracted data
