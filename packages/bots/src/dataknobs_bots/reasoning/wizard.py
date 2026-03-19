@@ -1866,14 +1866,16 @@ class WizardReasoning(ReasoningStrategy):
                 # template before allowing a transition.
                 new_data_keys: set[str] = set()
                 for k, v in extraction.data.items():
-                    if v is not None:
-                        if (
-                            k not in wizard_state.data
-                            or wizard_state.data[k] != v
-                        ):
-                            new_data_keys.add(k)
-                            wizard_state.data[k] = v
-                    elif k not in wizard_state.data:
+                    if v is None:
+                        # Null extraction = field not extracted.
+                        # Some models return null instead of omitting
+                        # the key; treat both identically.
+                        continue
+                    if (
+                        k not in wizard_state.data
+                        or wizard_state.data[k] != v
+                    ):
+                        new_data_keys.add(k)
                         wizard_state.data[k] = v
 
                 # Apply schema defaults for properties the user didn't
@@ -1896,7 +1898,7 @@ class WizardReasoning(ReasoningStrategy):
                         schema.get("required", []) if schema else []
                     )
                     can_satisfy = all(
-                        wizard_state.data.get(f) is not None
+                        self._field_is_present(wizard_state.data.get(f))
                         for f in required_fields
                     )
 
@@ -5401,11 +5403,38 @@ class WizardReasoning(ReasoningStrategy):
         prefix = "\n\n".join(messages) + "\n\n"
         response.content = prefix + response.content
 
+    @staticmethod
+    def _field_is_present(value: Any) -> bool:
+        """A field has been provided if its value is not None.
+
+        Centralises the "field presence" semantic used by the
+        ``has()`` condition helper and the ``can_satisfy`` confidence
+        gate.
+
+        Note: ``_can_auto_advance`` uses stricter logic — it
+        additionally rejects empty strings because auto-advance
+        requires fields to be *filled*, not merely *present*.
+        """
+        return value is not None
+
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.
 
         Uses a restricted execution environment to evaluate condition
-        expressions like "data.get('subject')" or "data.get('count', 0) > 5".
+        expressions like ``data.get('subject')``, ``has('count')``,
+        or ``data.get('count', 0) > 5``.
+
+        Available globals in condition expressions:
+
+        - ``data`` — the wizard state data dict
+        - ``has(key)`` — shorthand for ``data.get(key) is not None``;
+          preferred for boolean/numeric/list fields where falsy values
+          are legitimate.  Note: empty strings are considered present;
+          for text fields where non-empty content is required, use
+          ``data.get('key')`` (truthiness rejects empty strings)
+        - ``bank`` — memory bank accessor
+        - ``artifact`` — current artifact
+        - ``true``/``false``/``null``/``none`` — YAML/JSON literal aliases
 
         Args:
             condition: Condition expression string
@@ -5420,10 +5449,14 @@ class WizardReasoning(ReasoningStrategy):
             if not code.startswith("return"):
                 code = f"return {code}"
 
-            # Create a function to evaluate the condition
-            # Note: 'data' must be in globals for the function to access it
+            # Create a function to evaluate the condition.
+            # Shallow copy so exec cannot add/remove/replace top-level
+            # keys in live wizard state.  Nested mutable values are
+            # still shared.
+            data_snapshot = dict(data)
             global_vars: dict[str, Any] = {
-                "data": data,
+                "data": data_snapshot,
+                "has": lambda key: self._field_is_present(data_snapshot.get(key)),
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
                 # Common aliases for YAML/JSON boolean literals
