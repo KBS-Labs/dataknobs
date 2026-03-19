@@ -767,8 +767,16 @@ class DynaBot:
             mem_count,
         ))
 
-        # Add user message
-        await manager.add_message(content=full_message, role="user")
+        # Add user message.  When context augmentation was applied (KB
+        # results, memory history), store the original raw message in node
+        # metadata so that downstream consumers (e.g. WizardReasoning
+        # extraction) can access the undecorated user input.
+        msg_metadata: dict[str, Any] | None = None
+        if full_message != message:
+            msg_metadata = {"raw_content": message}
+        await manager.add_message(
+            content=full_message, role="user", metadata=msg_metadata
+        )
 
         # Update memory
         if self.memory:
@@ -1789,22 +1797,41 @@ class DynaBot:
 
         checkpoint_node_id, checkpoint_mem_count = checkpoints.pop()
 
-        # Identify what we're undoing (last user message + last bot response)
-        messages = manager.messages
+        # Identify what we're undoing (last user message + last bot response).
+        # For user messages, prefer raw_content from node metadata so that
+        # UndoResult.undone_user_message reflects the original user input
+        # rather than the KB/memory-augmented version.
         undone_user = ""
         undone_bot = ""
-        for msg in reversed(messages):
-            content = msg.get("content", "") if isinstance(msg, dict) else (
-                msg.content if hasattr(msg, "content") else str(msg)
-            )
-            role = msg.get("role", "") if isinstance(msg, dict) else (
-                msg.role if hasattr(msg, "role") else ""
-            )
-            if role == "assistant" and not undone_bot:
-                undone_bot = content
-            elif role == "user" and not undone_user:
-                undone_user = content
-                break
+        if hasattr(manager, "state") and manager.state is not None:
+            nodes = manager.state.get_current_nodes()
+            for node in reversed(nodes):
+                role = node.message.role
+                if role == "assistant" and not undone_bot:
+                    content = node.message.content
+                    undone_bot = content if isinstance(content, str) else str(content)
+                elif role == "user" and not undone_user:
+                    raw = node.metadata.get("raw_content")
+                    if raw is not None:
+                        undone_user = raw
+                    else:
+                        content = node.message.content
+                        undone_user = content if isinstance(content, str) else str(content)
+                    break
+        else:
+            messages = manager.messages
+            for msg in reversed(messages):
+                content = msg.get("content", "") if isinstance(msg, dict) else (
+                    msg.content if hasattr(msg, "content") else str(msg)
+                )
+                role = msg.get("role", "") if isinstance(msg, dict) else (
+                    msg.role if hasattr(msg, "role") else ""
+                )
+                if role == "assistant" and not undone_bot:
+                    undone_bot = content
+                elif role == "user" and not undone_user:
+                    undone_user = content
+                    break
 
         # Navigate back — next add_message() creates a sibling branch
         await manager.switch_to_node(checkpoint_node_id)

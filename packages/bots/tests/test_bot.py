@@ -467,6 +467,65 @@ Remember to always verify customer identity before sharing sensitive information
         assert "<question>" in message
 
     @pytest.mark.asyncio
+    async def test_prepare_chat_stores_raw_content_when_augmented(self):
+        """_prepare_chat stores raw message in metadata when KB augments it."""
+        from pathlib import Path
+
+        test_docs_dir = Path(__file__).parent / "test_docs"
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "knowledge_base": {
+                "enabled": True,
+                "type": "rag",
+                "vector_store": {"backend": "memory", "dimensions": 384},
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+                "documents_path": str(test_docs_dir),
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-raw", client_id="test-client")
+
+        raw_msg = "Create a grammar tutor with hints enabled"
+        manager = await bot._prepare_chat(raw_msg, context)
+
+        # The stored message should be augmented
+        nodes = manager.state.get_current_nodes()
+        user_nodes = [n for n in nodes if n.message.role == "user"]
+        assert len(user_nodes) == 1
+
+        user_node = user_nodes[0]
+        # Content should differ from raw (augmented with KB context)
+        assert user_node.message.content != raw_msg
+        # raw_content metadata should preserve the original message
+        assert user_node.metadata.get("raw_content") == raw_msg
+
+    @pytest.mark.asyncio
+    async def test_prepare_chat_no_raw_content_without_augmentation(self):
+        """_prepare_chat does not set raw_content when no augmentation occurs."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-plain", client_id="test-client")
+
+        manager = await bot._prepare_chat("Hello", context)
+
+        nodes = manager.state.get_current_nodes()
+        user_nodes = [n for n in nodes if n.message.role == "user"]
+        assert len(user_nodes) == 1
+
+        user_node = user_nodes[0]
+        assert user_node.message.content == "Hello"
+        # No augmentation → no raw_content metadata
+        assert "raw_content" not in user_node.metadata
+
+    @pytest.mark.asyncio
     async def test_conversation_persistence(self):
         """Test that conversations can be resumed."""
         config = {
