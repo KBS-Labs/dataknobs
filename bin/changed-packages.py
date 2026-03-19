@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 # Package dependency graph: package -> list of packages it depends on
 DEPENDENCIES: dict[str, list[str]] = {
@@ -146,7 +147,7 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool]:
     return changed_packages, docs_changed, all_triggered
 
 
-def detect_changes(base_ref: str = "main") -> dict:
+def detect_changes(base_ref: str = "main") -> dict[str, Any]:
     """Detect changed packages and docs status.
 
     Returns dict with:

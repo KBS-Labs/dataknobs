@@ -1803,35 +1803,20 @@ class DynaBot:
         # rather than the KB/memory-augmented version.
         undone_user = ""
         undone_bot = ""
-        if hasattr(manager, "state") and manager.state is not None:
-            nodes = manager.state.get_current_nodes()
-            for node in reversed(nodes):
-                role = node.message.role
-                if role == "assistant" and not undone_bot:
+        nodes = manager.state.get_current_nodes()
+        for node in reversed(nodes):
+            role = node.message.role
+            if role == "assistant" and not undone_bot:
+                content = node.message.content
+                undone_bot = content if isinstance(content, str) else str(content)
+            elif role == "user" and not undone_user:
+                raw = node.metadata.get("raw_content")
+                if raw is not None:
+                    undone_user = raw
+                else:
                     content = node.message.content
-                    undone_bot = content if isinstance(content, str) else str(content)
-                elif role == "user" and not undone_user:
-                    raw = node.metadata.get("raw_content")
-                    if raw is not None:
-                        undone_user = raw
-                    else:
-                        content = node.message.content
-                        undone_user = content if isinstance(content, str) else str(content)
-                    break
-        else:
-            messages = manager.messages
-            for msg in reversed(messages):
-                content = msg.get("content", "") if isinstance(msg, dict) else (
-                    msg.content if hasattr(msg, "content") else str(msg)
-                )
-                role = msg.get("role", "") if isinstance(msg, dict) else (
-                    msg.role if hasattr(msg, "role") else ""
-                )
-                if role == "assistant" and not undone_bot:
-                    undone_bot = content
-                elif role == "user" and not undone_user:
-                    undone_user = content
-                    break
+                    undone_user = content if isinstance(content, str) else str(content)
+                break
 
         # Navigate back — next add_message() creates a sibling branch
         await manager.switch_to_node(checkpoint_node_id)

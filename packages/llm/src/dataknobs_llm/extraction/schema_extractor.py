@@ -201,7 +201,12 @@ Extract data matching this JSON Schema:
    - Implied but not explicitly stated information
    - Default values used when information is missing
    - Interpretations that could have multiple meanings
-3. Return a JSON object with two keys:
+3. If the user did NOT mention a field at all, omit it from "data"
+4. For boolean fields: "yes"/"enable"/"add" → true; "no"/"disable"/"skip"/"none" → false
+5. Negations count as explicit values: "no knowledge base" → kb_enabled: false
+6. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
+7. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
+8. Return a JSON object with two keys:
    - "data": The extracted data matching the schema
    - "assumptions": Array of assumption objects with:
      - "content": Description of the assumption
