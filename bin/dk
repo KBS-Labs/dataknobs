@@ -48,7 +48,9 @@ ${DIM}The easy way to work with DataKnobs development${NC}
 ${BOLD}Usage:${NC} dk <command> [options]
 
 ${BOLD}${GREEN}Quick Commands:${NC}
-  ${CYAN}pr${NC}           Prepare for PR (full quality checks)
+  ${CYAN}pr${NC}           Prepare for PR (changed packages only, fast)
+  ${CYAN}pr --all${NC}     Prepare for PR (all packages, parallel)
+  ${CYAN}pr --full${NC}    Prepare for PR (legacy: all packages, verbose)
   ${CYAN}check${NC}        Quick quality check (dev mode)
   ${CYAN}test${NC}         Run tests (smart defaults)
   ${CYAN}fix${NC}          Auto-fix what can be fixed
@@ -56,17 +58,20 @@ ${BOLD}${GREEN}Quick Commands:${NC}
   ${CYAN}clean${NC}        Clean up artifacts and caches
 
 ${BOLD}${YELLOW}Common Workflows:${NC}
-  ${BOLD}dk pr${NC}              Run full PR checks before push
+  ${BOLD}dk pr${NC}              PR checks for changed packages (default)
+  ${BOLD}dk pr --all${NC}        PR checks for all packages
+  ${BOLD}dk pr --full${NC}       Legacy PR checks (sequential, verbose)
   ${BOLD}dk check data${NC}      Quick check the data package
   ${BOLD}dk test --last${NC}     Re-run only failed tests
   ${BOLD}dk fix${NC}             Auto-fix style issues
   ${BOLD}dk diagnose${NC}        Find out what failed
-  
+
 ${BOLD}${BLUE}Detailed Commands:${NC}
-  
+
   ${BOLD}PR Preparation:${NC}
-    pr, prepare      Full quality checks for PR
-    prq, pr-quick    Alias for 'pr' (same as full PR checks)
+    pr, prepare      PR checks (changed packages, parallel, quiet)
+    pr --all         PR checks (all packages, parallel)
+    pr --full        Legacy PR checks (all packages, sequential, verbose)
     
   ${BOLD}Quality Checks:${NC}
     check [pkg]      Quick check (dev mode)
@@ -120,16 +125,20 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     release-notes    Generate release notes
 
 ${BOLD}${MAGENTA}Shortcuts & Aliases:${NC}
-  dk pr         = dk prepare-for-pr
-  dk q          = dk check (quick check)  
+  dk pr         = PR checks (changed packages, fast)
+  dk pr --all   = PR checks (all packages, parallel)
+  dk pr --full  = PR checks (legacy: sequential, verbose)
+  dk pa         = dk pr --all
+  dk pf         = dk pr --full
+  dk q          = dk check (quick check)
   dk t          = dk test
   dk tf         = dk test --last (test failures)
   dk f          = dk fix
   dk d          = dk diagnose
   dk y          = dk why (why did it fail?)
-  
+
 ${BOLD}Examples:${NC}
-  ${DIM}# Before creating a PR:${NC}
+  ${DIM}# Before creating a PR (only tests changed packages):${NC}
   dk pr
   
   ${DIM}# Quick development cycle:${NC}
@@ -188,16 +197,24 @@ main() {
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
-            run_command "Preparing for PR (full quality checks)" \
+            run_command "Preparing for PR" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
             ;;
-        prq|pr-quick|prquick)
+        pr-all|prall|pa)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
-            run_command "Quick PR check" \
-                "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
+            run_command "Preparing for PR (all packages)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --all "$@"
+            ;;
+        pr-full|prfull|pf)
+            export TEST_S3=true
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
+            run_command "Preparing for PR (full legacy mode)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --full "$@"
             ;;
             
         # Quality Checks

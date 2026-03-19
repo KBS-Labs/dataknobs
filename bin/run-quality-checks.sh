@@ -17,6 +17,8 @@ SKIP_TESTS="no"
 PYTEST_ARGS=""
 KEEP_SERVICES="false"
 PR_MODE="auto"  # auto, yes, no
+RUN_MODE=""     # pr, all, full (set after argument parsing)
+BASE_REF="main" # Git ref for changed-package detection
 
 # Check if we're inside a Docker container
 IN_DOCKER=false
@@ -53,10 +55,16 @@ Run quality checks (linting, style, tests) for DataKnobs packages.
 ${YELLOW}Options:${NC}
     -p, --package PACKAGE    Package to check (can be specified multiple times)
                             If not specified, checks all packages
-    --pr                    PR mode: Run full quality checks with artifacts
-                            (unit and integration tests separately)
+    --pr                    PR mode (default): Only test changed packages + dependents.
+                            Uses parallel execution, quiet output, XML-only coverage.
+                            Skips docs build if no docs changed.
+    --all                   All mode: Test all packages with parallel execution
+                            and optimized coverage (no HTML reports)
+    --full                  Full mode: Legacy behavior — all packages, sequential,
+                            verbose output, all coverage reports (HTML + XML + term)
     --dev                   Dev mode: Run quick checks without artifacts
                             (combined tests, no artifact pollution)
+    --base-ref REF          Git ref for change detection (default: main)
     --skip-style            Skip style checks (ruff)
     --skip-tests            Skip test execution
     --keep-services         Keep services running after completion
@@ -65,10 +73,11 @@ ${YELLOW}Options:${NC}
 ${YELLOW}Advanced Usage:${NC}
     Any arguments after -- are passed directly to pytest:
     $0 data -- -xvs --tb=short
-    
+
 ${YELLOW}Examples:${NC}
-    $0                      # PR mode: Full checks for all packages with artifacts
-    $0 --pr                 # Explicit PR mode for all packages
+    $0 --pr                 # PR mode: Only changed packages (default)
+    $0 --all                # All packages, parallel, optimized
+    $0 --full               # Legacy: all packages, sequential, verbose
     $0 --dev data           # Dev mode: Quick checks for data package
     $0 data config          # Dev mode: Check specific packages (no artifacts)
     $0 --pr data            # PR mode for data package only
@@ -117,7 +126,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pr)
             PR_MODE="yes"
+            RUN_MODE="pr"
             shift
+            ;;
+        --all)
+            PR_MODE="yes"
+            RUN_MODE="all"
+            shift
+            ;;
+        --full)
+            PR_MODE="yes"
+            RUN_MODE="full"
+            shift
+            ;;
+        --base-ref)
+            BASE_REF="$2"
+            shift 2
             ;;
         --dev)
             PR_MODE="no"
@@ -161,6 +185,73 @@ if [ "$PR_MODE" = "auto" ]; then
         PR_MODE="yes"
     fi
 fi
+
+# Default RUN_MODE based on PR_MODE
+if [ -z "$RUN_MODE" ]; then
+    if [ "$PR_MODE" = "yes" ]; then
+        RUN_MODE="pr"
+    else
+        RUN_MODE="dev"
+    fi
+fi
+
+# Changed-package detection (pr mode only, when no explicit packages given)
+DOCS_CHANGED="true"
+TESTED_PACKAGES_JSON="[]"
+if [ "$RUN_MODE" = "pr" ] && [ -z "$PACKAGES" ]; then
+    print_status "Detecting changed packages..."
+    CHANGED_INFO=$(uv run python "$SCRIPT_DIR/changed-packages.py" --base-ref "$BASE_REF" 2>/dev/null || echo '{"packages": [], "docs_changed": true, "mode": "all"}')
+
+    CHANGED_PACKAGES=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(' '.join(d['packages']))" 2>/dev/null || echo "")
+    DOCS_CHANGED=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(str(d['docs_changed']).lower())" 2>/dev/null || echo "true")
+    CHANGE_MODE=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('mode', 'all'))" 2>/dev/null || echo "all")
+
+    if [ -n "$CHANGED_PACKAGES" ]; then
+        PACKAGES="$CHANGED_PACKAGES"
+        # Build JSON array of tested packages
+        TESTED_PACKAGES_JSON=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(json.dumps(d['packages']))" 2>/dev/null || echo "[]")
+        print_success "Changed packages: $PACKAGES"
+        if [ "$CHANGE_MODE" = "all" ]; then
+            print_status "Global files changed — testing all packages"
+        fi
+    else
+        print_success "No package changes detected — skipping tests"
+        SKIP_TESTS="yes"
+    fi
+
+    if [ "$DOCS_CHANGED" = "true" ]; then
+        print_status "Documentation changes detected"
+    else
+        print_status "No documentation changes detected — skipping docs build"
+    fi
+fi
+
+# Determine test runner flags based on mode
+TEST_PARALLEL_FLAG=""
+TEST_VERBOSITY_FLAG=""
+TEST_COV_REPORT="xml"
+case "$RUN_MODE" in
+    pr)
+        TEST_PARALLEL_FLAG="--parallel"
+        TEST_VERBOSITY_FLAG="--quiet"
+        TEST_COV_REPORT="xml"
+        ;;
+    all)
+        TEST_PARALLEL_FLAG="--parallel"
+        TEST_VERBOSITY_FLAG=""
+        TEST_COV_REPORT="xml"
+        ;;
+    full)
+        TEST_PARALLEL_FLAG="--no-parallel"
+        TEST_VERBOSITY_FLAG="--verbose"
+        TEST_COV_REPORT="term-missing,html,xml"
+        ;;
+    dev)
+        TEST_PARALLEL_FLAG=""
+        TEST_VERBOSITY_FLAG=""
+        TEST_COV_REPORT="term-missing"
+        ;;
+esac
 
 # Function to set environment variables based on context
 set_environment_vars() {
@@ -233,11 +324,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-if [ "$PR_MODE" = "yes" ]; then
-    echo -e "${BLUE}       DataKnobs Quality Checks - PR Mode                         ${NC}"
-else
-    echo -e "${BLUE}       DataKnobs Quality Checks - Developer Mode                  ${NC}"
-fi
+case "$RUN_MODE" in
+    pr)   echo -e "${BLUE}       DataKnobs Quality Checks - PR Mode (changed packages)     ${NC}" ;;
+    all)  echo -e "${BLUE}       DataKnobs Quality Checks - All Packages                   ${NC}" ;;
+    full) echo -e "${BLUE}       DataKnobs Quality Checks - Full Mode (legacy)             ${NC}" ;;
+    *)    echo -e "${BLUE}       DataKnobs Quality Checks - Developer Mode                 ${NC}" ;;
+esac
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -249,11 +341,12 @@ else
 fi
 
 # Display mode and packages
-if [ "$PR_MODE" = "yes" ]; then
-    print_status "Mode: PR (full checks with artifacts)"
-else
-    print_status "Mode: Developer (quick checks, no artifacts)"
-fi
+case "$RUN_MODE" in
+    pr)   print_status "Mode: PR (changed packages, parallel, quiet)" ;;
+    all)  print_status "Mode: All (all packages, parallel)" ;;
+    full) print_status "Mode: Full (all packages, sequential, verbose)" ;;
+    *)    print_status "Mode: Developer (quick checks, no artifacts)" ;;
+esac
 
 # Display packages to check
 if [ -n "$PACKAGES" ]; then
@@ -386,33 +479,37 @@ else
     exit 1
 fi
 
-# Build documentation (PR mode only)
+# Build documentation (PR mode only, skip if no docs changes in pr mode)
 if [ "$PR_MODE" = "yes" ]; then
-    print_status "Building documentation (checking for errors)..."
-    if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
-        print_success "Documentation builds without errors or warnings"
-    else
-        DOCS_STATUS=$?
-        print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
-        echo ""
-        echo -e "${YELLOW}Documentation errors:${NC}"
-        cat "$ARTIFACTS_DIR/docs-build.log"
-        echo ""
-    fi
+    if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
+        print_status "Building documentation (checking for errors)..."
+        if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
+            print_success "Documentation builds without errors or warnings"
+        else
+            DOCS_STATUS=$?
+            print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
+            echo ""
+            echo -e "${YELLOW}Documentation errors:${NC}"
+            cat "$ARTIFACTS_DIR/docs-build.log"
+            echo ""
+        fi
 
-    # Check documentation versions are in sync with packages.json
-    print_status "Checking documentation versions..."
-    if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
-        print_success "Documentation versions are in sync"
+        # Check documentation versions are in sync with packages.json
+        print_status "Checking documentation versions..."
+        if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
+            print_success "Documentation versions are in sync"
+        else
+            DOCS_VERSIONS_STATUS=$?
+            print_error "Documentation versions are out of sync"
+            echo ""
+            echo -e "${YELLOW}Version sync errors:${NC}"
+            cat "$ARTIFACTS_DIR/docs-versions.log"
+            echo ""
+            echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
+            echo ""
+        fi
     else
-        DOCS_VERSIONS_STATUS=$?
-        print_error "Documentation versions are out of sync"
-        echo ""
-        echo -e "${YELLOW}Version sync errors:${NC}"
-        cat "$ARTIFACTS_DIR/docs-versions.log"
-        echo ""
-        echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
-        echo ""
+        print_status "Skipping docs build (no documentation changes detected)"
     fi
 fi
 
@@ -448,133 +545,139 @@ if [ "$SKIP_TESTS" != "yes" ]; then
     TEST_CMD="$SCRIPT_DIR/test.sh"
     
     if [ "$PR_MODE" = "yes" ]; then
-        # PR mode: Run unit and integration tests separately with artifacts
-        
+        # PR/All/Full mode: Run unit and integration tests separately with artifacts
+
+        # Build common test flags
+        TEST_FLAGS="$TEST_PARALLEL_FLAG $TEST_VERBOSITY_FLAG"
+
+        # Helper: run unit tests for a single package, saving artifacts.
+        # Uses per-package coverage filenames to avoid race conditions in concurrent mode.
+        # Args: $1=package name, $2=cov_report_type (optional override)
+        run_unit_for_pkg() {
+            local pkg=$1
+            local cov_report="${2:-$TEST_COV_REPORT}"
+            print_status "Running unit tests for $pkg..."
+            local test_exit=0
+
+            # Set unique coverage file to avoid collisions in concurrent mode
+            export COVERAGE_FILE="$PROJECT_ROOT/.coverage.unit.$pkg"
+
+            if [ -n "$PYTEST_ARGS" ]; then
+                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+            else
+                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$ARTIFACTS_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+            fi
+
+            # Save coverage artifacts
+            if [ -f "coverage.xml" ]; then
+                mv coverage.xml "$ARTIFACTS_DIR/coverage-unit-$pkg.xml"
+            fi
+            if [ -f "$PROJECT_ROOT/.coverage.unit.$pkg" ]; then
+                mv "$PROJECT_ROOT/.coverage.unit.$pkg" "$ARTIFACTS_DIR/.coverage.unit.$pkg"
+            elif [ -f ".coverage" ]; then
+                mv .coverage "$ARTIFACTS_DIR/.coverage.unit.$pkg"
+            fi
+
+            # Unset to avoid leaking
+            unset COVERAGE_FILE
+
+            if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
+                print_error "Unit tests failed for $pkg"
+                return $test_exit
+            else
+                print_success "Unit tests passed for $pkg"
+                return 0
+            fi
+        }
+
+        # Determine packages to test
+        PACKAGES_TO_TEST=""
+        if [ -n "$PACKAGES" ]; then
+            PACKAGES_TO_TEST="$PACKAGES"
+        else
+            for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
+                if [ -d "$pkg_dir" ]; then
+                    pkg_name=$(basename "$pkg_dir")
+                    if [ -d "$pkg_dir/tests" ]; then
+                        PACKAGES_TO_TEST="$PACKAGES_TO_TEST $pkg_name"
+                    fi
+                fi
+            done
+        fi
+
         # Run unit tests
         print_status "Running unit tests..."
-        if [ -n "$PACKAGES" ]; then
-            # Run unit tests for specific packages
-            for pkg in $PACKAGES; do
+        if [ "$RUN_MODE" = "full" ]; then
+            # Full mode: sequential execution
+            for pkg in $PACKAGES_TO_TEST; do
                 if [ -d "packages/$pkg" ]; then
-                    if [ -n "$PYTEST_ARGS" ]; then
-                        $TEST_CMD "$pkg" -t unit --cov-report xml -- $PYTEST_ARGS 2>&1 | tee "$ARTIFACTS_DIR/unit-test-output-$pkg.txt"
-                    else
-                        $TEST_CMD "$pkg" -t unit --cov-report xml 2>&1 | tee "$ARTIFACTS_DIR/unit-test-output-$pkg.txt"
-                    fi
-                    
-                    pkg_status=${PIPESTATUS[0]}
-                    if [ $pkg_status -ne 0 ]; then
-                        UNIT_TEST_STATUS=$pkg_status
-                    fi
-                    if [ -f "coverage.xml" ]; then
-                        mv coverage.xml "$ARTIFACTS_DIR/coverage-unit-$pkg.xml"
-                    fi
-                    # Also save the .coverage data file for combining later
-                    if [ -f ".coverage" ]; then
-                        cp .coverage "$ARTIFACTS_DIR/.coverage.unit.$pkg"
-                    fi
+                    run_unit_for_pkg "$pkg" || UNIT_TEST_STATUS=$?
                 fi
             done
         else
-            # Run all unit tests - but do it per package to preserve individual coverage
-            for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-                if [ -d "$pkg_dir" ]; then
-                    pkg_name=$(basename "$pkg_dir")
-                    # Skip packages without tests
-                    if [ -d "$pkg_dir/tests" ]; then
-                        print_status "Running unit tests for $pkg_name..."
-                        if [ -n "$PYTEST_ARGS" ]; then
-                            $TEST_CMD "$pkg_name" -t unit --cov-report xml -- $PYTEST_ARGS 2>&1 | tee -a "$ARTIFACTS_DIR/unit-test-output.txt"
-                        else
-                            $TEST_CMD "$pkg_name" -t unit --cov-report xml 2>&1 | tee -a "$ARTIFACTS_DIR/unit-test-output.txt"
-                        fi
-                        
-                        pkg_status=${PIPESTATUS[0]}
-                        if [ $pkg_status -ne 0 ]; then
-                            UNIT_TEST_STATUS=$pkg_status
-                        fi
-                        
-                        # Save individual package coverage
-                        if [ -f "coverage.xml" ]; then
-                            mv coverage.xml "$ARTIFACTS_DIR/coverage-unit-$pkg_name.xml"
-                        fi
-                        if [ -f ".coverage" ]; then
-                            mv .coverage "$ARTIFACTS_DIR/.coverage.unit.$pkg_name"
-                        fi
-                    fi
+            # PR/All mode: concurrent execution of independent packages
+            # Each package gets its own COVERAGE_FILE and output file to avoid races.
+            # Skip per-package XML reports to avoid write collisions — XML is generated
+            # from combined .coverage data in the coverage combining phase.
+            unit_pids=()
+            unit_pkgs=()
+            for pkg in $PACKAGES_TO_TEST; do
+                if [ -d "packages/$pkg" ]; then
+                    run_unit_for_pkg "$pkg" "none" &
+                    unit_pids+=($!)
+                    unit_pkgs+=("$pkg")
                 fi
             done
+
+            # Wait for all and collect results
+            for idx in "${!unit_pids[@]}"; do
+                wait "${unit_pids[$idx]}" 2>/dev/null || {
+                    UNIT_TEST_STATUS=1
+                }
+            done
         fi
-        
-        # Run integration tests
+
+        # Run integration tests (always sequential — shared external services)
         print_status "Running integration tests..."
-        if [ -n "$PACKAGES" ]; then
-            # Run integration tests for specific packages
-            for pkg in $PACKAGES; do
-                if [ -d "packages/$pkg" ]; then
-                    if [ -n "$PYTEST_ARGS" ]; then
-                        $TEST_CMD "$pkg" -t integration --cov-report xml -- $PYTEST_ARGS 2>&1 | tee "$ARTIFACTS_DIR/integration-test-output-$pkg.txt"
-                    else
-                        $TEST_CMD "$pkg" -t integration --cov-report xml 2>&1 | tee "$ARTIFACTS_DIR/integration-test-output-$pkg.txt"
-                    fi
-                    
-                    pkg_status=${PIPESTATUS[0]}
-                    if [ $pkg_status -ne 0 ]; then
-                        INTEGRATION_TEST_STATUS=$pkg_status
-                    fi
-                    if [ -f "coverage.xml" ]; then
-                        mv coverage.xml "$ARTIFACTS_DIR/coverage-integration-$pkg.xml"
-                    fi
-                    # Also save the .coverage data file for combining later
-                    if [ -f ".coverage" ]; then
-                        cp .coverage "$ARTIFACTS_DIR/.coverage.integration.$pkg"
-                    fi
+        for pkg in $PACKAGES_TO_TEST; do
+            if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
+                print_status "Running integration tests for $pkg..."
+                local_exit=0
+                if [ -n "$PYTEST_ARGS" ]; then
+                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
+                else
+                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$ARTIFACTS_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 fi
-            done
-        else
-            # Run all integration tests - per package that has them
-            for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-                if [ -d "$pkg_dir" ]; then
-                    pkg_name=$(basename "$pkg_dir")
-                    # Check if integration tests exist
-                    if [ -d "$pkg_dir/tests/integration" ]; then
-                        print_status "Running integration tests for $pkg_name..."
-                        if [ -n "$PYTEST_ARGS" ]; then
-                            $TEST_CMD "$pkg_name" -t integration --cov-report xml -- $PYTEST_ARGS 2>&1 | tee -a "$ARTIFACTS_DIR/integration-test-output.txt"
-                        else
-                            $TEST_CMD "$pkg_name" -t integration --cov-report xml 2>&1 | tee -a "$ARTIFACTS_DIR/integration-test-output.txt"
-                        fi
-                        
-                        pkg_status=${PIPESTATUS[0]}
-                        if [ $pkg_status -ne 0 ]; then
-                            INTEGRATION_TEST_STATUS=$pkg_status
-                        fi
-                        
-                        # Save individual package coverage
-                        if [ -f "coverage.xml" ]; then
-                            mv coverage.xml "$ARTIFACTS_DIR/coverage-integration-$pkg_name.xml"
-                        fi
-                        if [ -f ".coverage" ]; then
-                            mv .coverage "$ARTIFACTS_DIR/.coverage.integration.$pkg_name"
-                        fi
-                    fi
+
+                if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
+                    INTEGRATION_TEST_STATUS=$local_exit
+                    print_error "Integration tests failed for $pkg"
+                else
+                    print_success "Integration tests passed for $pkg"
                 fi
-            done
-        fi
-        
+
+                if [ -f "coverage.xml" ]; then
+                    mv coverage.xml "$ARTIFACTS_DIR/coverage-integration-$pkg.xml"
+                fi
+                if [ -f ".coverage" ]; then
+                    mv .coverage "$ARTIFACTS_DIR/.coverage.integration.$pkg"
+                fi
+            fi
+        done
+
         # Set overall test status
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
             TEST_STATUS=1
         else
             TEST_STATUS=0
         fi
-        
+
         if [ $UNIT_TEST_STATUS -eq 0 ]; then
             print_success "Unit tests passed"
         else
             print_error "Unit tests failed"
         fi
-        
+
         if [ $INTEGRATION_TEST_STATUS -eq 0 ]; then
             print_success "Integration tests passed"
         else
@@ -807,12 +910,15 @@ if [ "$PR_MODE" = "yes" ]; then
 {
   "timestamp": "$TIMESTAMP",
   "overall_status": "$OVERALL_STATUS",
+  "run_mode": "$RUN_MODE",
   "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
+  "tested_packages": $TESTED_PACKAGES_JSON,
   "checks": {
     "documentation": {
       "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_STATUS,
+      "skipped": $([ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ] && echo "false" || echo "true"),
       "tool": "mkdocs"
     },
     "documentation_versions": {

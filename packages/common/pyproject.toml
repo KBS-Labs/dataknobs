@@ -33,10 +33,6 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--cov=dataknobs_common",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
-    "-v",
 ]
 asyncio_mode = "auto"
 
