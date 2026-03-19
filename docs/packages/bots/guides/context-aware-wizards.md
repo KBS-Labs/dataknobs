@@ -21,6 +21,12 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Bot Response in Extraction](#bot-response-in-extraction)
   - [Verbatim Capture and Deictic Resolution](#verbatim-capture-and-deictic-resolution)
   - [capture_mode Stage Field](#capture_mode-stage-field)
+- [Extraction Grounding](#extraction-grounding)
+  - [The Problem](#the-problem)
+  - [How Grounding Works](#how-grounding-works)
+  - [Configuration](#grounding-configuration)
+  - [Custom Merge Filters](#custom-merge-filters)
+  - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -298,6 +304,132 @@ stages:
 `capture_mode` can be set as a top-level stage field or nested under `collection_config`. The top-level field takes precedence when both are set.
 
 Use `capture_mode: extract` when a stage has a trivial schema but the user's input may contain references that need resolution. Use `capture_mode: verbatim` to force the fast path even when a bot response is present (e.g., when the stage prompt never presents options).
+
+## Extraction Grounding
+
+### The Problem
+
+Extraction models sometimes return values for fields the user didn't address. In multi-turn wizards, this causes good data to be overwritten with hallucinated or empty values.
+
+For example, when a user says "make it a tutor instead, keep the same name and subject," the extraction model may return `subject: ""` and `domain_id: ""`, overwriting previously-extracted values.
+
+### How Grounding Works
+
+Extraction grounding verifies each extracted value against the user's actual message before allowing it to overwrite existing wizard state data. It uses type-appropriate heuristics derived from the JSON Schema definition:
+
+| Schema Type | Grounding Strategy |
+|-------------|-------------------|
+| `string` | Word overlap between value and message (configurable threshold) |
+| `string` + `enum` | Enum value appears in the message |
+| `boolean` | Field-related keywords (from description + field name) found in message |
+| `integer`/`number` | The literal number appears in the message |
+| `array` | At least one element appears in the message |
+
+The merge decision is conservative:
+
+| Grounded? | Existing value? | Action |
+|-----------|----------------|--------|
+| Yes | Any | **Merge** (user addressed this field) |
+| No | None/absent | **Merge** (first extraction, benefit of the doubt) |
+| No | Has value | **Skip** (protect existing data) |
+
+First-turn extraction is unaffected — all fields are absent, so everything merges. Grounding only gates **overwrites** of existing data.
+
+### Configuration
+
+Grounding is enabled by default. Control it at three levels:
+
+#### Wizard-Level Settings
+
+```yaml
+settings:
+  extraction_grounding: true          # default: true
+  grounding_overlap_threshold: 0.5    # word overlap ratio for strings
+  merge_filter: null                  # custom MergeFilter class (dotted path)
+```
+
+#### Per-Stage Override
+
+```yaml
+stages:
+  - name: free_text_stage
+    extraction_grounding: false       # disable grounding for this stage
+    schema: ...
+```
+
+#### Per-Field Hints (x-extraction)
+
+For edge cases where the inferred grounding strategy is wrong, use the `x-extraction` JSON Schema extension:
+
+```yaml
+schema:
+  properties:
+    tone:
+      type: string
+      x-extraction:
+        grounding: skip               # never grounding-check this field
+    domain_id:
+      type: string
+      x-extraction:
+        grounding: exact              # require literal match in message
+    description:
+      type: string
+      description: "Brief description of the bot"
+      x-extraction:
+        empty_allowed: true           # allow "" as intentional "no value"
+        overlap_threshold: 0.3        # lower threshold for this field
+```
+
+**Supported `x-extraction` hints:**
+
+| Key | Values | Effect |
+|-----|--------|--------|
+| `grounding` | `"exact"` / `"fuzzy"` / `"skip"` | Override grounding strategy |
+| `empty_allowed` | `true` / `false` | Allow empty string to overwrite existing values |
+| `overlap_threshold` | `float` | Per-field word overlap ratio override |
+
+### Custom Merge Filters
+
+For domain-specific merge logic, provide a custom `MergeFilter` class:
+
+```yaml
+settings:
+  merge_filter: mypackage.filters.ConfigBotMergeFilter
+```
+
+The class must implement the `MergeFilter` protocol:
+
+```python
+class MergeFilter(Protocol):
+    def should_merge(
+        self,
+        field: str,
+        new_value: Any,
+        existing_value: Any,
+        user_message: str,
+        schema_property: dict[str, Any],
+    ) -> bool: ...
+```
+
+Custom filters replace the built-in grounding check entirely.
+
+### Walk-Through: Correction Scenario
+
+**Turn 2:** "I want a history quiz bot called History Quizzer, ID history-quizzer."
+
+All fields extracted, no existing data → all merge normally.
+
+**Turn 3:** "Actually, make it a tutor instead. Keep the same name and subject."
+
+| Field | Extracted | Grounded? | Existing | Action |
+|-------|-----------|-----------|----------|--------|
+| intent | "tutor" | "tutor" in message | "quiz" | **Merge** (correction) |
+| subject | "" | no negation keyword | "history" | **Skip** (protected) |
+| domain_id | "" | no negation keyword | "history-quizzer" | **Skip** (protected) |
+
+Result: only `intent` is updated to "tutor"; `subject` and `domain_id` are preserved.
+
+---
 
 ## Message Stages
 

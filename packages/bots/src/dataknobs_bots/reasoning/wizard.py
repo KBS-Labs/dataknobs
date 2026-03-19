@@ -26,6 +26,7 @@ from .observability import (
     WizardTaskList,
     create_transition_record,
 )
+from .wizard_grounding import MergeFilter, SchemaGroundingFilter
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
@@ -94,6 +95,57 @@ def _is_json_safe(value: Any) -> bool:
             for f in dataclasses.fields(value)
         )
     return False
+
+
+def _load_merge_filter(dotted_path: str) -> MergeFilter:
+    """Load a custom :class:`MergeFilter` from a dotted import path.
+
+    Args:
+        dotted_path: Fully qualified class name, e.g.
+            ``"mypackage.filters.ConfigBotMergeFilter"``.
+
+    Returns:
+        Instantiated :class:`MergeFilter`.
+
+    Raises:
+        ConfigurationError: If the path is invalid, the class cannot
+            be found, or the instance doesn't satisfy the protocol.
+    """
+    from dataknobs_common.exceptions import ConfigurationError
+
+    module_path, _, class_name = dotted_path.rpartition(".")
+    if not module_path:
+        raise ConfigurationError(
+            f"Invalid merge_filter path: {dotted_path!r} "
+            "(expected 'module.ClassName')",
+            context={"merge_filter": dotted_path},
+        )
+    import importlib
+
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as exc:
+        raise ConfigurationError(
+            f"Cannot import merge filter module {module_path!r}: {exc}",
+            context={"merge_filter": dotted_path},
+        ) from exc
+    cls = getattr(module, class_name, None)
+    if cls is None:
+        raise ConfigurationError(
+            f"Merge filter class {class_name!r} not found in {module_path!r}",
+            context={"merge_filter": dotted_path},
+        )
+    instance = cls()
+    # Runtime-checkable protocol validates method name presence
+    # only, not full signature.  A class with a non-callable
+    # ``should_merge`` attribute would pass this check.
+    if not isinstance(instance, MergeFilter):
+        raise ConfigurationError(
+            f"Merge filter {dotted_path!r} does not implement "
+            "the MergeFilter protocol",
+            context={"merge_filter": dotted_path},
+        )
+    return instance
 
 
 @dataclass
@@ -532,6 +584,9 @@ class WizardReasoning(ReasoningStrategy):
         extraction_scope: str = "wizard_session",
         conflict_strategy: str = "latest_wins",
         log_conflicts: bool = True,
+        extraction_grounding: bool = True,
+        merge_filter: MergeFilter | None = None,
+        grounding_overlap_threshold: float = 0.5,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -567,6 +622,18 @@ class WizardReasoning(ReasoningStrategy):
                 the same field is extracted from multiple messages. "latest_wins"
                 (default) uses the most recent value.
             log_conflicts: Whether to log when field values conflict (default: True).
+            extraction_grounding: Enable schema-driven grounding checks that
+                verify extracted values against the user's message before
+                allowing them to overwrite existing data.  When True (default),
+                ungrounded extraction values cannot overwrite previously
+                accumulated data --- only grounded values or first-time
+                extractions (no existing value) are merged.
+            merge_filter: Custom :class:`MergeFilter` implementation that
+                replaces the built-in grounding check entirely.  When
+                provided, ``extraction_grounding`` is ignored.
+            grounding_overlap_threshold: Minimum word-overlap ratio for
+                string grounding (0.0--1.0).  Defaults to 0.5.  Only used
+                when the built-in grounding filter is active.
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -596,6 +663,17 @@ class WizardReasoning(ReasoningStrategy):
         self._extraction_scope = extraction_scope
         self._conflict_strategy = conflict_strategy
         self._log_conflicts = log_conflicts
+        self._extraction_grounding = extraction_grounding
+        self._grounding_overlap_threshold = grounding_overlap_threshold
+        # Build merge filter: custom > built-in grounding > none
+        if merge_filter is not None:
+            self._merge_filter: MergeFilter | None = merge_filter
+        elif extraction_grounding:
+            self._merge_filter = SchemaGroundingFilter(
+                overlap_threshold=grounding_overlap_threshold,
+            )
+        else:
+            self._merge_filter = None
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1373,6 +1451,17 @@ class WizardReasoning(ReasoningStrategy):
         extraction_scope = wizard_fsm.settings.get("extraction_scope", "wizard_session")
         conflict_strategy = wizard_fsm.settings.get("conflict_strategy", "latest_wins")
         log_conflicts = wizard_fsm.settings.get("log_conflicts", True)
+        extraction_grounding = wizard_fsm.settings.get("extraction_grounding", True)
+        grounding_overlap_threshold = wizard_fsm.settings.get(
+            "grounding_overlap_threshold", 0.5,
+        )
+
+        # Load custom merge filter if specified
+        merge_filter: MergeFilter | None = None
+        merge_filter_path = wizard_fsm.settings.get("merge_filter")
+        if merge_filter_path:
+            merge_filter = _load_merge_filter(merge_filter_path)
+
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
 
@@ -1462,6 +1551,9 @@ class WizardReasoning(ReasoningStrategy):
             extraction_scope=extraction_scope,
             conflict_strategy=conflict_strategy,
             log_conflicts=log_conflicts,
+            extraction_grounding=extraction_grounding,
+            merge_filter=merge_filter,
+            grounding_overlap_threshold=grounding_overlap_threshold,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -1865,12 +1957,48 @@ class WizardReasoning(ReasoningStrategy):
                 # changed so we can decide whether to show a confirmation
                 # template before allowing a transition.
                 new_data_keys: set[str] = set()
+                schema_props = (
+                    schema.get("properties", {}) if schema else {}
+                )
+                # Resolve merge filter: per-stage grounding override,
+                # then fall back to wizard-level filter.
+                # Note: user_message here is always the *last* user
+                # message.  With wizard_session extraction scope, the
+                # extractor sees the full history, but the grounding
+                # check intentionally grounds against only the current
+                # message.  First-write (existing_value is None) is
+                # always allowed through, which compensates for
+                # session-scope re-extraction of prior turns.
+                stage_grounding = stage.get("extraction_grounding")
+                if stage_grounding is not None:
+                    if stage_grounding:
+                        # Per-stage enable: use wizard filter or create
+                        # a default if wizard-level grounding was off.
+                        active_filter: MergeFilter | None = (
+                            self._merge_filter
+                            or SchemaGroundingFilter(
+                                overlap_threshold=self._grounding_overlap_threshold,
+                            )
+                        )
+                    else:
+                        active_filter = None
+                else:
+                    active_filter = self._merge_filter
                 for k, v in extraction.data.items():
                     if v is None:
                         # Null extraction = field not extracted.
                         # Some models return null instead of omitting
                         # the key; treat both identically.
                         continue
+                    # Grounding check: protect existing data from
+                    # ungrounded overwrites (Layer 2/4).
+                    if active_filter is not None:
+                        existing = wizard_state.data.get(k)
+                        prop_def = schema_props.get(k, {})
+                        if not active_filter.should_merge(
+                            k, v, existing, user_message, prop_def,
+                        ):
+                            continue
                     if (
                         k not in wizard_state.data
                         or wizard_state.data[k] != v
