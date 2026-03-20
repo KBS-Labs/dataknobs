@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -146,6 +146,7 @@ class DynaBot:
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
         default_temperature: float = 0.7,
         default_max_tokens: int = 1000,
+        context_transform: Callable[[str], str] | None = None,
     ):
         """Initialize DynaBot.
 
@@ -166,6 +167,10 @@ class DynaBot:
             system_prompt_rag_configs: RAG configurations for inline system prompts
             default_temperature: Default temperature (0-1)
             default_max_tokens: Default max tokens to generate
+            context_transform: Optional callable applied to each content string
+                (KB chunks, memory context) before it is injected into the
+                prompt.  Use this to sanitize or fence external content
+                against prompt injection.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -181,6 +186,7 @@ class DynaBot:
         self.system_prompt_rag_configs = system_prompt_rag_configs
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
+        self._context_transform = context_transform
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[str]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
@@ -536,6 +542,23 @@ class DynaBot:
                 else:
                     system_prompt_content = system_prompt_config
 
+        # Resolve context_transform callable (if configured)
+        context_transform: Callable[[str], str] | None = None
+        context_transform_ref = config.get("context_transform")
+        if context_transform_ref is not None:
+            if callable(context_transform_ref):
+                context_transform = context_transform_ref
+            elif isinstance(context_transform_ref, str):
+                from dataknobs_bots.tools.resolve import resolve_callable
+
+                context_transform = resolve_callable(context_transform_ref)
+            else:
+                logger.warning(
+                    "context_transform must be a callable or dotted import "
+                    "string, got %s — ignoring",
+                    type(context_transform_ref).__name__,
+                )
+
         # Collect subsystem providers for catalog registration.
         # Each subsystem declares its own providers via providers().
         subsystem_providers: dict[str, AsyncLLMProvider] = {}
@@ -564,6 +587,7 @@ class DynaBot:
             system_prompt_rag_configs=system_prompt_rag_configs,
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
+            context_transform=context_transform,
         )
 
         for role, provider in subsystem_providers.items():
@@ -1688,6 +1712,8 @@ class DynaBot:
                 kb_context = self.knowledge_base.format_context(
                     kb_results, wrap_in_tags=True
                 )
+                if self._context_transform:
+                    kb_context = self._context_transform(kb_context)
                 contexts.append(kb_context)
 
         # Add memory context
@@ -1695,6 +1721,8 @@ class DynaBot:
             mem_results = await self.memory.get_context(message)
             if mem_results:
                 mem_context = "\n\n".join([r["content"] for r in mem_results])
+                if self._context_transform:
+                    mem_context = self._context_transform(mem_context)
                 contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
 
         # Build full message with clear separation
