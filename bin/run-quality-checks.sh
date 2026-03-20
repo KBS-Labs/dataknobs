@@ -991,7 +991,9 @@ EOF
                 fi
                 if [ -d "$pkg_dir/src/${src_name}" ]; then
                     # Single coverage report call per package — used for both text and JSON
-                    coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null)
+                    echo -ne "  ${DIM}$pkg_name...${NC} "
+                    coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null || true)
+                    echo -e "${GREEN}done${NC}"
 
                     # Text summary
                     echo "" >> test-coverage-summary.txt
