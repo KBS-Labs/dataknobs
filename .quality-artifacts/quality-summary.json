@@ -1,15 +1,15 @@
 {
-  "timestamp": "2026-03-20T05:20:31Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-03-20T16:24:55Z",
+  "overall_status": "FAIL",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots fsm llm",
-  "tested_packages": ["bots", "fsm", "llm"],
+  "packages": "bots config data fsm llm",
+  "tested_packages": ["bots", "config", "data", "fsm", "llm"],
   "checks": {
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -24,8 +24,8 @@
       "tool": "validate.sh"
     },
     "unit_tests": {
-      "status": "pass",
-      "exit_code": 0,
+      "status": "fail",
+      "exit_code": 1,
       "skipped": false
     },
     "integration_tests": {

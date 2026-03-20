@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-20T05:20:31Z",
+  "timestamp": "2026-03-20T16:29:38Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/bot-test-harness",
-  "git_commit": "0c7a440a85fd889ce76df8cbae0d2a5198d638ca",
+  "git_branch": "sbk/quick-gap-fixes",
+  "git_commit": "cd1135c96179b1d295c63cdb598448e66edefc18",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
