@@ -1,12 +1,17 @@
 """Cost tracking middleware for monitoring LLM usage."""
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.bot.context import BotContext
 
 from .base import Middleware
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.turn import TurnState
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +292,59 @@ class CostTrackingMiddleware(Middleware):
             "~%d in + ~%d out tokens (estimated), "
             "cost: $%.6f, total: $%.6f",
             client_id, provider, model,
+            input_tokens, output_tokens, cost, total,
+        )
+
+    async def after_turn(self, turn: TurnState) -> None:
+        """Track costs using real usage data from TurnState.
+
+        Unlike ``after_message`` (which receives kwargs) and
+        ``post_stream`` (which estimates from text length), this hook
+        always has access to real token usage when the provider reports
+        it — regardless of whether the turn was streaming or not.
+
+        Args:
+            turn: Completed turn state with usage data.
+        """
+        if not self.track_tokens:
+            return
+
+        # Only track if we have real usage data — if not, the legacy
+        # hooks (after_message / post_stream) will handle tracking.
+        if not turn.usage:
+            return
+
+        client_id = turn.context.client_id
+        provider = turn.provider_name or "unknown"
+        model = turn.model or "unknown"
+
+        input_tokens = int(
+            turn.usage.get(
+                "input",
+                turn.usage.get("prompt_tokens", 0),
+            )
+        )
+        output_tokens = int(
+            turn.usage.get(
+                "output",
+                turn.usage.get("completion_tokens", 0),
+            )
+        )
+
+        hook_counter = (
+            "post_stream_calls" if turn.is_streaming else "after_message_calls"
+        )
+        cost = self._record_usage(
+            client_id, hook_counter,
+            provider, model, input_tokens, output_tokens,
+        )
+
+        total = self._usage_stats[client_id]["total_cost_usd"]
+        mode_label = turn.mode.value
+        self._logger.info(
+            "Turn complete (%s) - Client %s: %s/%s - "
+            "%d in + %d out tokens, cost: $%.6f, total: $%.6f",
+            mode_label, client_id, provider, model,
             input_tokens, output_tokens, cost, total,
         )
 

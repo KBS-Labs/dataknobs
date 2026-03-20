@@ -380,6 +380,11 @@ class ConversationState:
     updated_at: datetime = field(default_factory=datetime.now)
     schema_version: str = SCHEMA_VERSION
 
+    # Transient per-turn data for cross-middleware communication.
+    # Populated by the bot layer before each LLM call and cleared after
+    # the turn completes.  NOT persisted — excluded from to_dict/from_dict.
+    turn_data: Dict[str, Any] = field(default_factory=dict, repr=False)
+
     def get_current_node(self) -> Tree | None:
         """Get the current tree node."""
         return get_node_by_id(self.message_tree, self.current_node_id)

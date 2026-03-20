@@ -26,6 +26,7 @@ from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from ..middleware.base import Middleware
 from .context import BotContext
+from .turn import ToolExecution, TurnMode, TurnState
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
@@ -721,39 +722,47 @@ class DynaBot:
         # Dict passes through (assumed already portable)
         return config
 
-    async def _prepare_chat(
-        self,
-        message: str,
-        context: BotContext,
-        rag_query: str | None = None,
-    ) -> ConversationManager:
-        """Shared pre-processing for chat() and stream_chat().
+    async def _prepare_turn(self, turn: TurnState) -> None:
+        """Shared pre-processing for all turn types.
 
-        Runs before_message middleware, builds the augmented message,
-        gets/creates the conversation manager, adds the user message,
-        and updates memory.
+        For chat/stream: runs on_turn_start (plugin_data + message
+        transforms), before_message middleware, builds the augmented
+        message, gets/creates the conversation manager, records undo
+        checkpoint, adds the user message, updates memory, and injects
+        plugin_data into the manager for LLM middleware access.
+
+        For greet: runs on_turn_start and before_message middleware
+        (empty message) and gets/creates the conversation manager.
+        No user message is added.
 
         Args:
-            message: Raw user message
-            context: Bot execution context
-            rag_query: Optional explicit RAG query override
-
-        Returns:
-            The ConversationManager ready for response generation.
+            turn: Turn state to populate with the conversation manager.
         """
-        # Apply middleware (before)
-        await self._call_before_message_middleware(message, context)
+        # on_turn_start: plugin_data writes + message transforms (chained)
+        await self._call_on_turn_start_middleware(turn)
+
+        # Legacy observational hook
+        await self._call_before_message_middleware(turn.message, turn.context)
+
+        if turn.is_greet:
+            turn.manager = await self._get_or_create_conversation(turn.context)
+            # Bridge plugin_data to LLM middleware
+            if turn.manager.state is not None:
+                turn.manager.state.turn_data = turn.plugin_data
+            return
 
         # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message, rag_query=rag_query)
+        full_message = await self._build_message_with_context(
+            turn.message, rag_query=turn.rag_query
+        )
 
         # Get or create conversation manager
-        manager = await self._get_or_create_conversation(context)
+        turn.manager = await self._get_or_create_conversation(turn.context)
 
         # Record tree position before the turn for undo support.
         # Store (node_id, memory_count) — node_id for tree navigation,
         # memory_count for accurate memory rollback (node depth is unreliable).
-        conv_id = context.conversation_id
+        conv_id = turn.context.conversation_id
         if conv_id not in self._turn_checkpoints:
             self._turn_checkpoints[conv_id] = []
         mem_count = 0
@@ -763,7 +772,7 @@ class DynaBot:
             except Exception:
                 mem_count = 0
         self._turn_checkpoints[conv_id].append((
-            manager.state.current_node_id if manager.state else "",
+            turn.manager.state.current_node_id if turn.manager.state else "",
             mem_count,
         ))
 
@@ -772,17 +781,62 @@ class DynaBot:
         # metadata so that downstream consumers (e.g. WizardReasoning
         # extraction) can access the undecorated user input.
         msg_metadata: dict[str, Any] | None = None
-        if full_message != message:
-            msg_metadata = {"raw_content": message}
-        await manager.add_message(
+        if full_message != turn.message:
+            msg_metadata = {"raw_content": turn.message}
+        await turn.manager.add_message(
             content=full_message, role="user", metadata=msg_metadata
         )
 
         # Update memory
         if self.memory:
-            await self.memory.add_message(message, role="user")
+            await self.memory.add_message(turn.message, role="user")
 
-        return manager
+        # Bridge plugin_data to LLM middleware via ConversationState.turn_data
+        if turn.manager.state is not None:
+            turn.manager.state.turn_data = turn.plugin_data
+
+    async def _finalize_turn(self, turn: TurnState) -> None:
+        """Shared post-generation processing for all turn types.
+
+        Updates memory with the assistant response, fires tool execution
+        hooks, dispatches the unified ``after_turn`` middleware hook, and
+        then dispatches the appropriate legacy hook (``after_message`` for
+        chat/greet, ``post_stream`` for streaming).
+
+        Args:
+            turn: Completed turn state with response content populated.
+        """
+        # Update memory with assistant response
+        if self.memory and turn.response_content:
+            await self.memory.add_message(turn.response_content, role="assistant")
+
+        # Collect tool executions from strategy
+        if self.reasoning_strategy:
+            strategy_tools = self.reasoning_strategy.get_and_clear_tool_executions()
+            turn.tool_executions.extend(strategy_tools)
+
+        # Fire on_tool_executed for each tool execution
+        for execution in turn.tool_executions:
+            await self._call_on_tool_executed_middleware(execution, turn.context)
+
+        # New unified hook — all turn types
+        await self._call_after_turn_middleware(turn)
+
+        # Legacy hooks for backward compatibility
+        if turn.is_streaming:
+            await self._call_post_stream_middleware(
+                turn.message, turn.response_content, turn.context
+            )
+        else:
+            mw_kwargs = turn.middleware_kwargs()
+            await self._call_after_message_middleware(
+                turn.response_content, turn.context, **mw_kwargs
+            )
+
+        # Clean up transient turn_data on the manager to avoid leaking
+        # between turns (the manager is cached across turns).
+        if turn.manager and turn.manager.state is not None:
+            turn.manager.state.turn_data = {}
 
     async def _generate_response(
         self,
@@ -828,6 +882,30 @@ class DynaBot:
             The response text as a string.
         """
         return response.content if hasattr(response, "content") else str(response)
+
+    async def _call_on_turn_start_middleware(self, turn: TurnState) -> None:
+        """Dispatch on_turn_start to all middleware (chained transforms).
+
+        Each middleware can write to ``turn.plugin_data`` and optionally
+        return a transformed message. Transforms chain: each middleware
+        receives the message as modified by the previous one.
+
+        Args:
+            turn: Turn state at the start of the pipeline.
+        """
+        for mw in self.middleware:
+            try:
+                result = await mw.on_turn_start(turn)
+                if result is not None:
+                    turn.message = result
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.on_turn_start raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "on_turn_start", exc, turn.context
+                )
 
     async def _call_before_message_middleware(
         self, message: str, context: BotContext
@@ -972,24 +1050,52 @@ class DynaBot:
                     hook_name,
                 )
 
-    def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
-        """Build kwargs for middleware after_message/post_stream hooks.
+    async def _call_after_turn_middleware(self, turn: TurnState) -> None:
+        """Dispatch after_turn to all middleware.
 
-        Extracts token usage, model, and provider info from the LLM
-        response and the bot's provider for middleware consumption.
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
+
+        Args:
+            turn: Completed turn state.
         """
-        kwargs: dict[str, Any] = {}
-        if hasattr(response, "usage") and response.usage:
-            kwargs["tokens_used"] = response.usage
-        if hasattr(response, "model") and response.model:
-            kwargs["model"] = response.model
-        if self.llm is not None:
-            provider_name = getattr(self.llm, "provider_name", None)
-            if provider_name:
-                kwargs["provider"] = provider_name
-            elif hasattr(self.llm, "__class__"):
-                kwargs["provider"] = type(self.llm).__name__
-        return kwargs
+        for mw in self.middleware:
+            try:
+                await mw.after_turn(turn)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.after_turn raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "after_turn", exc, turn.context
+                )
+
+    async def _call_on_tool_executed_middleware(
+        self, execution: ToolExecution, context: BotContext
+    ) -> None:
+        """Dispatch on_tool_executed to all middleware.
+
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
+
+        Args:
+            execution: Record of the tool execution.
+            context: Bot execution context.
+        """
+        for mw in self.middleware:
+            try:
+                await mw.on_tool_executed(execution, context)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.on_tool_executed raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "on_tool_executed", exc, context
+                )
 
     async def chat(
         self,
@@ -1045,24 +1151,25 @@ class DynaBot:
             )
             ```
         """
+        turn = TurnState(
+            mode=TurnMode.CHAT,
+            message=message,
+            context=context,
+            rag_query=rag_query,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            llm_config_overrides=llm_config_overrides,
+        )
         try:
-            manager = await self._prepare_chat(message, context, rag_query=rag_query)
+            await self._prepare_turn(turn)
             response = await self._generate_response(
-                manager, temperature, max_tokens, llm_config_overrides
+                turn.manager, temperature, max_tokens, llm_config_overrides
             )
-            response_content = self._extract_response_content(response)
-
-            # Update memory
-            if self.memory:
-                await self.memory.add_message(response_content, role="assistant")
-
-            # Apply middleware (after)
-            mw_kwargs = self._middleware_kwargs(response)
-            await self._call_after_message_middleware(
-                response_content, context, **mw_kwargs
-            )
-
-            return response_content
+            turn.response = response
+            turn.response_content = self._extract_response_content(response)
+            turn.populate_from_response(response, self.llm)
+            await self._finalize_turn(turn)
+            return turn.response_content
         except Exception as e:
             await self._call_on_error_middleware(e, message, context)
             raise
@@ -1112,16 +1219,17 @@ class DynaBot:
         if not self.reasoning_strategy:
             return None
 
+        turn = TurnState(
+            mode=TurnMode.GREET,
+            message="",
+            context=context,
+            initial_context=initial_context,
+        )
         try:
-            # Apply middleware (before) with empty message for context
-            await self._call_before_message_middleware("", context)
+            await self._prepare_turn(turn)
 
-            # Get or create conversation manager
-            manager = await self._get_or_create_conversation(context)
-
-            # Delegate to reasoning strategy
             response = await self.reasoning_strategy.greet(
-                manager=manager,
+                manager=turn.manager,
                 llm=self.llm,
                 initial_context=initial_context,
             )
@@ -1129,20 +1237,11 @@ class DynaBot:
             if response is None:
                 return None
 
-            # Extract response content
-            response_content = self._extract_response_content(response)
-
-            # Update memory with assistant greeting (no user message)
-            if self.memory:
-                await self.memory.add_message(response_content, role="assistant")
-
-            # Apply middleware (after)
-            mw_kwargs = self._middleware_kwargs(response)
-            await self._call_after_message_middleware(
-                response_content, context, **mw_kwargs
-            )
-
-            return response_content
+            turn.response = response
+            turn.response_content = self._extract_response_content(response)
+            turn.populate_from_response(response, self.llm)
+            await self._finalize_turn(turn)
+            return turn.response_content
         except Exception as e:
             await self._call_on_error_middleware(e, "", context)
             raise
@@ -1211,18 +1310,26 @@ class DynaBot:
             When a reasoning_strategy is configured, the strategy produces the
             complete response and it is emitted as a single stream chunk.
         """
-        full_response_chunks: list[str] = []
+        turn = TurnState(
+            mode=TurnMode.STREAM,
+            message=message,
+            context=context,
+            rag_query=rag_query,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            llm_config_overrides=llm_config_overrides,
+        )
         streaming_error: Exception | None = None
 
         try:
-            manager = await self._prepare_chat(message, context, rag_query=rag_query)
+            await self._prepare_turn(turn)
             if self.reasoning_strategy:
                 # Delegate to the strategy's stream_generate().
                 # Strategies with true streaming (SimpleReasoning) yield
                 # LLMStreamResponse chunks; others yield a single complete
                 # response that we wrap as a stream chunk.
                 async for chunk in self.reasoning_strategy.stream_generate(
-                    manager=manager,
+                    manager=turn.manager,
                     llm=self.llm,
                     tools=list(self.tool_registry),
                     temperature=temperature or self.default_temperature,
@@ -1230,42 +1337,43 @@ class DynaBot:
                     llm_config_overrides=llm_config_overrides,
                 ):
                     if isinstance(chunk, LLMStreamResponse):
-                        full_response_chunks.append(chunk.delta)
+                        turn.stream_chunks.append(chunk.delta)
+                        # Capture usage from the final streaming chunk
+                        if chunk.is_final or chunk.usage:
+                            turn.populate_from_final_stream_chunk(
+                                chunk, self.llm
+                            )
                         yield chunk
                     else:
                         # Strategy yielded a complete LLMResponse — wrap it
                         content = self._extract_response_content(chunk)
-                        full_response_chunks.append(content)
+                        turn.stream_chunks.append(content)
+                        turn.populate_from_response(chunk, self.llm)
                         yield LLMStreamResponse(
                             delta=content, is_final=True, finish_reason="stop"
                         )
             else:
                 # No reasoning strategy — stream directly from LLM
-                async for chunk in manager.stream_complete(
+                async for chunk in turn.manager.stream_complete(
                     llm_config_overrides=llm_config_overrides,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     **kwargs,
                 ):
-                    full_response_chunks.append(chunk.delta)
+                    turn.stream_chunks.append(chunk.delta)
+                    # Capture usage from the final streaming chunk
+                    if chunk.is_final or chunk.usage:
+                        turn.populate_from_final_stream_chunk(chunk, self.llm)
                     yield chunk
         except Exception as e:
             streaming_error = e
             await self._call_on_error_middleware(e, message, context)
             raise
 
-        # Only update memory and run post_stream middleware on success
+        # Only finalize on success
         if streaming_error is None:
-            complete_response = "".join(full_response_chunks)
-
-            # Update memory with complete response
-            if self.memory:
-                await self.memory.add_message(complete_response, role="assistant")
-
-            # Apply post_stream middleware hook (provides both message and response)
-            await self._call_post_stream_middleware(
-                message, complete_response, context
-            )
+            turn.response_content = "".join(turn.stream_chunks)
+            await self._finalize_turn(turn)
 
     async def get_conversation(self, conversation_id: str) -> Any:
         """Retrieve conversation history.

@@ -468,8 +468,10 @@ Remember to always verify customer identity before sharing sensitive information
 
     @pytest.mark.asyncio
     async def test_prepare_chat_stores_raw_content_when_augmented(self):
-        """_prepare_chat stores raw message in metadata when KB augments it."""
+        """_prepare_turn stores raw message in metadata when KB augments it."""
         from pathlib import Path
+
+        from dataknobs_bots.bot.turn import TurnMode, TurnState
 
         test_docs_dir = Path(__file__).parent / "test_docs"
 
@@ -490,10 +492,11 @@ Remember to always verify customer identity before sharing sensitive information
         context = BotContext(conversation_id="conv-raw", client_id="test-client")
 
         raw_msg = "Create a grammar tutor with hints enabled"
-        manager = await bot._prepare_chat(raw_msg, context)
+        turn = TurnState(mode=TurnMode.CHAT, message=raw_msg, context=context)
+        await bot._prepare_turn(turn)
 
         # The stored message should be augmented
-        nodes = manager.state.get_current_nodes()
+        nodes = turn.manager.state.get_current_nodes()
         user_nodes = [n for n in nodes if n.message.role == "user"]
         assert len(user_nodes) == 1
 
@@ -505,7 +508,9 @@ Remember to always verify customer identity before sharing sensitive information
 
     @pytest.mark.asyncio
     async def test_prepare_chat_no_raw_content_without_augmentation(self):
-        """_prepare_chat does not set raw_content when no augmentation occurs."""
+        """_prepare_turn does not set raw_content when no augmentation occurs."""
+        from dataknobs_bots.bot.turn import TurnMode, TurnState
+
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -514,9 +519,10 @@ Remember to always verify customer identity before sharing sensitive information
         bot = await DynaBot.from_config(config)
         context = BotContext(conversation_id="conv-plain", client_id="test-client")
 
-        manager = await bot._prepare_chat("Hello", context)
+        turn = TurnState(mode=TurnMode.CHAT, message="Hello", context=context)
+        await bot._prepare_turn(turn)
 
-        nodes = manager.state.get_current_nodes()
+        nodes = turn.manager.state.get_current_nodes()
         user_nodes = [n for n in nodes if n.message.role == "user"]
         assert len(user_nodes) == 1
 

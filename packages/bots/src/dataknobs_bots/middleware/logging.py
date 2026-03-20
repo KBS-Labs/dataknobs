@@ -1,13 +1,18 @@
 """Logging middleware for conversation tracking."""
 
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.bot.context import BotContext
 
 from .base import Middleware
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.turn import TurnState
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +162,40 @@ class LoggingMiddleware(Middleware):
         # Log content at DEBUG level (first 200 chars each)
         self._logger.debug("Streamed message: %.200s...", message)
         self._logger.debug("Streamed response: %.200s...", response)
+
+    async def after_turn(self, turn: TurnState) -> None:
+        """Log turn completion with unified data for all turn types.
+
+        Args:
+            turn: Completed turn state.
+        """
+        log_data: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "turn_complete",
+            "mode": turn.mode.value,
+            "client_id": turn.context.client_id,
+            "user_id": turn.context.user_id,
+            "conversation_id": turn.context.conversation_id,
+            "response_length": len(turn.response_content),
+        }
+
+        if turn.usage:
+            log_data["tokens_used"] = turn.usage
+        if turn.provider_name:
+            log_data["provider"] = turn.provider_name
+        if turn.model:
+            log_data["model"] = turn.model
+        if turn.tool_executions:
+            log_data["tool_executions"] = len(turn.tool_executions)
+
+        if self.include_metadata:
+            log_data["session_metadata"] = turn.context.session_metadata
+            log_data["request_metadata"] = turn.context.request_metadata
+
+        if self.json_format:
+            self._logger.info(json.dumps(log_data))
+        else:
+            self._logger.info("Turn complete: %s", log_data)
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext

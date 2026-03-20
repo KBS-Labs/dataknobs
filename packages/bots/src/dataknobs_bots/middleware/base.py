@@ -1,9 +1,14 @@
 """Base middleware interface for bot request/response lifecycle."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.bot.context import BotContext
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.turn import ToolExecution, TurnState
 
 
 class Middleware(ABC):
@@ -130,3 +135,58 @@ class Middleware(ABC):
             context: Bot context
         """
         ...
+
+    # --- New unified hooks (concrete no-ops, non-breaking) ---
+
+    async def on_turn_start(
+        self, turn: TurnState
+    ) -> str | None:
+        """Called at the start of every turn, before message processing.
+
+        Receives the full ``TurnState`` including ``plugin_data`` for
+        cross-middleware communication. Middleware can:
+
+        - Write to ``turn.plugin_data`` to share data with downstream
+          pipeline participants (LLM middleware, tools, ``after_turn``).
+        - Return a transformed message string to replace ``turn.message``
+          before it reaches the LLM (e.g., PII stripping, attack
+          sanitization). Transforms chain: each middleware receives the
+          message as modified by the previous one.
+        - Return ``None`` to leave the message unchanged.
+
+        Args:
+            turn: Turn state at the start of the pipeline.
+
+        Returns:
+            Transformed message string, or ``None`` to keep the original.
+        """
+        return None
+
+    async def after_turn(self, turn: TurnState) -> None:  # noqa: B027
+        """Called after any turn completes (chat, stream, or greet).
+
+        Provides the full ``TurnState`` with usage data, tool executions,
+        and response content regardless of how the turn was initiated.
+        This is the unified successor to ``after_message`` and
+        ``post_stream`` — implement this for uniform post-turn handling.
+
+        The legacy hooks (``after_message`` / ``post_stream``) continue
+        to fire as well, so existing middleware is unaffected.
+
+        Args:
+            turn: Complete turn state with all pipeline data.
+        """
+
+    async def on_tool_executed(  # noqa: B027
+        self, execution: ToolExecution, context: BotContext
+    ) -> None:
+        """Called after each tool execution within a turn.
+
+        Fired once per tool invocation, before ``after_turn``. Useful
+        for tool usage auditing, cost tracking, or logging.
+
+        Args:
+            execution: Record of the tool execution (name, params, result,
+                error, duration).
+            context: Bot context for the current turn.
+        """

@@ -167,12 +167,21 @@ class ToolExecutionContext:
         if "wizard" in metadata:
             wizard_state = WizardStateSnapshot.from_manager_metadata(metadata)
 
+        # Bridge turn_data from ConversationState into extra so tools
+        # can read/write per-turn plugin data set by the bot layer.
+        merged_extra = dict(extra or {})
+        state = getattr(manager, "state", None)
+        if state is not None:
+            turn_data = getattr(state, "turn_data", None)
+            if turn_data:
+                merged_extra["turn_data"] = turn_data
+
         return cls(
             conversation_id=conversation_id,
             conversation_metadata=metadata,
             wizard_state=wizard_state,
             request_metadata=request_metadata or {},
-            extra=extra or {},
+            extra=merged_extra,
         )
 
     def get(self, key: str, default: Any = None) -> Any:

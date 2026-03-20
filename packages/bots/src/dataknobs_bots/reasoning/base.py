@@ -1,12 +1,17 @@
 """Base reasoning strategy for DynaBot."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import jinja2
 
 from dataknobs_llm import LLMResponse
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.turn import ToolExecution
 
 
 @runtime_checkable
@@ -112,6 +117,23 @@ class ReasoningStrategy(ABC):
 
     def __init__(self, *, greeting_template: str | None = None) -> None:
         self._greeting_template = greeting_template
+        self._tool_executions: list[ToolExecution] = []
+
+    def get_and_clear_tool_executions(self) -> list[ToolExecution]:
+        """Return tool executions recorded during the last generate() call.
+
+        Strategies that execute tools (e.g. ReAct) append
+        ``ToolExecution`` records to ``self._tool_executions`` during
+        their generation loop.  DynaBot calls this after
+        ``generate()`` returns to collect the records and fire
+        ``on_tool_executed`` middleware hooks.
+
+        Returns:
+            List of tool execution records (cleared after retrieval).
+        """
+        result = list(self._tool_executions)
+        self._tool_executions.clear()
+        return result
 
     async def greet(
         self,

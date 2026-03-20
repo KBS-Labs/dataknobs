@@ -2,12 +2,15 @@
 
 import json
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
 from dataknobs_llm.exceptions import ToolsNotSupportedError
 from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.tools import ToolExecutionContext
+
+from dataknobs_bots.bot.turn import ToolExecution
 
 from .base import ReasoningStrategy
 
@@ -310,15 +313,25 @@ class ReActReasoning(ReasoningStrategy):
                         # Execute the tool with context injection
                         # Context-aware tools will extract _context and use it
                         # Regular tools will ignore _context via **kwargs
+                        t0 = time.monotonic()
                         result = await tool.execute(
                             **tool_call.parameters, _context=tool_context
                         )
+                        duration_ms = (time.monotonic() - t0) * 1000
                         try:
                             observation = f"Tool result: {json.dumps(result, default=str)}"
                         except (TypeError, ValueError):
                             observation = f"Tool result: {result}"
                         tool_trace["status"] = "success"
                         tool_trace["result"] = str(result)
+
+                        # Record for DynaBot on_tool_executed middleware hook
+                        self._tool_executions.append(ToolExecution(
+                            tool_name=tool_call.name,
+                            parameters=tool_call.parameters,
+                            result=result,
+                            duration_ms=duration_ms,
+                        ))
 
                         logger.log(
                             log_level,
@@ -345,6 +358,13 @@ class ReActReasoning(ReasoningStrategy):
                     error_msg = f"Error executing tool {tool_call.name}: {e!s}"
                     tool_trace["status"] = "error"
                     tool_trace["error"] = str(e)
+
+                    # Record failed execution for middleware hook
+                    self._tool_executions.append(ToolExecution(
+                        tool_name=tool_call.name,
+                        parameters=tool_call.parameters,
+                        error=str(e),
+                    ))
 
                     logger.error(
                         "ReAct: Tool execution failed",
