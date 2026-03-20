@@ -241,12 +241,19 @@ class DynaBot:
         return result
 
     @classmethod
-    async def from_config(cls, config: dict[str, Any]) -> DynaBot:
+    async def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        llm: AsyncLLMProvider | None = None,
+        middleware: list[Middleware] | None = None,
+    ) -> DynaBot:
         """Create DynaBot from configuration.
 
         Args:
             config: Configuration dictionary containing:
-                - llm: LLM configuration (provider, model, etc.)
+                - llm: LLM configuration (provider, model, etc.).
+                  Optional when the ``llm`` kwarg is provided.
                 - conversation_storage: Storage configuration.  Two modes:
                     - ``backend``: Database backend key for the default
                       DataknobsConversationStorage (e.g. ``"memory"``,
@@ -260,13 +267,20 @@ class DynaBot:
                 - memory: Optional memory configuration
                 - knowledge_base: Optional knowledge base configuration
                 - reasoning: Optional reasoning strategy configuration
-                - middleware: Optional middleware configurations
+                - middleware: Optional middleware configurations (ignored
+                  when the ``middleware`` kwarg is provided)
                 - prompts: Optional prompts library (dict of name -> content)
                 - system_prompt: Optional system prompt configuration (see below)
                 - config_base_path: Optional base directory for resolving
                   relative config file paths (e.g. wizard_config). When set,
                   relative paths in nested configs are resolved against this
                   directory instead of the current working directory.
+            llm: Pre-built LLM provider.  When provided, ``config["llm"]``
+                is optional and the provider is used as-is (no initialization
+                or cleanup — the caller owns the lifecycle).  Use this to
+                share a single provider across multiple bot instances.
+            middleware: Pre-built middleware list.  When provided, replaces
+                any middleware defined in config.
 
         Returns:
             Configured DynaBot instance
@@ -286,65 +300,45 @@ class DynaBot:
 
         Example:
             ```python
-            # Smart detection: uses as template if it exists in prompts library
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "prompts": {
-                    "helpful_assistant": "You are a helpful AI assistant."
-                },
-                "system_prompt": "helpful_assistant"  # Found in prompts, used as template
-            }
-
-            # Smart detection: treated as inline content (not in prompts library)
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": "You are a helpful assistant."  # Not a template name
-            }
-
-            # Explicit inline content with RAG enhancement
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": {
-                    "content": "You are a helpful assistant. Use this context: {{ CONTEXT }}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "assistant guidelines",
-                        "placeholder": "CONTEXT",
-                        "k": 3
-                    }]
-                }
-            }
-
-            # Strict mode: error if template doesn't exist
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": {
-                    "name": "my_template",
-                    "strict": true  # Raises ValueError if my_template doesn't exist
-                }
-            }
-
             bot = await DynaBot.from_config(config)
+
+            # With a shared provider
+            shared_llm = OllamaProvider({"provider": "ollama", "model": "llama3.2"})
+            await shared_llm.initialize()
+            bot = await DynaBot.from_config(
+                {"conversation_storage": {"backend": "memory"}},
+                llm=shared_llm,
+            )
+
+            # With pre-built middleware
+            bot = await DynaBot.from_config(config, middleware=[my_middleware])
             ```
         """
+        if llm is not None:
+            # Caller-owned provider — skip creation/initialization.
+            # Caller is responsible for lifecycle (initialize/close).
+            llm_config = config.get("llm", {})
+            return await cls._build_from_config(
+                config, llm, llm_config, middleware_override=middleware
+            )
+
+        # Create LLM provider from config
+        llm_config = config["llm"]
+
         from dataknobs_llm.llm import LLMProviderFactory
 
-        # Create LLM provider
-        llm_config = config["llm"]
-        factory = LLMProviderFactory(is_async=True)
-        llm = factory.create(llm_config)
-        await llm.initialize()
+        created_llm = LLMProviderFactory(is_async=True).create(llm_config)
+        await created_llm.initialize()
 
         # Everything below can fail; ensure the provider is closed on error
         # so we don't leak aiohttp sessions or other resources.
         try:
-            return await cls._build_from_config(config, llm, llm_config)
+            return await cls._build_from_config(
+                config, created_llm, llm_config,
+                middleware_override=middleware,
+            )
         except Exception:
-            await llm.close()
+            await created_llm.close()
             raise
 
     @classmethod
@@ -353,6 +347,8 @@ class DynaBot:
         config: dict[str, Any],
         llm: Any,
         llm_config: dict[str, Any],
+        *,
+        middleware_override: list[Middleware] | None = None,
     ) -> DynaBot:
         """Build a DynaBot after the LLM provider is initialized.
 
@@ -508,12 +504,15 @@ class DynaBot:
             reasoning_strategy = create_reasoning_from_config(reasoning_config)
 
         # Create middleware
-        middleware = []
-        if "middleware" in config:
-            for mw_config in config["middleware"]:
-                mw = cls._create_middleware(mw_config)
-                if mw:
-                    middleware.append(mw)
+        if middleware_override is not None:
+            middleware = list(middleware_override)
+        else:
+            middleware = []
+            if "middleware" in config:
+                for mw_config in config["middleware"]:
+                    mw = cls._create_middleware(mw_config)
+                    if mw:
+                        middleware.append(mw)
 
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
