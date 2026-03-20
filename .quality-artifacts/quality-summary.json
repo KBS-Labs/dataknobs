@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-03-20T16:24:55Z",
-  "overall_status": "FAIL",
+  "timestamp": "2026-03-20T17:22:11Z",
+  "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots config data fsm llm",
@@ -9,7 +9,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -24,8 +24,8 @@
       "tool": "validate.sh"
     },
     "unit_tests": {
-      "status": "fail",
-      "exit_code": 1,
+      "status": "pass",
+      "exit_code": 0,
       "skipped": false
     },
     "integration_tests": {
