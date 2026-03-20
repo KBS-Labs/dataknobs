@@ -388,9 +388,9 @@ Remember to always verify customer identity before sharing sensitive information
         await bot.chat("Message in conv 1", context1)
         await bot.chat("Message in conv 2", context2)
 
-        # Verify both conversations are cached
-        assert "conv-1" in bot._conversation_managers
-        assert "conv-2" in bot._conversation_managers
+        # Verify both conversations exist via public API
+        assert await bot.get_conversation("conv-1") is not None
+        assert await bot.get_conversation("conv-2") is not None
 
     @pytest.mark.asyncio
     async def test_build_message_with_context_no_memory(self):
@@ -599,15 +599,14 @@ Remember to always verify customer identity before sharing sensitive information
         # Create a conversation
         await bot.chat("Hello", context)
 
-        # Verify conversation exists in cache
-        assert "conv-clear-test" in bot._conversation_managers
+        # Verify conversation exists via public API
+        assert await bot.get_conversation("conv-clear-test") is not None
 
         # Clear the conversation
         deleted = await bot.clear_conversation("conv-clear-test")
 
         # Verify deletion
         assert deleted is True
-        assert "conv-clear-test" not in bot._conversation_managers
 
         # Try to get the deleted conversation (should return None)
         conversation_state = await bot.get_conversation("conv-clear-test")
@@ -653,7 +652,7 @@ Remember to always verify customer identity before sharing sensitive information
         assert response is not None
 
         # Verify new conversation was created
-        assert "conv-fresh-test" in bot._conversation_managers
+        assert await bot.get_conversation("conv-fresh-test") is not None
 
     @pytest.mark.asyncio
     async def test_stream_chat_basic(self):

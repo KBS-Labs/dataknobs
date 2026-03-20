@@ -87,8 +87,14 @@ These exist for use by dataknobs tests AND all consuming projects:
 
 | Need | Construct | Package |
 |---|---|---|
+| **DynaBot wizard tests** | **`BotTestHarness`** - preferred single-object test setup (see below) | `dataknobs-bots` |
+| **Wizard config building** | **`WizardConfigBuilder`** - fluent builder replacing inline config dicts | `dataknobs-bots` |
+| Extraction (bypass LLM) | `ConfigurableExtractor` - scripted results, call tracking | `dataknobs-llm` |
+| Extraction (real pipeline) | `scripted_schema_extractor()` - real SchemaExtractor + EchoProvider | `dataknobs-llm` |
 | LLM provider | `EchoProvider` - scripted responses, call history | `dataknobs-llm` |
 | LLM response fixtures | `text_response()`, `tool_call_response()`, `ResponseSequenceBuilder` | `dataknobs-llm` |
+| Provider injection | `inject_providers()` - wire providers + extractors into DynaBot | `dataknobs-bots` |
+| Capture/replay | `CaptureReplay` - replay recorded LLM conversations | `dataknobs-bots` |
 | RAG adapter | `InMemoryAdapter`, `InMemoryAsyncAdapter` | `dataknobs-llm` |
 | Sync database | `SyncMemoryDatabase` | `dataknobs-data` |
 | Async database | `AsyncMemoryDatabase` | `dataknobs-data` |
@@ -98,6 +104,43 @@ These exist for use by dataknobs tests AND all consuming projects:
 | Pytest markers | `@requires_ollama`, `@requires_faiss`, `@requires_redis` | `dataknobs-common` |
 
 If a new testing construct is needed, **add it to the appropriate dataknobs package** for cross-project reuse.
+
+### DynaBot Testing — MANDATORY Patterns
+
+When writing tests for DynaBot wizard behavior, **always use `BotTestHarness`**:
+
+```python
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+
+config = (WizardConfigBuilder("test")
+    .stage("gather", is_start=True, prompt="Tell me your name.")
+        .field("name", field_type="string", required=True)
+        .transition("done", "data.get('name')")
+    .stage("done", is_end=True, prompt="All done!")
+    .build())
+
+async with await BotTestHarness.create(
+    wizard_config=config,
+    main_responses=["Got it!"],
+    extraction_results=[[{"name": "Alice"}]],
+) as harness:
+    await harness.chat("My name is Alice")
+    assert harness.wizard_data["name"] == "Alice"
+    assert harness.wizard_stage == "done"
+```
+
+**Anti-patterns to AVOID in bot tests:**
+
+| Anti-Pattern | Why It's Wrong | Use Instead |
+|---|---|---|
+| Direct `WizardReasoning()` + `reasoning.generate(manager)` | Bypasses `from_config()`, middleware, raw_content pipeline | `BotTestHarness.create()` + `harness.chat()` |
+| `bot._conversation_managers` access | Couples to internal cache implementation | `bot.get_wizard_state()` or `harness.wizard_data` |
+| `strategy._extractor = extractor` | Private attribute injection | `strategy.set_extractor(extractor)` or `inject_providers(bot, extractor=ext)` |
+| `_get_wizard_state()` / `_get_wizard_data()` per-file helpers | Duplicated internal metadata access | `harness.wizard_stage` / `harness.wizard_data` |
+| `MagicMock(spec=ConversationManager)` | Mocks hide integration bugs | `BotTestHarness` creates real bots via `from_config()` |
+| Inline 40-line wizard config dicts | Verbose, error-prone, copy-pasted | `WizardConfigBuilder` fluent API |
+
+**Exception:** Tests that verify WizardReasoning internal logic (`_evaluate_condition`, `_can_auto_advance`, transform flows) are legitimate unit tests and may use `WizardReasoning` directly with the `conversation_manager_pair` conftest fixture. These test specific internal methods, not wizard flow behavior.
 
 ## Before Adding New Functionality
 

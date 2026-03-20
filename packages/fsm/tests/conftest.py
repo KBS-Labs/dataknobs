@@ -4,10 +4,15 @@ import pytest
 from pathlib import Path
 import sys
 
-# Add src to path for testing
-src_path = Path(__file__).parent.parent / "src"
+# Add src and package root to path for testing.
+# Package root is needed so ``from examples.advanced_debugging import ...``
+# resolves when pytest runs from the workspace root.
+_pkg_root = Path(__file__).parent.parent
+src_path = _pkg_root / "src"
 if src_path not in sys.path:
     sys.path.insert(0, str(src_path))
+if str(_pkg_root) not in sys.path:
+    sys.path.insert(0, str(_pkg_root))
 
 
 @pytest.fixture

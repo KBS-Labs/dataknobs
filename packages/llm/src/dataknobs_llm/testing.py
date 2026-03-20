@@ -54,6 +54,7 @@ from .llm.base import (
 from .llm.providers.echo import ErrorResponse
 
 if TYPE_CHECKING:
+    from .extraction.schema_extractor import SchemaExtractor
     from .llm.providers.echo import EchoProvider
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ __all__ = [
     "ResponseSequenceBuilder",
     "SimpleExtractionResult",
     "extraction_response",
+    "scripted_schema_extractor",
     "llm_message_from_dict",
     "llm_message_to_dict",
     "llm_response_from_dict",
@@ -467,6 +469,44 @@ class ConfigurableExtractor:
         return self._results[idx]
 
 
+def scripted_schema_extractor(
+    responses: list[str] | None = None,
+) -> tuple[SchemaExtractor, EchoProvider]:
+    """Create a real SchemaExtractor backed by scripted EchoProvider responses.
+
+    Unlike ``ConfigurableExtractor`` (which bypasses extraction entirely),
+    this exercises the full ``SchemaExtractor`` pipeline: prompt building,
+    LLM call, JSON parsing, and confidence scoring.  Use this for tests
+    that need to verify extraction behavior end-to-end.
+
+    Args:
+        responses: JSON strings the EchoProvider will return in order.
+            Each string should be the raw JSON that SchemaExtractor
+            expects to parse (e.g. ``'{"name": "Alice"}'``).
+
+    Returns:
+        Tuple of ``(SchemaExtractor, EchoProvider)`` — the provider is
+        returned so tests can verify call counts or queue additional
+        responses.
+
+    Example::
+
+        extractor, ext_provider = scripted_schema_extractor([
+            '{"name": "Alice", "topic": "math"}',
+        ])
+        # Use with WizardReasoning or any code that accepts a SchemaExtractor
+        reasoning = WizardReasoning(wizard_fsm=fsm, extractor=extractor)
+    """
+    from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
+    from dataknobs_llm.llm.providers.echo import EchoProvider as _EchoProvider
+
+    provider = _EchoProvider({"provider": "echo", "model": "echo-extraction"})
+    if responses:
+        provider.set_responses(responses)
+    extractor = SchemaExtractor(provider=provider)
+    return extractor, provider
+
+
 # =============================================================================
 # Serialization helpers — LLM types ↔ dict for capture/replay
 # =============================================================================
@@ -664,17 +704,11 @@ class CapturingProvider(AsyncLLMProvider):
 
     async def initialize(self) -> None:
         """Delegate initialization to the wrapped provider."""
-        if hasattr(self._delegate, "initialize"):
-            result = self._delegate.initialize()
-            if hasattr(result, "__await__"):
-                await result
+        await self._delegate.initialize()
 
     async def close(self) -> None:
         """Delegate close to the wrapped provider."""
-        if hasattr(self._delegate, "close"):
-            result = self._delegate.close()
-            if hasattr(result, "__await__"):
-                await result
+        await self._delegate.close()
 
     async def validate_model(self) -> bool:
         """Delegate model validation to the wrapped provider."""

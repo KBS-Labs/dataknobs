@@ -11,148 +11,78 @@ Two fixes:
    boolean/numeric/list fields where falsy values (False, 0, []) are legitimate.
 """
 
-from typing import Any
-
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.llm.providers.echo import EchoProvider
-from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Shared wizard configs
 # ---------------------------------------------------------------------------
 
 
-WIZARD_CONFIG: dict[str, Any] = {
-    "name": "null-test",
-    "version": "1.0",
-    "stages": [
-        {
-            "name": "gather",
-            "is_start": True,
-            "prompt": "Tell me your intent and provider.",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "intent": {"type": "string"},
-                    "domain_name": {"type": "string"},
-                    "llm_provider": {"type": "string"},
-                },
-                "required": ["intent", "domain_name", "llm_provider"],
-            },
-            "transitions": [
-                {
-                    "target": "done",
-                    "condition": (
-                        "data.get('intent') and data.get('domain_name') "
-                        "and data.get('llm_provider')"
-                    ),
-                },
-            ],
-        },
-        {
-            "name": "done",
-            "is_end": True,
-            "prompt": "All done!",
-        },
-    ],
-}
-
-
-WIZARD_WITH_DEFAULTS_CONFIG: dict[str, Any] = {
-    "name": "null-defaults-test",
-    "version": "1.0",
-    "stages": [
-        {
-            "name": "gather",
-            "is_start": True,
-            "prompt": "Tell me your intent.",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "intent": {"type": "string"},
-                    "level": {"type": "string", "default": "beginner"},
-                },
-                "required": ["intent", "level"],
-            },
-            "transitions": [
-                {
-                    "target": "done",
-                    "condition": (
-                        "data.get('intent') and data.get('level')"
-                    ),
-                },
-            ],
-        },
-        {
-            "name": "done",
-            "is_end": True,
-            "prompt": "All done!",
-        },
-    ],
-}
-
-
-WIZARD_WITH_BOOLEAN_CONFIG: dict[str, Any] = {
-    "name": "null-boolean-test",
-    "version": "1.0",
-    "stages": [
-        {
-            "name": "gather",
-            "is_start": True,
-            "prompt": "Tell me your intent and whether KB is enabled.",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "intent": {"type": "string"},
-                    "kb_enabled": {"type": "boolean"},
-                },
-                "required": ["intent", "kb_enabled"],
-            },
-            "transitions": [
-                {
-                    "target": "done",
-                    "condition": (
-                        "data.get('intent') and has('kb_enabled')"
-                    ),
-                },
-            ],
-        },
-        {
-            "name": "done",
-            "is_end": True,
-            "prompt": "All done!",
-        },
-    ],
-}
-
-
-def _build_wizard(
-    config: dict[str, Any],
-    extractor: ConfigurableExtractor,
-    **kwargs: Any,
-) -> WizardReasoning:
-    """Build a WizardReasoning with a ConfigurableExtractor."""
-    loader = WizardConfigLoader()
-    wizard_fsm = loader.load_from_dict(config)
-    return WizardReasoning(
-        wizard_fsm=wizard_fsm,
-        extractor=extractor,
-        strict_validation=False,
-        extraction_scope="current_message",
-        **kwargs,
+def _null_test_config() -> dict:
+    """Gather stage: intent, domain_name, llm_provider (all required)."""
+    return (
+        WizardConfigBuilder("null-test")
+        .stage(
+            "gather",
+            is_start=True,
+            prompt="Tell me your intent and provider.",
+        )
+        .field("intent", field_type="string", required=True)
+        .field("domain_name", field_type="string", required=True)
+        .field("llm_provider", field_type="string", required=True)
+        .transition(
+            "done",
+            "data.get('intent') and data.get('domain_name') "
+            "and data.get('llm_provider')",
+        )
+        .stage("done", is_end=True, prompt="All done!")
+        .build()
     )
 
 
-def _get_wizard_state_data(manager: ConversationManager) -> dict[str, Any]:
-    """Extract wizard_state.data from manager metadata."""
-    wizard_meta = manager.metadata.get("wizard", {})
-    fsm_state = wizard_meta.get("fsm_state", {})
-    return fsm_state.get("data", {})
+def _defaults_config() -> dict:
+    """Gather stage: intent + level (with default "beginner")."""
+    return (
+        WizardConfigBuilder("null-defaults-test")
+        .stage(
+            "gather",
+            is_start=True,
+            prompt="Tell me your intent.",
+        )
+        .field("intent", field_type="string", required=True)
+        .field("level", field_type="string", required=True, default="beginner")
+        .transition(
+            "done",
+            "data.get('intent') and data.get('level')",
+        )
+        .stage("done", is_end=True, prompt="All done!")
+        .build()
+    )
+
+
+def _boolean_config() -> dict:
+    """Gather stage: intent + kb_enabled (boolean, uses has())."""
+    return (
+        WizardConfigBuilder("null-boolean-test")
+        .stage(
+            "gather",
+            is_start=True,
+            prompt="Tell me your intent and whether KB is enabled.",
+        )
+        .field("intent", field_type="string", required=True)
+        .field("kb_enabled", field_type="boolean", required=True)
+        .transition(
+            "done",
+            "data.get('intent') and has('kb_enabled')",
+        )
+        .stage("done", is_end=True, prompt="All done!")
+        .build()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,169 +94,102 @@ class TestNullExtractionHandling:
     """Null values from extraction must not be stored in wizard state."""
 
     @pytest.mark.asyncio
-    async def test_null_values_dropped_from_extraction(
-        self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+    async def test_null_values_dropped_from_extraction(self) -> None:
         """Extraction returning null fields should not store None in data."""
-        manager, conv_provider = conversation_manager_pair
-
-        # Extraction returns intent + two null fields
-        extractor = ConfigurableExtractor([
-            SimpleExtractionResult(
-                data={"intent": "create", "domain_name": None, "llm_provider": None},
-                confidence=0.5,
-            ),
-        ])
-        reasoning = _build_wizard(WIZARD_CONFIG, extractor)
-
-        await manager.add_message(role="user", content="I want to create a bot")
-        conv_provider.set_responses(["Please provide domain and provider."])
-
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "create", (
-            "Non-null value must be stored"
-        )
-        assert "domain_name" not in state_data, (
-            "Null extraction must not store key in wizard state"
-        )
-        assert "llm_provider" not in state_data, (
-            "Null extraction must not store key in wizard state"
-        )
+        async with await BotTestHarness.create(
+            wizard_config=_null_test_config(),
+            main_responses=["Please provide domain and provider."],
+            extraction_results=[
+                [{"intent": "create", "domain_name": None, "llm_provider": None}],
+            ],
+        ) as harness:
+            await harness.chat("I want to create a bot")
+            assert harness.wizard_data.get("intent") == "create", (
+                "Non-null value must be stored"
+            )
+            assert "domain_name" not in harness.wizard_data, (
+                "Null extraction must not store key in wizard state"
+            )
+            assert "llm_provider" not in harness.wizard_data, (
+                "Null extraction must not store key in wizard state"
+            )
 
     @pytest.mark.asyncio
-    async def test_null_values_do_not_block_schema_defaults(
-        self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+    async def test_null_values_do_not_block_schema_defaults(self) -> None:
         """Null extraction should allow schema defaults to apply."""
-        manager, conv_provider = conversation_manager_pair
-
-        # Extract intent (non-null) + level (null).
-        # Schema has default "beginner" for level.
-        extractor = ConfigurableExtractor([
-            SimpleExtractionResult(
-                data={"intent": "learn", "level": None},
-                confidence=0.9,
-            ),
-        ])
-        reasoning = _build_wizard(WIZARD_WITH_DEFAULTS_CONFIG, extractor)
-
-        await manager.add_message(role="user", content="I want to learn")
-        conv_provider.set_responses(["Great!"])
-
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "learn"
-        assert state_data.get("level") == "beginner", (
-            "Schema default must apply when null extraction leaves key absent"
-        )
+        async with await BotTestHarness.create(
+            wizard_config=_defaults_config(),
+            main_responses=["Great!"],
+            extraction_results=[
+                [{"intent": "learn", "level": None}],
+            ],
+        ) as harness:
+            await harness.chat("I want to learn")
+            assert harness.wizard_data.get("intent") == "learn"
+            assert harness.wizard_data.get("level") == "beginner", (
+                "Schema default must apply when null extraction leaves key absent"
+            )
 
     @pytest.mark.asyncio
-    async def test_null_values_do_not_overwrite_existing(
-        self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+    async def test_null_values_do_not_overwrite_existing(self) -> None:
         """Null extraction for an existing key must not clear it."""
-        manager, conv_provider = conversation_manager_pair
+        async with await BotTestHarness.create(
+            wizard_config=_null_test_config(),
+            main_responses=["Which LLM provider?", "All set!"],
+            extraction_results=[
+                [{"intent": "create", "domain_name": "test.com"}],
+                [{"intent": None, "domain_name": None, "llm_provider": "ollama"}],
+            ],
+        ) as harness:
+            # Turn 1: establish intent + domain_name
+            await harness.chat("create bot for test.com")
+            assert harness.wizard_data.get("intent") == "create"
+            assert harness.wizard_data.get("domain_name") == "test.com"
 
-        # Turn 1: extract intent + domain_name
-        extractor = ConfigurableExtractor([
-            SimpleExtractionResult(
-                data={"intent": "create", "domain_name": "test.com"},
-                confidence=0.5,
-            ),
-            SimpleExtractionResult(
-                data={"intent": None, "domain_name": None, "llm_provider": "ollama"},
-                confidence=0.9,
-            ),
-        ])
-        reasoning = _build_wizard(WIZARD_CONFIG, extractor)
-
-        # Turn 1
-        await manager.add_message(role="user", content="create bot for test.com")
-        conv_provider.set_responses(["Which LLM provider?"])
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "create"
-        assert state_data.get("domain_name") == "test.com"
-
-        # Turn 2: null for intent and domain_name should not overwrite
-        await manager.add_message(role="user", content="use ollama")
-        conv_provider.set_responses(["All set!"])
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "create", (
-            "Null extraction must not overwrite existing value"
-        )
-        assert state_data.get("domain_name") == "test.com", (
-            "Null extraction must not overwrite existing value"
-        )
-        assert state_data.get("llm_provider") == "ollama"
+            # Turn 2: null for intent and domain_name should not overwrite
+            await harness.chat("use ollama")
+            assert harness.wizard_data.get("intent") == "create", (
+                "Null extraction must not overwrite existing value"
+            )
+            assert harness.wizard_data.get("domain_name") == "test.com", (
+                "Null extraction must not overwrite existing value"
+            )
+            assert harness.wizard_data.get("llm_provider") == "ollama"
 
     @pytest.mark.asyncio
-    async def test_mixed_null_and_values_merged_correctly(
-        self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+    async def test_mixed_null_and_values_merged_correctly(self) -> None:
         """Only non-null values from extraction are merged."""
-        manager, conv_provider = conversation_manager_pair
-
-        extractor = ConfigurableExtractor([
-            SimpleExtractionResult(
-                data={
-                    "intent": "create",
-                    "domain_name": None,
-                    "llm_provider": "ollama",
-                },
-                confidence=0.5,
-            ),
-        ])
-        reasoning = _build_wizard(WIZARD_CONFIG, extractor)
-
-        await manager.add_message(role="user", content="create with ollama")
-        conv_provider.set_responses(["What domain?"])
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "create"
-        assert "domain_name" not in state_data
-        assert state_data.get("llm_provider") == "ollama"
+        async with await BotTestHarness.create(
+            wizard_config=_null_test_config(),
+            main_responses=["What domain?"],
+            extraction_results=[
+                [{"intent": "create", "domain_name": None, "llm_provider": "ollama"}],
+            ],
+        ) as harness:
+            await harness.chat("create with ollama")
+            assert harness.wizard_data.get("intent") == "create"
+            assert "domain_name" not in harness.wizard_data
+            assert harness.wizard_data.get("llm_provider") == "ollama"
 
     @pytest.mark.asyncio
-    async def test_null_boolean_field_not_coerced_to_false(
-        self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
-    ) -> None:
+    async def test_null_boolean_field_not_coerced_to_false(self) -> None:
         """Null for a boolean-typed field must not be coerced to False.
 
-        _normalize_extracted_data coerces string→bool for boolean fields.
+        _normalize_extracted_data coerces string->bool for boolean fields.
         A null value must be dropped (not stored), not coerced to False.
         """
-        manager, conv_provider = conversation_manager_pair
-
-        extractor = ConfigurableExtractor([
-            SimpleExtractionResult(
-                data={"intent": "create", "kb_enabled": None},
-                confidence=0.5,
-            ),
-        ])
-        reasoning = _build_wizard(WIZARD_WITH_BOOLEAN_CONFIG, extractor)
-
-        await manager.add_message(role="user", content="I want to create a bot")
-        conv_provider.set_responses(["Should KB be enabled?"])
-        await reasoning.generate(manager, llm=None)
-
-        state_data = _get_wizard_state_data(manager)
-        assert state_data.get("intent") == "create"
-        assert "kb_enabled" not in state_data, (
-            "Null boolean extraction must not be coerced to False"
-        )
+        async with await BotTestHarness.create(
+            wizard_config=_boolean_config(),
+            main_responses=["Should KB be enabled?"],
+            extraction_results=[
+                [{"intent": "create", "kb_enabled": None}],
+            ],
+        ) as harness:
+            await harness.chat("I want to create a bot")
+            assert harness.wizard_data.get("intent") == "create"
+            assert "kb_enabled" not in harness.wizard_data, (
+                "Null boolean extraction must not be coerced to False"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +198,11 @@ class TestNullExtractionHandling:
 
 
 class TestHasHelper:
-    """The has() helper checks field presence (not truthiness)."""
+    """The has() helper checks field presence (not truthiness).
+
+    These tests exercise _evaluate_condition() directly — this is a
+    legitimate unit test of internal condition evaluation logic.
+    """
 
     @pytest.fixture
     def reasoning(self) -> WizardReasoning:

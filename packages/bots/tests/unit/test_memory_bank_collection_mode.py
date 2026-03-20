@@ -18,6 +18,7 @@ from dataknobs_llm import EchoProvider
 from dataknobs_llm.conversations.manager import ConversationManager
 from dataknobs_llm.conversations.storage import DataknobsConversationStorage
 from dataknobs_llm.llm import LLMConfig
+from dataknobs_llm.testing import scripted_schema_extractor
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder
 from dataknobs_llm.prompts.implementations.config_library import ConfigPromptLibrary
 from dataknobs_llm.conversations.storage import ConversationNode, calculate_node_id
@@ -582,18 +583,10 @@ class TestCollectionModeGenerateFlow:
     @pytest.mark.asyncio
     async def test_ingredient_message_adds_to_bank_via_generate(self) -> None:
         """A non-done message should be extracted and added to the bank."""
-        from dataknobs_llm.extraction import SchemaExtractor
-
-        # EchoProvider for extraction — returns JSON for the ingredient
-        ext_config = LLMConfig(
-            provider="echo", model="echo-ext",
-            options={"echo_prefix": ""},
-        )
-        ext_provider = EchoProvider(ext_config)
-        extractor = SchemaExtractor(provider=ext_provider)
+        extractor, ext_provider = scripted_schema_extractor()
 
         reasoning = _make_collection_wizard()
-        reasoning._extractor = extractor  # inject extractor
+        reasoning.set_extractor(extractor)
 
         manager, provider = await _make_manager_and_provider()
         _seed_wizard_state(manager, stage="collect")
@@ -775,17 +768,10 @@ class TestCollectionModeBranching:
         previous one, producing node IDs like 0, 0.0, 0.0.0 instead
         of 0, 0.1, 0.2.
         """
-        from dataknobs_llm.extraction import SchemaExtractor
-
-        ext_config = LLMConfig(
-            provider="echo", model="echo-ext",
-            options={"echo_prefix": ""},
-        )
-        ext_provider = EchoProvider(ext_config)
-        extractor = SchemaExtractor(provider=ext_provider)
+        extractor, ext_provider = scripted_schema_extractor()
 
         reasoning = _make_collection_wizard()
-        reasoning._extractor = extractor
+        reasoning.set_extractor(extractor)
 
         manager, provider = await _make_manager_and_provider()
         _seed_wizard_state(manager, stage="collect")
@@ -849,17 +835,10 @@ class TestCollectionModeBranching:
         returns every node across all branches in chronological order,
         so the full interaction history is available for logging/export.
         """
-        from dataknobs_llm.extraction import SchemaExtractor
-
-        ext_config = LLMConfig(
-            provider="echo", model="echo-ext",
-            options={"echo_prefix": ""},
-        )
-        ext_provider = EchoProvider(ext_config)
-        extractor = SchemaExtractor(provider=ext_provider)
+        extractor, ext_provider = scripted_schema_extractor()
 
         reasoning = _make_collection_wizard()
-        reasoning._extractor = extractor
+        reasoning.set_extractor(extractor)
 
         manager, provider = await _make_manager_and_provider()
         _seed_wizard_state(manager, stage="collect")

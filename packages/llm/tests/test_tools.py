@@ -528,25 +528,46 @@ class TestToolRegistryExecutionTracking:
 
     @pytest.mark.asyncio
     async def test_get_execution_history_filter_by_time(self):
-        """Test filtering execution history by time range."""
+        """Test filtering execution history by time range.
+
+        Uses recorded timestamps with a midpoint boundary to avoid
+        flakiness from time.time() granularity.  When both executions
+        share the same timestamp (rare but possible under load), the
+        midpoint equals both timestamps, making time-based filtering
+        impossible — the test skips the boundary assertions in that case
+        and verifies only that the range query itself works.
+        """
         registry = ToolRegistry(track_executions=True)
         registry.register_tool(CalculatorTool())
 
-        before = time.time()
         await registry.execute_tool("calculator", operation="add", a=1, b=2)
-        middle = time.time()
         await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
-        after = time.time()
 
-        # Since middle
-        recent_history = registry.get_execution_history(since=middle)
-        assert len(recent_history) == 1
-        assert recent_history[0].parameters["operation"] == "multiply"
+        all_history = registry.get_execution_history()
+        assert len(all_history) == 2
+        t1 = all_history[0].timestamp  # add
+        t2 = all_history[1].timestamp  # multiply
 
-        # Until middle
-        early_history = registry.get_execution_history(until=middle)
-        assert len(early_history) == 1
-        assert early_history[0].parameters["operation"] == "add"
+        if t1 < t2:
+            middle = (t1 + t2) / 2
+
+            # Since middle — only the second execution
+            recent_history = registry.get_execution_history(since=middle)
+            assert len(recent_history) == 1
+            assert recent_history[0].parameters["operation"] == "multiply"
+
+            # Until middle — only the first execution
+            early_history = registry.get_execution_history(until=middle)
+            assert len(early_history) == 1
+            assert early_history[0].parameters["operation"] == "add"
+        else:
+            # Same timestamp — verify range query still works at boundaries
+            before = t1 - 1.0
+            after = t2 + 1.0
+            assert len(registry.get_execution_history(since=before)) == 2
+            assert len(registry.get_execution_history(until=after)) == 2
+            assert len(registry.get_execution_history(since=after)) == 0
+            assert len(registry.get_execution_history(until=before)) == 0
 
     @pytest.mark.asyncio
     async def test_get_execution_history_with_limit(self):

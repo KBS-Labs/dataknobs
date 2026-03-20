@@ -313,7 +313,7 @@ Each `CapturedCall` contains:
 - `role` — the provider's role label (e.g. `"main"`, `"extraction"`)
 - `messages` — the messages list sent to the LLM
 - `response` — dict with `content`, `tool_calls`, `usage`, etc.
-- `call_index` — assigned by `CallTracker` for global ordering (default: -1)
+- `call_index` — assigned by `CallTracker` for global ordering (default: 0)
 
 ## CallTracker
 
@@ -367,6 +367,54 @@ Key features:
 - **Multi-provider** — register any number of named providers via kwargs
 - **No duplicates** — each call is returned exactly once
 
+## Extraction Testing
+
+Two utilities for testing schema extraction at different levels of fidelity.
+
+### ConfigurableExtractor
+
+Returns pre-configured results without calling any LLM. Use when testing code
+that consumes extraction results (wizard flow, merge logic) rather than the
+extraction pipeline itself:
+
+```python
+from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
+
+# Sequence mode — different result per call
+extractor = ConfigurableExtractor(results=[
+    SimpleExtractionResult(data={"name": "Alice"}, confidence=0.9),
+    SimpleExtractionResult(data={"topic": "math"}, confidence=0.5),
+])
+
+result = await extractor.extract("I'm Alice", schema={...})
+assert result.data == {"name": "Alice"}
+assert len(extractor.extract_calls) == 1
+
+# Single-result mode — same result every call
+extractor = ConfigurableExtractor(result_data={"name": "Alice"}, confidence=0.9)
+```
+
+### scripted_schema_extractor
+
+Creates a real `SchemaExtractor` backed by a scripted `EchoProvider`.
+Exercises the full extraction pipeline (prompt building, LLM call, JSON parsing,
+confidence scoring):
+
+```python
+from dataknobs_llm.testing import scripted_schema_extractor
+
+extractor, ext_provider = scripted_schema_extractor([
+    '{"name": "Alice", "topic": "math"}',
+])
+
+# extractor is a real SchemaExtractor
+# ext_provider is the EchoProvider (for call count verification)
+```
+
+Use `ConfigurableExtractor` for most tests. Use `scripted_schema_extractor`
+when you need to verify the extraction pipeline behavior itself (e.g., JSON
+parsing edge cases, confidence scoring).
+
 ## Imports
 
 All testing utilities are available from the main package:
@@ -379,6 +427,9 @@ from dataknobs_llm.testing import (
     multi_tool_response,
     extraction_response,
     ResponseSequenceBuilder,
+    ConfigurableExtractor,
+    SimpleExtractionResult,
+    scripted_schema_extractor,
     CapturingProvider,
     CapturedCall,
     CallTracker,
