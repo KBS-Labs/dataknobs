@@ -171,6 +171,54 @@ class TestCaptureReplay:
         assert replay.metadata["description"] == "file test"
         assert len(replay.turns) == 1
 
+    @pytest.mark.asyncio
+    async def test_main_provider_responses_in_order(self) -> None:
+        """Main provider delivers captured responses in order."""
+        turns = [
+            _make_turn(0, llm_calls=[
+                _make_llm_call(0, role="main", content="first"),
+            ]),
+            _make_turn(1, llm_calls=[
+                _make_llm_call(0, role="main", content="second"),
+            ]),
+        ]
+        replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
+        provider = replay.main_provider()
+
+        from dataknobs_llm.llm.base import LLMMessage
+
+        r1 = await provider.complete([LLMMessage(role="user", content="a")])
+        r2 = await provider.complete([LLMMessage(role="user", content="b")])
+        assert r1.content == "first"
+        assert r2.content == "second"
+
+    @pytest.mark.asyncio
+    async def test_extraction_provider_responses_in_order(self) -> None:
+        """Extraction provider delivers captured responses in order."""
+        turns = [
+            _make_turn(0, llm_calls=[
+                _make_llm_call(0, role="extraction", content="ext1"),
+                _make_llm_call(1, role="extraction", content="ext2"),
+            ]),
+        ]
+        replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
+        provider = replay.extraction_provider()
+
+        from dataknobs_llm.llm.base import LLMMessage
+
+        r1 = await provider.complete([LLMMessage(role="user", content="a")])
+        r2 = await provider.complete([LLMMessage(role="user", content="b")])
+        assert r1.content == "ext1"
+        assert r2.content == "ext2"
+
+    def test_empty_capture_creates_empty_providers(self) -> None:
+        """Empty capture data creates valid providers with no queued responses."""
+        replay = CaptureReplay.from_dict(_make_capture_data())
+        main = replay.main_provider()
+        ext = replay.extraction_provider()
+        assert main.config.model == "capture-replay"
+        assert ext.config.model == "capture-replay"
+
 
 # =============================================================================
 # inject_providers tests — using real DynaBot instances

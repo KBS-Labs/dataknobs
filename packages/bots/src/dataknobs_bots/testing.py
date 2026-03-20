@@ -23,7 +23,7 @@ Example — BotTestHarness (preferred):
 
     config = (WizardConfigBuilder("test")
         .stage("gather", is_start=True, prompt="Tell me your name.")
-            .field("name", type="string", required=True)
+            .field("name", field_type="string", required=True)
             .transition("done", "data.get('name')")
         .stage("done", is_end=True, prompt="All done!")
         .build())
@@ -49,6 +49,7 @@ Example — CaptureReplay (low-level):
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from dataclasses import dataclass, field
@@ -85,8 +86,8 @@ class WizardConfigBuilder:
         ```python
         config = (WizardConfigBuilder("my-wizard")
             .stage("gather", is_start=True, prompt="Tell me your name.")
-                .field("name", type="string", required=True)
-                .field("domain", type="string")
+                .field("name", field_type="string", required=True)
+                .field("domain", field_type="string")
                 .transition("done", "data.get('name') and data.get('domain')")
             .stage("done", is_end=True, prompt="All done!")
             .settings(extraction_scope="current_message")
@@ -413,6 +414,8 @@ class BotTestHarness:
             conversation_id: Conversation ID for the test context.
             client_id: Client ID for the test context.
             extraction_scope: Default extraction scope for the wizard.
+                Only applies when ``wizard_config`` is used; ignored
+                when ``bot_config`` is provided directly.
 
         Returns:
             Configured ``BotTestHarness`` instance.
@@ -428,7 +431,6 @@ class BotTestHarness:
             raise ValueError(
                 "Either wizard_config or bot_config must be provided"
             )
-        assert wizard_config is not None or bot_config is not None
 
         # Build extraction results
         extractor: ConfigurableExtractor | None = None
@@ -445,14 +447,14 @@ class BotTestHarness:
             assert wizard_config is not None
             wizard_settings = wizard_config.get("settings", {})
             if "extraction_scope" not in wizard_settings:
-                wizard_cfg = dict(wizard_config)
+                wizard_cfg = copy.deepcopy(wizard_config)
                 existing = wizard_cfg.get("settings", {})
                 wizard_cfg["settings"] = {
                     "extraction_scope": extraction_scope,
                     **existing,
                 }
             else:
-                wizard_cfg = dict(wizard_config)
+                wizard_cfg = copy.deepcopy(wizard_config)
 
             bot_config = {
                 "llm": {"provider": "echo", "model": "echo-test"},
@@ -474,12 +476,18 @@ class BotTestHarness:
         # Create bot
         bot = await DynaBot.from_config(bot_config)
 
-        # Create and configure main provider
+        # Close the original provider created by from_config() — we replace
+        # it with a fresh EchoProvider that has a clean response queue.
+        original_provider = bot.llm
+        if hasattr(original_provider, "close"):
+            await original_provider.close()
+
+        # Create a fresh provider with known state
         provider = EchoProvider({"provider": "echo", "model": "echo-test"})
         if main_responses:
             provider.set_responses(main_responses)
 
-        # Inject providers
+        # Inject fresh provider and extractor
         inject_providers(bot, main_provider=provider, extractor=extractor)
 
         context = BotContext(
@@ -612,8 +620,8 @@ def inject_providers(
     For ``extraction_provider`` and ``**role_providers``, updates both the
     registry catalog and the actual subsystem wiring via ``set_provider()``.
 
-    For ``extractor``, directly replaces the reasoning strategy's
-    ``_extractor`` attribute.  Use this to inject a
+    For ``extractor``, calls ``strategy.set_extractor()`` to replace
+    the reasoning strategy's extractor entirely.  Use this to inject a
     ``ConfigurableExtractor`` (which is not an ``AsyncLLMProvider`` and
     cannot be wired through ``set_provider()``).
 
