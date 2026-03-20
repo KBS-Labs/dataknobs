@@ -46,6 +46,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         *,
         database: AsyncDatabase | None = None,
         steps_database: AsyncDatabase | None = None,
+        owns_databases: bool | None = None,
     ):
         """Initialize database storage.
 
@@ -56,10 +57,19 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 directly. Enables connection pool sharing across components.
             steps_database: Optional separate AsyncDatabase for step records.
                 Defaults to ``database`` when only ``database`` is provided.
+            owns_databases: Explicit ownership override. When ``True``, this
+                instance will close both databases on ``close()``. When
+                ``False``, neither is closed. When ``None`` (default),
+                ownership is inferred: databases created by the factory are
+                owned; injected databases are not.
         """
         super().__init__(config)
-        self._owns_db = database is None
-        self._owns_steps_db = steps_database is None and database is None
+        if owns_databases is not None:
+            self._owns_db = owns_databases
+            self._owns_steps_db = owns_databases
+        else:
+            self._owns_db = database is None
+            self._owns_steps_db = steps_database is None and database is None
         self._db: AsyncDatabase | None = database
         self._steps_db: AsyncDatabase | None = steps_database or database
     
@@ -98,7 +108,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if hasattr(self._db, 'connect'):
             await self._db.connect()
         
-        # Use the same database for steps unless one was injected
+        # Use the same database for steps unless one was injected.
+        # Sharing is safe for SQL backends because history and step records
+        # use different schemas/tables. Memory backends (flat namespace)
+        # override __init__ to create separate instances — see
+        # InMemoryStorage (Bug B3).
         if self._steps_db is None:
             self._steps_db = self._db
     

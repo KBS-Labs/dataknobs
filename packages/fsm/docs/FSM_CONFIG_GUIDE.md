@@ -1109,7 +1109,10 @@ The `database` and `steps_database` parameters are keyword-only:
 | `steps_database` | `None` | Separate `AsyncDatabase` for step records. Defaults to `database` when omitted. |
 
 When both parameters are `None` (the default), the storage creates its own
-database via the factory — identical to pre-injection behavior.
+database(s) via the factory. `InMemoryStorage` creates two separate
+`AsyncMemoryDatabase` instances (one for history, one for steps) to avoid
+namespace collisions in the flat memory backend. SQL-backed storages share
+a single database since tables provide natural isolation.
 
 The factory also supports injection via keyword arguments:
 

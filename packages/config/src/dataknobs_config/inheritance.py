@@ -94,7 +94,9 @@ def substitute_env_vars(data: Any) -> Any:
     - ${VAR_NAME}: Required variable, raises error if not set
     - ${VAR_NAME:default_value}: Optional with default
 
-    Also expands ~ in paths after substitution.
+    Also expands ~ in string values after substitution using
+    os.path.expanduser(), which leaves non-path strings (URLs,
+    connection strings) intact.
 
     Args:
         data: Configuration data (dict, list, string, or primitive)
@@ -151,7 +153,7 @@ def _substitute_string(value: str) -> str:
     result = re.sub(pattern, replacer, value)
     if not result:
         return result
-    return str(Path(result).expanduser())
+    return os.path.expanduser(result)  # noqa: PTH111 — Path(x).expanduser() collapses "://" to ":/" in URLs
 
 
 class InheritableConfigLoader:

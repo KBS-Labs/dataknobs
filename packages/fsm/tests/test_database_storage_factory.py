@@ -2,13 +2,14 @@
 
 This test suite covers:
 - AsyncDatabaseFactory with memory backend
-- Factory with sqlite backend  
+- Factory with sqlite backend
 - Factory with invalid backend
 - Database connection handling
 - Cleanup with cleanup() method
 - Concurrent database operations
 - Transaction support
 - Error recovery
+- InMemoryStorage shared-DB collision (Bug B3)
 
 Uses real implementations instead of mocks following DRY principle.
 """
@@ -21,6 +22,7 @@ import uuid
 from typing import Dict, Any
 
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
+from dataknobs_fsm.storage.memory import InMemoryStorage
 from dataknobs_fsm.storage.base import StorageConfig, StorageBackend
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
 from dataknobs_fsm.core.data_modes import DataHandlingMode
@@ -425,6 +427,133 @@ class TestDatabaseStorageFactory:
             # Save with reference mode
             history_id = await storage.save_history(history)
             assert history_id == history.execution_id
-            
+
         finally:
             await storage.cleanup()
+
+
+class TestInMemoryStorageIsolation:
+    """Bug B3: InMemoryStorage shared-DB collision.
+
+    When no databases are injected, history and step records share the same
+    AsyncMemoryDatabase instance. load_steps() queries by execution_id and
+    finds both history records (which lack 'step_data') and step records,
+    crashing with KeyError on the history record.
+    """
+
+    @pytest.fixture
+    def memory_config(self):
+        """Create a default InMemoryStorage config."""
+        return StorageConfig(
+            backend=StorageBackend.MEMORY,
+            connection_params={'type': 'memory'},
+        )
+
+    @pytest.mark.asyncio
+    async def test_load_steps_does_not_collide_with_history(self, memory_config):
+        """Steps and history with same execution_id must not collide."""
+        storage = InMemoryStorage(memory_config)
+        await storage.initialize()
+
+        try:
+            exec_id = f"collision-test-{uuid.uuid4().hex[:8]}"
+
+            # Create and save a history record
+            history = ExecutionHistory(
+                execution_id=exec_id,
+                fsm_name="test_fsm",
+                data_mode=DataHandlingMode.COPY,
+            )
+            step = history.add_step(
+                state_name="start",
+                network_name="main",
+                data=None,
+            )
+            step.complete()
+            history.end_time = 1002.0
+            history.total_steps = 1
+
+            await storage.save_history(history)
+            await storage.save_step(exec_id, step)
+
+            # This must return only the step record, not crash on the
+            # history record which lacks 'step_data'.
+            steps = await storage.load_steps(exec_id)
+            assert len(steps) == 1
+            assert steps[0].state_name == "start"
+        finally:
+            await storage.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_injected_databases_still_work(self, memory_config):
+        """Explicit database injection must still be honored."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        steps_db = AsyncMemoryDatabase()
+        storage = InMemoryStorage(
+            memory_config, database=db, steps_database=steps_db,
+        )
+        await storage.initialize()
+
+        try:
+            exec_id = f"inject-test-{uuid.uuid4().hex[:8]}"
+            history = ExecutionHistory(
+                execution_id=exec_id,
+                fsm_name="test_fsm",
+                data_mode=DataHandlingMode.COPY,
+            )
+            step = history.add_step(
+                state_name="process",
+                network_name="main",
+                data=None,
+            )
+            step.complete()
+
+            await storage.save_history(history)
+            await storage.save_step(exec_id, step)
+
+            steps = await storage.load_steps(exec_id)
+            assert len(steps) == 1
+        finally:
+            await storage.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_close_disposes_auto_created_databases(self, memory_config):
+        """close() must dispose databases created internally, not injected ones."""
+        storage = InMemoryStorage(memory_config)
+        await storage.initialize()
+
+        # Auto-created databases should be owned
+        assert storage._owns_db is True  # type: ignore[attr-defined]
+        assert storage._owns_steps_db is True  # type: ignore[attr-defined]
+
+        # close() should not raise
+        await storage.close()
+
+        # Idempotent — calling again should not raise
+        await storage.close()
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_dispose_injected_databases(self, memory_config):
+        """close() must not close caller-injected databases."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        steps_db = AsyncMemoryDatabase()
+        storage = InMemoryStorage(
+            memory_config, database=db, steps_database=steps_db,
+        )
+        await storage.initialize()
+
+        # Injected databases should NOT be owned
+        assert storage._owns_db is False  # type: ignore[attr-defined]
+        assert storage._owns_steps_db is False  # type: ignore[attr-defined]
+
+        await storage.close()
+
+        # Injected databases should still be usable after storage.close()
+        from dataknobs_data.records import Record
+        await db.upsert(Record({"id": "test", "value": "alive"}))
+        result = await db.read("test")
+        assert result is not None

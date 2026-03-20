@@ -680,6 +680,38 @@ class TestPgVectorStoreEdgeCases:
         results = await pgvector_store.get_vectors([id_])
         assert results[0][1]["updated"] is True
 
+    async def test_upsert_updates_content_column(self, pgvector_store):
+        """Gap 12: Upsert must update content, domain_id, document_id, chunk_index.
+
+        Previously the ON CONFLICT clause only updated embedding and metadata,
+        leaving the content column stale on re-ingestion.
+        """
+        vector = np.random.rand(128).astype(np.float32)
+        id_ = str(uuid.uuid4())
+
+        # Initial insert with original content
+        await pgvector_store.add_vectors(
+            vector,
+            ids=[id_],
+            metadata=[{"source_text": "original content", "document_id": "doc1"}],
+        )
+
+        # Upsert with updated content
+        await pgvector_store.add_vectors(
+            vector,
+            ids=[id_],
+            metadata=[{"source_text": "updated content", "document_id": "doc2"}],
+        )
+
+        # Verify the content column was updated (not just metadata)
+        async with pgvector_store._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT content, document_id FROM {pgvector_store.schema}.{pgvector_store.table_name} WHERE id = $1::uuid",
+                uuid.UUID(id_),
+            )
+            assert row["content"] == "updated content"
+            assert row["document_id"] == "doc2"
+
     async def test_large_batch(self, pgvector_store):
         """Test adding a large batch of vectors."""
         vectors = np.random.rand(100, 128).astype(np.float32)
