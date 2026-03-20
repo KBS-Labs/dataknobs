@@ -26,30 +26,6 @@ class TurnTrackingMiddleware(Middleware):
     def __init__(self) -> None:
         self.turns: list[TurnState] = []
         self.tool_executions: list[ToolExecution] = []
-        self.before_messages: list[str] = []
-
-    async def before_message(self, message: str, context: BotContext) -> None:
-        self.before_messages.append(message)
-
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        pass
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
-        pass
 
     async def after_turn(self, turn: TurnState) -> None:
         self.turns.append(turn)
@@ -368,9 +344,15 @@ class TestMiddlewareBackwardCompatibility:
 
     @pytest.mark.asyncio
     async def test_existing_middleware_inherits_noop(self) -> None:
-        """Middleware subclasses that don't override after_turn still work."""
+        """Middleware subclasses that only override legacy hooks still work.
+
+        Legacy middleware that only implements before_message/after_message etc.
+        inherits no-op unified hooks — no breakage.
+        """
 
         class LegacyMiddleware(Middleware):
+            """Middleware using only legacy hooks (still supported)."""
+
             async def before_message(
                 self, message: str, context: BotContext
             ) -> None:
@@ -381,30 +363,26 @@ class TestMiddlewareBackwardCompatibility:
             ) -> None:
                 pass
 
-            async def post_stream(
-                self, message: str, response: str, context: BotContext
-            ) -> None:
-                pass
-
-            async def on_error(
-                self, error: Exception, message: str, context: BotContext
-            ) -> None:
-                pass
-
-            async def on_hook_error(
-                self, hook_name: str, error: Exception, context: BotContext
-            ) -> None:
-                pass
-
         mw = LegacyMiddleware()
         ctx = BotContext(conversation_id="c1", client_id="t1")
         turn = TurnState(mode=TurnMode.CHAT, message="hi", context=ctx)
 
-        # These should not raise
+        # Unified hooks should be inherited no-ops
         await mw.after_turn(turn)
         await mw.on_tool_executed(
             ToolExecution(tool_name="test", parameters={}), ctx
         )
+        result = await mw.on_turn_start(turn)
+        assert result is None
+
+        # Legacy hooks it implements should also work
+        await mw.before_message("hi", ctx)
+        await mw.after_message("hello", ctx)
+
+        # Legacy hooks it doesn't implement should be inherited no-ops
+        await mw.post_stream("hi", "hello", ctx)
+        await mw.on_error(ValueError("e"), "hi", ctx)
+        await mw.on_hook_error("hook", ValueError("e"), ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -417,29 +395,6 @@ class PluginDataMiddleware(Middleware):
         self.key = key
         self.value = value
         self.read_back: Any = None
-
-    async def before_message(self, message: str, context: BotContext) -> None:
-        pass
-
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        pass
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
-        pass
 
     async def on_turn_start(self, turn: TurnState) -> str | None:
         turn.plugin_data[self.key] = self.value
@@ -454,29 +409,6 @@ class MessageTransformMiddleware(Middleware):
 
     def __init__(self, transform_fn: Any) -> None:
         self._transform_fn = transform_fn
-
-    async def before_message(self, message: str, context: BotContext) -> None:
-        pass
-
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        pass
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
-        pass
 
     async def on_turn_start(self, turn: TurnState) -> str | None:
         return self._transform_fn(turn.message)
@@ -536,29 +468,6 @@ class TestPluginData:
         call_count = 0
 
         class OnceMiddleware(Middleware):
-            async def before_message(self, message: str, context: BotContext) -> None:
-                pass
-
-            async def after_message(
-                self, response: str, context: BotContext, **kwargs: Any
-            ) -> None:
-                pass
-
-            async def post_stream(
-                self, message: str, response: str, context: BotContext
-            ) -> None:
-                pass
-
-            async def on_error(
-                self, error: Exception, message: str, context: BotContext
-            ) -> None:
-                pass
-
-            async def on_hook_error(
-                self, hook_name: str, error: Exception, context: BotContext
-            ) -> None:
-                pass
-
             async def on_turn_start(self, turn: TurnState) -> str | None:
                 nonlocal call_count
                 call_count += 1
