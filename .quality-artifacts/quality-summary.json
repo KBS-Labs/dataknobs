@@ -1,15 +1,15 @@
 {
-  "timestamp": "2026-03-19T18:25:39Z",
+  "timestamp": "2026-03-20T00:05:52Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "all",
+  "tested_packages": [],
   "checks": {
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -17,21 +17,21 @@
       "exit_code": 0,
       "tool": "docs-update-versions.sh"
     },
-    "style": {
+    "validation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "tool": "ruff"
+      "skipped": true,
+      "tool": "validate.sh"
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false
+      "skipped": true
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false
+      "skipped": true
     }
   }
 }

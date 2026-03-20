@@ -7,23 +7,51 @@ computing the transitive closure of dependents via the dependency graph.
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-# Package dependency graph: package -> list of packages it depends on
-DEPENDENCIES: dict[str, list[str]] = {
-    "common": [],
-    "structures": ["common"],
-    "config": ["common"],
-    "utils": ["common", "structures"],
-    "xization": ["common", "structures", "utils"],
-    "data": ["common", "utils", "config"],
-    "fsm": ["common", "data", "structures", "utils", "config"],
-    "llm": ["common", "config", "data"],
-    "bots": ["common", "config", "llm", "data", "xization"],
-}
+# Root of the repository
+_ROOT = Path(__file__).resolve().parent.parent
+_PACKAGES_DIR = _ROOT / "packages"
+
+# Regex to extract dataknobs-<name> from dependency strings like:
+#   "dataknobs-common>=1.0.1",
+_DK_DEP_RE = re.compile(r'"dataknobs-([a-z]+)')
+
+
+def discover_dependencies() -> dict[str, list[str]]:
+    """Build the dependency graph by parsing each package's pyproject.toml.
+
+    Returns a dict mapping package short name to the list of internal
+    dataknobs package short names it depends on.
+    """
+    deps: dict[str, list[str]] = {}
+    for pyproject in sorted(_PACKAGES_DIR.glob("*/pyproject.toml")):
+        pkg_name = pyproject.parent.name
+        internal_deps: list[str] = []
+        in_deps_section = False
+        for line in pyproject.read_text().splitlines():
+            stripped = line.strip()
+            if stripped == "dependencies = [":
+                in_deps_section = True
+                continue
+            if in_deps_section:
+                if stripped == "]":
+                    break
+                m = _DK_DEP_RE.search(stripped)
+                if m:
+                    dep_name = m.group(1)
+                    if dep_name != pkg_name:  # skip self-references
+                        internal_deps.append(dep_name)
+        deps[pkg_name] = sorted(internal_deps)
+    return deps
+
+
+# Discover at import time — this script is short-lived (CLI tool)
+DEPENDENCIES = discover_dependencies()
 
 # All valid package names
 ALL_PACKAGES = sorted(DEPENDENCIES.keys())
@@ -33,11 +61,6 @@ GLOBAL_TRIGGERS = [
     "pyproject.toml",
     "uv.lock",
     "conftest.py",
-]
-
-# Prefixes that trigger testing all packages
-GLOBAL_PREFIXES = [
-    "bin/",
 ]
 
 # Patterns that indicate docs changes
@@ -120,10 +143,6 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool]:
     for filepath in files:
         # Check for global triggers
         if filepath in GLOBAL_TRIGGERS:
-            all_triggered = True
-            continue
-
-        if any(filepath.startswith(prefix) for prefix in GLOBAL_PREFIXES):
             all_triggered = True
             continue
 
