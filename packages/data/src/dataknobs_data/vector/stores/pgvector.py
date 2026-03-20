@@ -431,7 +431,23 @@ class PgVectorStore(VectorStore):
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
-        """Add vectors to the store."""
+        """Add vectors to the store, upserting on ID conflict.
+
+        When a vector with the same ID already exists, all columns are
+        updated (embedding, metadata, content, domain_id, document_id,
+        chunk_index). The ``created_at`` timestamp is preserved to retain
+        the original insertion time.
+
+        Args:
+            vectors: Vector data as numpy array(s).
+            ids: Optional IDs for the vectors. Generated if not provided.
+            metadata: Optional metadata dicts. Keys ``source_text``,
+                ``document_id``, ``chunk_index``, and ``domain_id`` are
+                extracted and stored in dedicated columns.
+
+        Returns:
+            List of vector IDs (provided or generated).
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -461,6 +477,8 @@ class PgVectorStore(VectorStore):
                 content = meta.get("source_text", meta.get("content", ""))
                 domain_id = meta.get("domain_id", self.domain_id)
 
+                # Upsert: update all columns on conflict except created_at
+                # (preserve original insertion timestamp on re-ingestion).
                 await conn.execute(
                     f"""
                     INSERT INTO {self.schema}.{self.table_name}
@@ -469,7 +487,6 @@ class PgVectorStore(VectorStore):
                          {self._col('content')}, {self._col('embedding')},
                          {self._col('metadata')})
                     VALUES ($1{id_cast}, $2, $3, $4, $5, $6::vector, $7::jsonb)
-                    -- created_at intentionally excluded: preserve original insertion time
                     ON CONFLICT ({self._col('id')}) DO UPDATE SET
                         {self._col('embedding')} = EXCLUDED.{self._col('embedding')},
                         {self._col('metadata')} = EXCLUDED.{self._col('metadata')},

@@ -517,3 +517,43 @@ class TestInMemoryStorageIsolation:
             assert len(steps) == 1
         finally:
             await storage.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_close_disposes_auto_created_databases(self, memory_config):
+        """close() must dispose databases created internally, not injected ones."""
+        storage = InMemoryStorage(memory_config)
+        await storage.initialize()
+
+        # Auto-created databases should be owned
+        assert storage._owns_db is True  # type: ignore[attr-defined]
+        assert storage._owns_steps_db is True  # type: ignore[attr-defined]
+
+        # close() should not raise
+        await storage.close()
+
+        # Idempotent — calling again should not raise
+        await storage.close()
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_dispose_injected_databases(self, memory_config):
+        """close() must not close caller-injected databases."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        steps_db = AsyncMemoryDatabase()
+        storage = InMemoryStorage(
+            memory_config, database=db, steps_database=steps_db,
+        )
+        await storage.initialize()
+
+        # Injected databases should NOT be owned
+        assert storage._owns_db is False  # type: ignore[attr-defined]
+        assert storage._owns_steps_db is False  # type: ignore[attr-defined]
+
+        await storage.close()
+
+        # Injected databases should still be usable after storage.close()
+        from dataknobs_data.records import Record
+        await db.upsert(Record({"id": "test", "value": "alive"}))
+        result = await db.read("test")
+        assert result is not None

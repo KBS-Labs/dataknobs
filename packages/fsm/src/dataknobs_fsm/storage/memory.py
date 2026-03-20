@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING
 
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 
@@ -20,12 +19,10 @@ if TYPE_CHECKING:
 class InMemoryStorage(UnifiedDatabaseStorage):
     """In-memory storage implementation using dataknobs_data's memory backend.
 
-    This storage backend uses dataknobs_data's AsyncMemoryDatabase which
-    provides in-memory storage with support for:
-    - LRU eviction based on max_size
-    - Mode-specific compression for REFERENCE mode
-    - Fast queries with in-memory indexing
-    - Automatic cleanup of old entries
+    Creates two separate ``AsyncMemoryDatabase`` instances (one for history
+    records, one for step records) to avoid namespace collisions in the
+    flat memory backend.  SQL-backed storages can safely share a single
+    database because tables provide natural isolation.
     """
 
     def __init__(
@@ -59,61 +56,25 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         if 'enable_indexing' not in config.connection_params:
             config.connection_params['enable_indexing'] = True
 
-        # Configure mode-specific optimizations
-        self._configure_mode_optimizations(config)
-
         # When no databases are injected, create separate instances so that
         # history and step records don't share a single namespace.  Without
         # this, load_steps() queries by execution_id and finds both history
         # records (which lack 'step_data') and step records, crashing with
         # KeyError.  (Bug B3)
-        created_internally = database is None and steps_database is None
-        if created_internally:
+        if database is None and steps_database is None:
             from dataknobs_data.backends.memory import AsyncMemoryDatabase
             database = AsyncMemoryDatabase()
             steps_database = AsyncMemoryDatabase()
+            owns_databases = True
+        else:
+            owns_databases = None  # defer to parent's inference
 
-        super().__init__(config, database=database, steps_database=steps_database)
-
-        # Reclaim ownership of databases we just built so that cleanup()
-        # properly closes them (super().__init__ sets _owns_* = False when
-        # it receives non-None databases).
-        if created_internally:
-            self._owns_db = True
-            self._owns_steps_db = True
-    
-    def _configure_mode_optimizations(self, config: StorageConfig) -> None:
-        """Configure mode-specific optimizations for memory storage.
-        
-        Args:
-            config: Storage configuration to modify.
-        """
-        # For REFERENCE mode, enable compression by default
-        if not config.mode_specific_config:
-            config.mode_specific_config = {}
-        
-        if DataHandlingMode.REFERENCE not in config.mode_specific_config:
-            config.mode_specific_config[DataHandlingMode.REFERENCE] = {
-                'compress': True,
-                'eviction_policy': 'lru',
-                'cache_size': 100
-            }
-        
-        # For DIRECT mode, use minimal storage
-        if DataHandlingMode.DIRECT not in config.mode_specific_config:
-            config.mode_specific_config[DataHandlingMode.DIRECT] = {
-                'store_paths': False,
-                'store_snapshots': False,
-                'max_history': 10  # Keep only last 10 for DIRECT mode
-            }
-        
-        # For COPY mode, full storage but with size limits
-        if DataHandlingMode.COPY not in config.mode_specific_config:
-            config.mode_specific_config[DataHandlingMode.COPY] = {
-                'store_paths': True,
-                'store_snapshots': True,
-                'max_size_mb': 100  # Limit total size for COPY mode
-            }
+        super().__init__(
+            config,
+            database=database,
+            steps_database=steps_database,
+            owns_databases=owns_databases,
+        )
 
 
 # Register memory backend

@@ -46,6 +46,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         *,
         database: AsyncDatabase | None = None,
         steps_database: AsyncDatabase | None = None,
+        owns_databases: bool | None = None,
     ):
         """Initialize database storage.
 
@@ -56,10 +57,19 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 directly. Enables connection pool sharing across components.
             steps_database: Optional separate AsyncDatabase for step records.
                 Defaults to ``database`` when only ``database`` is provided.
+            owns_databases: Explicit ownership override. When ``True``, this
+                instance will close both databases on ``close()``. When
+                ``False``, neither is closed. When ``None`` (default),
+                ownership is inferred: databases created by the factory are
+                owned; injected databases are not.
         """
         super().__init__(config)
-        self._owns_db = database is None
-        self._owns_steps_db = steps_database is None and database is None
+        if owns_databases is not None:
+            self._owns_db = owns_databases
+            self._owns_steps_db = owns_databases
+        else:
+            self._owns_db = database is None
+            self._owns_steps_db = steps_database is None and database is None
         self._db: AsyncDatabase | None = database
         self._steps_db: AsyncDatabase | None = steps_database or database
     
