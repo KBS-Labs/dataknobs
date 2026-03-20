@@ -2,14 +2,25 @@
 
 Tests the get_wizard_state(), _normalize_wizard_state(), and
 normalize_wizard_state() methods for public wizard state access.
+
+TestNormalizeWizardState and TestCanonicalSchema test the pure
+normalize_wizard_state() function.
+
+TestGetWizardState tests the DynaBot.get_wizard_state() method, which
+looks up state from cache then falls back to storage. Edge cases
+(None metadata, empty metadata, nested format) use lightweight
+SimpleNamespace objects injected into the cache since they test
+get_wizard_state's lookup logic, not wizard flow behavior.
 """
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from dataknobs_bots import DynaBot
 from dataknobs_bots.bot.base import normalize_wizard_state
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm.conversations import (
     ConversationNode,
@@ -17,6 +28,8 @@ from dataknobs_llm.conversations import (
     DataknobsConversationStorage,
 )
 from dataknobs_llm.llm.base import LLMMessage
+from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 from dataknobs_structures.tree import Tree
 
 
@@ -98,7 +111,7 @@ class TestNormalizeWizardState:
 
     def test_normalize_defaults(self) -> None:
         """Verify default values are applied for missing fields."""
-        wizard_meta: dict = {}
+        wizard_meta: dict[str, Any] = {}
 
         result = normalize_wizard_state(wizard_meta)
 
@@ -142,10 +155,15 @@ class TestInstanceNormalizeWizardState:
     @pytest.fixture
     def bot(self) -> DynaBot:
         """Create a minimal DynaBot for testing normalization."""
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        library = ConfigPromptLibrary({
+            "system": {"assistant": {"template": "You are a bot."}},
+        })
+        builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
         return DynaBot(
-            llm=MagicMock(),
-            prompt_builder=MagicMock(),
+            llm=provider,
+            prompt_builder=builder,
             conversation_storage=storage,
         )
 
@@ -165,7 +183,12 @@ class TestInstanceNormalizeWizardState:
 
 @pytest.mark.asyncio
 class TestGetWizardState:
-    """Tests for DynaBot.get_wizard_state() method (async with storage fallback)."""
+    """Tests for DynaBot.get_wizard_state() method.
+
+    Edge cases use lightweight SimpleNamespace objects injected into the
+    conversation cache to test get_wizard_state's lookup logic without
+    exercising full wizard flow.
+    """
 
     @pytest.fixture
     def storage(self) -> DataknobsConversationStorage:
@@ -175,9 +198,14 @@ class TestGetWizardState:
     @pytest.fixture
     def bot(self, storage: DataknobsConversationStorage) -> DynaBot:
         """Create a minimal DynaBot for testing."""
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        library = ConfigPromptLibrary({
+            "system": {"assistant": {"template": "You are a bot."}},
+        })
+        builder = AsyncPromptBuilder(library=library)
         return DynaBot(
-            llm=MagicMock(),
-            prompt_builder=MagicMock(),
+            llm=provider,
+            prompt_builder=builder,
             conversation_storage=storage,
         )
 
@@ -188,64 +216,64 @@ class TestGetWizardState:
 
     async def test_returns_none_when_no_wizard_metadata(self, bot: DynaBot) -> None:
         """Verify None is returned when conversation has no wizard metadata."""
-        mock_manager = MagicMock()
-        mock_manager.metadata = {"other": "data"}
-        bot._conversation_managers["conv-123"] = mock_manager
+        manager = SimpleNamespace(metadata={"other": "data"})
+        bot._conversation_managers["conv-123"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-123")
         assert result is None
 
     async def test_returns_none_when_metadata_empty(self, bot: DynaBot) -> None:
         """Verify None is returned when metadata is empty."""
-        mock_manager = MagicMock()
-        mock_manager.metadata = {}
-        bot._conversation_managers["conv-123"] = mock_manager
+        manager = SimpleNamespace(metadata={})
+        bot._conversation_managers["conv-123"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-123")
         assert result is None
 
     async def test_returns_none_when_metadata_is_none(self, bot: DynaBot) -> None:
         """Verify None is returned when metadata is None."""
-        mock_manager = MagicMock()
-        mock_manager.metadata = None
-        bot._conversation_managers["conv-123"] = mock_manager
+        manager = SimpleNamespace(metadata=None)
+        bot._conversation_managers["conv-123"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-123")
         assert result is None
 
-    async def test_returns_normalized_state(self, bot: DynaBot) -> None:
-        """Verify wizard state is returned normalized from in-memory cache."""
-        mock_manager = MagicMock()
-        mock_manager.metadata = {
-            "wizard": {
-                "current_stage": "step_1",
-                "stage_index": 0,
-                "total_stages": 3,
-                "progress": 0.0,
-                "completed": False,
-                "data": {"user_input": "hello"},
-                "can_skip": True,
-                "can_go_back": False,
-                "suggestions": ["Continue"],
-                "history": ["step_1"],
-            }
-        }
-        bot._conversation_managers["conv-123"] = mock_manager
+    async def test_returns_normalized_state_via_harness(self) -> None:
+        """Verify get_wizard_state returns normalized state via real bot flow.
 
-        result = await bot.get_wizard_state("conv-123")
+        Uses 2 required fields to bypass verbatim capture (single-field
+        schemas skip LLM extraction and capture the raw user message).
+        """
+        config = (
+            WizardConfigBuilder("state-test")
+            .stage("gather", is_start=True, prompt="Tell me your name and topic.")
+            .field("name", field_type="string", required=True)
+            .field("topic", field_type="string", required=True)
+            .transition("done", "data.get('name') and data.get('topic')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
 
-        assert result is not None
-        assert result["current_stage"] == "step_1"
-        assert result["data"] == {"user_input": "hello"}
-        assert result["can_skip"] is True
-        assert result["can_go_back"] is False
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"name": "Alice", "topic": "math"}]],
+        ) as harness:
+            await harness.chat("My name is Alice and I like math")
+            state = harness.wizard_state
+
+            assert state is not None
+            assert state["data"]["name"] == "Alice"
+            assert state["data"]["topic"] == "math"
+            assert "current_stage" in state
+            assert "stage_index" in state
+            assert "progress" in state
 
     async def test_returns_normalized_state_from_nested_format(
         self, bot: DynaBot
     ) -> None:
         """Verify legacy nested format is normalized correctly."""
-        mock_manager = MagicMock()
-        mock_manager.metadata = {
+        manager = SimpleNamespace(metadata={
             "wizard": {
                 "fsm_state": {
                     "current_stage": "configure",
@@ -254,8 +282,8 @@ class TestGetWizardState:
                     "history": ["welcome", "configure"],
                 }
             }
-        }
-        bot._conversation_managers["conv-123"] = mock_manager
+        })
+        bot._conversation_managers["conv-123"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-123")
 
@@ -271,7 +299,6 @@ class TestGetWizardState:
         storage: DataknobsConversationStorage,
     ) -> None:
         """Verify get_wizard_state falls back to storage when not in cache."""
-        # Save a conversation with wizard metadata directly to storage
         root_node = ConversationNode(
             message=LLMMessage(role="system", content="Wizard bot"),
             node_id="",
@@ -293,7 +320,6 @@ class TestGetWizardState:
         )
         await storage.save_conversation(state)
 
-        # Do NOT add to _conversation_managers — force storage fallback
         result = await bot.get_wizard_state("conv-storage")
 
         assert result is not None
@@ -307,7 +333,6 @@ class TestGetWizardState:
         storage: DataknobsConversationStorage,
     ) -> None:
         """Verify in-memory cache wins over storage when both have data."""
-        # Save stale wizard state to storage
         root_node = ConversationNode(
             message=LLMMessage(role="system", content="Wizard bot"),
             node_id="",
@@ -325,15 +350,13 @@ class TestGetWizardState:
         )
         await storage.save_conversation(state)
 
-        # Add fresh state to in-memory cache
-        mock_manager = MagicMock()
-        mock_manager.metadata = {
+        manager = SimpleNamespace(metadata={
             "wizard": {
                 "current_stage": "new_stage",
                 "data": {"version": "fresh"},
             }
-        }
-        bot._conversation_managers["conv-both"] = mock_manager
+        })
+        bot._conversation_managers["conv-both"] = manager  # type: ignore[assignment]
 
         result = await bot.get_wizard_state("conv-both")
 

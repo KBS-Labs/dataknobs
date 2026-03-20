@@ -164,3 +164,59 @@ def set_wizard_state(
         fsm_state: The FSM state dict to set.
     """
     manager.metadata["wizard"] = {"fsm_state": fsm_state}
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for wizard unit tests (metadata access + builder)
+# ---------------------------------------------------------------------------
+
+
+def get_wizard_state_data(manager: ConversationManager) -> dict[str, Any]:
+    """Read wizard_state.data from manager metadata.
+
+    Centralized helper — use instead of per-file ``_get_wizard_state_data()``.
+    """
+    wizard_meta = manager.metadata.get("wizard", {})
+    fsm_state = wizard_meta.get("fsm_state", {})
+    return fsm_state.get("data", {})
+
+
+def get_wizard_stage(manager: ConversationManager) -> str:
+    """Read current wizard stage from manager metadata.
+
+    Centralized helper — use instead of per-file ``_get_wizard_stage()``.
+    """
+    wizard_meta = manager.metadata.get("wizard", {})
+    fsm_state = wizard_meta.get("fsm_state", {})
+    return fsm_state.get("current_stage", "")
+
+
+def build_wizard_reasoning(
+    config: dict[str, Any],
+    extractor: Any | None = None,
+    **kwargs: Any,
+) -> WizardReasoning:
+    """Build a WizardReasoning with optional extractor.
+
+    Centralized helper — use instead of per-file ``_build_wizard()``
+    for tests that use ``ConfigurableExtractor``-style extraction.
+    For tests that need a real ``SchemaExtractor`` with scripted
+    EchoProvider responses, use ``scripted_schema_extractor()``
+    from ``dataknobs_llm.testing``.
+
+    Args:
+        config: Wizard config dict.
+        extractor: Optional ConfigurableExtractor or compatible.
+        **kwargs: Additional kwargs for WizardReasoning.
+
+    Returns:
+        Configured WizardReasoning instance.
+    """
+    loader = WizardConfigLoader()
+    wizard_fsm = loader.load_from_dict(config)
+    return WizardReasoning(
+        wizard_fsm=wizard_fsm,
+        extractor=extractor,
+        strict_validation=False,
+        **kwargs,
+    )

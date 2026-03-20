@@ -22,8 +22,8 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
 from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.testing import scripted_schema_extractor
 
 
 # ── Test transform functions ──────────────────────────────────────────
@@ -207,31 +207,34 @@ QUIZ_WIZARD_CONFIG = {
 # ── Helper to build wizard reasoning with extraction ─────────────────
 
 
+_CUSTOM_FNS: dict[str, Any] = {
+    "generate_test_questions": generate_test_questions,
+    "initialize_test_bank": initialize_test_bank,
+    "submit_test_review": submit_test_review,
+    "context_capturing_transform": context_capturing_transform,
+}
+
+
 def _build_wizard(
     extraction_responses: list[str],
     artifact_registry: Any = None,
 ) -> tuple[WizardReasoning, EchoProvider]:
     """Build a WizardReasoning with scripted extraction responses.
 
+    Uses ``scripted_schema_extractor`` from ``dataknobs_llm.testing``
+    to create a real ``SchemaExtractor`` backed by an ``EchoProvider``
+    with the given responses.
+
     Returns:
         Tuple of (WizardReasoning, extraction_provider) so tests can
         inspect extraction call counts.
     """
-    extraction_provider = EchoProvider(
-        {"provider": "echo", "model": "echo-extraction"}
+    extractor, extraction_provider = scripted_schema_extractor(
+        extraction_responses,
     )
-    extraction_provider.set_responses(extraction_responses)
-    extractor = SchemaExtractor(provider=extraction_provider)
-
-    custom_fns: dict[str, Any] = {
-        "generate_test_questions": generate_test_questions,
-        "initialize_test_bank": initialize_test_bank,
-        "submit_test_review": submit_test_review,
-        "context_capturing_transform": context_capturing_transform,
-    }
 
     loader = WizardConfigLoader()
-    wizard_fsm = loader.load_from_dict(QUIZ_WIZARD_CONFIG, custom_fns)
+    wizard_fsm = loader.load_from_dict(QUIZ_WIZARD_CONFIG, _CUSTOM_FNS)
 
     reasoning = WizardReasoning(
         wizard_fsm=wizard_fsm,
@@ -590,11 +593,7 @@ class TestWizardTransformContext:
             ],
         }
 
-        extraction_provider = EchoProvider(
-            {"provider": "echo", "model": "echo-extraction"}
-        )
-        extraction_provider.set_responses(['{"go": "yes"}'])
-        extractor = SchemaExtractor(provider=extraction_provider)
+        extractor, _ = scripted_schema_extractor(['{"go": "yes"}'])
 
         custom_fns = {
             "context_capturing_transform": context_capturing_transform,
@@ -658,11 +657,7 @@ class TestWizardTransformContext:
             ],
         }
 
-        extraction_provider = EchoProvider(
-            {"provider": "echo", "model": "echo-extraction"}
-        )
-        extraction_provider.set_responses(['{"go": "yes"}'])
-        extractor = SchemaExtractor(provider=extraction_provider)
+        extractor, _ = scripted_schema_extractor(['{"go": "yes"}'])
 
         custom_fns = {
             "context_capturing_transform": context_capturing_transform,

@@ -1272,6 +1272,25 @@ class WizardReasoning(ReasoningStrategy):
             return {PROVIDER_ROLE_EXTRACTION: self._extractor.provider}
         return {}
 
+    @property
+    def extractor(self) -> Any | None:
+        """The current extractor instance, or None if not configured."""
+        return self._extractor
+
+    def set_extractor(self, extractor: Any) -> None:
+        """Replace the extractor instance.
+
+        Use this to inject a ``ConfigurableExtractor`` or any other
+        duck-typed extractor that implements ``async extract(text,
+        schema, context, model)``.  Unlike ``set_provider()`` (which
+        swaps the LLM provider *inside* an existing ``SchemaExtractor``),
+        this replaces the extractor object entirely.
+
+        Args:
+            extractor: New extractor instance.
+        """
+        self._extractor = extractor
+
     def set_provider(self, role: str, provider: Any) -> bool:
         """Replace the extraction provider if the role matches."""
         from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION

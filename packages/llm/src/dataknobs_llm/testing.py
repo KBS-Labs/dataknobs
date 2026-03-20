@@ -467,6 +467,43 @@ class ConfigurableExtractor:
         return self._results[idx]
 
 
+def scripted_schema_extractor(
+    responses: list[str] | None = None,
+) -> tuple[Any, Any]:
+    """Create a real SchemaExtractor backed by scripted EchoProvider responses.
+
+    Unlike ``ConfigurableExtractor`` (which bypasses extraction entirely),
+    this exercises the full ``SchemaExtractor`` pipeline: prompt building,
+    LLM call, JSON parsing, and confidence scoring.  Use this for tests
+    that need to verify extraction behavior end-to-end.
+
+    Args:
+        responses: JSON strings the EchoProvider will return in order.
+            Each string should be the raw JSON that SchemaExtractor
+            expects to parse (e.g. ``'{"name": "Alice"}'``).
+
+    Returns:
+        Tuple of ``(SchemaExtractor, EchoProvider)`` — the provider is
+        returned so tests can verify call counts or queue additional
+        responses.
+
+    Example::
+
+        extractor, ext_provider = scripted_schema_extractor([
+            '{"name": "Alice", "topic": "math"}',
+        ])
+        reasoning = build_wizard_reasoning(config, extractor=extractor)
+    """
+    from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
+    from dataknobs_llm.llm.providers.echo import EchoProvider as _EchoProvider
+
+    provider = _EchoProvider({"provider": "echo", "model": "echo-extraction"})
+    if responses:
+        provider.set_responses(responses)
+    extractor = SchemaExtractor(provider=provider)
+    return extractor, provider
+
+
 # =============================================================================
 # Serialization helpers — LLM types ↔ dict for capture/replay
 # =============================================================================

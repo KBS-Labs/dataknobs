@@ -16,8 +16,8 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
 from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.testing import scripted_schema_extractor
 
 
 # ---------------------------------------------------------------------------
@@ -84,11 +84,9 @@ def _build_clarification_wizard(
     Returns:
         Tuple of (WizardReasoning, extraction_provider).
     """
-    extraction_provider = EchoProvider(
-        {"provider": "echo", "model": "echo-extraction"}
+    extractor, extraction_provider = scripted_schema_extractor(
+        extraction_responses,
     )
-    extraction_provider.set_responses(extraction_responses)
-    extractor = SchemaExtractor(provider=extraction_provider)
 
     loader = WizardConfigLoader()
     wizard_fsm = loader.load_from_dict(CLARIFICATION_WIZARD_CONFIG)
