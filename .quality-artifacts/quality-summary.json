@@ -1,15 +1,15 @@
 {
-  "timestamp": "2026-03-20T02:37:45Z",
+  "timestamp": "2026-03-20T04:28:17Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "bots llm",
+  "tested_packages": ["bots", "llm"],
   "checks": {
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {

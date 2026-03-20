@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-20T02:37:45Z",
+  "timestamp": "2026-03-20T04:28:17Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/extraction-scope-escalation",
-  "git_commit": "1c9e762aa567452d7454a19a25dec8d4690a0e5b",
+  "git_branch": "sbk/bot-test-harness",
+  "git_commit": "e2cb0c47f51887cf22a9a3f0c7d0675e879078d8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
