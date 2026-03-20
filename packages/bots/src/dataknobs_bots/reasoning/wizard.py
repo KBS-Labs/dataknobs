@@ -47,6 +47,14 @@ DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
     "_bank_fn",             # Per-step bank accessor (non-serializable callable)
 })
 
+# Extraction scope breadth ordering — used by scope escalation to
+# determine whether the current scope is narrower than the target.
+SCOPE_BREADTH: dict[str, int] = {
+    "current_message": 0,
+    "recent_messages": 1,
+    "wizard_session": 2,
+}
+
 
 @dataclass
 class TurnContext:
@@ -587,6 +595,9 @@ class WizardReasoning(ReasoningStrategy):
         extraction_grounding: bool = True,
         merge_filter: MergeFilter | None = None,
         grounding_overlap_threshold: float = 0.5,
+        scope_escalation_enabled: bool = False,
+        scope_escalation_scope: str = "wizard_session",
+        recent_messages_count: int = 3,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -634,6 +645,16 @@ class WizardReasoning(ReasoningStrategy):
             grounding_overlap_threshold: Minimum word-overlap ratio for
                 string grounding (0.0--1.0).  Defaults to 0.5.  Only used
                 when the built-in grounding filter is active.
+            scope_escalation_enabled: When True, automatically retry extraction
+                with a broader scope when required fields are missing after
+                the initial extraction.  Defaults to False (backward-compat).
+            scope_escalation_scope: The scope to escalate to when
+                ``scope_escalation_enabled`` is True.  One of
+                ``"recent_messages"`` or ``"wizard_session"`` (default).
+            recent_messages_count: Number of prior user messages to include
+                when using the ``"recent_messages"`` extraction scope.
+                Defaults to 3.  Configured under ``scope_escalation``
+                in the wizard settings YAML.
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -674,6 +695,9 @@ class WizardReasoning(ReasoningStrategy):
             )
         else:
             self._merge_filter = None
+        self._scope_escalation_enabled = scope_escalation_enabled
+        self._scope_escalation_scope = scope_escalation_scope
+        self._recent_messages_count = recent_messages_count
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1462,6 +1486,24 @@ class WizardReasoning(ReasoningStrategy):
         if merge_filter_path:
             merge_filter = _load_merge_filter(merge_filter_path)
 
+        # Load scope escalation settings
+        scope_escalation_config = wizard_fsm.settings.get("scope_escalation", {})
+        scope_escalation_enabled = scope_escalation_config.get("enabled", False)
+        scope_escalation_scope = scope_escalation_config.get(
+            "escalation_scope", "wizard_session",
+        )
+        if scope_escalation_scope not in SCOPE_BREADTH:
+            logger.warning(
+                "Unknown scope_escalation_scope %r — must be one of %s. "
+                "Defaulting to 'wizard_session'.",
+                scope_escalation_scope,
+                list(SCOPE_BREADTH),
+            )
+            scope_escalation_scope = "wizard_session"
+        recent_messages_count = scope_escalation_config.get(
+            "recent_messages_count", 3,
+        )
+
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
 
@@ -1554,6 +1596,9 @@ class WizardReasoning(ReasoningStrategy):
             extraction_grounding=extraction_grounding,
             merge_filter=merge_filter,
             grounding_overlap_threshold=grounding_overlap_threshold,
+            scope_escalation_enabled=scope_escalation_enabled,
+            scope_escalation_scope=scope_escalation_scope,
+            recent_messages_count=recent_messages_count,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -1953,58 +1998,98 @@ class WizardReasoning(ReasoningStrategy):
                         extraction.data, schema
                     )
 
-                # Merge extracted data, tracking which keys are new or
-                # changed so we can decide whether to show a confirmation
-                # template before allowing a transition.
-                new_data_keys: set[str] = set()
-                schema_props = (
-                    schema.get("properties", {}) if schema else {}
-                )
-                # Resolve merge filter: per-stage grounding override,
-                # then fall back to wizard-level filter.
-                # Note: user_message here is always the *last* user
-                # message.  With wizard_session extraction scope, the
-                # extractor sees the full history, but the grounding
-                # check intentionally grounds against only the current
+                # Merge extracted data into wizard_state.data (in-place),
+                # tracking which keys are new or changed so we can
+                # decide whether to show a confirmation template before
+                # allowing a transition.
+                # Note: user_message is always the *last* user message.
+                # With wizard_session extraction scope, the extractor
+                # sees the full history, but the grounding check
+                # intentionally grounds against only the current
                 # message.  First-write (existing_value is None) is
                 # always allowed through, which compensates for
                 # session-scope re-extraction of prior turns.
-                stage_grounding = stage.get("extraction_grounding")
-                if stage_grounding is not None:
-                    if stage_grounding:
-                        # Per-stage enable: use wizard filter or create
-                        # a default if wizard-level grounding was off.
-                        active_filter: MergeFilter | None = (
-                            self._merge_filter
-                            or SchemaGroundingFilter(
-                                overlap_threshold=self._grounding_overlap_threshold,
-                            )
+                new_data_keys = self._merge_extraction_result(
+                    extraction.data, wizard_state, stage, user_message,
+                )
+
+                # ── Scope escalation ──
+                # When required fields are still missing after the
+                # initial merge and the current scope is narrower than
+                # the escalation target, retry extraction with a
+                # broader scope so that information from earlier turns
+                # can fill the gaps.  Only escalate when there IS
+                # prior conversation history — on the first turn,
+                # the broader scope would see the same content and
+                # waste an LLM call.
+                if self._scope_escalation_enabled:
+                    effective_scope = self._get_extraction_scope(stage)
+                    target_breadth = SCOPE_BREADTH.get(
+                        self._scope_escalation_scope,
+                        SCOPE_BREADTH["wizard_session"],
+                    )
+                    current_breadth = SCOPE_BREADTH.get(
+                        effective_scope, 0,
+                    )
+                    if current_breadth < target_breadth:
+                        missing = self._check_required_fields_missing(
+                            wizard_state, stage,
                         )
-                    else:
-                        active_filter = None
-                else:
-                    active_filter = self._merge_filter
-                for k, v in extraction.data.items():
-                    if v is None:
-                        # Null extraction = field not extracted.
-                        # Some models return null instead of omitting
-                        # the key; treat both identically.
-                        continue
-                    # Grounding check: protect existing data from
-                    # ungrounded overwrites (Layer 2/4).
-                    if active_filter is not None:
-                        existing = wizard_state.data.get(k)
-                        prop_def = schema_props.get(k, {})
-                        if not active_filter.should_merge(
-                            k, v, existing, user_message, prop_def,
-                        ):
-                            continue
-                    if (
-                        k not in wizard_state.data
-                        or wizard_state.data[k] != v
-                    ):
-                        new_data_keys.add(k)
-                        wizard_state.data[k] = v
+                        # Check for prior history: without earlier
+                        # turns, escalation would re-extract the same
+                        # content at higher cost for no benefit.
+                        has_prior = bool(
+                            self._build_wizard_context(
+                                manager, wizard_state,
+                            )
+                        ) if missing and manager is not None else False
+                        if missing and has_prior:
+                            logger.debug(
+                                "Scope escalation: %d required fields "
+                                "missing after '%s' extraction: %s "
+                                "— retrying with '%s' scope",
+                                len(missing),
+                                effective_scope,
+                                sorted(missing),
+                                self._scope_escalation_scope,
+                            )
+                            escalated_stage = {
+                                **stage,
+                                "extraction_scope": (
+                                    self._scope_escalation_scope
+                                ),
+                            }
+                            escalated = await self._extract_data(
+                                user_message,
+                                escalated_stage,
+                                llm,
+                                manager,
+                                wizard_state,
+                            )
+                            if escalated.data:
+                                if schema:
+                                    escalated.data = (
+                                        self._normalize_extracted_data(
+                                            escalated.data, schema,
+                                        )
+                                    )
+                                # Merge escalated data into
+                                # wizard_state.data (in-place).
+                                escalated_keys = (
+                                    self._merge_extraction_result(
+                                        escalated.data,
+                                        wizard_state,
+                                        stage,
+                                        user_message,
+                                    )
+                                )
+                                new_data_keys |= escalated_keys
+                            # Always use the escalated result for
+                            # the downstream confidence gate: the
+                            # escalated extraction has strictly
+                            # broader context, so its confidence
+                            # assessment is more informed.
+                            extraction = escalated
 
                 # Apply schema defaults for properties the user didn't
                 # mention.  This ensures template conditions (e.g.
@@ -3777,12 +3862,20 @@ class WizardReasoning(ReasoningStrategy):
         # Build extraction input based on scope (stage override or wizard default)
         extraction_scope = self._get_extraction_scope(stage)
         if (
-            extraction_scope == "wizard_session"
+            extraction_scope in ("wizard_session", "recent_messages")
             and manager is not None
             and wizard_state is not None
         ):
-            # Build context from wizard session conversation
-            wizard_context = self._build_wizard_context(manager, wizard_state)
+            # Build context from wizard session conversation.
+            # For recent_messages scope, limit to last N user messages.
+            max_msgs = (
+                self._recent_messages_count
+                if extraction_scope == "recent_messages"
+                else None
+            )
+            wizard_context = self._build_wizard_context(
+                manager, wizard_state, max_messages=max_msgs,
+            )
             if wizard_context:
                 extraction_input = (
                     f"{wizard_context}\n\nCurrent message: {message}"
@@ -3865,13 +3958,17 @@ class WizardReasoning(ReasoningStrategy):
         )
 
     def _build_wizard_context(
-        self, manager: Any, wizard_state: WizardState
+        self,
+        manager: Any,
+        wizard_state: WizardState,
+        *,
+        max_messages: int | None = None,
     ) -> str:
         """Build extraction context from wizard session history.
 
-        Collects all user messages from the conversation to provide
-        full context for extraction. This allows the wizard to
-        "remember" information provided in earlier messages.
+        Collects user messages from the conversation to provide context
+        for extraction. This allows the wizard to "remember" information
+        provided in earlier messages.
 
         Prefers ``raw_content`` from node metadata when available, so
         that session-wide extraction context is not polluted by KB/memory
@@ -3880,6 +3977,9 @@ class WizardReasoning(ReasoningStrategy):
         Args:
             manager: ConversationManager instance
             wizard_state: Current wizard state
+            max_messages: When set, include only the most recent *N*
+                prior user messages (for ``recent_messages`` scope).
+                ``None`` means include all prior messages (full session).
 
         Returns:
             Formatted context string from previous user messages,
@@ -3918,6 +4018,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Exclude the last message (it's the current one we're processing)
         previous_messages = user_messages[:-1] if len(user_messages) > 1 else []
+
+        # Limit to most recent N messages for recent_messages scope
+        if max_messages is not None and len(previous_messages) > max_messages:
+            previous_messages = previous_messages[-max_messages:]
 
         if not previous_messages:
             return ""
@@ -5544,6 +5648,91 @@ class WizardReasoning(ReasoningStrategy):
         requires fields to be *filled*, not merely *present*.
         """
         return value is not None
+
+    def _check_required_fields_missing(
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+    ) -> set[str]:
+        """Return required field names not yet present in wizard_state.data.
+
+        Uses ``_field_is_present`` semantics (value is not None) to match
+        the ``can_satisfy`` confidence gate check.
+
+        Args:
+            wizard_state: Current wizard state with accumulated data
+            stage: Stage configuration dict containing the schema
+
+        Returns:
+            Set of required field names whose values are absent or None
+        """
+        schema = stage.get("schema")
+        if not schema:
+            return set()
+        required_fields = schema.get("required", [])
+        if not required_fields:
+            return set()
+        return {
+            f for f in required_fields
+            if not self._field_is_present(wizard_state.data.get(f))
+        }
+
+    def _merge_extraction_result(
+        self,
+        extraction_data: dict[str, Any],
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        user_message: str,
+    ) -> set[str]:
+        """Merge extracted data into wizard state, returning new/changed keys.
+
+        Applies the grounding filter (per-stage override or wizard-level)
+        to protect existing data from ungrounded overwrites.  Skips None
+        values.
+
+        Args:
+            extraction_data: Dict of field→value from extraction
+            wizard_state: Wizard state whose ``.data`` is updated in-place
+            stage: Stage configuration dict (for schema and grounding config)
+            user_message: Current user message (for grounding checks)
+
+        Returns:
+            Set of keys that were newly added or changed
+        """
+        schema = stage.get("schema")
+        schema_props = schema.get("properties", {}) if schema else {}
+
+        # Resolve merge filter: per-stage grounding override, then
+        # fall back to wizard-level filter.
+        stage_grounding = stage.get("extraction_grounding")
+        if stage_grounding is not None:
+            if stage_grounding:
+                active_filter: MergeFilter | None = (
+                    self._merge_filter
+                    or SchemaGroundingFilter(
+                        overlap_threshold=self._grounding_overlap_threshold,
+                    )
+                )
+            else:
+                active_filter = None
+        else:
+            active_filter = self._merge_filter
+
+        new_data_keys: set[str] = set()
+        for k, v in extraction_data.items():
+            if v is None:
+                continue
+            if active_filter is not None:
+                existing = wizard_state.data.get(k)
+                prop_def = schema_props.get(k, {})
+                if not active_filter.should_merge(
+                    k, v, existing, user_message, prop_def,
+                ):
+                    continue
+            if k not in wizard_state.data or wizard_state.data[k] != v:
+                new_data_keys.add(k)
+                wizard_state.data[k] = v
+        return new_data_keys
 
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.
