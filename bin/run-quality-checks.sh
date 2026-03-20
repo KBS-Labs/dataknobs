@@ -65,7 +65,7 @@ ${YELLOW}Options:${NC}
     --dev                   Dev mode: Run quick checks without artifacts
                             (combined tests, no artifact pollution)
     --base-ref REF          Git ref for change detection (default: main)
-    --skip-style            Skip style checks (ruff)
+    --skip-style            Skip code validation (syntax, ruff, imports, mypy)
     --skip-tests            Skip test execution
     --keep-services         Keep services running after completion
     -h, --help              Show this help message
@@ -90,8 +90,8 @@ ${YELLOW}Environment:${NC}
 ${YELLOW}Output:${NC}
     All artifacts are saved to: .quality-artifacts/
     - environment.json: System information
-    - lint-report.json: Linting results
-    - style-check.json: Style check results
+    - validation.log: Code validation results (syntax, ruff, imports, mypy)
+    - style-check.json: Ruff findings (JSON format)
     - *-test-results.xml: Test results in JUnit format
     - coverage*.xml: Coverage reports
     - quality-summary.json: Overall summary
@@ -443,6 +443,7 @@ fi
 
 # Initialize status tracking
 VALIDATION_STATUS=0
+VALIDATION_SKIPPED="false"
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
 TEST_STATUS=0
@@ -550,9 +551,11 @@ if [ "$SKIP_STYLE" != "yes" ]; then
             fi
         fi
     else
+        VALIDATION_SKIPPED="true"
         print_status "Skipping code validation (no package changes)"
     fi
 else
+    VALIDATION_SKIPPED="true"
     print_status "Skipping code validation"
 fi
 
@@ -1035,7 +1038,7 @@ if [ "$PR_MODE" = "yes" ]; then
     "validation": {
       "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $VALIDATION_STATUS,
-      "skipped": $([ "$SKIP_STYLE" = "yes" ] && echo "true" || echo "false"),
+      "skipped": $VALIDATION_SKIPPED,
       "tool": "validate.sh"
     },
     "unit_tests": {
@@ -1129,7 +1132,7 @@ echo -e "${BLUE}═════════════════════�
 
 # Determine overall status
 OVERALL_STATUS="PASS"
-if [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
+if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
     OVERALL_STATUS="FAIL"
 fi
 
