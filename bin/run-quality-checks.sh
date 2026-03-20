@@ -843,138 +843,32 @@ else
     print_status "Skipping tests"
 fi
 
-# Process coverage and generate artifacts (PR mode only)
+# Generate coverage.xml (PR mode only)
+# This must happen before the summary/signature so coverage.xml is included in the signature.
+# The slower per-package coverage reports run afterward.
+COVERAGE_COMBINED=false
 if [ "$PR_MODE" = "yes" ]; then
-    # Combine coverage data files if they exist
     if ls "$ARTIFACTS_DIR"/.coverage.* >/dev/null 2>&1; then
-        print_status "Combining coverage reports..."
-        
-        # Change to artifacts directory for coverage operations
+        print_status "Combining coverage data..."
         cd "$ARTIFACTS_DIR"
-        
-        # Combine all .coverage.* files
+
         if uv run coverage combine .coverage.* 2>/dev/null; then
+            COVERAGE_COMBINED=true
             print_success "Coverage data combined"
-            
-            # Generate combined XML report
+
             if uv run coverage xml -o coverage.xml 2>/dev/null; then
                 print_success "Combined coverage XML generated"
-                
-                # Also generate per-package XML reports
-                for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-                    if [ -d "$pkg_dir" ]; then
-                        pkg_name=$(basename "$pkg_dir")
-                        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-                        if [ "$pkg_name" = "legacy" ]; then
-                            src_name="dataknobs"
-                        else
-                            src_name="dataknobs_${pkg_name}"
-                        fi
-                        if [ -d "$pkg_dir/src/${src_name}" ]; then
-                            # Generate package-specific XML
-                            uv run coverage xml -o "coverage-${pkg_name}-combined.xml" --include="*/${src_name}/*" 2>/dev/null || true
-                        fi
-                    fi
-                done
-                print_success "Per-package coverage XML generated"
             else
                 print_warning "Could not generate combined XML"
-                # Fall back to using individual XML files
                 if [ -f "coverage-unit.xml" ]; then
                     cp coverage-unit.xml coverage.xml
                 elif [ -f "coverage-integration.xml" ]; then
                     cp coverage-integration.xml coverage.xml
                 fi
             fi
-            
-            # Generate combined HTML report (full mode only — slow)
-            if [ "$RUN_MODE" = "full" ]; then
-                if uv run coverage html -d htmlcov 2>/dev/null; then
-                    print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
-                fi
-            fi
-            
-            # Generate terminal report to show combined coverage
-            echo "" >> test-coverage-summary.txt
-            echo "Combined Coverage Report:" >> test-coverage-summary.txt
-            echo "=========================" >> test-coverage-summary.txt
-            uv run coverage report >> test-coverage-summary.txt 2>&1 || true
-            
-            # Generate per-package coverage summary
-            echo "" >> test-coverage-summary.txt
-            echo "Coverage by Package:" >> test-coverage-summary.txt
-            echo "====================" >> test-coverage-summary.txt
-            
-            # Extract package-specific coverage from the combined data
-            for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-                if [ -d "$pkg_dir" ]; then
-                    pkg_name=$(basename "$pkg_dir")
-                    # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-                    if [ "$pkg_name" = "legacy" ]; then
-                        src_name="dataknobs"
-                    else
-                        src_name="dataknobs_${pkg_name}"
-                    fi
-                    # Skip packages without source code
-                    if [ -d "$pkg_dir/src/${src_name}" ]; then
-                        echo "" >> test-coverage-summary.txt
-                        echo "Package: $pkg_name" >> test-coverage-summary.txt
-                        echo "--------" >> test-coverage-summary.txt
-                        # Generate coverage report filtered to this package (from artifacts dir where .coverage is)
-                        uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null >> test-coverage-summary.txt || echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
-                    fi
-                fi
-            done
-            
-            # Generate JSON coverage summary for each package
-            echo "{" > coverage-by-package.json
-            echo '  "generated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> coverage-by-package.json
-            echo '  "packages": {' >> coverage-by-package.json
-            
-            first_pkg=true
-            for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
-                if [ -d "$pkg_dir" ]; then
-                    pkg_name=$(basename "$pkg_dir")
-                    # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-                    if [ "$pkg_name" = "legacy" ]; then
-                        src_name="dataknobs"
-                    else
-                        src_name="dataknobs_${pkg_name}"
-                    fi
-                    if [ -d "$pkg_dir/src/${src_name}" ]; then
-                        # Get coverage percentage for this package (from artifacts dir where .coverage is)
-                        coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null | tail -1)
-                        if echo "$coverage_output" | grep -q "TOTAL"; then
-                            # Extract coverage percentage from the TOTAL line
-                            coverage_pct=$(echo "$coverage_output" | awk '{print $(NF)}' | sed 's/%//')
-                            statements=$(echo "$coverage_output" | awk '{print $2}')
-                            missing=$(echo "$coverage_output" | awk '{print $3}')
-                            
-                            if [ "$first_pkg" = false ]; then
-                                echo "," >> coverage-by-package.json
-                            fi
-                            first_pkg=false
-                            
-                            echo -n '    "'$pkg_name'": {' >> coverage-by-package.json
-                            echo -n '"statements": '$statements', ' >> coverage-by-package.json
-                            echo -n '"missing": '$missing', ' >> coverage-by-package.json
-                            echo -n '"coverage": "'$coverage_pct'%"}' >> coverage-by-package.json
-                        fi
-                    fi
-                fi
-            done
-            
-            echo "" >> coverage-by-package.json
-            echo "  }" >> coverage-by-package.json
-            echo "}" >> coverage-by-package.json
-            
-            print_success "Package coverage summary saved to coverage-by-package.json"
-            
         else
             print_warning "Could not combine coverage data, using individual reports"
-            # Fall back to XML files if combine fails
             if [ -f "coverage-unit.xml" ] && [ -f "coverage-integration.xml" ]; then
-                # Use unit coverage as base (usually has more coverage)
                 cp coverage-unit.xml coverage.xml
                 print_warning "Using unit test coverage as primary report"
             elif [ -f "coverage-unit.xml" ]; then
@@ -983,18 +877,11 @@ if [ "$PR_MODE" = "yes" ]; then
                 cp coverage-integration.xml coverage.xml
             fi
         fi
-        
-        # Return to project root
+
         cd "$PROJECT_ROOT"
     elif ls "$ARTIFACTS_DIR"/coverage*.xml >/dev/null 2>&1; then
-        # No .coverage data files but we have XML files
         print_status "Processing coverage XML files..."
-        coverage_files=($ARTIFACTS_DIR/coverage-*.xml)
-        if [ ${#coverage_files[@]} -gt 1 ]; then
-            cp "${coverage_files[0]}" "$ARTIFACTS_DIR/coverage.xml"
-            print_warning "Multiple XML files found, using ${coverage_files[0]##*/}"
-        elif [ ! -f "$ARTIFACTS_DIR/coverage.xml" ]; then
-            # If coverage.xml doesn't exist but other coverage files do
+        if [ ! -f "$ARTIFACTS_DIR/coverage.xml" ]; then
             if [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ]; then
                 cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml"
             elif [ -f "$ARTIFACTS_DIR/coverage-integration.xml" ]; then
@@ -1002,19 +889,18 @@ if [ "$PR_MODE" = "yes" ]; then
             fi
         fi
     else
-        # Create empty coverage report if no tests ran
         echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$ARTIFACTS_DIR/coverage.xml"
     fi
-    
-    # Generate summary
+
+    # Generate quality summary and signature immediately after coverage.xml is ready.
+    # These are the files CI validates and that must be committed — they must not be
+    # delayed by the slower per-package coverage reporting that follows.
     print_status "Generating quality summary..."
     OVERALL_STATUS="PASS"
-
-    # Check for failures
     if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
     fi
-    
+
     cat > "$ARTIFACTS_DIR/quality-summary.json" <<EOF
 {
   "timestamp": "$TIMESTAMP",
@@ -1054,8 +940,7 @@ if [ "$PR_MODE" = "yes" ]; then
   }
 }
 EOF
-    
-    # Generate signature of artifacts
+
     print_status "Generating artifact signature..."
     cd "$ARTIFACTS_DIR"
     if command -v sha256sum >/dev/null 2>&1; then
@@ -1064,7 +949,88 @@ EOF
         find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs shasum -a 256 > signature.sha256
     fi
     cd "$PROJECT_ROOT"
-    print_success "Artifact signature generated"
+    print_success "Quality summary and signature generated"
+
+    # Generate supplementary per-package coverage reports (not needed by CI).
+    # This section is slow due to multiple `uv run coverage report` calls but
+    # runs after the summary/signature are already written.
+    if [ "$COVERAGE_COMBINED" = true ]; then
+        print_status "Generating per-package coverage reports..."
+        cd "$ARTIFACTS_DIR"
+
+        # Generate combined HTML report (full mode only — slow)
+        if [ "$RUN_MODE" = "full" ]; then
+            if uv run coverage html -d htmlcov 2>/dev/null; then
+                print_success "Combined coverage HTML generated in .quality-artifacts/htmlcov/"
+            fi
+        fi
+
+        # Generate terminal report
+        echo "" >> test-coverage-summary.txt
+        echo "Combined Coverage Report:" >> test-coverage-summary.txt
+        echo "=========================" >> test-coverage-summary.txt
+        uv run coverage report >> test-coverage-summary.txt 2>&1 || true
+
+        # Generate per-package text and JSON summaries in a single loop
+        echo "" >> test-coverage-summary.txt
+        echo "Coverage by Package:" >> test-coverage-summary.txt
+        echo "====================" >> test-coverage-summary.txt
+
+        echo "{" > coverage-by-package.json
+        echo '  "generated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> coverage-by-package.json
+        echo '  "packages": {' >> coverage-by-package.json
+
+        first_pkg=true
+        for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
+            if [ -d "$pkg_dir" ]; then
+                pkg_name=$(basename "$pkg_dir")
+                if [ "$pkg_name" = "legacy" ]; then
+                    src_name="dataknobs"
+                else
+                    src_name="dataknobs_${pkg_name}"
+                fi
+                if [ -d "$pkg_dir/src/${src_name}" ]; then
+                    # Single coverage report call per package — used for both text and JSON
+                    coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null)
+
+                    # Text summary
+                    echo "" >> test-coverage-summary.txt
+                    echo "Package: $pkg_name" >> test-coverage-summary.txt
+                    echo "--------" >> test-coverage-summary.txt
+                    if [ -n "$coverage_output" ]; then
+                        echo "$coverage_output" >> test-coverage-summary.txt
+                    else
+                        echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
+                    fi
+
+                    # JSON summary
+                    total_line=$(echo "$coverage_output" | tail -1)
+                    if echo "$total_line" | grep -q "TOTAL"; then
+                        coverage_pct=$(echo "$total_line" | awk '{print $(NF)}' | sed 's/%//')
+                        statements=$(echo "$total_line" | awk '{print $2}')
+                        missing=$(echo "$total_line" | awk '{print $3}')
+
+                        if [ "$first_pkg" = false ]; then
+                            echo "," >> coverage-by-package.json
+                        fi
+                        first_pkg=false
+
+                        echo -n '    "'$pkg_name'": {' >> coverage-by-package.json
+                        echo -n '"statements": '$statements', ' >> coverage-by-package.json
+                        echo -n '"missing": '$missing', ' >> coverage-by-package.json
+                        echo -n '"coverage": "'$coverage_pct'%"}' >> coverage-by-package.json
+                    fi
+                fi
+            fi
+        done
+
+        echo "" >> coverage-by-package.json
+        echo "  }" >> coverage-by-package.json
+        echo "}" >> coverage-by-package.json
+
+        cd "$PROJECT_ROOT"
+        print_success "Per-package coverage reports generated"
+    fi
 fi
 
 # Print summary
