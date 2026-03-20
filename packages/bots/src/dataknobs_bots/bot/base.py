@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +23,7 @@ from dataknobs_llm.conversations.storage import get_node_by_id, ConversationNode
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
+from dataknobs_llm.tools.context import ToolExecutionContext
 
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
@@ -114,6 +117,11 @@ class DynaBot:
     DynaBot provides a flexible, configuration-driven bot that can be customized
     for different use cases through YAML/JSON configuration files.
 
+    .. versionadded:: 0.14.0
+       DynaBot-level tool execution loop — strategies that pass tools to the
+       LLM but do not execute ``tool_calls`` themselves (e.g. SimpleReasoning)
+       now have their tool calls executed automatically by the bot pipeline.
+
     Attributes:
         llm: LLM provider for generating responses
         prompt_builder: Prompt builder for managing prompts
@@ -128,6 +136,15 @@ class DynaBot:
         system_prompt_rag_configs: RAG configurations for inline system prompts
         default_temperature: Default temperature for LLM generation
         default_max_tokens: Default max tokens for LLM generation
+    """
+
+    _MAX_TOOL_ITERATIONS = 5
+    """Maximum number of tool execution rounds before returning.
+
+    When a strategy (e.g. SimpleReasoning) returns a response with
+    ``tool_calls``, DynaBot executes the tools and re-generates.
+    This cap prevents infinite loops when the model keeps requesting
+    the same tools.
     """
 
     def __init__(
@@ -818,6 +835,105 @@ class DynaBot:
         if turn.manager.state is not None:
             turn.manager.state.turn_data = turn.plugin_data
 
+    async def _execute_tools(
+        self,
+        turn: TurnState,
+        tool_calls: list[Any],
+    ) -> None:
+        """Execute tool calls and add observations to the conversation.
+
+        Builds a ``ToolExecutionContext`` from the conversation manager,
+        executes each tool, records ``ToolExecution`` on the turn state,
+        and adds tool result observations to the conversation history so
+        the next LLM call sees them.
+
+        Args:
+            turn: Current turn state (tool executions are appended here).
+            tool_calls: List of ``ToolCall`` objects from the LLM response.
+        """
+        tool_context = ToolExecutionContext.from_manager(turn.manager)
+
+        for tool_call in tool_calls:
+            tool_name = tool_call.name
+            try:
+                tool = self.tool_registry.get_tool(tool_name)
+            except Exception:
+                tool = None
+
+            if tool is None:
+                observation = f"Error: Tool '{tool_name}' not found"
+                turn.tool_executions.append(ToolExecution(
+                    tool_name=tool_name,
+                    parameters=tool_call.parameters,
+                    error="Tool not found",
+                ))
+                logger.warning(
+                    "Tool not found: %s",
+                    tool_name,
+                    extra={
+                        "conversation_id": getattr(
+                            turn.manager, "conversation_id", None
+                        ),
+                    },
+                )
+            else:
+                try:
+                    t0 = time.monotonic()
+                    result = await tool.execute(
+                        **tool_call.parameters, _context=tool_context
+                    )
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    try:
+                        observation = (
+                            f"Tool result: {json.dumps(result, default=str)}"
+                        )
+                    except (TypeError, ValueError):
+                        observation = f"Tool result: {result}"
+
+                    turn.tool_executions.append(ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        result=result,
+                        duration_ms=duration_ms,
+                    ))
+                    logger.info(
+                        "Tool executed: %s",
+                        tool_name,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                            "duration_ms": round(duration_ms, 1),
+                            "result_length": len(str(result)),
+                        },
+                    )
+                except Exception as exc:
+                    observation = (
+                        f"Error executing tool {tool_name}: {exc!s}"
+                    )
+                    turn.tool_executions.append(ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        error=str(exc),
+                    ))
+                    logger.error(
+                        "Tool execution failed: %s",
+                        tool_name,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                            "error": str(exc),
+                        },
+                        exc_info=True,
+                    )
+
+            await turn.manager.add_message(
+                content=f"Observation from {tool_name}: {observation}",
+                role="tool",
+                name=tool_name,
+            )
+
     async def _finalize_turn(self, turn: TurnState) -> None:
         """Shared post-generation processing for all turn types.
 
@@ -1188,6 +1304,24 @@ class DynaBot:
             response = await self._generate_response(
                 turn.manager, temperature, max_tokens, llm_config_overrides
             )
+
+            # DynaBot-level tool execution loop.  Strategies that handle
+            # tool_calls internally (e.g. ReAct) return responses without
+            # tool_calls, so this loop is a no-op for them.
+            for _iteration in range(self._MAX_TOOL_ITERATIONS):
+                if (
+                    not self.tool_registry
+                    or not getattr(response, "tool_calls", None)
+                ):
+                    break
+                await self._execute_tools(turn, response.tool_calls)
+                response = await turn.manager.complete(
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                )
+
             turn.response = response
             turn.response_content = self._extract_response_content(response)
             turn.populate_from_response(response, self.llm)
@@ -1346,6 +1480,11 @@ class DynaBot:
 
         try:
             await self._prepare_turn(turn)
+
+            # Track tool_calls across streaming rounds so the tool
+            # execution loop can pick them up after the initial stream.
+            pending_tool_calls: list[Any] | None = None
+
             if self.reasoning_strategy:
                 # Delegate to the strategy's stream_generate().
                 # Strategies with true streaming (SimpleReasoning) yield
@@ -1361,20 +1500,42 @@ class DynaBot:
                 ):
                     if isinstance(chunk, LLMStreamResponse):
                         turn.stream_chunks.append(chunk.delta)
-                        # Capture usage from the final streaming chunk
                         if chunk.is_final or chunk.usage:
                             turn.populate_from_final_stream_chunk(
                                 chunk, self.llm
                             )
-                        yield chunk
+                        # Intercept tool_calls: suppress is_final so the
+                        # consumer knows more content may follow.
+                        if chunk.tool_calls and self.tool_registry:
+                            pending_tool_calls = chunk.tool_calls
+                            yield LLMStreamResponse(
+                                delta=chunk.delta,
+                                is_final=False,
+                                usage=chunk.usage,
+                                model=chunk.model,
+                            )
+                        else:
+                            yield chunk
                     else:
                         # Strategy yielded a complete LLMResponse — wrap it
                         content = self._extract_response_content(chunk)
                         turn.stream_chunks.append(content)
                         turn.populate_from_response(chunk, self.llm)
-                        yield LLMStreamResponse(
-                            delta=content, is_final=True, finish_reason="stop"
-                        )
+                        # Check for tool_calls on the LLMResponse
+                        if (
+                            getattr(chunk, "tool_calls", None)
+                            and self.tool_registry
+                        ):
+                            pending_tool_calls = chunk.tool_calls
+                            yield LLMStreamResponse(
+                                delta=content, is_final=False,
+                            )
+                        else:
+                            yield LLMStreamResponse(
+                                delta=content,
+                                is_final=True,
+                                finish_reason="stop",
+                            )
             else:
                 # No reasoning strategy — stream directly from LLM
                 async for chunk in turn.manager.stream_complete(
@@ -1384,10 +1545,50 @@ class DynaBot:
                     **kwargs,
                 ):
                     turn.stream_chunks.append(chunk.delta)
-                    # Capture usage from the final streaming chunk
                     if chunk.is_final or chunk.usage:
                         turn.populate_from_final_stream_chunk(chunk, self.llm)
-                    yield chunk
+                    if chunk.tool_calls and self.tool_registry:
+                        pending_tool_calls = chunk.tool_calls
+                        yield LLMStreamResponse(
+                            delta=chunk.delta,
+                            is_final=False,
+                            usage=chunk.usage,
+                            model=chunk.model,
+                        )
+                    else:
+                        yield chunk
+
+            # DynaBot-level tool execution loop for streaming.
+            # Execute pending tool_calls, then re-stream until no
+            # more tool_calls or max iterations reached.
+            for _iteration in range(self._MAX_TOOL_ITERATIONS):
+                if not pending_tool_calls or not self.tool_registry:
+                    break
+                await self._execute_tools(turn, pending_tool_calls)
+                pending_tool_calls = None
+
+                async for chunk in turn.manager.stream_complete(
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                ):
+                    turn.stream_chunks.append(chunk.delta)
+                    if chunk.is_final or chunk.usage:
+                        turn.populate_from_final_stream_chunk(
+                            chunk, self.llm
+                        )
+                    if chunk.tool_calls:
+                        pending_tool_calls = chunk.tool_calls
+                        yield LLMStreamResponse(
+                            delta=chunk.delta,
+                            is_final=False,
+                            usage=chunk.usage,
+                            model=chunk.model,
+                        )
+                    else:
+                        yield chunk
+
         except Exception as e:
             streaming_error = e
             await self._call_on_error_middleware(e, message, context)

@@ -107,7 +107,33 @@ If a new testing construct is needed, **add it to the appropriate dataknobs pack
 
 ### DynaBot Testing — MANDATORY Patterns
 
-When writing tests for DynaBot wizard behavior, **always use `BotTestHarness`**:
+When writing tests for DynaBot behavior, **always use `BotTestHarness`** — for ALL bot tests, not just wizard tests. The harness handles `from_config()`, provider injection, context creation, tool registration, and middleware wiring.
+
+**Non-wizard example** (tool execution, middleware, streaming, from_config DI, etc.):
+
+```python
+from dataknobs_bots.testing import BotTestHarness
+from dataknobs_llm.testing import text_response, tool_call_response
+
+async with await BotTestHarness.create(
+    bot_config={
+        "llm": {"provider": "echo", "model": "test"},
+        "conversation_storage": {"backend": "memory"},
+        "reasoning": {"strategy": "simple"},
+    },
+    main_responses=[
+        tool_call_response("my_tool", {"query": "test"}),
+        text_response("Here are the results"),
+    ],
+    tools=[my_tool],
+    middleware=[my_middleware],
+) as harness:
+    result = await harness.chat("search for test")
+    assert result.response == "Here are the results"
+    # For streaming: harness.bot.stream_chat("msg", harness.context)
+```
+
+**Wizard example** (use `wizard_config=` and `WizardConfigBuilder`):
 
 ```python
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
@@ -133,6 +159,7 @@ async with await BotTestHarness.create(
 
 | Anti-Pattern | Why It's Wrong | Use Instead |
 |---|---|---|
+| Manual `DynaBot.from_config()` + `EchoProvider` + `BotContext` | Duplicates harness boilerplate, bypasses lifecycle management | `BotTestHarness.create(bot_config=...)` |
 | Direct `WizardReasoning()` + `reasoning.generate(manager)` | Bypasses `from_config()`, middleware, raw_content pipeline | `BotTestHarness.create()` + `harness.chat()` |
 | `bot._conversation_managers` access | Couples to internal cache implementation | `bot.get_wizard_state()` or `harness.wizard_data` |
 | `strategy._extractor = extractor` | Private attribute injection | `strategy.set_extractor(extractor)` or `inject_providers(bot, extractor=ext)` |
@@ -140,7 +167,7 @@ async with await BotTestHarness.create(
 | `MagicMock(spec=ConversationManager)` | Mocks hide integration bugs | `BotTestHarness` creates real bots via `from_config()` |
 | Inline 40-line wizard config dicts | Verbose, error-prone, copy-pasted | `WizardConfigBuilder` fluent API |
 
-**Exception:** Tests that verify WizardReasoning internal logic (`_evaluate_condition`, `_can_auto_advance`, transform flows) are legitimate unit tests and may use `WizardReasoning` directly with the `conversation_manager_pair` conftest fixture. These test specific internal methods, not wizard flow behavior.
+**Exception:** Tests that verify DynaBot/WizardReasoning internal logic (`_evaluate_condition`, `_can_auto_advance`, transform flows) are legitimate unit tests and may use direct instantiation. These test specific internal methods, not behavioral flows.
 
 ## Before Adding New Functionality
 

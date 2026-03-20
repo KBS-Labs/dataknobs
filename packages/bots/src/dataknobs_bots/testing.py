@@ -347,11 +347,35 @@ class TurnResult:
 
 
 class BotTestHarness:
-    """High-level test helper for wizard bot testing.
+    """High-level test helper for ALL DynaBot behavioral tests.
 
-    Wraps the full setup ceremony (bot creation, provider injection, state
-    access) into one object. Use ``create()`` to build, ``chat()``/``greet()``
-    to run turns, and properties to inspect wizard state.
+    Wraps the full setup ceremony (bot creation, provider injection, tool
+    registration, middleware wiring, context management) into one object.
+    Use ``create()`` to build, ``chat()``/``greet()`` to run turns.
+
+    For **non-wizard tests**, use ``bot_config=`` with any DynaBot config:
+
+    Example:
+        ```python
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "simple"},
+            },
+            main_responses=[
+                tool_call_response("my_tool", {"q": "test"}),
+                text_response("Here are the results"),
+            ],
+            tools=[my_tool],
+            middleware=[my_middleware],
+        ) as harness:
+            result = await harness.chat("search")
+            assert result.response == "Here are the results"
+            # Streaming: harness.bot.stream_chat("msg", harness.context)
+        ```
+
+    For **wizard tests**, use ``wizard_config=`` with ``WizardConfigBuilder``:
 
     Example:
         ```python
