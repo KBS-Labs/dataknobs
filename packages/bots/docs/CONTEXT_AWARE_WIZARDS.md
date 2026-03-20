@@ -655,6 +655,31 @@ Transforms run after a transition fires and can modify state. Derivation runs be
 
 With `extraction_scope: current_message`, the extraction model only sees the user's text. When users make referential statements ("the first one", "yes", "use that name"), the model needs the bot's output for context. Including it as a prefix keeps the extraction scope setting meaningful while solving the reference resolution problem.
 
+### Extraction scope escalation
+
+When `extraction_scope: current_message` is used for speed, information from earlier turns is invisible to the extraction model. If the user spread required fields across multiple messages, or a weak extraction model missed a field, the wizard would need to ask for clarification — even though the information exists in the conversation history.
+
+Scope escalation addresses this by automatically retrying with a broader scope when required fields are missing after the initial extraction. It only fires when (a) required fields are missing, (b) the current scope is narrower than the escalation target, and (c) there are prior user messages available. The grounding filter (if enabled) protects existing data during the escalated re-extraction.
+
+Three extraction scopes are available, ordered from narrowest to broadest:
+
+1. `current_message` — only the user's latest message (fast, focused)
+2. `recent_messages` — the last N user messages (controlled by `scope_escalation.recent_messages_count`, default 3)
+3. `wizard_session` — all user messages in the wizard session (comprehensive)
+
+Configure escalation under the `scope_escalation` settings key:
+
+```yaml
+settings:
+  extraction_scope: current_message
+  scope_escalation:
+    enabled: true                     # Default: false
+    escalation_scope: wizard_session  # Or: recent_messages
+    recent_messages_count: 3          # For recent_messages scope
+```
+
+Escalation is disabled by default for backward compatibility. The `recent_messages_count` setting applies both when `extraction_scope` is `"recent_messages"` directly and when escalation targets `"recent_messages"`.
+
 ---
 
 ## Automatic Context Injection
