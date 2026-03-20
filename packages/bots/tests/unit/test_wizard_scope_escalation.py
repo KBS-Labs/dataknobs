@@ -115,8 +115,15 @@ def _inject_extractor(bot: DynaBot, extractor: ConfigurableExtractor) -> None:
     """Replace the wizard's schema extractor with a ConfigurableExtractor.
 
     This is the one internal touch point — equivalent to what
-    inject_providers() does for LLM providers, but for the extraction
-    subsystem which uses a ConfigurableExtractor (not an AsyncLLMProvider).
+    ``inject_providers()`` does for LLM providers, but for the extraction
+    subsystem which uses a ``ConfigurableExtractor`` (not an
+    ``AsyncLLMProvider``).
+
+    Known gap: ``inject_providers()`` cannot wire a
+    ``ConfigurableExtractor`` because it expects an ``AsyncLLMProvider``.
+    This will be resolved when the sandbox harness testing
+    infrastructure is migrated into dataknobs-bots (see project memory:
+    ``project_harness_migration.md``).
     """
     strategy = bot.reasoning_strategy
     if strategy is not None and hasattr(strategy, "_extractor"):

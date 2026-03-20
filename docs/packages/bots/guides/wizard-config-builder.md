@@ -119,12 +119,42 @@ builder.set_settings(
     conflict_strategy="latest_wins",
     extraction_grounding=True,
     timeout_seconds=300,
+    scope_escalation={
+        "enabled": True,
+        "escalation_scope": "wizard_session",
+        "recent_messages_count": 3,
+    },
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `timeout_seconds`, `store_trace`, and `verbose`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `timeout_seconds`, `store_trace`, `verbose`, and `scope_escalation`.
 
 The `store_trace` and `verbose` settings propagate to ReAct stages. Both support per-stage overrides (set directly on the stage dict) that take precedence over the wizard-level default.
+
+#### Extraction Scope
+
+The `extraction_scope` setting controls what context the extraction model receives:
+
+- `"wizard_session"` (default): All user messages in the wizard session — comprehensive but heavier.
+- `"recent_messages"`: The last N user messages, controlled by `scope_escalation.recent_messages_count` (default 3). A middle ground between session and current message.
+- `"current_message"`: Only the user's latest message — fast and focused.
+
+#### Scope Escalation
+
+When `extraction_scope` is `"current_message"`, the extraction model may miss fields that were mentioned in earlier turns. Scope escalation automatically retries with a broader scope when required fields are still missing after the initial extraction:
+
+```python
+builder.set_settings(
+    extraction_scope="current_message",
+    scope_escalation={
+        "enabled": True,                     # Default: False
+        "escalation_scope": "wizard_session", # Or: "recent_messages"
+        "recent_messages_count": 3,           # For recent_messages scope
+    },
+)
+```
+
+Escalation only fires when (a) required fields are missing, (b) the current scope is narrower than the target, and (c) there is prior conversation history to draw on. The grounding filter protects existing data during escalated re-extraction.
 
 #### Extraction Grounding Settings
 

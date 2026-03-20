@@ -626,9 +626,12 @@ class WizardReasoning(ReasoningStrategy):
             artifact_registry: Optional ArtifactRegistry for artifact management.
             review_executor: Optional ReviewExecutor for running reviews.
             context_builder: Optional ContextBuilder for building conversation context.
-            extraction_scope: Scope for data extraction. "wizard_session" extracts
-                from all user messages in the wizard session (default), while
-                "current_message" only extracts from the current message.
+            extraction_scope: Scope for data extraction. ``"wizard_session"``
+                extracts from all user messages in the wizard session
+                (default), ``"recent_messages"`` extracts from the last
+                N user messages (controlled by ``recent_messages_count``),
+                and ``"current_message"`` only extracts from the current
+                message.
             conflict_strategy: Strategy for handling conflicting values when
                 the same field is extracted from multiple messages. "latest_wins"
                 (default) uses the most recent value.
@@ -1500,6 +1503,14 @@ class WizardReasoning(ReasoningStrategy):
                 list(SCOPE_BREADTH),
             )
             scope_escalation_scope = "wizard_session"
+        elif SCOPE_BREADTH[scope_escalation_scope] == 0:
+            logger.warning(
+                "scope_escalation_scope %r is the narrowest scope and "
+                "cannot be an escalation target. "
+                "Defaulting to 'wizard_session'.",
+                scope_escalation_scope,
+            )
+            scope_escalation_scope = "wizard_session"
         recent_messages_count = scope_escalation_config.get(
             "recent_messages_count", 3,
         )
@@ -2035,12 +2046,21 @@ class WizardReasoning(ReasoningStrategy):
                         missing = self._check_required_fields_missing(
                             wizard_state, stage,
                         )
-                        # Check for prior history: without earlier
-                        # turns, escalation would re-extract the same
-                        # content at higher cost for no benefit.
+                        # Check for prior history using the same
+                        # scope window the escalated extraction will
+                        # use.  Without earlier turns visible in that
+                        # window, escalation would re-extract the
+                        # same content at higher cost for no benefit.
+                        guard_max = (
+                            self._recent_messages_count
+                            if self._scope_escalation_scope
+                            == "recent_messages"
+                            else None
+                        )
                         has_prior = bool(
                             self._build_wizard_context(
                                 manager, wizard_state,
+                                max_messages=guard_max,
                             )
                         ) if missing and manager is not None else False
                         if missing and has_prior:
@@ -2084,12 +2104,14 @@ class WizardReasoning(ReasoningStrategy):
                                     )
                                 )
                                 new_data_keys |= escalated_keys
-                            # Always use the escalated result for
-                            # the downstream confidence gate: the
-                            # escalated extraction has strictly
-                            # broader context, so its confidence
-                            # assessment is more informed.
-                            extraction = escalated
+                                # Use the escalated result for
+                                # the downstream confidence gate:
+                                # broader context with data is a
+                                # more informed assessment.  When
+                                # escalation returns empty data,
+                                # keep the original extraction so
+                                # its confidence drives the gate.
+                                extraction = escalated
 
                 # Apply schema defaults for properties the user didn't
                 # mention.  This ensures template conditions (e.g.
@@ -3780,9 +3802,12 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Extract structured data from user message or wizard session.
 
-        When extraction_scope is "wizard_session", builds context from all
-        user messages in the wizard session for extraction. This allows the
-        wizard to remember information provided in earlier messages.
+        When extraction_scope is ``"wizard_session"`` or
+        ``"recent_messages"``, builds context from user messages in the
+        wizard session for extraction.  For ``"recent_messages"``, only
+        the last ``recent_messages_count`` messages are included.  This
+        allows the wizard to remember information provided in earlier
+        messages.
 
         Schema 'default' values are stripped before extraction to prevent
         the LLM from auto-filling them. This ensures extraction only captures
