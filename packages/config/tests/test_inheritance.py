@@ -149,6 +149,30 @@ class TestSubstituteEnvVars:
         assert "~" not in result["path"]
         assert result["path"].endswith("/test")
 
+    def test_url_with_double_slash_preserved(self, monkeypatch):
+        """Bug B4: URLs with :// must not have double-slash collapsed.
+
+        Path(result).expanduser() normalizes path separators, turning
+        postgresql://host:5432/db into postgresql:/host:5432/db.
+        os.path.expanduser() only expands ~ and leaves URLs intact.
+        """
+        monkeypatch.setenv("DB_URL", "postgresql://host:5432/db")
+
+        result = substitute_env_vars({"dsn": "${DB_URL}"})
+        assert result["dsn"] == "postgresql://host:5432/db"
+
+    def test_url_env_var_substitution_preserves_scheme(self, monkeypatch):
+        """Bug B4: Various URL schemes must survive env var substitution."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        monkeypatch.setenv("HTTP_URL", "https://api.example.com/v1")
+
+        result = substitute_env_vars({
+            "redis": "${REDIS_URL}",
+            "api": "${HTTP_URL}",
+        })
+        assert result["redis"] == "redis://localhost:6379/0"
+        assert result["api"] == "https://api.example.com/v1"
+
     def test_empty_default(self, monkeypatch):
         """Test empty string as default value."""
         monkeypatch.delenv("EMPTY_DEFAULT", raising=False)

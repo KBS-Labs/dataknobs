@@ -469,9 +469,14 @@ class PgVectorStore(VectorStore):
                          {self._col('content')}, {self._col('embedding')},
                          {self._col('metadata')})
                     VALUES ($1{id_cast}, $2, $3, $4, $5, $6::vector, $7::jsonb)
+                    -- created_at intentionally excluded: preserve original insertion time
                     ON CONFLICT ({self._col('id')}) DO UPDATE SET
                         {self._col('embedding')} = EXCLUDED.{self._col('embedding')},
-                        {self._col('metadata')} = EXCLUDED.{self._col('metadata')}
+                        {self._col('metadata')} = EXCLUDED.{self._col('metadata')},
+                        {self._col('content')} = EXCLUDED.{self._col('content')},
+                        {self._col('domain_id')} = EXCLUDED.{self._col('domain_id')},
+                        {self._col('document_id')} = EXCLUDED.{self._col('document_id')},
+                        {self._col('chunk_index')} = EXCLUDED.{self._col('chunk_index')}
                     """,
                     vec_id,
                     domain_id,

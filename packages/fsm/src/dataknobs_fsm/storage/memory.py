@@ -62,7 +62,25 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         # Configure mode-specific optimizations
         self._configure_mode_optimizations(config)
 
+        # When no databases are injected, create separate instances so that
+        # history and step records don't share a single namespace.  Without
+        # this, load_steps() queries by execution_id and finds both history
+        # records (which lack 'step_data') and step records, crashing with
+        # KeyError.  (Bug B3)
+        created_internally = database is None and steps_database is None
+        if created_internally:
+            from dataknobs_data.backends.memory import AsyncMemoryDatabase
+            database = AsyncMemoryDatabase()
+            steps_database = AsyncMemoryDatabase()
+
         super().__init__(config, database=database, steps_database=steps_database)
+
+        # Reclaim ownership of databases we just built so that cleanup()
+        # properly closes them (super().__init__ sets _owns_* = False when
+        # it receives non-None databases).
+        if created_internally:
+            self._owns_db = True
+            self._owns_steps_db = True
     
     def _configure_mode_optimizations(self, config: StorageConfig) -> None:
         """Configure mode-specific optimizations for memory storage.
