@@ -98,7 +98,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if hasattr(self._db, 'connect'):
             await self._db.connect()
         
-        # Use the same database for steps unless one was injected
+        # Use the same database for steps unless one was injected.
+        # Sharing is safe for SQL backends because history and step records
+        # use different schemas/tables. Memory backends (flat namespace)
+        # override __init__ to create separate instances — see
+        # InMemoryStorage (Bug B3).
         if self._steps_db is None:
             self._steps_db = self._db
     

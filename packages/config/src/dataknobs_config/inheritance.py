@@ -153,7 +153,7 @@ def _substitute_string(value: str) -> str:
     result = re.sub(pattern, replacer, value)
     if not result:
         return result
-    return os.path.expanduser(result)  # noqa: PTH111 - Path().expanduser() corrupts URLs (Bug B4)
+    return os.path.expanduser(result)  # noqa: PTH111 — Path(x).expanduser() collapses "://" to ":/" in URLs
 
 
 class InheritableConfigLoader:
