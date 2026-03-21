@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-21T20:49:39Z",
+  "timestamp": "2026-03-21T21:44:56Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.12 (Homebrew 2026-03-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/extraction-recovery-pipeline",
-  "git_commit": "2afca1a1af08e50e9e1abad783900afb5307e0be",
+  "git_branch": "sbk/custom-merge-filter",
+  "git_commit": "d87f70ec19527b19508daa2d645bdf5c423baee2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
