@@ -73,7 +73,6 @@ class TestRecoveryConstants:
         assert DEFAULT_RECOVERY_PIPELINE == [
             "derivation",
             "scope_escalation",
-            "focused_retry",
         ]
 
 
@@ -457,6 +456,68 @@ class TestPerStageDisable:
             # Derivation did NOT fire — domain_name missing
             assert harness.wizard_data.get("domain_name") is None
             assert harness.wizard_stage == "gather2"
+
+    @pytest.mark.asyncio
+    async def test_derivation_disabled_but_escalation_runs(self) -> None:
+        """derivation_enabled: false suppresses derivation only.
+
+        Other pipeline strategies (scope_escalation) still run.
+        """
+        config = (
+            WizardConfigBuilder("derivation-disabled-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="Tell me your info.",
+                derivation_enabled=False,
+            )
+            .field("name", field_type="string", required=True)
+            .field("domain_id", field_type="string", required=True)
+            .field("domain_name", field_type="string", required=True)
+            .transition(
+                "done",
+                "data.get('name') and data.get('domain_id') "
+                "and data.get('domain_name')",
+            )
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+        config["settings"] = {
+            "extraction_scope": "current_message",
+            "scope_escalation": {"enabled": True},
+            "derivations": [
+                {
+                    "source": "domain_id",
+                    "target": "domain_name",
+                    "transform": "title_case",
+                },
+            ],
+            "recovery": {
+                "pipeline": ["derivation", "scope_escalation"],
+            },
+        }
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "All set!"],
+            extraction_results=[
+                # Turn 1: name
+                [{"name": "Alice"}],
+                # Turn 2: current_message gives domain_id only.
+                # Derivation is disabled so domain_name NOT derived.
+                # Escalation fires and returns all 3 fields.
+                [
+                    {"domain_id": "chess-champ"},
+                    {"name": "Alice", "domain_id": "chess-champ",
+                     "domain_name": "Chess Champ"},
+                ],
+            ],
+        ) as harness:
+            await harness.chat("I'm Alice")
+            await harness.chat("Domain chess-champ, display Chess Champ")
+            # Derivation was disabled but escalation filled domain_name
+            assert harness.wizard_data["domain_name"] == "Chess Champ"
+            assert harness.wizard_stage == "done"
 
 
 # ---------------------------------------------------------------------------

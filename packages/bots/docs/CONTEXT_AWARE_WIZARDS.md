@@ -675,12 +675,10 @@ Derivations can also chain: rule A→B fires, then rule B→C fires in the same 
 
 ## Recovery Pipeline
 
-### The Problem {: #recovery-problem }
-
+### The Problem 
 The wizard provides several extraction recovery strategies — [field derivation](#field-derivation-recovery), [scope escalation](#extraction-scope-escalation), and [enum normalization](#enum-normalization) — that each address different failure classes. However, extraction failures are often compound: a single turn might need derivation for one field AND scope escalation for another. Without a composition mechanism, strategies run in a hardcoded sequence with no awareness of each other, potentially wasting LLM calls when a cheaper strategy would have been sufficient.
 
-### How It Works {: #recovery-how-it-works }
-
+### How It Works 
 The recovery pipeline runs after initial extraction and merge, executing strategies in a configurable order. It **short-circuits** as soon as all required fields are satisfied — minimizing LLM calls and latency in the common case.
 
 ```
@@ -702,8 +700,7 @@ Key design choices:
 - **Derivation runs first** (before scope escalation). Prior to the recovery pipeline, scope escalation ran before field derivation. The pipeline reverses this ordering because derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
 - **Each LLM-backed strategy** (scope escalation, focused retry) runs normalize + merge on its results automatically, including grounding checks.
 
-### Pipeline Configuration {: #pipeline-configuration }
-
+### Pipeline Configuration 
 Configure the pipeline under the `recovery` settings key:
 
 ```yaml
@@ -720,7 +717,7 @@ settings:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `recovery.pipeline` | list of strings | `["derivation", "scope_escalation", "focused_retry"]` | Ordered list of strategies to execute |
+| `recovery.pipeline` | list of strings | `["derivation", "scope_escalation"]` | Ordered list of strategies to execute |
 | `recovery.focused_retry.enabled` | bool | `false` | Enable the focused retry strategy |
 | `recovery.focused_retry.max_retries` | int | `1` | Maximum focused retry attempts per turn |
 
@@ -728,10 +725,9 @@ Valid strategy names: `derivation`, `scope_escalation`, `focused_retry`, `clarif
 
 The `clarification` strategy is a no-op placeholder — clarification is handled by the confidence gate after the pipeline, regardless of whether it appears in the list. Including it documents intent but doesn't change behavior.
 
-**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation → focused_retry`. However, scope escalation requires `scope_escalation.enabled: true` to fire, and focused retry requires `recovery.focused_retry.enabled: true`. So without any configuration, only derivation runs (if rules are configured).
+**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation`. Scope escalation requires `scope_escalation.enabled: true` to fire, so without any configuration only derivation runs (if rules are configured). Add `focused_retry` to the pipeline explicitly to opt in.
 
-### Focused Retry Strategy {: #focused-retry-strategy }
-
+### Focused Retry Strategy 
 When scope escalation doesn't recover all fields (or is skipped), focused retry re-extracts targeting **only the missing fields**. It builds a minimal schema containing just the missing required fields, then extracts using the full wizard session context.
 
 This works better than full re-extraction because extracting 1-2 fields from a conversation is a much simpler task than extracting 12 fields. Models that fail on the full schema often succeed on a focused subset.
@@ -749,8 +745,7 @@ settings:
 
 Focused retry always uses `wizard_session` scope (broadest available context) and forces LLM extraction (never verbatim capture), since the goal is to recover fields that simpler approaches missed.
 
-### Per-Stage Override {: #recovery-per-stage-override }
-
+### Per-Stage Override 
 Recovery can be disabled on individual stages using the `recovery_enabled` stage field:
 
 ```yaml
@@ -768,8 +763,7 @@ stages:
 
 When `recovery_enabled: false`, no recovery strategies run for that stage — the pipeline is skipped entirely. This is useful for stages where recovery would be counterproductive (e.g., confirmation stages where you want the user to explicitly provide missing information).
 
-### Pipeline Examples {: #pipeline-examples }
-
+### Pipeline Examples 
 **Minimal pipeline — derivation only (no LLM calls):**
 
 ```yaml

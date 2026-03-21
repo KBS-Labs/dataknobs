@@ -69,13 +69,17 @@ RECOVERY_CLARIFICATION = "clarification"
 
 # Default pipeline order (when no explicit pipeline is configured).
 # Each strategy only fires when required fields are still missing.
+# Note: focused_retry is not in the default — consumers opt in by
+# adding it to their pipeline AND setting focused_retry.enabled: true.
 DEFAULT_RECOVERY_PIPELINE: list[str] = [
     RECOVERY_DERIVATION,
     RECOVERY_SCOPE_ESCALATION,
-    RECOVERY_FOCUSED_RETRY,
 ]
 
-# Valid strategy names for pipeline configuration
+# Valid strategy names for pipeline configuration.
+# Note: "clarification" is a no-op placeholder — clarification is
+# handled by the confidence gate, not the pipeline engine.  Including
+# it in a pipeline documents intent but doesn't change behavior.
 VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
     RECOVERY_DERIVATION,
     RECOVERY_SCOPE_ESCALATION,
@@ -802,7 +806,8 @@ class WizardReasoning(ReasoningStrategy):
                 initial extraction.  Valid names: ``"derivation"``,
                 ``"scope_escalation"``, ``"focused_retry"``,
                 ``"clarification"``.  Defaults to
-                ``["derivation", "scope_escalation", "focused_retry"]``.
+                ``["derivation", "scope_escalation"]``.  Add
+                ``"focused_retry"`` explicitly to opt in.
                 The pipeline short-circuits when all required fields
                 are satisfied.
             focused_retry_enabled: When True, the ``"focused_retry"``
@@ -6162,6 +6167,10 @@ class WizardReasoning(ReasoningStrategy):
                     sorted(retry_keys),
                 )
                 return retry_keys, retry_result
+            # Data was extracted but merge yielded no new keys
+            # (already present or blocked by grounding filter).
+            # Retrying with the same inputs won't help.
+            break
 
         return set(), None
 
@@ -6178,8 +6187,8 @@ class WizardReasoning(ReasoningStrategy):
     ) -> tuple[set[str], Any]:
         """Run recovery strategies until required fields are satisfied.
 
-        Executes strategies in pipeline order, checking after each
-        whether all required fields are now present.  Short-circuits
+        Executes strategies in pipeline order, checking before each
+        whether all required fields are still missing.  Short-circuits
         as soon as requirements are met.
 
         Args:

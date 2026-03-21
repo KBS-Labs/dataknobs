@@ -720,7 +720,7 @@ settings:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `recovery.pipeline` | list of strings | `["derivation", "scope_escalation", "focused_retry"]` | Ordered list of strategies to execute |
+| `recovery.pipeline` | list of strings | `["derivation", "scope_escalation"]` | Ordered list of strategies to execute |
 | `recovery.focused_retry.enabled` | bool | `false` | Enable the focused retry strategy |
 | `recovery.focused_retry.max_retries` | int | `1` | Maximum focused retry attempts per turn |
 
@@ -728,7 +728,7 @@ Valid strategy names: `derivation`, `scope_escalation`, `focused_retry`, `clarif
 
 The `clarification` strategy is a no-op placeholder — clarification is handled by the confidence gate after the pipeline, regardless of whether it appears in the list. Including it documents intent but doesn't change behavior.
 
-**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation → focused_retry`. However, scope escalation requires `scope_escalation.enabled: true` to fire, and focused retry requires `recovery.focused_retry.enabled: true`. So without any configuration, only derivation runs (if rules are configured).
+**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation`. Scope escalation requires `scope_escalation.enabled: true` to fire, so without any configuration only derivation runs (if rules are configured). Add `focused_retry` to the pipeline explicitly to opt in.
 
 ### Focused Retry Strategy {: #focused-retry-strategy }
 
