@@ -1,12 +1,16 @@
 """Cost tracking middleware for monitoring LLM usage."""
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
-
-from dataknobs_bots.bot.context import BotContext
+from typing import TYPE_CHECKING, Any
 
 from .base import Middleware
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.context import BotContext
+    from dataknobs_bots.bot.turn import TurnState
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +113,8 @@ class CostTrackingMiddleware(Middleware):
             "total_input_tokens": 0,
             "total_output_tokens": 0,
             "total_cost_usd": 0.0,
-            "after_message_calls": 0,
-            "post_stream_calls": 0,
+            "chat_turns": 0,
+            "stream_turns": 0,
             "on_error_calls": 0,
             "on_hook_error_calls": 0,
             "by_provider": {},
@@ -127,8 +131,8 @@ class CostTrackingMiddleware(Middleware):
     ) -> float:
         """Record token usage and cost for a request.
 
-        Shared by ``after_message`` and ``post_stream`` to ensure
-        consistent stats tracking (totals, by-provider, by-model).
+        Called by ``after_turn`` for consistent stats tracking
+        (totals, by-provider, by-model).
 
         Args:
             client_id: Client identifier
@@ -186,108 +190,77 @@ class CostTrackingMiddleware(Middleware):
 
         return cost
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        """Track message before processing (mainly for logging).
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        """Log estimated input tokens at the start of a turn.
 
         Args:
-            message: User's input message
-            context: Bot context
+            turn: Turn state at the start of the pipeline.
+
+        Returns:
+            None (no message transform).
         """
         # Estimate input tokens (rough approximation: ~4 chars per token)
-        estimated_tokens = len(message) // 4
+        estimated_tokens = len(turn.message) // 4
         self._logger.debug("Estimated input tokens: %d", estimated_tokens)
+        return None
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        """Track costs after bot response.
+    async def after_turn(self, turn: TurnState) -> None:
+        """Track costs after turn completion using TurnState data.
+
+        Uses real token usage when the provider reports it, otherwise
+        estimates from message/response text length (~4 chars per token).
 
         Args:
-            response: Bot's generated response
-            context: Bot context
-            **kwargs: Should contain 'tokens_used', 'provider', 'model' if available
+            turn: Completed turn state with usage and response data.
         """
         if not self.track_tokens:
             return
 
-        client_id = context.client_id
-        provider = kwargs.get("provider", "unknown")
-        model = kwargs.get("model", "unknown")
+        client_id = turn.context.client_id
+        provider = turn.provider_name or "unknown"
+        model = turn.model or "unknown"
 
-        # Get token counts
-        tokens_used = kwargs.get("tokens_used", {})
-        if isinstance(tokens_used, int):
-            # If single number, assume it's total and estimate split
-            input_tokens = len(context.session_metadata.get("last_message", "")) // 4
-            output_tokens = tokens_used - input_tokens
-        else:
+        if turn.usage:
             input_tokens = int(
-                tokens_used.get(
+                turn.usage.get(
                     "input",
-                    tokens_used.get(
-                        "prompt_tokens",
-                        len(context.session_metadata.get("last_message", "")) // 4,
-                    ),
+                    turn.usage.get("prompt_tokens", 0),
                 )
             )
             output_tokens = int(
-                tokens_used.get(
+                turn.usage.get(
                     "output",
-                    tokens_used.get("completion_tokens", len(response) // 4),
+                    turn.usage.get("completion_tokens", 0),
                 )
             )
+            estimated = False
+        else:
+            # Estimate from text length (~4 chars per token).
+            # Note: turn.message is the user's message before KB/memory
+            # augmentation.  The actual LLM input includes system prompt,
+            # KB chunks, and memory context, so this underestimates real
+            # input tokens.  When real usage data is available (above
+            # branch), this fallback is not reached.
+            input_tokens = len(turn.message) // 4
+            output_tokens = len(turn.response_content) // 4
+            estimated = True
 
+        hook_counter = (
+            "stream_turns" if turn.is_streaming else "chat_turns"
+        )
         cost = self._record_usage(
-            client_id, "after_message_calls",
+            client_id, hook_counter,
             provider, model, input_tokens, output_tokens,
         )
 
         total = self._usage_stats[client_id]["total_cost_usd"]
+        mode_label = turn.mode.value
+        est_marker = " (estimated)" if estimated else ""
         self._logger.info(
-            "Client %s: %s/%s - %d in + %d out tokens, "
-            "cost: $%.6f, total: $%.6f",
-            client_id, provider, model,
-            input_tokens, output_tokens, cost, total,
-        )
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        """Track costs after streaming completes.
-
-        For streaming responses, token counts are estimated from text length
-        since exact counts may not be available until the stream completes.
-
-        Args:
-            message: Original user message
-            response: Complete accumulated response from streaming
-            context: Bot context
-        """
-        if not self.track_tokens:
-            return
-
-        client_id = context.client_id
-
-        # For streaming, we estimate tokens from text length (~4 chars per token)
-        input_tokens = len(message) // 4
-        output_tokens = len(response) // 4
-
-        # Get provider/model from context metadata if available
-        provider = context.session_metadata.get("provider", "unknown")
-        model = context.session_metadata.get("model", "unknown")
-
-        cost = self._record_usage(
-            client_id, "post_stream_calls",
-            provider, model, input_tokens, output_tokens,
-        )
-
-        total = self._usage_stats[client_id]["total_cost_usd"]
-        self._logger.info(
-            "Stream complete - Client %s: %s/%s - "
-            "~%d in + ~%d out tokens (estimated), "
-            "cost: $%.6f, total: $%.6f",
-            client_id, provider, model,
-            input_tokens, output_tokens, cost, total,
+            "Turn complete (%s) - Client %s: %s/%s - "
+            "%d in + %d out tokens%s, cost: $%.6f, total: $%.6f",
+            mode_label, client_id, provider, model,
+            input_tokens, output_tokens, est_marker, cost, total,
         )
 
     async def on_error(

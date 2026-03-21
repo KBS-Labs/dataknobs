@@ -380,6 +380,19 @@ class ConversationState:
     updated_at: datetime = field(default_factory=datetime.now)
     schema_version: str = SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        """Initialize transient runtime state.
+
+        ``turn_data`` is per-turn cross-middleware communication state.
+        Populated by the bot layer before each LLM call and cleared
+        after the turn completes.  Stored as a plain attribute (not a
+        dataclass field) so it is invisible to ``dataclasses.asdict()``
+        and ``dataclasses.fields()`` — only the custom ``to_dict()``
+        and ``from_dict()`` matter for serialization, and they
+        deliberately exclude it.
+        """
+        self.turn_data: Dict[str, Any] = {}
+
     def get_current_node(self) -> Tree | None:
         """Get the current tree node."""
         return get_node_by_id(self.message_tree, self.current_node_id)

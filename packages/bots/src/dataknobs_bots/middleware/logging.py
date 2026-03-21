@@ -1,13 +1,17 @@
 """Logging middleware for conversation tracking."""
 
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
-
-from dataknobs_bots.bot.context import BotContext
+from typing import TYPE_CHECKING, Any
 
 from .base import Middleware
+
+if TYPE_CHECKING:
+    from dataknobs_bots.bot.context import BotContext
+    from dataknobs_bots.bot.turn import TurnState
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,11 @@ class LoggingMiddleware(Middleware):
 
     Logs all user messages and bot responses with context
     for monitoring, debugging, and analytics.
+
+    Uses the unified TurnState hooks:
+
+    - ``on_turn_start`` — logs incoming user message
+    - ``after_turn`` — logs turn completion with response, usage, tools
 
     Attributes:
         log_level: Logging level to use (default: INFO)
@@ -56,25 +65,28 @@ class LoggingMiddleware(Middleware):
         self._logger = logging.getLogger(f"{__name__}.ConversationLogger")
         self._logger.setLevel(getattr(logging, log_level.upper()))
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        """Called before processing user message.
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        """Log incoming user message at the start of a turn.
 
         Args:
-            message: User's input message
-            context: Bot context with conversation and user info
+            turn: Turn state at the start of the pipeline.
+
+        Returns:
+            None (no message transform).
         """
-        log_data = {
+        log_data: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": "user_message",
-            "client_id": context.client_id,
-            "user_id": context.user_id,
-            "conversation_id": context.conversation_id,
-            "message_length": len(message),
+            "mode": turn.mode.value,
+            "client_id": turn.context.client_id,
+            "user_id": turn.context.user_id,
+            "conversation_id": turn.context.conversation_id,
+            "message_length": len(turn.message),
         }
 
         if self.include_metadata:
-            log_data["session_metadata"] = context.session_metadata
-            log_data["request_metadata"] = context.request_metadata
+            log_data["session_metadata"] = turn.context.session_metadata
+            log_data["request_metadata"] = turn.context.request_metadata
 
         if self.json_format:
             self._logger.info(json.dumps(log_data))
@@ -82,81 +94,45 @@ class LoggingMiddleware(Middleware):
             self._logger.info("User message: %s", log_data)
 
         # Log content at DEBUG level (first 200 chars)
-        self._logger.debug("Message content: %.200s...", message)
+        self._logger.debug("Message content: %.200s...", turn.message)
+        return None
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        """Called after generating bot response.
+    async def after_turn(self, turn: TurnState) -> None:
+        """Log turn completion with unified data for all turn types.
 
         Args:
-            response: Bot's generated response
-            context: Bot context
-            **kwargs: Additional data (e.g., tokens_used, response_time_ms)
+            turn: Completed turn state.
         """
-        log_data = {
+        log_data: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": "bot_response",
-            "client_id": context.client_id,
-            "user_id": context.user_id,
-            "conversation_id": context.conversation_id,
-            "response_length": len(response),
+            "event": "turn_complete",
+            "mode": turn.mode.value,
+            "client_id": turn.context.client_id,
+            "user_id": turn.context.user_id,
+            "conversation_id": turn.context.conversation_id,
+            "response_length": len(turn.response_content),
         }
 
-        # Add optional metrics
-        if "tokens_used" in kwargs:
-            log_data["tokens_used"] = kwargs["tokens_used"]
-        if "response_time_ms" in kwargs:
-            log_data["response_time_ms"] = kwargs["response_time_ms"]
-        if "provider" in kwargs:
-            log_data["provider"] = kwargs["provider"]
-        if "model" in kwargs:
-            log_data["model"] = kwargs["model"]
+        if turn.usage:
+            log_data["tokens_used"] = turn.usage
+        if turn.provider_name:
+            log_data["provider"] = turn.provider_name
+        if turn.model:
+            log_data["model"] = turn.model
+        if turn.tool_executions:
+            log_data["tool_executions"] = len(turn.tool_executions)
 
         if self.include_metadata:
-            log_data["session_metadata"] = context.session_metadata
-            log_data["request_metadata"] = context.request_metadata
+            log_data["session_metadata"] = turn.context.session_metadata
+            log_data["request_metadata"] = turn.context.request_metadata
 
         if self.json_format:
             self._logger.info(json.dumps(log_data))
         else:
-            self._logger.info("Bot response: %s", log_data)
+            self._logger.info("Turn complete: %s", log_data)
 
         # Log content at DEBUG level (first 200 chars)
-        self._logger.debug("Response content: %.200s...", response)
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        """Called after streaming response completes.
-
-        Args:
-            message: Original user message
-            response: Complete accumulated response from streaming
-            context: Bot context
-        """
-        log_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event": "stream_complete",
-            "client_id": context.client_id,
-            "user_id": context.user_id,
-            "conversation_id": context.conversation_id,
-            "message_length": len(message),
-            "response_length": len(response),
-        }
-
-        if self.include_metadata:
-            log_data["session_metadata"] = context.session_metadata
-            log_data["request_metadata"] = context.request_metadata
-
-        if self.json_format:
-            self._logger.info(json.dumps(log_data))
-        else:
-            self._logger.info("Stream complete: %s", log_data)
-
-        # Log content at DEBUG level (first 200 chars each)
-        self._logger.debug("Streamed message: %.200s...", message)
-        self._logger.debug("Streamed response: %.200s...", response)
+        self._logger.debug("Response content: %.200s...", turn.response_content)
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext

@@ -11,6 +11,7 @@ from .base import (
     normalize_wizard_state,
 )
 from .context import BotContext
+from .turn import ToolExecution, TurnMode, TurnState
 from .manager import BotManager
 from .registry import BotRegistry, InMemoryBotRegistry, create_memory_registry
 
@@ -25,6 +26,9 @@ __all__ = [
     "PROVIDER_ROLE_MAIN",
     "PROVIDER_ROLE_MEMORY_EMBEDDING",
     "PROVIDER_ROLE_SUMMARY_LLM",
+    "ToolExecution",
+    "TurnMode",
+    "TurnState",
     "UndoResult",
     "create_memory_registry",
     "normalize_wizard_state",

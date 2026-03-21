@@ -162,6 +162,16 @@ system_prompt: string     # Smart detection: template if exists in library, else
 middleware:
   - class: string
     params: dict
+
+# Optional: Content Security
+context_transform: string   # Dotted import path to a (str) -> str callable
+                             # Applied to KB chunks and memory context before
+                             # injection into the prompt (e.g. XML escaping)
+
+# Optional: Tool Execution
+max_tool_iterations: int     # Max tool execution rounds (default: 5)
+                             # Caps the DynaBot-level tool loop for strategies
+                             # that don't handle tool_calls internally
 ```
 
 ---
@@ -2728,26 +2738,24 @@ middleware:
 
 ### Middleware Interface
 
-Custom middleware should extend the `Middleware` base class:
+`Middleware` is a concrete base class with all hooks as no-ops. Override only
+the hooks you need:
 
 ```python
-from dataknobs_bots.middleware import Middleware
-from dataknobs_bots import BotContext
-from typing import Any
+from dataknobs_bots.middleware.base import Middleware
+from dataknobs_bots.bot.turn import TurnState
 
 class MyMiddleware(Middleware):
     def __init__(self, **params):
         # Initialize with params
         pass
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        # Pre-processing
-        pass
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        # Pre-processing, plugin_data writes, message transforms
+        return None
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        # Post-processing (kwargs includes tokens_used, provider, model)
+    async def after_turn(self, turn: TurnState) -> None:
+        # Post-processing — fires for all turn types (chat, stream, greet)
         pass
 
     async def on_error(
@@ -2757,7 +2765,41 @@ class MyMiddleware(Middleware):
         pass
 ```
 
-For comprehensive middleware documentation, see the [Middleware Guide](middleware.md).
+Legacy hooks (`before_message`, `after_message`, `post_stream`) are still
+dispatched for backward compatibility but are deprecated. See the
+[Middleware Guide](middleware.md) for the full hook reference, `TurnState`
+fields, `plugin_data` bridge, and migration guidance.
+
+### Programmatic Middleware via `from_config()`
+
+Use the `middleware=` keyword argument to inject middleware instances
+programmatically, bypassing config-driven construction:
+
+```python
+bot = await DynaBot.from_config(
+    config,
+    middleware=[cost_tracker, logger_mw],  # Overrides config middleware
+)
+```
+
+Similarly, use `llm=` to inject a pre-built shared provider:
+
+```python
+# At startup — create shared provider once
+shared_llm = AnthropicProvider({...})
+await shared_llm.initialize()
+
+# Per-request — reuse the provider
+bot = await DynaBot.from_config(
+    config,
+    llm=shared_llm,          # Skips provider creation; caller owns lifecycle
+    middleware=[cost_mw],
+)
+```
+
+When `llm=` is passed, `config["llm"]` becomes optional and the provider is NOT
+closed when the bot closes (originator-owns-lifecycle). When `middleware=` is
+passed, it completely replaces any middleware defined in config.
 
 ---
 

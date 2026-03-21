@@ -24,7 +24,7 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
 - [Extraction Grounding](#extraction-grounding)
   - [The Problem](#the-problem)
   - [How Grounding Works](#how-grounding-works)
-  - [Configuration](#grounding-configuration)
+  - [Grounding Configuration](#grounding-configuration)
   - [Custom Merge Filters](#custom-merge-filters)
   - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
 - [Message Stages](#message-stages)
@@ -335,7 +335,7 @@ The merge decision is conservative:
 
 First-turn extraction is unaffected — all fields are absent, so everything merges. Grounding only gates **overwrites** of existing data.
 
-### Configuration
+### Grounding Configuration
 
 Grounding is enabled by default. Control it at three levels:
 

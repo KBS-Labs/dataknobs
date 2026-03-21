@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import AsyncGenerator
+import time
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -21,11 +23,15 @@ from dataknobs_llm.conversations.storage import get_node_by_id, ConversationNode
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
+from dataknobs_llm.tools.context import ToolExecutionContext
+
+from dataknobs_common.exceptions import NotFoundError
 
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from ..middleware.base import Middleware
 from .context import BotContext
+from .turn import ToolExecution, TurnMode, TurnState
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
@@ -113,6 +119,11 @@ class DynaBot:
     DynaBot provides a flexible, configuration-driven bot that can be customized
     for different use cases through YAML/JSON configuration files.
 
+    .. versionadded:: 0.14.0
+       DynaBot-level tool execution loop — strategies that pass tools to the
+       LLM but do not execute ``tool_calls`` themselves (e.g. SimpleReasoning)
+       now have their tool calls executed automatically by the bot pipeline.
+
     Attributes:
         llm: LLM provider for generating responses
         prompt_builder: Prompt builder for managing prompts
@@ -128,6 +139,9 @@ class DynaBot:
         default_temperature: Default temperature for LLM generation
         default_max_tokens: Default max tokens for LLM generation
     """
+
+    _DEFAULT_MAX_TOOL_ITERATIONS = 5
+    """Default maximum number of tool execution rounds before returning."""
 
     def __init__(
         self,
@@ -145,6 +159,8 @@ class DynaBot:
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
         default_temperature: float = 0.7,
         default_max_tokens: int = 1000,
+        context_transform: Callable[[str], str] | None = None,
+        max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
     ):
         """Initialize DynaBot.
 
@@ -165,6 +181,15 @@ class DynaBot:
             system_prompt_rag_configs: RAG configurations for inline system prompts
             default_temperature: Default temperature (0-1)
             default_max_tokens: Default max tokens to generate
+            context_transform: Optional callable applied to each content string
+                (KB chunks, memory context) before it is injected into the
+                prompt.  Use this to sanitize or fence external content
+                against prompt injection.
+            max_tool_iterations: Maximum number of tool execution rounds
+                before returning.  When a strategy returns a response with
+                ``tool_calls``, DynaBot executes the tools and re-generates.
+                This cap prevents infinite loops when the model keeps
+                requesting the same tools.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -180,8 +205,11 @@ class DynaBot:
         self.system_prompt_rag_configs = system_prompt_rag_configs
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
+        self._context_transform = context_transform
+        self._max_tool_iterations = max_tool_iterations
+        self._owns_llm = True  # Set False by from_config() when llm= injected
         self._conversation_managers: dict[str, ConversationManager] = {}
-        self._turn_checkpoints: dict[str, list[str]] = {}
+        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
 
     def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
@@ -234,12 +262,19 @@ class DynaBot:
         return result
 
     @classmethod
-    async def from_config(cls, config: dict[str, Any]) -> DynaBot:
+    async def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        llm: AsyncLLMProvider | None = None,
+        middleware: list[Middleware] | None = None,
+    ) -> DynaBot:
         """Create DynaBot from configuration.
 
         Args:
             config: Configuration dictionary containing:
-                - llm: LLM configuration (provider, model, etc.)
+                - llm: LLM configuration (provider, model, etc.).
+                  Optional when the ``llm`` kwarg is provided.
                 - conversation_storage: Storage configuration.  Two modes:
                     - ``backend``: Database backend key for the default
                       DataknobsConversationStorage (e.g. ``"memory"``,
@@ -253,13 +288,20 @@ class DynaBot:
                 - memory: Optional memory configuration
                 - knowledge_base: Optional knowledge base configuration
                 - reasoning: Optional reasoning strategy configuration
-                - middleware: Optional middleware configurations
+                - middleware: Optional middleware configurations (ignored
+                  when the ``middleware`` kwarg is provided)
                 - prompts: Optional prompts library (dict of name -> content)
                 - system_prompt: Optional system prompt configuration (see below)
                 - config_base_path: Optional base directory for resolving
                   relative config file paths (e.g. wizard_config). When set,
                   relative paths in nested configs are resolved against this
                   directory instead of the current working directory.
+            llm: Pre-built LLM provider.  When provided, ``config["llm"]``
+                is optional and the provider is used as-is (no initialization
+                or cleanup — the caller owns the lifecycle).  Use this to
+                share a single provider across multiple bot instances.
+            middleware: Pre-built middleware list.  When provided, replaces
+                any middleware defined in config.
 
         Returns:
             Configured DynaBot instance
@@ -279,65 +321,47 @@ class DynaBot:
 
         Example:
             ```python
-            # Smart detection: uses as template if it exists in prompts library
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "prompts": {
-                    "helpful_assistant": "You are a helpful AI assistant."
-                },
-                "system_prompt": "helpful_assistant"  # Found in prompts, used as template
-            }
-
-            # Smart detection: treated as inline content (not in prompts library)
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": "You are a helpful assistant."  # Not a template name
-            }
-
-            # Explicit inline content with RAG enhancement
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": {
-                    "content": "You are a helpful assistant. Use this context: {{ CONTEXT }}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "assistant guidelines",
-                        "placeholder": "CONTEXT",
-                        "k": 3
-                    }]
-                }
-            }
-
-            # Strict mode: error if template doesn't exist
-            config = {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "memory"},
-                "system_prompt": {
-                    "name": "my_template",
-                    "strict": true  # Raises ValueError if my_template doesn't exist
-                }
-            }
-
             bot = await DynaBot.from_config(config)
+
+            # With a shared provider
+            shared_llm = OllamaProvider({"provider": "ollama", "model": "llama3.2"})
+            await shared_llm.initialize()
+            bot = await DynaBot.from_config(
+                {"conversation_storage": {"backend": "memory"}},
+                llm=shared_llm,
+            )
+
+            # With pre-built middleware
+            bot = await DynaBot.from_config(config, middleware=[my_middleware])
             ```
         """
+        if llm is not None:
+            # Caller-owned provider — skip creation/initialization.
+            # Caller is responsible for lifecycle (initialize/close).
+            llm_config = config.get("llm", {})
+            bot = await cls._build_from_config(
+                config, llm, llm_config, middleware_override=middleware
+            )
+            bot._owns_llm = False  # Caller owns lifecycle
+            return bot
+
+        # Create LLM provider from config
+        llm_config = config["llm"]
+
         from dataknobs_llm.llm import LLMProviderFactory
 
-        # Create LLM provider
-        llm_config = config["llm"]
-        factory = LLMProviderFactory(is_async=True)
-        llm = factory.create(llm_config)
-        await llm.initialize()
+        created_llm = LLMProviderFactory(is_async=True).create(llm_config)
+        await created_llm.initialize()
 
         # Everything below can fail; ensure the provider is closed on error
         # so we don't leak aiohttp sessions or other resources.
         try:
-            return await cls._build_from_config(config, llm, llm_config)
+            return await cls._build_from_config(
+                config, created_llm, llm_config,
+                middleware_override=middleware,
+            )
         except Exception:
-            await llm.close()
+            await created_llm.close()
             raise
 
     @classmethod
@@ -346,6 +370,8 @@ class DynaBot:
         config: dict[str, Any],
         llm: Any,
         llm_config: dict[str, Any],
+        *,
+        middleware_override: list[Middleware] | None = None,
     ) -> DynaBot:
         """Build a DynaBot after the LLM provider is initialized.
 
@@ -501,12 +527,15 @@ class DynaBot:
             reasoning_strategy = create_reasoning_from_config(reasoning_config)
 
         # Create middleware
-        middleware = []
-        if "middleware" in config:
-            for mw_config in config["middleware"]:
-                mw = cls._create_middleware(mw_config)
-                if mw:
-                    middleware.append(mw)
+        if middleware_override is not None:
+            middleware = list(middleware_override)
+        else:
+            middleware = []
+            if "middleware" in config:
+                for mw_config in config["middleware"]:
+                    mw = cls._create_middleware(mw_config)
+                    if mw:
+                        middleware.append(mw)
 
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
@@ -534,6 +563,30 @@ class DynaBot:
                     system_prompt_name = system_prompt_config
                 else:
                     system_prompt_content = system_prompt_config
+
+        # Resolve context_transform callable (if configured)
+        context_transform: Callable[[str], str] | None = None
+        context_transform_ref = config.get("context_transform")
+        if context_transform_ref is not None:
+            if callable(context_transform_ref):
+                context_transform = context_transform_ref
+            elif isinstance(context_transform_ref, str):
+                from dataknobs_bots.tools.resolve import resolve_callable
+                from dataknobs_common.exceptions import ConfigurationError
+
+                try:
+                    context_transform = resolve_callable(context_transform_ref)
+                except (ImportError, AttributeError, ValueError) as exc:
+                    raise ConfigurationError(
+                        f"context_transform: could not resolve "
+                        f"'{context_transform_ref}': {exc}"
+                    ) from exc
+            else:
+                logger.warning(
+                    "context_transform must be a callable or dotted import "
+                    "string, got %s — ignoring",
+                    type(context_transform_ref).__name__,
+                )
 
         # Collect subsystem providers for catalog registration.
         # Each subsystem declares its own providers via providers().
@@ -563,6 +616,10 @@ class DynaBot:
             system_prompt_rag_configs=system_prompt_rag_configs,
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
+            context_transform=context_transform,
+            max_tool_iterations=config.get(
+                "max_tool_iterations", cls._DEFAULT_MAX_TOOL_ITERATIONS
+            ),
         )
 
         for role, provider in subsystem_providers.items():
@@ -721,39 +778,47 @@ class DynaBot:
         # Dict passes through (assumed already portable)
         return config
 
-    async def _prepare_chat(
-        self,
-        message: str,
-        context: BotContext,
-        rag_query: str | None = None,
-    ) -> ConversationManager:
-        """Shared pre-processing for chat() and stream_chat().
+    async def _prepare_turn(self, turn: TurnState) -> None:
+        """Shared pre-processing for all turn types.
 
-        Runs before_message middleware, builds the augmented message,
-        gets/creates the conversation manager, adds the user message,
-        and updates memory.
+        For chat/stream: runs on_turn_start (plugin_data + message
+        transforms), before_message middleware, builds the augmented
+        message, gets/creates the conversation manager, records undo
+        checkpoint, adds the user message, updates memory, and injects
+        plugin_data into the manager for LLM middleware access.
+
+        For greet: runs on_turn_start and before_message middleware
+        (empty message) and gets/creates the conversation manager.
+        No user message is added.
 
         Args:
-            message: Raw user message
-            context: Bot execution context
-            rag_query: Optional explicit RAG query override
-
-        Returns:
-            The ConversationManager ready for response generation.
+            turn: Turn state to populate with the conversation manager.
         """
-        # Apply middleware (before)
-        await self._call_before_message_middleware(message, context)
+        # on_turn_start: plugin_data writes + message transforms (chained)
+        await self._call_on_turn_start_middleware(turn)
+
+        # Legacy observational hook
+        await self._call_before_message_middleware(turn.message, turn.context)
+
+        if turn.is_greet:
+            turn.manager = await self._get_or_create_conversation(turn.context)
+            # Bridge plugin_data to LLM middleware
+            if turn.manager.state is not None:
+                turn.manager.state.turn_data = turn.plugin_data
+            return
 
         # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message, rag_query=rag_query)
+        full_message = await self._build_message_with_context(
+            turn.message, rag_query=turn.rag_query
+        )
 
         # Get or create conversation manager
-        manager = await self._get_or_create_conversation(context)
+        turn.manager = await self._get_or_create_conversation(turn.context)
 
         # Record tree position before the turn for undo support.
         # Store (node_id, memory_count) — node_id for tree navigation,
         # memory_count for accurate memory rollback (node depth is unreliable).
-        conv_id = context.conversation_id
+        conv_id = turn.context.conversation_id
         if conv_id not in self._turn_checkpoints:
             self._turn_checkpoints[conv_id] = []
         mem_count = 0
@@ -763,7 +828,7 @@ class DynaBot:
             except Exception:
                 mem_count = 0
         self._turn_checkpoints[conv_id].append((
-            manager.state.current_node_id if manager.state else "",
+            turn.manager.state.current_node_id if turn.manager.state else "",
             mem_count,
         ))
 
@@ -772,17 +837,162 @@ class DynaBot:
         # metadata so that downstream consumers (e.g. WizardReasoning
         # extraction) can access the undecorated user input.
         msg_metadata: dict[str, Any] | None = None
-        if full_message != message:
-            msg_metadata = {"raw_content": message}
-        await manager.add_message(
+        if full_message != turn.message:
+            msg_metadata = {"raw_content": turn.message}
+        await turn.manager.add_message(
             content=full_message, role="user", metadata=msg_metadata
         )
 
         # Update memory
         if self.memory:
-            await self.memory.add_message(message, role="user")
+            await self.memory.add_message(turn.message, role="user")
 
-        return manager
+        # Bridge plugin_data to LLM middleware via ConversationState.turn_data
+        if turn.manager.state is not None:
+            turn.manager.state.turn_data = turn.plugin_data
+
+    async def _execute_tools(
+        self,
+        turn: TurnState,
+        tool_calls: list[Any],
+    ) -> None:
+        """Execute tool calls and add observations to the conversation.
+
+        Builds a ``ToolExecutionContext`` from the conversation manager,
+        executes each tool, records ``ToolExecution`` on the turn state,
+        and adds tool result observations to the conversation history so
+        the next LLM call sees them.
+
+        Args:
+            turn: Current turn state (tool executions are appended here).
+            tool_calls: List of ``ToolCall`` objects from the LLM response.
+        """
+        for tool_call in tool_calls:
+            tool_name = tool_call.name
+            tool_context = ToolExecutionContext.from_manager(turn.manager)
+            try:
+                tool = self.tool_registry.get_tool(tool_name)
+            except NotFoundError:
+                tool = None
+
+            if tool is None:
+                observation = "Tool not found"
+                turn.tool_executions.append(ToolExecution(
+                    tool_name=tool_name,
+                    parameters=tool_call.parameters,
+                    error="Tool not found",
+                ))
+                logger.warning(
+                    "Tool not found: %s",
+                    tool_name,
+                    extra={
+                        "conversation_id": getattr(
+                            turn.manager, "conversation_id", None
+                        ),
+                    },
+                )
+            else:
+                try:
+                    t0 = time.monotonic()
+                    result = await tool.execute(
+                        **tool_call.parameters, _context=tool_context
+                    )
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    try:
+                        observation = (
+                            f"Tool result: {json.dumps(result, default=str)}"
+                        )
+                    except (TypeError, ValueError):
+                        observation = f"Tool result: {result}"
+
+                    turn.tool_executions.append(ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        result=result,
+                        duration_ms=duration_ms,
+                    ))
+                    logger.info(
+                        "Tool executed: %s",
+                        tool_name,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                            "duration_ms": round(duration_ms, 1),
+                            "result_length": len(str(result)),
+                        },
+                    )
+                except Exception as exc:
+                    observation = f"Error: {exc!s}"
+                    turn.tool_executions.append(ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        error=str(exc),
+                    ))
+                    logger.error(
+                        "Tool execution failed: %s",
+                        tool_name,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                            "error": str(exc),
+                        },
+                        exc_info=True,
+                    )
+
+            await turn.manager.add_message(
+                content=f"Observation from {tool_name}: {observation}",
+                role="tool",
+                name=tool_name,
+            )
+
+    async def _finalize_turn(self, turn: TurnState) -> None:
+        """Shared post-generation processing for all turn types.
+
+        Updates memory with the assistant response, fires tool execution
+        hooks, dispatches the unified ``after_turn`` middleware hook, and
+        then dispatches the appropriate legacy hook (``after_message`` for
+        chat/greet, ``post_stream`` for streaming).
+
+        Args:
+            turn: Completed turn state with response content populated.
+        """
+        # Update memory with assistant response
+        if self.memory and turn.response_content:
+            await self.memory.add_message(turn.response_content, role="assistant")
+
+        # Collect tool executions from strategy (appended after DynaBot-level
+        # executions — ordering is by source, not chronological).  For current
+        # strategies, only one source produces executions per turn: either
+        # ReAct (strategy-level) or the DynaBot loop (for non-ReAct strategies).
+        if self.reasoning_strategy:
+            strategy_tools = self.reasoning_strategy.get_and_clear_tool_executions()
+            turn.tool_executions.extend(strategy_tools)
+
+        # Fire on_tool_executed for each tool execution (post-turn, not
+        # real-time — middleware cannot abort or rate-limit mid-turn).
+        for execution in turn.tool_executions:
+            await self._call_on_tool_executed_middleware(execution, turn.context)
+
+        # New unified hook — all turn types
+        await self._call_after_turn_middleware(turn)
+
+        # Legacy hooks for backward compatibility
+        if turn.is_streaming:
+            await self._call_post_stream_middleware(
+                turn.message, turn.response_content, turn.context
+            )
+        else:
+            mw_kwargs = turn.middleware_kwargs()
+            await self._call_after_message_middleware(
+                turn.response_content, turn.context, **mw_kwargs
+            )
+
+        # Clean up transient turn_data on the manager to avoid leaking
+        # between turns (the manager is cached across turns).
+        if turn.manager and turn.manager.state is not None:
+            turn.manager.state.turn_data = {}
 
     async def _generate_response(
         self,
@@ -828,6 +1038,38 @@ class DynaBot:
             The response text as a string.
         """
         return response.content if hasattr(response, "content") else str(response)
+
+    async def _call_on_turn_start_middleware(self, turn: TurnState) -> None:
+        """Dispatch on_turn_start to all middleware (chained transforms).
+
+        Each middleware can write to ``turn.plugin_data`` and optionally
+        return a transformed message. Transforms chain: each middleware
+        receives the message as modified by the previous one.
+
+        Every middleware gets called even if an earlier one raises.
+        If any raise, the first error is re-raised after all have
+        been called (so the outer try block can route it to on_error).
+        This matches ``before_message`` semantics — middleware can
+        raise to abort the request (e.g. rate limiting, auth).
+
+        Args:
+            turn: Turn state at the start of the pipeline.
+        """
+        first_error: Exception | None = None
+        for mw in self.middleware:
+            try:
+                result = await mw.on_turn_start(turn)
+                if result is not None:
+                    turn.message = result
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.on_turn_start raised",
+                    type(mw).__name__,
+                )
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def _call_before_message_middleware(
         self, message: str, context: BotContext
@@ -972,24 +1214,52 @@ class DynaBot:
                     hook_name,
                 )
 
-    def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
-        """Build kwargs for middleware after_message/post_stream hooks.
+    async def _call_after_turn_middleware(self, turn: TurnState) -> None:
+        """Dispatch after_turn to all middleware.
 
-        Extracts token usage, model, and provider info from the LLM
-        response and the bot's provider for middleware consumption.
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
+
+        Args:
+            turn: Completed turn state.
         """
-        kwargs: dict[str, Any] = {}
-        if hasattr(response, "usage") and response.usage:
-            kwargs["tokens_used"] = response.usage
-        if hasattr(response, "model") and response.model:
-            kwargs["model"] = response.model
-        if self.llm is not None:
-            provider_name = getattr(self.llm, "provider_name", None)
-            if provider_name:
-                kwargs["provider"] = provider_name
-            elif hasattr(self.llm, "__class__"):
-                kwargs["provider"] = type(self.llm).__name__
-        return kwargs
+        for mw in self.middleware:
+            try:
+                await mw.after_turn(turn)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.after_turn raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "after_turn", exc, turn.context
+                )
+
+    async def _call_on_tool_executed_middleware(
+        self, execution: ToolExecution, context: BotContext
+    ) -> None:
+        """Dispatch on_tool_executed to all middleware.
+
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
+
+        Args:
+            execution: Record of the tool execution.
+            context: Bot execution context.
+        """
+        for mw in self.middleware:
+            try:
+                await mw.on_tool_executed(execution, context)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.on_tool_executed raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "on_tool_executed", exc, context
+                )
 
     async def chat(
         self,
@@ -1045,24 +1315,60 @@ class DynaBot:
             )
             ```
         """
+        turn = TurnState(
+            mode=TurnMode.CHAT,
+            message=message,
+            context=context,
+            rag_query=rag_query,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            llm_config_overrides=llm_config_overrides,
+        )
         try:
-            manager = await self._prepare_chat(message, context, rag_query=rag_query)
+            await self._prepare_turn(turn)
             response = await self._generate_response(
-                manager, temperature, max_tokens, llm_config_overrides
-            )
-            response_content = self._extract_response_content(response)
-
-            # Update memory
-            if self.memory:
-                await self.memory.add_message(response_content, role="assistant")
-
-            # Apply middleware (after)
-            mw_kwargs = self._middleware_kwargs(response)
-            await self._call_after_message_middleware(
-                response_content, context, **mw_kwargs
+                turn.manager, temperature, max_tokens, llm_config_overrides
             )
 
-            return response_content
+            # DynaBot-level tool execution loop.  Strategies that handle
+            # tool_calls internally (e.g. ReAct) return responses without
+            # tool_calls, so this loop is a no-op for them.
+            for _iteration in range(self._max_tool_iterations):
+                if (
+                    not self.tool_registry
+                    or not getattr(response, "tool_calls", None)
+                ):
+                    break
+                await self._execute_tools(turn, response.tool_calls)
+                # Accumulate usage from intermediate LLM calls
+                turn.accumulate_usage(response)
+                response = await turn.manager.complete(
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                )
+            else:
+                # Loop completed without break — cap hit
+                if self.tool_registry and getattr(
+                    response, "tool_calls", None
+                ):
+                    logger.warning(
+                        "Tool execution loop reached max iterations (%d) "
+                        "with pending tool_calls",
+                        self._max_tool_iterations,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+
+            turn.response = response
+            turn.response_content = self._extract_response_content(response)
+            turn.populate_from_response(response, self.llm)
+            await self._finalize_turn(turn)
+            return turn.response_content
         except Exception as e:
             await self._call_on_error_middleware(e, message, context)
             raise
@@ -1094,10 +1400,11 @@ class DynaBot:
             Greeting string, or None if the bot does not support greetings
 
         Note:
-            Middleware lifecycle for greet: ``before_message("")`` is
-            called before greeting generation; ``after_message(...)`` is
-            called on success.  If an error occurs, ``on_error`` hooks
-            receive ``message=""`` since there is no user message.  If a
+            Middleware lifecycle for greet: ``on_turn_start(turn)`` and
+            ``before_message("")`` are called before greeting generation;
+            ``after_turn(turn)`` and ``after_message(...)`` are called on
+            success.  If an error occurs, ``on_error`` hooks receive
+            ``message=""`` since there is no user message.  If a
             middleware hook itself fails, ``on_hook_error`` is called on
             all middleware.
 
@@ -1112,16 +1419,17 @@ class DynaBot:
         if not self.reasoning_strategy:
             return None
 
+        turn = TurnState(
+            mode=TurnMode.GREET,
+            message="",
+            context=context,
+            initial_context=initial_context,
+        )
         try:
-            # Apply middleware (before) with empty message for context
-            await self._call_before_message_middleware("", context)
+            await self._prepare_turn(turn)
 
-            # Get or create conversation manager
-            manager = await self._get_or_create_conversation(context)
-
-            # Delegate to reasoning strategy
             response = await self.reasoning_strategy.greet(
-                manager=manager,
+                manager=turn.manager,
                 llm=self.llm,
                 initial_context=initial_context,
             )
@@ -1129,20 +1437,16 @@ class DynaBot:
             if response is None:
                 return None
 
-            # Extract response content
-            response_content = self._extract_response_content(response)
-
-            # Update memory with assistant greeting (no user message)
-            if self.memory:
-                await self.memory.add_message(response_content, role="assistant")
-
-            # Apply middleware (after)
-            mw_kwargs = self._middleware_kwargs(response)
-            await self._call_after_message_middleware(
-                response_content, context, **mw_kwargs
-            )
-
-            return response_content
+            turn.response = response
+            turn.response_content = self._extract_response_content(response)
+            # Note: greet responses are not checked for tool_calls.
+            # Greetings are bot-initiated and strategies are not expected
+            # to request tool calls during greet.  If this assumption
+            # changes, add the tool execution loop here (matching
+            # chat/stream_chat).
+            turn.populate_from_response(response, self.llm)
+            await self._finalize_turn(turn)
+            return turn.response_content
         except Exception as e:
             await self._call_on_error_middleware(e, "", context)
             raise
@@ -1211,18 +1515,31 @@ class DynaBot:
             When a reasoning_strategy is configured, the strategy produces the
             complete response and it is emitted as a single stream chunk.
         """
-        full_response_chunks: list[str] = []
+        turn = TurnState(
+            mode=TurnMode.STREAM,
+            message=message,
+            context=context,
+            rag_query=rag_query,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            llm_config_overrides=llm_config_overrides,
+        )
         streaming_error: Exception | None = None
 
         try:
-            manager = await self._prepare_chat(message, context, rag_query=rag_query)
+            await self._prepare_turn(turn)
+
+            # Track tool_calls across streaming rounds so the tool
+            # execution loop can pick them up after the initial stream.
+            pending_tool_calls: list[Any] | None = None
+
             if self.reasoning_strategy:
                 # Delegate to the strategy's stream_generate().
                 # Strategies with true streaming (SimpleReasoning) yield
                 # LLMStreamResponse chunks; others yield a single complete
                 # response that we wrap as a stream chunk.
                 async for chunk in self.reasoning_strategy.stream_generate(
-                    manager=manager,
+                    manager=turn.manager,
                     llm=self.llm,
                     tools=list(self.tool_registry),
                     temperature=temperature or self.default_temperature,
@@ -1230,42 +1547,120 @@ class DynaBot:
                     llm_config_overrides=llm_config_overrides,
                 ):
                     if isinstance(chunk, LLMStreamResponse):
-                        full_response_chunks.append(chunk.delta)
-                        yield chunk
+                        turn.stream_chunks.append(chunk.delta)
+                        if chunk.is_final or chunk.usage:
+                            turn.populate_from_final_stream_chunk(
+                                chunk, self.llm
+                            )
+                        # Intercept tool_calls: suppress is_final so the
+                        # consumer knows more content may follow.
+                        if chunk.tool_calls and self.tool_registry:
+                            pending_tool_calls = chunk.tool_calls
+                            yield LLMStreamResponse(
+                                delta=chunk.delta,
+                                is_final=False,
+                                usage=chunk.usage,
+                                model=chunk.model,
+                            )
+                        else:
+                            yield chunk
                     else:
                         # Strategy yielded a complete LLMResponse — wrap it
                         content = self._extract_response_content(chunk)
-                        full_response_chunks.append(content)
-                        yield LLMStreamResponse(
-                            delta=content, is_final=True, finish_reason="stop"
-                        )
+                        turn.stream_chunks.append(content)
+                        turn.populate_from_response(chunk, self.llm)
+                        # Check for tool_calls on the LLMResponse
+                        if (
+                            getattr(chunk, "tool_calls", None)
+                            and self.tool_registry
+                        ):
+                            pending_tool_calls = chunk.tool_calls
+                            yield LLMStreamResponse(
+                                delta=content, is_final=False,
+                            )
+                        else:
+                            yield LLMStreamResponse(
+                                delta=content,
+                                is_final=True,
+                                finish_reason="stop",
+                            )
             else:
                 # No reasoning strategy — stream directly from LLM
-                async for chunk in manager.stream_complete(
+                async for chunk in turn.manager.stream_complete(
                     llm_config_overrides=llm_config_overrides,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     **kwargs,
                 ):
-                    full_response_chunks.append(chunk.delta)
-                    yield chunk
+                    turn.stream_chunks.append(chunk.delta)
+                    if chunk.is_final or chunk.usage:
+                        turn.populate_from_final_stream_chunk(chunk, self.llm)
+                    if chunk.tool_calls and self.tool_registry:
+                        pending_tool_calls = chunk.tool_calls
+                        yield LLMStreamResponse(
+                            delta=chunk.delta,
+                            is_final=False,
+                            usage=chunk.usage,
+                            model=chunk.model,
+                        )
+                    else:
+                        yield chunk
+
+            # DynaBot-level tool execution loop for streaming.
+            # Execute pending tool_calls, then re-stream until no
+            # more tool_calls or max iterations reached.
+            for _iteration in range(self._max_tool_iterations):
+                if not pending_tool_calls or not self.tool_registry:
+                    break
+                await self._execute_tools(turn, pending_tool_calls)
+                # Accumulate usage from intermediate streaming rounds
+                turn.accumulate_usage_from_stream()
+                pending_tool_calls = None
+
+                async for chunk in turn.manager.stream_complete(
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                ):
+                    turn.stream_chunks.append(chunk.delta)
+                    if chunk.is_final or chunk.usage:
+                        turn.populate_from_final_stream_chunk(
+                            chunk, self.llm
+                        )
+                    if chunk.tool_calls and self.tool_registry:
+                        pending_tool_calls = chunk.tool_calls
+                        yield LLMStreamResponse(
+                            delta=chunk.delta,
+                            is_final=False,
+                            usage=chunk.usage,
+                            model=chunk.model,
+                        )
+                    else:
+                        yield chunk
+            else:
+                # Loop completed without break — cap hit
+                if pending_tool_calls and self.tool_registry:
+                    logger.warning(
+                        "Streaming tool execution loop reached max "
+                        "iterations (%d) with pending tool_calls",
+                        self._max_tool_iterations,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+
         except Exception as e:
             streaming_error = e
             await self._call_on_error_middleware(e, message, context)
             raise
 
-        # Only update memory and run post_stream middleware on success
+        # Only finalize on success
         if streaming_error is None:
-            complete_response = "".join(full_response_chunks)
-
-            # Update memory with complete response
-            if self.memory:
-                await self.memory.add_message(complete_response, role="assistant")
-
-            # Apply post_stream middleware hook (provides both message and response)
-            await self._call_post_stream_middleware(
-                message, complete_response, context
-            )
+            turn.response_content = "".join(turn.stream_chunks)
+            await self._finalize_turn(turn)
 
     async def get_conversation(self, conversation_id: str) -> Any:
         """Retrieve conversation history.
@@ -1463,8 +1858,9 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing conversation storage")
 
-        # Close main LLM provider (DynaBot is the originator)
-        if self.llm and hasattr(self.llm, "close"):
+        # Close main LLM provider only if DynaBot created it.
+        # When from_config(llm=...) was used, the caller owns the lifecycle.
+        if self._owns_llm and self.llm and hasattr(self.llm, "close"):
             try:
                 await self.llm.close()
             except Exception:
@@ -1492,6 +1888,24 @@ class DynaBot:
             exc_tb: Exception traceback if an exception occurred
         """
         await self.close()
+
+    def get_conversation_manager(
+        self, conversation_id: str
+    ) -> ConversationManager | None:
+        """Get a cached conversation manager by conversation ID.
+
+        Returns ``None`` if no manager exists for the given ID (i.e. no
+        turn has been processed for that conversation yet).  Use this for
+        cross-layer integration testing (e.g. injecting LLM-layer
+        ``ConversationMiddleware`` into a manager after construction).
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Cached ConversationManager, or None
+        """
+        return self._conversation_managers.get(conversation_id)
 
     async def _get_or_create_conversation(
         self, context: BotContext
@@ -1580,6 +1994,8 @@ class DynaBot:
                 kb_context = self.knowledge_base.format_context(
                     kb_results, wrap_in_tags=True
                 )
+                if self._context_transform:
+                    kb_context = self._context_transform(kb_context)
                 contexts.append(kb_context)
 
         # Add memory context
@@ -1587,6 +2003,8 @@ class DynaBot:
             mem_results = await self.memory.get_context(message)
             if mem_results:
                 mem_context = "\n\n".join([r["content"] for r in mem_results])
+                if self._context_transform:
+                    mem_context = self._context_transform(mem_context)
                 contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
 
         # Build full message with clear separation

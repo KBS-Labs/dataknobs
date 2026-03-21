@@ -3,9 +3,10 @@
 This module provides testing infrastructure for bot interactions:
 
 High-level helpers (preferred for new tests):
-- ``BotTestHarness``: Single-object test setup for wizard bots. Creates a
+- ``BotTestHarness``: Single-object test setup for DynaBot. Creates a
   DynaBot via ``from_config()``, wires EchoProvider and ConfigurableExtractor,
   and provides ``chat()``/``greet()`` with automatic wizard state capture.
+  Supports tools (for ReAct testing) and middleware injection.
 - ``WizardConfigBuilder``: Fluent builder for wizard config dicts, replacing
   verbose inline dict construction with a readable chained API.
 - ``TurnResult``: Dataclass capturing response + wizard state snapshot per turn.
@@ -346,11 +347,35 @@ class TurnResult:
 
 
 class BotTestHarness:
-    """High-level test helper for wizard bot testing.
+    """High-level test helper for ALL DynaBot behavioral tests.
 
-    Wraps the full setup ceremony (bot creation, provider injection, state
-    access) into one object. Use ``create()`` to build, ``chat()``/``greet()``
-    to run turns, and properties to inspect wizard state.
+    Wraps the full setup ceremony (bot creation, provider injection, tool
+    registration, middleware wiring, context management) into one object.
+    Use ``create()`` to build, ``chat()``/``greet()`` to run turns.
+
+    For **non-wizard tests**, use ``bot_config=`` with any DynaBot config:
+
+    Example:
+        ```python
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "simple"},
+            },
+            main_responses=[
+                tool_call_response("my_tool", {"q": "test"}),
+                text_response("Here are the results"),
+            ],
+            tools=[my_tool],
+            middleware=[my_middleware],
+        ) as harness:
+            result = await harness.chat("search")
+            assert result.response == "Here are the results"
+            # Streaming: harness.bot.stream_chat("msg", harness.context)
+        ```
+
+    For **wizard tests**, use ``wizard_config=`` with ``WizardConfigBuilder``:
 
     Example:
         ```python
@@ -388,12 +413,14 @@ class BotTestHarness:
         *,
         wizard_config: dict[str, Any] | None = None,
         bot_config: dict[str, Any] | None = None,
-        main_responses: list[str] | None = None,
+        main_responses: list[Any] | None = None,
         extraction_results: list[list[dict[str, Any]]] | None = None,
         system_prompt: str = "You are a helpful assistant.",
         conversation_id: str = "test-conv",
         client_id: str = "test",
         extraction_scope: str = "current_message",
+        tools: list[Any] | None = None,
+        middleware: list[Any] | None = None,
     ) -> BotTestHarness:
         """Create a harness with a fully wired DynaBot.
 
@@ -407,6 +434,8 @@ class BotTestHarness:
             bot_config: Complete bot config dict for ``DynaBot.from_config()``.
                 When provided, ``wizard_config`` is ignored.
             main_responses: Responses to queue on the main EchoProvider.
+                Accepts strings or ``LLMResponse`` objects (e.g. from
+                ``text_response()`` / ``tool_call_response()``).
             extraction_results: Per-turn extraction results. Each inner list
                 contains dicts for one turn's extraction calls. Flattened
                 into a ``ConfigurableExtractor`` sequence internally.
@@ -416,6 +445,12 @@ class BotTestHarness:
             extraction_scope: Default extraction scope for the wizard.
                 Only applies when ``wizard_config`` is used; ignored
                 when ``bot_config`` is provided directly.
+            tools: Optional list of ``Tool`` instances to register on the
+                bot. Useful for ReAct strategy tests that need tool
+                execution.
+            middleware: Optional list of ``Middleware`` instances to append
+                to the bot. Useful for testing middleware hooks like
+                ``after_turn`` and ``on_tool_executed``.
 
         Returns:
             Configured ``BotTestHarness`` instance.
@@ -489,6 +524,16 @@ class BotTestHarness:
 
         # Inject fresh provider and extractor
         inject_providers(bot, main_provider=provider, extractor=extractor)
+
+        # Register tools if provided
+        if tools:
+            for tool in tools:
+                bot.tool_registry.register_tool(tool)
+
+        # Append middleware if provided
+        if middleware:
+            for mw in middleware:
+                bot.middleware.append(mw)
 
         context = BotContext(
             conversation_id=conversation_id,
@@ -582,6 +627,11 @@ class BotTestHarness:
     def bot(self) -> Any:
         """The underlying DynaBot instance."""
         return self._bot
+
+    @property
+    def context(self) -> Any:
+        """The BotContext used for this harness's turns."""
+        return self._context
 
     @property
     def provider(self) -> EchoProvider:
