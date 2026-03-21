@@ -61,6 +61,28 @@ SCOPE_BREADTH: dict[str, int] = {
     "wizard_session": 2,
 }
 
+# Recovery strategy identifiers
+RECOVERY_DERIVATION = "derivation"
+RECOVERY_SCOPE_ESCALATION = "scope_escalation"
+RECOVERY_FOCUSED_RETRY = "focused_retry"
+RECOVERY_CLARIFICATION = "clarification"
+
+# Default pipeline order (when no explicit pipeline is configured).
+# Each strategy only fires when required fields are still missing.
+DEFAULT_RECOVERY_PIPELINE: list[str] = [
+    RECOVERY_DERIVATION,
+    RECOVERY_SCOPE_ESCALATION,
+    RECOVERY_FOCUSED_RETRY,
+]
+
+# Valid strategy names for pipeline configuration
+VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
+    RECOVERY_DERIVATION,
+    RECOVERY_SCOPE_ESCALATION,
+    RECOVERY_FOCUSED_RETRY,
+    RECOVERY_CLARIFICATION,
+})
+
 
 @dataclass
 class TurnContext:
@@ -696,6 +718,9 @@ class WizardReasoning(ReasoningStrategy):
         field_derivations: list[DerivationRule] | None = None,
         enum_normalize: bool = True,
         normalize_threshold: float = 0.7,
+        recovery_pipeline: list[str] | None = None,
+        focused_retry_enabled: bool = False,
+        focused_retry_max_retries: int = 1,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -772,6 +797,20 @@ class WizardReasoning(ReasoningStrategy):
                 for fuzzy enum matching.  Defaults to 0.7.  Only used
                 when enum normalization is active.  Per-field
                 ``x-extraction.normalize_threshold`` overrides.
+            recovery_pipeline: Ordered list of recovery strategy names
+                to execute when required fields are missing after
+                initial extraction.  Valid names: ``"derivation"``,
+                ``"scope_escalation"``, ``"focused_retry"``,
+                ``"clarification"``.  Defaults to
+                ``["derivation", "scope_escalation", "focused_retry"]``.
+                The pipeline short-circuits when all required fields
+                are satisfied.
+            focused_retry_enabled: When True, the ``"focused_retry"``
+                pipeline strategy builds a minimal schema with only the
+                missing required fields and re-extracts.  Defaults to
+                False — consumers must opt in.
+            focused_retry_max_retries: Maximum number of focused retry
+                attempts per turn.  Defaults to 1.
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -818,6 +857,24 @@ class WizardReasoning(ReasoningStrategy):
         self._field_derivations = field_derivations or []
         self._enum_normalize = enum_normalize
         self._normalize_threshold = normalize_threshold
+        # Recovery pipeline
+        if recovery_pipeline is not None:
+            unknown = set(recovery_pipeline) - VALID_RECOVERY_STRATEGIES
+            if unknown:
+                logger.warning(
+                    "Unknown recovery strategies %s — removing. "
+                    "Valid: %s",
+                    sorted(unknown),
+                    sorted(VALID_RECOVERY_STRATEGIES),
+                )
+            self._recovery_pipeline = [
+                s for s in recovery_pipeline
+                if s in VALID_RECOVERY_STRATEGIES
+            ]
+        else:
+            self._recovery_pipeline = list(DEFAULT_RECOVERY_PIPELINE)
+        self._focused_retry_enabled = focused_retry_enabled
+        self._focused_retry_max_retries = max(1, focused_retry_max_retries)
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1672,6 +1729,13 @@ class WizardReasoning(ReasoningStrategy):
         enum_normalize = extraction_hints.get("enum_normalize", True)
         normalize_threshold = extraction_hints.get("normalize_threshold", 0.7)
 
+        # Load recovery pipeline settings
+        recovery_config = wizard_fsm.settings.get("recovery", {})
+        recovery_pipeline: list[str] | None = recovery_config.get("pipeline")
+        focused_retry_config = recovery_config.get("focused_retry", {})
+        focused_retry_enabled = focused_retry_config.get("enabled", False)
+        focused_retry_max_retries = focused_retry_config.get("max_retries", 1)
+
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
 
@@ -1770,6 +1834,9 @@ class WizardReasoning(ReasoningStrategy):
             field_derivations=field_derivations,
             enum_normalize=enum_normalize,
             normalize_threshold=normalize_threshold,
+            recovery_pipeline=recovery_pipeline,
+            focused_retry_enabled=focused_retry_enabled,
+            focused_retry_max_retries=focused_retry_max_retries,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -2186,117 +2253,36 @@ class WizardReasoning(ReasoningStrategy):
                     extraction.data, wizard_state, stage, user_message,
                 )
 
-                # ── Scope escalation ──
-                # When required fields are still missing after the
-                # initial merge and the current scope is narrower than
-                # the escalation target, retry extraction with a
-                # broader scope so that information from earlier turns
-                # can fill the gaps.  Only escalate when there IS
-                # prior conversation history — on the first turn,
-                # the broader scope would see the same content and
-                # waste an LLM call.
-                if self._scope_escalation_enabled:
-                    effective_scope = self._get_extraction_scope(stage)
-                    target_breadth = SCOPE_BREADTH.get(
-                        self._scope_escalation_scope,
-                        SCOPE_BREADTH["wizard_session"],
-                    )
-                    current_breadth = SCOPE_BREADTH.get(
-                        effective_scope, 0,
-                    )
-                    if current_breadth < target_breadth:
-                        missing = self._check_required_fields_missing(
-                            wizard_state, stage,
-                        )
-                        # Check for prior history using the same
-                        # scope window the escalated extraction will
-                        # use.  Without earlier turns visible in that
-                        # window, escalation would re-extract the
-                        # same content at higher cost for no benefit.
-                        guard_max = (
-                            self._recent_messages_count
-                            if self._scope_escalation_scope
-                            == "recent_messages"
-                            else None
-                        )
-                        has_prior = bool(
-                            self._build_wizard_context(
-                                manager, wizard_state,
-                                max_messages=guard_max,
-                            )
-                        ) if missing and manager is not None else False
-                        if missing and has_prior:
-                            logger.debug(
-                                "Scope escalation: %d required fields "
-                                "missing after '%s' extraction: %s "
-                                "— retrying with '%s' scope",
-                                len(missing),
-                                effective_scope,
-                                sorted(missing),
-                                self._scope_escalation_scope,
-                            )
-                            escalated_stage = {
-                                **stage,
-                                "extraction_scope": (
-                                    self._scope_escalation_scope
-                                ),
-                            }
-                            escalated = await self._extract_data(
-                                user_message,
-                                escalated_stage,
-                                llm,
-                                manager,
-                                wizard_state,
-                            )
-                            if escalated.data:
-                                if schema:
-                                    escalated.data = (
-                                        self._normalize_extracted_data(
-                                            escalated.data, schema,
-                                        )
-                                    )
-                                # Merge escalated data into
-                                # wizard_state.data (in-place).
-                                escalated_keys = (
-                                    self._merge_extraction_result(
-                                        escalated.data,
-                                        wizard_state,
-                                        stage,
-                                        user_message,
-                                    )
-                                )
-                                new_data_keys |= escalated_keys
-                                # Use the escalated result for
-                                # the downstream confidence gate:
-                                # broader context with data is a
-                                # more informed assessment.  When
-                                # escalation returns empty data,
-                                # keep the original extraction so
-                                # its confidence drives the gate.
-                                extraction = escalated
-
-                # Apply schema defaults for properties the user didn't
-                # mention.  This ensures template conditions (e.g.
-                # ``{% if difficulty %}``) evaluate True when defaults
-                # exist in the schema definition.
+                # Apply schema defaults for properties the user
+                # didn't mention.  This runs before the recovery
+                # pipeline so that defaults are available as
+                # derivation sources and so defaulted fields don't
+                # count as "missing" in the pipeline.
                 default_keys = self._apply_schema_defaults(
                     wizard_state, stage
                 )
                 if default_keys:
                     new_data_keys |= default_keys
 
-                # ── Field derivations ──
-                # Derive missing fields from present ones using
-                # configured rules (e.g. domain_id → domain_name
-                # via title_case).  Runs before the confidence gate
-                # so derived fields count as "present" for the
-                # required-field check.
-                if self._field_derivations:
-                    derived_keys = self._apply_field_derivations(
-                        wizard_state, stage,
+                # ── Recovery pipeline ──
+                # Run configured strategies in order, stopping as
+                # soon as all required fields are satisfied.
+                missing = self._check_required_fields_missing(
+                    wizard_state, stage,
+                )
+                if missing:
+                    new_data_keys, extraction = (
+                        await self._run_recovery_pipeline(
+                            extraction,
+                            wizard_state,
+                            stage,
+                            schema,
+                            user_message,
+                            llm,
+                            manager,
+                            new_data_keys,
+                        )
                     )
-                    if derived_keys:
-                        new_data_keys |= derived_keys
 
                 # ── Confidence gate ──
                 # After merge, check whether we have enough data to
@@ -5571,9 +5557,10 @@ class WizardReasoning(ReasoningStrategy):
     ) -> set[str]:
         """Apply field derivation rules to fill missing fields.
 
-        Runs after merge/escalation/defaults and before the confidence
-        gate.  Derived values never overwrite user-provided or extracted
-        data unless the rule specifies ``when: always``.
+        Runs as a recovery pipeline strategy — by default first, before
+        scope escalation and focused retry.  Derived values never
+        overwrite user-provided or extracted data unless the rule
+        specifies ``when: always``.
 
         Per-stage override: set ``derivation_enabled: false`` on a
         stage to suppress derivation for that stage.
@@ -6000,6 +5987,274 @@ class WizardReasoning(ReasoningStrategy):
                 new_data_keys.add(k)
                 wizard_state.data[k] = v
         return new_data_keys
+
+    async def _run_scope_escalation(
+        self,
+        extraction: Any,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        schema: dict[str, Any] | None,
+        user_message: str,
+        llm: Any,
+        manager: Any,
+    ) -> tuple[set[str], Any]:
+        """Run scope escalation recovery strategy.
+
+        When required fields are still missing and the current scope is
+        narrower than the escalation target, retry extraction with a
+        broader scope so that information from earlier turns can fill
+        the gaps.
+
+        Returns:
+            Tuple of (new keys from escalation, updated extraction).
+            Empty set and original extraction if escalation didn't fire.
+        """
+        if not self._scope_escalation_enabled:
+            return set(), extraction
+
+        effective_scope = self._get_extraction_scope(stage)
+        target_breadth = SCOPE_BREADTH.get(
+            self._scope_escalation_scope,
+            SCOPE_BREADTH["wizard_session"],
+        )
+        current_breadth = SCOPE_BREADTH.get(effective_scope, 0)
+        if current_breadth >= target_breadth:
+            return set(), extraction
+
+        missing = self._check_required_fields_missing(
+            wizard_state, stage,
+        )
+        if not missing:
+            return set(), extraction
+
+        # Check for prior history using the same scope window
+        # the escalated extraction will use.
+        guard_max = (
+            self._recent_messages_count
+            if self._scope_escalation_scope == "recent_messages"
+            else None
+        )
+        has_prior = bool(
+            self._build_wizard_context(
+                manager, wizard_state,
+                max_messages=guard_max,
+            )
+        ) if manager is not None else False
+
+        if not has_prior:
+            return set(), extraction
+
+        logger.debug(
+            "Scope escalation: %d required fields "
+            "missing after '%s' extraction: %s "
+            "— retrying with '%s' scope",
+            len(missing),
+            effective_scope,
+            sorted(missing),
+            self._scope_escalation_scope,
+        )
+        escalated_stage = {
+            **stage,
+            "extraction_scope": self._scope_escalation_scope,
+        }
+        escalated = await self._extract_data(
+            user_message,
+            escalated_stage,
+            llm,
+            manager,
+            wizard_state,
+        )
+        if not escalated.data:
+            return set(), extraction
+
+        if schema:
+            escalated.data = self._normalize_extracted_data(
+                escalated.data, schema,
+            )
+        escalated_keys = self._merge_extraction_result(
+            escalated.data, wizard_state, stage, user_message,
+        )
+        if escalated_keys:
+            return escalated_keys, escalated
+        return set(), extraction
+
+    async def _run_focused_retry(
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        schema: dict[str, Any] | None,
+        user_message: str,
+        llm: Any,
+        manager: Any,
+    ) -> tuple[set[str], Any]:
+        """Run focused retry — extract only missing required fields.
+
+        Builds a minimal schema containing only the missing required
+        fields, then extracts using the full wizard session context.
+        This is simpler for the LLM since fewer fields = easier task.
+
+        Returns:
+            Tuple of (new keys from retry, extraction result).
+            Empty set and None if retry didn't produce data.
+        """
+        if not schema:
+            return set(), None
+
+        missing = self._check_required_fields_missing(
+            wizard_state, stage,
+        )
+        if not missing:
+            return set(), None
+
+        # Build focused schema with only the missing fields
+        properties = schema.get("properties", {})
+        focused_properties = {
+            f: properties[f]
+            for f in missing
+            if f in properties
+        }
+        if not focused_properties:
+            return set(), None
+
+        focused_schema = {
+            "type": "object",
+            "properties": focused_properties,
+            "required": list(missing),
+        }
+
+        # Build a focused stage with the minimal schema and broadest
+        # scope for maximum context.  Force LLM extraction to prevent
+        # verbatim capture when the focused schema has a single field.
+        focused_stage = {
+            **stage,
+            "schema": focused_schema,
+            "extraction_scope": "wizard_session",
+            "capture_mode": "extract",
+        }
+
+        logger.debug(
+            "Focused retry: extracting %d missing fields: %s",
+            len(missing),
+            sorted(missing),
+        )
+
+        for attempt in range(self._focused_retry_max_retries):
+            retry_result = await self._extract_data(
+                user_message,
+                focused_stage,
+                llm,
+                manager,
+                wizard_state,
+            )
+            if not retry_result.data:
+                continue
+
+            retry_result.data = self._normalize_extracted_data(
+                retry_result.data, focused_schema,
+            )
+            retry_keys = self._merge_extraction_result(
+                retry_result.data, wizard_state, stage, user_message,
+            )
+            if retry_keys:
+                logger.debug(
+                    "Focused retry attempt %d filled: %s",
+                    attempt + 1,
+                    sorted(retry_keys),
+                )
+                return retry_keys, retry_result
+
+        return set(), None
+
+    async def _run_recovery_pipeline(
+        self,
+        extraction: Any,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        schema: dict[str, Any] | None,
+        user_message: str,
+        llm: Any,
+        manager: Any,
+        new_data_keys: set[str],
+    ) -> tuple[set[str], Any]:
+        """Run recovery strategies until required fields are satisfied.
+
+        Executes strategies in pipeline order, checking after each
+        whether all required fields are now present.  Short-circuits
+        as soon as requirements are met.
+
+        Args:
+            extraction: Current extraction result (may be replaced by
+                an escalated/retried result for the confidence gate).
+            wizard_state: Wizard state (modified in-place during merges).
+            stage: Current stage metadata.
+            schema: Stage schema (for field enumeration).
+            user_message: Raw user message for grounding.
+            llm: LLM provider.
+            manager: ConversationManager.
+            new_data_keys: Set of new/changed keys (augmented in-place).
+
+        Returns:
+            Tuple of (updated new_data_keys, updated extraction result).
+        """
+        # Per-stage disable
+        stage_recovery = stage.get("recovery_enabled")
+        if stage_recovery is False:
+            return new_data_keys, extraction
+
+        for strategy in self._recovery_pipeline:
+            # Check stop condition: all required fields satisfied
+            missing = self._check_required_fields_missing(
+                wizard_state, stage,
+            )
+            if not missing:
+                break
+
+            if strategy == RECOVERY_DERIVATION:
+                derived = self._apply_field_derivations(
+                    wizard_state, stage,
+                )
+                if derived:
+                    new_data_keys |= derived
+                    logger.debug(
+                        "Recovery pipeline: derivation filled %s",
+                        sorted(derived),
+                    )
+
+            elif strategy == RECOVERY_SCOPE_ESCALATION:
+                escalated_keys, escalated_extraction = (
+                    await self._run_scope_escalation(
+                        extraction, wizard_state, stage, schema,
+                        user_message, llm, manager,
+                    )
+                )
+                if escalated_keys:
+                    new_data_keys |= escalated_keys
+                    extraction = escalated_extraction
+
+            elif strategy == RECOVERY_FOCUSED_RETRY:
+                if self._focused_retry_enabled:
+                    retry_keys, retry_extraction = (
+                        await self._run_focused_retry(
+                            wizard_state, stage, schema,
+                            user_message, llm, manager,
+                        )
+                    )
+                    if retry_keys:
+                        new_data_keys |= retry_keys
+                        extraction = retry_extraction
+                else:
+                    logger.debug(
+                        "Recovery pipeline: focused_retry in pipeline "
+                        "but not enabled — skipping",
+                    )
+
+            elif strategy == RECOVERY_CLARIFICATION:
+                # Clarification is handled by the confidence gate
+                # downstream.  Including it in the pipeline is a
+                # no-op signal for documentation purposes.
+                pass
+
+        return new_data_keys, extraction
 
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.

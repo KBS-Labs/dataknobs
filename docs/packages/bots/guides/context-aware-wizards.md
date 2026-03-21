@@ -40,6 +40,13 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Guard Conditions](#guard-conditions)
   - [Per-Stage Override](#derivation-per-stage-override)
   - [Custom Transforms](#custom-transforms)
+- [Recovery Pipeline](#recovery-pipeline)
+  - [The Problem](#recovery-problem)
+  - [How It Works](#recovery-how-it-works)
+  - [Pipeline Configuration](#pipeline-configuration)
+  - [Focused Retry Strategy](#focused-retry-strategy)
+  - [Per-Stage Override](#recovery-per-stage-override)
+  - [Pipeline Examples](#pipeline-examples)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -666,6 +673,147 @@ Derivations can also chain: rule A→B fires, then rule B→C fires in the same 
 
 ---
 
+## Recovery Pipeline
+
+### The Problem {: #recovery-problem }
+
+The wizard provides several extraction recovery strategies — [field derivation](#field-derivation-recovery), [scope escalation](#extraction-scope-escalation), and [enum normalization](#enum-normalization) — that each address different failure classes. However, extraction failures are often compound: a single turn might need derivation for one field AND scope escalation for another. Without a composition mechanism, strategies run in a hardcoded sequence with no awareness of each other, potentially wasting LLM calls when a cheaper strategy would have been sufficient.
+
+### How It Works {: #recovery-how-it-works }
+
+The recovery pipeline runs after initial extraction and merge, executing strategies in a configurable order. It **short-circuits** as soon as all required fields are satisfied — minimizing LLM calls and latency in the common case.
+
+```
+Extract → Normalize → Merge (grounded) → Schema defaults
+  → Recovery pipeline (if required fields missing):
+    1. derivation         [free — pure functions, no LLM call]
+    2. scope_escalation   [1 LLM call — broader context]
+    3. focused_retry      [1 LLM call — focused prompt]
+  → Confidence gate
+    → PASS: proceed to transitions
+    → FAIL: clarification (ask the user)
+```
+
+After each strategy, the pipeline checks whether all required fields are now present. If they are, remaining strategies are skipped.
+
+Key design choices:
+
+- **Schema defaults run before the pipeline**, not as a pipeline step. Defaults fill preconfigured values that should always apply, so defaulted fields don't trigger unnecessary recovery.
+- **Derivation runs first** (before scope escalation). Prior to the recovery pipeline, scope escalation ran before field derivation. The pipeline reverses this ordering because derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
+- **Each LLM-backed strategy** (scope escalation, focused retry) runs normalize + merge on its results automatically, including grounding checks.
+
+### Pipeline Configuration {: #pipeline-configuration }
+
+Configure the pipeline under the `recovery` settings key:
+
+```yaml
+settings:
+  recovery:
+    pipeline:
+      - derivation          # Derive missing fields (free)
+      - scope_escalation    # Retry with broader scope (1 LLM call)
+      - focused_retry       # Extract only missing fields (1 LLM call)
+    focused_retry:
+      enabled: true         # Default: false — must opt in
+      max_retries: 1        # Default: 1
+```
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `recovery.pipeline` | list of strings | `["derivation", "scope_escalation", "focused_retry"]` | Ordered list of strategies to execute |
+| `recovery.focused_retry.enabled` | bool | `false` | Enable the focused retry strategy |
+| `recovery.focused_retry.max_retries` | int | `1` | Maximum focused retry attempts per turn |
+
+Valid strategy names: `derivation`, `scope_escalation`, `focused_retry`, `clarification`.
+
+The `clarification` strategy is a no-op placeholder — clarification is handled by the confidence gate after the pipeline, regardless of whether it appears in the list. Including it documents intent but doesn't change behavior.
+
+**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation → focused_retry`. However, scope escalation requires `scope_escalation.enabled: true` to fire, and focused retry requires `recovery.focused_retry.enabled: true`. So without any configuration, only derivation runs (if rules are configured).
+
+### Focused Retry Strategy {: #focused-retry-strategy }
+
+When scope escalation doesn't recover all fields (or is skipped), focused retry re-extracts targeting **only the missing fields**. It builds a minimal schema containing just the missing required fields, then extracts using the full wizard session context.
+
+This works better than full re-extraction because extracting 1-2 fields from a conversation is a much simpler task than extracting 12 fields. Models that fail on the full schema often succeed on a focused subset.
+
+```yaml
+settings:
+  recovery:
+    pipeline:
+      - derivation
+      - focused_retry
+    focused_retry:
+      enabled: true
+      max_retries: 1    # Try once with the focused schema
+```
+
+Focused retry always uses `wizard_session` scope (broadest available context) and forces LLM extraction (never verbatim capture), since the goal is to recover fields that simpler approaches missed.
+
+### Per-Stage Override {: #recovery-per-stage-override }
+
+Recovery can be disabled on individual stages using the `recovery_enabled` stage field:
+
+```yaml
+stages:
+  - name: gather
+    prompt: "Tell me about your project."
+    schema: { ... }
+    # Uses the global recovery pipeline (default)
+
+  - name: confirm
+    prompt: "Does this look right?"
+    recovery_enabled: false   # No recovery on this stage
+    schema: { ... }
+```
+
+When `recovery_enabled: false`, no recovery strategies run for that stage — the pipeline is skipped entirely. This is useful for stages where recovery would be counterproductive (e.g., confirmation stages where you want the user to explicitly provide missing information).
+
+### Pipeline Examples {: #pipeline-examples }
+
+**Minimal pipeline — derivation only (no LLM calls):**
+
+```yaml
+settings:
+  derivations:
+    - source: domain_id
+      target: domain_name
+      transform: title_case
+  recovery:
+    pipeline:
+      - derivation
+```
+
+**Full pipeline — all strategies:**
+
+```yaml
+settings:
+  extraction_scope: current_message
+  scope_escalation:
+    enabled: true
+    escalation_scope: wizard_session
+  derivations:
+    - source: domain_id
+      target: domain_name
+      transform: title_case
+  recovery:
+    pipeline:
+      - derivation
+      - scope_escalation
+      - focused_retry
+    focused_retry:
+      enabled: true
+```
+
+**Disable all recovery:**
+
+```yaml
+settings:
+  recovery:
+    pipeline: []   # Empty list — no strategies run
+```
+
+---
+
 ## Message Stages
 
 Message stages display informational content to the user without collecting data, then auto-advance to the next stage — all within a single user turn. They are configured using existing fields: `auto_advance: true` + `response_template`, with no `schema`.
@@ -904,6 +1052,14 @@ settings:
 ```
 
 Escalation is disabled by default for backward compatibility. The `recent_messages_count` setting applies both when `extraction_scope` is `"recent_messages"` directly and when escalation targets `"recent_messages"`.
+
+### Why a composable recovery pipeline?
+
+The individual recovery strategies (derivation, scope escalation, focused retry) each address different failure classes. But extraction failures are often compound — a single turn might need derivation for one field and scope escalation for another. Without composition, each strategy runs independently in a hardcoded sequence with no awareness of whether prior strategies already satisfied the requirements.
+
+The pipeline provides three benefits: (1) **short-circuiting** — strategies stop running as soon as all required fields are present, avoiding unnecessary LLM calls; (2) **optimal ordering** — derivation (free) runs before escalation (1 LLM call) so cheap strategies get first crack; (3) **configurability** — consumers can reorder, add, or remove strategies to match their cost/latency budget.
+
+The pipeline also introduces **focused retry** as a last-resort strategy before clarification. When all else fails, extracting 1-2 missing fields from a conversation with a minimal schema is a much simpler task than extracting 12 fields — models that fail on the full schema often succeed on a focused subset.
 
 ---
 
