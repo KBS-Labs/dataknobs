@@ -12,6 +12,8 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_grounding import (
+    CompositeMergeFilter,
+    MergeDecision,
     MergeFilter,
     SchemaGroundingFilter,
     _has_negation,
@@ -40,60 +42,60 @@ class TestSchemaGroundingFilterStrings:
         self.f = SchemaGroundingFilter(overlap_threshold=0.5)
 
     def test_string_grounded_when_value_in_message(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "subject", "history", None,
             "I want to study history",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action != "reject"
 
     def test_string_not_grounded_no_existing_merges(self) -> None:
         """No existing value -> merge regardless (benefit of the doubt)."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "subject", "history", None,
             "make it a tutor",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action != "reject"
 
     def test_string_not_grounded_blocks_overwrite(self) -> None:
         """Existing data protected from ungrounded overwrite."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "subject", "", "history",
             "make it a tutor instead",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action == "reject"
 
     def test_string_grounded_allows_overwrite(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "subject", "math", "history",
             "actually change the subject to math",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action != "reject"
 
     def test_string_word_overlap_at_threshold(self) -> None:
         # "History Quizzer" -> words {history, quizzer}
         # Message has "history" -> 50% overlap -> meets default threshold
-        assert self.f.should_merge(
+        assert self.f.filter(
             "domain_name", "History Quizzer", None,
             "I want history content",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action != "reject"
 
     def test_string_word_overlap_below_threshold(self) -> None:
         # "Advanced World History" -> 3 significant words
         # Message has 0 overlap -> blocked
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "domain_name", "Advanced World History", "My Bot",
             "make it a tutor",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action == "reject"
 
     def test_string_all_stopwords_trusts_extraction(self) -> None:
         """A value composed entirely of stopwords is trusted."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "prefix", "the", None,
             "completely unrelated",
-            {"type": "string"},
-        )
+            {"type": "string"}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterEnums:
@@ -103,25 +105,25 @@ class TestSchemaGroundingFilterEnums:
         self.f = SchemaGroundingFilter()
 
     def test_enum_grounded_when_value_in_message(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "intent", "tutor", "quiz",
             "make it a tutor instead",
-            {"type": "string", "enum": ["tutor", "quiz", "custom"]},
-        )
+            {"type": "string", "enum": ["tutor", "quiz", "custom"]}, {},
+        ).action != "reject"
 
     def test_enum_not_grounded_blocks_overwrite(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "intent", "custom", "quiz",
             "keep the same settings",
-            {"type": "string", "enum": ["tutor", "quiz", "custom"]},
-        )
+            {"type": "string", "enum": ["tutor", "quiz", "custom"]}, {},
+        ).action == "reject"
 
     def test_enum_case_insensitive(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "intent", "Tutor", "quiz",
             "I want a TUTOR bot",
-            {"type": "string", "enum": ["tutor", "quiz"]},
-        )
+            {"type": "string", "enum": ["tutor", "quiz"]}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterBooleans:
@@ -131,26 +133,26 @@ class TestSchemaGroundingFilterBooleans:
         self.f = SchemaGroundingFilter()
 
     def test_boolean_grounded_when_field_keyword_in_message(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, None,
             "no knowledge base please",
-            {"type": "boolean", "description": "Whether knowledge base is enabled"},
-        )
+            {"type": "boolean", "description": "Whether knowledge base is enabled"}, {},
+        ).action != "reject"
 
     def test_boolean_not_grounded_blocks_overwrite(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "make it a tutor instead",
-            {"type": "boolean", "description": "Whether knowledge base is enabled"},
-        )
+            {"type": "boolean", "description": "Whether knowledge base is enabled"}, {},
+        ).action == "reject"
 
     def test_boolean_grounded_by_field_name(self) -> None:
         """Field name itself provides keywords when no description."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "hints_enabled", True, False,
             "enable hints please",
-            {"type": "boolean"},
-        )
+            {"type": "boolean"}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterNumbers:
@@ -160,25 +162,25 @@ class TestSchemaGroundingFilterNumbers:
         self.f = SchemaGroundingFilter()
 
     def test_number_grounded_when_literal_in_message(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "max_hints", 2, None,
             "give me 2 hints max",
-            {"type": "integer"},
-        )
+            {"type": "integer"}, {},
+        ).action != "reject"
 
     def test_number_not_grounded_blocks_overwrite(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "max_hints", 5, 2,
             "keep the same settings",
-            {"type": "integer"},
-        )
+            {"type": "integer"}, {},
+        ).action == "reject"
 
     def test_float_grounded(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "threshold", 0.8, None,
             "set threshold to 0.8",
-            {"type": "number"},
-        )
+            {"type": "number"}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterArrays:
@@ -188,26 +190,26 @@ class TestSchemaGroundingFilterArrays:
         self.f = SchemaGroundingFilter()
 
     def test_array_grounded_when_element_in_message(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", ["search", "calculator"], None,
             "I want search and calculator tools",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action != "reject"
 
     def test_empty_array_not_grounded_blocks_overwrite(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "make it a tutor",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action == "reject"
 
     def test_array_partial_grounding(self) -> None:
         """At least one element present is sufficient."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", ["search", "unknown_tool"], None,
             "enable search",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterEmptyStrings:
@@ -218,26 +220,26 @@ class TestSchemaGroundingFilterEmptyStrings:
 
     def test_empty_string_grounded_with_negation(self) -> None:
         """Empty string is grounded when user uses negation + field keyword."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "description", "", "A great bot",
             "no description needed",
-            {"type": "string", "description": "Brief description of the bot"},
-        )
+            {"type": "string", "description": "Brief description of the bot"}, {},
+        ).action != "reject"
 
     def test_empty_string_not_grounded_without_negation(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "description", "", "A great bot",
             "make it a tutor",
-            {"type": "string", "description": "Brief description of the bot"},
-        )
+            {"type": "string", "description": "Brief description of the bot"}, {},
+        ).action == "reject"
 
     def test_empty_string_with_empty_allowed(self) -> None:
         """x-extraction.empty_allowed: true allows empty overwrite."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "description", "", "A great bot",
             "make it a tutor",  # No negation keyword, but empty_allowed=true
-            {"type": "string", "x-extraction": {"empty_allowed": True}},
-        )
+            {"type": "string", "x-extraction": {"empty_allowed": True}}, {},
+        ).action != "reject"
 
 
 class TestSchemaGroundingFilterXExtraction:
@@ -247,40 +249,40 @@ class TestSchemaGroundingFilterXExtraction:
         self.f = SchemaGroundingFilter()
 
     def test_grounding_skip_always_merges(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tone", "formal", "casual",
             "completely unrelated message",
-            {"type": "string", "x-extraction": {"grounding": "skip"}},
-        )
+            {"type": "string", "x-extraction": {"grounding": "skip"}}, {},
+        ).action != "reject"
 
     def test_grounding_exact_requires_literal_match(self) -> None:
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "domain_id", "my-bot", "old-bot",
             "I said My Bot",  # "my-bot" not literally in message
-            {"type": "string", "x-extraction": {"grounding": "exact"}},
-        )
-        assert self.f.should_merge(
+            {"type": "string", "x-extraction": {"grounding": "exact"}}, {},
+        ).action == "reject"
+        assert self.f.filter(
             "domain_id", "my-bot", "old-bot",
             "set the id to my-bot",
-            {"type": "string", "x-extraction": {"grounding": "exact"}},
-        )
+            {"type": "string", "x-extraction": {"grounding": "exact"}}, {},
+        ).action != "reject"
 
     def test_grounding_fuzzy_always_trusts(self) -> None:
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tone", "professional", "casual",
             "unrelated message",
-            {"type": "string", "x-extraction": {"grounding": "fuzzy"}},
-        )
+            {"type": "string", "x-extraction": {"grounding": "fuzzy"}}, {},
+        ).action != "reject"
 
     def test_per_field_overlap_threshold(self) -> None:
         """x-extraction.overlap_threshold overrides the global default."""
         # "Advanced World History" -> 3 words, msg has "history" -> 33%
         # Default threshold 0.5 would block, but per-field 0.3 allows it
-        assert self.f.should_merge(
+        assert self.f.filter(
             "domain_name", "Advanced World History", "Old Name",
             "I want a history bot",
-            {"type": "string", "x-extraction": {"overlap_threshold": 0.3}},
-        )
+            {"type": "string", "x-extraction": {"overlap_threshold": 0.3}}, {},
+        ).action != "reject"
 
 
 class TestSignificantWords:
@@ -633,42 +635,44 @@ class TestMergeFilterProtocol:
         """A custom MergeFilter that always allows merge."""
 
         class AlwaysMerge:
-            def should_merge(
+            def filter(
                 self,
                 field: str,
                 new_value: Any,
                 existing_value: Any,
                 user_message: str,
                 schema_property: dict[str, Any],
-            ) -> bool:
-                return True
+                wizard_data: dict[str, Any],
+            ) -> MergeDecision:
+                return MergeDecision.accept()
 
         f = AlwaysMerge()
         assert isinstance(f, MergeFilter)
 
         # Verify it would allow overwrite that grounding would block
-        assert f.should_merge(
-            "subject", "", "history", "unrelated", {"type": "string"},
-        )
+        assert f.filter(
+            "subject", "", "history", "unrelated", {"type": "string"}, {},
+        ).action != "reject"
 
     def test_custom_filter_blocks(self) -> None:
         """A custom MergeFilter that blocks all overwrites."""
 
         class NeverOverwrite:
-            def should_merge(
+            def filter(
                 self,
                 field: str,
                 new_value: Any,
                 existing_value: Any,
                 user_message: str,
                 schema_property: dict[str, Any],
-            ) -> bool:
-                return existing_value is None
+                wizard_data: dict[str, Any],
+            ) -> MergeDecision:
+                return MergeDecision.accept() if existing_value is None else MergeDecision.reject()
 
         f = NeverOverwrite()
         assert isinstance(f, MergeFilter)
-        assert f.should_merge("x", "val", None, "msg", {})
-        assert not f.should_merge("x", "new", "old", "msg", {})
+        assert f.filter("x", "val", None, "msg", {}, {}).action != "reject"
+        assert f.filter("x", "new", "old", "msg", {}, {}).action == "reject"
 
 
 class TestGroundingInit:
@@ -691,19 +695,20 @@ class TestGroundingInit:
         )
         assert reasoning._merge_filter is None
 
-    def test_custom_filter_overrides_grounding(self) -> None:
-        """Custom merge_filter takes precedence over extraction_grounding."""
+    def test_custom_filter_composes_with_grounding(self) -> None:
+        """Custom merge_filter composes with grounding via CompositeMergeFilter."""
 
         class CustomFilter:
-            def should_merge(
+            def filter(
                 self,
                 field: str,
                 new_value: Any,
                 existing_value: Any,
                 user_message: str,
                 schema_property: dict[str, Any],
-            ) -> bool:
-                return True
+                wizard_data: dict[str, Any],
+            ) -> MergeDecision:
+                return MergeDecision.accept()
 
         custom = CustomFilter()
         reasoning = _build_reasoning(
@@ -711,6 +716,56 @@ class TestGroundingInit:
             ConfigurableExtractor(results=[]),
             merge_filter=custom,
         )
+        # Both grounding and custom filter → composite
+        assert isinstance(reasoning._merge_filter, CompositeMergeFilter)
+
+    def test_custom_filter_alone_when_grounding_disabled(self) -> None:
+        """Custom filter is used directly when grounding is disabled."""
+
+        class CustomFilter:
+            def filter(
+                self,
+                field: str,
+                new_value: Any,
+                existing_value: Any,
+                user_message: str,
+                schema_property: dict[str, Any],
+                wizard_data: dict[str, Any],
+            ) -> MergeDecision:
+                return MergeDecision.accept()
+
+        custom = CustomFilter()
+        reasoning = _build_reasoning(
+            GROUNDING_DISABLED_CONFIG,
+            ConfigurableExtractor(results=[]),
+            merge_filter=custom,
+        )
+        # Grounding disabled → custom filter used directly
+        assert reasoning._merge_filter is custom
+
+    def test_skip_builtin_grounding(self) -> None:
+        """skip_builtin_grounding=True uses custom filter alone."""
+
+        class CustomFilter:
+            def filter(
+                self,
+                field: str,
+                new_value: Any,
+                existing_value: Any,
+                user_message: str,
+                schema_property: dict[str, Any],
+                wizard_data: dict[str, Any],
+            ) -> MergeDecision:
+                return MergeDecision.accept()
+
+        custom = CustomFilter()
+        reasoning = _build_reasoning(
+            GROUNDING_WIZARD_CONFIG,
+            ConfigurableExtractor(results=[]),
+            merge_filter=custom,
+            skip_builtin_grounding=True,
+        )
+        # skip_builtin_grounding → custom filter used directly
         assert reasoning._merge_filter is custom
 
 
@@ -829,35 +884,119 @@ class TestPerStageReEnable:
         assert ws.data["tone"] == "formal"
 
 
+class TestStageOverrideWithSkipBuiltinGrounding:
+    """Stage extraction_grounding: true must override skip_builtin_grounding."""
+
+    @pytest.mark.asyncio
+    async def test_stage_reenable_overrides_skip_builtin(self) -> None:
+        """Stage extraction_grounding: true works even when
+        skip_builtin_grounding=True globally."""
+        config: dict[str, Any] = {
+            "name": "skip-override-test",
+            "version": "1.0",
+            "settings": {
+                "extraction_grounding": True,
+            },
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Tell me.",
+                    "extraction_grounding": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "tone": {"type": "string"},
+                            "extra": {"type": "string"},
+                        },
+                        "required": ["subject", "tone", "extra"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "done",
+                            "condition": (
+                                "data.get('subject') and "
+                                "data.get('tone') and "
+                                "data.get('extra')"
+                            ),
+                        },
+                    ],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done!"},
+            ],
+        }
+
+        extractor = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(
+                    data={"subject": "history", "tone": "casual"},
+                    confidence=0.9,
+                ),
+                SimpleExtractionResult(
+                    data={"subject": "", "tone": "formal", "extra": "val"},
+                    confidence=0.9,
+                ),
+            ],
+        )
+        reasoning = _build_reasoning(
+            config, extractor, skip_builtin_grounding=True,
+        )
+        manager, provider = await _create_manager()
+        provider.set_responses(["Got it!", "Updated!"])
+
+        # Turn 1: fill subject + tone (extra still missing → no transition)
+        await manager.add_message(
+            role="user", content="history casual",
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        assert ws.data["subject"] == "history"
+
+        # Turn 2: stage grounding=True should protect subject from ""
+        await manager.add_message(
+            role="user", content="change tone to formal",
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        assert ws.data["subject"] == "history", (
+            "Stage extraction_grounding=True should override "
+            "skip_builtin_grounding and protect existing data"
+        )
+        assert ws.data["tone"] == "formal"
+
+
 class TestAdditionalEdgeCases:
     """Additional edge case tests from code review."""
 
     def test_array_non_empty_ungrounded_blocks_overwrite(self) -> None:
         """Non-empty array not in message should not overwrite existing."""
         f = SchemaGroundingFilter()
-        assert not f.should_merge(
+        assert f.filter(
             "tools", ["calculator"], ["search"],
             "no tools needed",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action == "reject"
 
     def test_number_word_boundary_no_false_positive(self) -> None:
         """Number 5 should not match in '15' or '50'."""
         f = SchemaGroundingFilter()
-        assert not f.should_merge(
+        assert f.filter(
             "count", 5, 3,
             "I want 15 items and 50 results",
-            {"type": "integer"},
-        )
+            {"type": "integer"}, {},
+        ).action == "reject"
 
     def test_number_word_boundary_matches_standalone(self) -> None:
         """Number 5 should match when standalone."""
         f = SchemaGroundingFilter()
-        assert f.should_merge(
+        assert f.filter(
             "count", 5, 3,
             "I want 5 items",
-            {"type": "integer"},
-        )
+            {"type": "integer"}, {},
+        ).action != "reject"
 
 
 # ---------------------------------------------------------------------------
@@ -881,59 +1020,59 @@ class TestWordBoundaryMatching:
 
     def test_boolean_base_not_in_database(self) -> None:
         """'base' from description should not match 'database'."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "use a database for storage",
-            {"type": "boolean", "description": "Whether knowledge base is enabled"},
-        )
+            {"type": "boolean", "description": "Whether knowledge base is enabled"}, {},
+        ).action == "reject"
 
     def test_boolean_log_not_in_catalog(self) -> None:
         """'log' from 'logging' should not match 'catalog'."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "logging_enabled", True, False,
             "add to catalog",
-            {"type": "boolean", "description": "Enable logging"},
-        )
+            {"type": "boolean", "description": "Enable logging"}, {},
+        ).action == "reject"
 
     def test_enum_tutor_not_in_tutored(self) -> None:
         """Enum 'tutor' should not match 'tutored'."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "intent", "tutor", "quiz",
             "I was tutored yesterday",
-            {"type": "string", "enum": ["tutor", "quiz"]},
-        )
+            {"type": "string", "enum": ["tutor", "quiz"]}, {},
+        ).action == "reject"
 
     def test_enum_tutor_matches_standalone(self) -> None:
         """Enum 'tutor' should match when standalone."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "intent", "tutor", "quiz",
             "make it a tutor",
-            {"type": "string", "enum": ["tutor", "quiz"]},
-        )
+            {"type": "string", "enum": ["tutor", "quiz"]}, {},
+        ).action != "reject"
 
     def test_empty_string_name_not_in_rename(self) -> None:
         """'name' from description should not match 'rename'."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "domain_name", "", "My Bot",
             "rename the project, skip the rest",
-            {"type": "string", "description": "The domain name"},
-        )
+            {"type": "string", "description": "The domain name"}, {},
+        ).action == "reject"
 
     def test_array_element_word_boundary(self) -> None:
         """Array element 'search' should not match 'researching'."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", ["search"], ["calculator"],
             "I was researching options",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action == "reject"
 
     def test_array_element_matches_standalone(self) -> None:
         """Array element 'search' should match when standalone."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", ["search"], ["calculator"],
             "enable the search tool",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action != "reject"
 
 
 # ---------------------------------------------------------------------------
@@ -955,43 +1094,43 @@ class TestBooleanValueDirection:
 
     def test_false_with_negation_is_grounded(self) -> None:
         """False + negation keyword → grounded (user said 'no KB')."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "no knowledge base please",
-            self.kb_prop,
-        )
+            self.kb_prop, {},
+        ).action != "reject"
 
     def test_true_with_negation_is_not_grounded(self) -> None:
         """True + negation keyword → NOT grounded (hallucinated True)."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "no knowledge base please",
-            self.kb_prop,
-        )
+            self.kb_prop, {},
+        ).action == "reject"
 
     def test_true_without_negation_is_grounded(self) -> None:
         """True + no negation → grounded (user affirmed the field)."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "enable the knowledge base",
-            self.kb_prop,
-        )
+            self.kb_prop, {},
+        ).action != "reject"
 
     def test_false_without_negation_is_not_grounded(self) -> None:
         """False + no negation → NOT grounded (hallucinated False)."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "enable the knowledge base",
-            self.kb_prop,
-        )
+            self.kb_prop, {},
+        ).action == "reject"
 
     def test_field_not_mentioned_is_not_grounded(self) -> None:
         """Field keywords absent → not grounded regardless of value."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "make it a tutor instead",
-            self.kb_prop,
-        )
+            self.kb_prop, {},
+        ).action == "reject"
 
     # -- check_direction: false disables direction checking --
 
@@ -1002,11 +1141,11 @@ class TestBooleanValueDirection:
             "x-extraction": {"check_direction": False},
         }
         # True even though there's negation — direction not checked
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "no knowledge base please",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
     # -- Custom negation keywords --
 
@@ -1017,17 +1156,17 @@ class TestBooleanValueDirection:
             "x-extraction": {"negation_keywords": ["nope", "nah"]},
         }
         # "no" is in default set but NOT in custom set → not negation
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", True, False,
             "no knowledge base please",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
         # "nah" IS in custom set → negation detected
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "nah, skip the knowledge base",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
     # -- Negation proximity --
 
@@ -1038,11 +1177,11 @@ class TestBooleanValueDirection:
             "x-extraction": {"negation_proximity": 2},
         }
         # "no" is 6+ words from "knowledge" → not within proximity
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "no I really do want a knowledge base",
-            prop,
-        )
+            prop, {},
+        ).action == "reject"
 
     def test_negation_proximity_allows_nearby_negation(self) -> None:
         """Proximity check: 'no' near field keyword should count."""
@@ -1051,11 +1190,11 @@ class TestBooleanValueDirection:
             "x-extraction": {"negation_proximity": 2},
         }
         # "no" is 1 word from "knowledge" → within proximity=2
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "no knowledge base",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
     def test_negation_proximity_zero_means_anywhere(self) -> None:
         """Proximity 0 (default) means negation anywhere counts."""
@@ -1064,11 +1203,11 @@ class TestBooleanValueDirection:
             "x-extraction": {"negation_proximity": 0},
         }
         # "no" is far from "knowledge" but proximity=0 → still counts
-        assert self.f.should_merge(
+        assert self.f.filter(
             "kb_enabled", False, True,
             "no I really do want a knowledge base",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
 
 # ---------------------------------------------------------------------------
@@ -1088,35 +1227,35 @@ class TestEmptyArrayClearing:
 
     def test_empty_array_grounded_with_negation(self) -> None:
         """'no tools' → empty array is grounded."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search", "calculator"],
             "no tools needed",
-            self.tools_prop,
-        )
+            self.tools_prop, {},
+        ).action != "reject"
 
     def test_empty_array_not_grounded_without_negation(self) -> None:
         """Field keyword present but no negation → not grounded."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "I want better tools",
-            self.tools_prop,
-        )
+            self.tools_prop, {},
+        ).action == "reject"
 
     def test_empty_array_not_grounded_no_field_keyword(self) -> None:
         """No field keyword at all → not grounded."""
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "make it a tutor",
-            self.tools_prop,
-        )
+            self.tools_prop, {},
+        ).action == "reject"
 
     def test_empty_array_grounded_with_field_name_negation(self) -> None:
         """Field name keyword + negation → grounded."""
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools_enabled", [], ["search"],
             "remove all tools please",
-            {"type": "array"},
-        )
+            {"type": "array"}, {},
+        ).action != "reject"
 
     def test_empty_array_with_empty_allowed(self) -> None:
         """empty_allowed: true bypasses negation check for arrays."""
@@ -1124,11 +1263,11 @@ class TestEmptyArrayClearing:
             **self.tools_prop,
             "x-extraction": {"empty_allowed": True},
         }
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "make it a tutor",  # No negation, no field keyword
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
     def test_empty_array_custom_negation_keywords(self) -> None:
         """Custom negation_keywords for array clearing."""
@@ -1137,17 +1276,17 @@ class TestEmptyArrayClearing:
             "x-extraction": {"negation_keywords": ["drop", "ditch"]},
         }
         # "no" is NOT in custom set → should not ground
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "no tools needed",
-            prop,
-        )
+            prop, {},
+        ).action == "reject"
         # "drop" IS in custom set → should ground
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "drop the tools",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
 
     def test_empty_array_with_proximity(self) -> None:
         """Proximity check applies to empty array negation."""
@@ -1156,17 +1295,17 @@ class TestEmptyArrayClearing:
             "x-extraction": {"negation_proximity": 2},
         }
         # "no" within 2 words of "tools"
-        assert self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "no tools needed",
-            prop,
-        )
+            prop, {},
+        ).action != "reject"
         # "no" far from "tools"
-        assert not self.f.should_merge(
+        assert self.f.filter(
             "tools", [], ["search"],
             "no I actually want some tools",
-            prop,
-        )
+            prop, {},
+        ).action == "reject"
 
 
 # ---------------------------------------------------------------------------

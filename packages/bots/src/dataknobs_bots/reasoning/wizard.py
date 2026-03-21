@@ -31,7 +31,11 @@ from .wizard_derivations import (
     apply_field_derivations,
     parse_derivation_rules,
 )
-from .wizard_grounding import MergeFilter, SchemaGroundingFilter
+from .wizard_grounding import (
+    CompositeMergeFilter,
+    MergeFilter,
+    SchemaGroundingFilter,
+)
 from .wizard_hooks import WizardHooks
 from .wizard_utils import word_in_text
 
@@ -178,11 +182,11 @@ def _load_merge_filter(dotted_path: str) -> MergeFilter:
     instance = cls()
     # Runtime-checkable protocol validates method name presence
     # only, not full signature.  A class with a non-callable
-    # ``should_merge`` attribute would pass this check.
+    # ``filter`` attribute would pass this check.
     if not isinstance(instance, MergeFilter):
         raise ConfigurationError(
             f"Merge filter {dotted_path!r} does not implement "
-            "the MergeFilter protocol",
+            "the MergeFilter protocol (must have a 'filter' method)",
             context={"merge_filter": dotted_path},
         )
     return instance
@@ -715,6 +719,7 @@ class WizardReasoning(ReasoningStrategy):
         log_conflicts: bool = True,
         extraction_grounding: bool = True,
         merge_filter: MergeFilter | None = None,
+        skip_builtin_grounding: bool = False,
         grounding_overlap_threshold: float = 0.5,
         scope_escalation_enabled: bool = False,
         scope_escalation_scope: str = "wizard_session",
@@ -725,6 +730,9 @@ class WizardReasoning(ReasoningStrategy):
         recovery_pipeline: list[str] | None = None,
         focused_retry_enabled: bool = False,
         focused_retry_max_retries: int = 1,
+        clarification_groups: list[dict[str, Any]] | None = None,
+        clarification_exclude_derivable: bool = False,
+        clarification_template: str | None = None,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -769,9 +777,17 @@ class WizardReasoning(ReasoningStrategy):
                 ungrounded extraction values cannot overwrite previously
                 accumulated data --- only grounded values or first-time
                 extractions (no existing value) are merged.
-            merge_filter: Custom :class:`MergeFilter` implementation that
-                replaces the built-in grounding check entirely.  When
-                provided, ``extraction_grounding`` is ignored.
+            merge_filter: Custom :class:`MergeFilter` implementation for
+                domain-specific validation.  When provided alongside
+                ``extraction_grounding=True``, both compose via
+                :class:`CompositeMergeFilter` (grounding runs first,
+                then the custom filter).  Set
+                ``skip_builtin_grounding=True`` to bypass grounding and
+                run only the custom filter.
+            skip_builtin_grounding: When True and a ``merge_filter`` is
+                provided, skip the built-in grounding check entirely.
+                The custom filter is responsible for all validation.
+                Has no effect when no ``merge_filter`` is set.
             grounding_overlap_threshold: Minimum word-overlap ratio for
                 string grounding (0.0--1.0).  Defaults to 0.5.  Only used
                 when the built-in grounding filter is active.
@@ -816,6 +832,22 @@ class WizardReasoning(ReasoningStrategy):
                 False — consumers must opt in.
             focused_retry_max_retries: Maximum number of focused retry
                 attempts per turn.  Defaults to 1.
+            clarification_groups: List of field group dicts for structured
+                clarification questions.  Each dict has ``fields``
+                (list of field names) and ``question`` (human-readable
+                question text).  When configured, the clarification
+                response groups related missing fields into natural
+                questions instead of a generic list.
+            clarification_exclude_derivable: When True, exclude fields
+                that have derivation rules from clarification questions
+                (they'll be derived once a source field is provided).
+                This applies even when the source is also missing —
+                the clarification prompt will ask for the source, and
+                derivation fills the target from the user's answer.
+            clarification_template: Optional Jinja2 template string for
+                rendering clarification questions.  Receives a
+                ``field_groups`` variable (list of dicts with ``fields``
+                and ``question`` keys).
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -847,13 +879,21 @@ class WizardReasoning(ReasoningStrategy):
         self._log_conflicts = log_conflicts
         self._extraction_grounding = extraction_grounding
         self._grounding_overlap_threshold = grounding_overlap_threshold
-        # Build merge filter: custom > built-in grounding > none
-        if merge_filter is not None:
-            self._merge_filter: MergeFilter | None = merge_filter
-        elif extraction_grounding:
-            self._merge_filter = SchemaGroundingFilter(
+        self._skip_builtin_grounding = skip_builtin_grounding
+        # Build merge filter chain: grounding (if enabled) → custom
+        filters: list[MergeFilter] = []
+        if extraction_grounding and not skip_builtin_grounding:
+            filters.append(SchemaGroundingFilter(
                 overlap_threshold=grounding_overlap_threshold,
+            ))
+        if merge_filter is not None:
+            filters.append(merge_filter)
+        if len(filters) > 1:
+            self._merge_filter: MergeFilter | None = (
+                CompositeMergeFilter(filters)
             )
+        elif len(filters) == 1:
+            self._merge_filter = filters[0]
         else:
             self._merge_filter = None
         self._scope_escalation_enabled = scope_escalation_enabled
@@ -880,6 +920,9 @@ class WizardReasoning(ReasoningStrategy):
             self._recovery_pipeline = list(DEFAULT_RECOVERY_PIPELINE)
         self._focused_retry_enabled = focused_retry_enabled
         self._focused_retry_max_retries = max(1, focused_retry_max_retries)
+        self._clarification_groups = clarification_groups or []
+        self._clarification_exclude_derivable = clarification_exclude_derivable
+        self._clarification_template = clarification_template
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1691,6 +1734,9 @@ class WizardReasoning(ReasoningStrategy):
         merge_filter_path = wizard_fsm.settings.get("merge_filter")
         if merge_filter_path:
             merge_filter = _load_merge_filter(merge_filter_path)
+        skip_builtin_grounding = wizard_fsm.settings.get(
+            "skip_builtin_grounding", False,
+        )
 
         # Load scope escalation settings
         scope_escalation_config = wizard_fsm.settings.get("scope_escalation", {})
@@ -1740,6 +1786,18 @@ class WizardReasoning(ReasoningStrategy):
         focused_retry_config = recovery_config.get("focused_retry", {})
         focused_retry_enabled = focused_retry_config.get("enabled", False)
         focused_retry_max_retries = focused_retry_config.get("max_retries", 1)
+
+        # Load clarification grouping settings
+        clarification_config = recovery_config.get("clarification", {})
+        clarification_groups: list[dict[str, Any]] = (
+            clarification_config.get("groups", [])
+        )
+        clarification_exclude_derivable: bool = (
+            clarification_config.get("exclude_derivable", False)
+        )
+        clarification_template: str | None = (
+            clarification_config.get("template")
+        )
 
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
@@ -1832,6 +1890,7 @@ class WizardReasoning(ReasoningStrategy):
             log_conflicts=log_conflicts,
             extraction_grounding=extraction_grounding,
             merge_filter=merge_filter,
+            skip_builtin_grounding=skip_builtin_grounding,
             grounding_overlap_threshold=grounding_overlap_threshold,
             scope_escalation_enabled=scope_escalation_enabled,
             scope_escalation_scope=scope_escalation_scope,
@@ -1842,6 +1901,9 @@ class WizardReasoning(ReasoningStrategy):
             recovery_pipeline=recovery_pipeline,
             focused_retry_enabled=focused_retry_enabled,
             focused_retry_max_retries=focused_retry_max_retries,
+            clarification_groups=clarification_groups,
+            clarification_exclude_derivable=clarification_exclude_derivable,
+            clarification_template=clarification_template,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -5963,9 +6025,17 @@ class WizardReasoning(ReasoningStrategy):
 
         # Resolve merge filter: per-stage grounding override, then
         # fall back to wizard-level filter.
+        #
+        # When a stage explicitly sets extraction_grounding: true, it
+        # overrides skip_builtin_grounding — the stage-level opt-in
+        # always creates a grounding filter as fallback.
         stage_grounding = stage.get("extraction_grounding")
         if stage_grounding is not None:
             if stage_grounding:
+                # Stage explicitly enables grounding.  Use the
+                # wizard-level composite filter if available, otherwise
+                # create a fresh grounding filter.  This overrides
+                # skip_builtin_grounding for this stage.
                 active_filter: MergeFilter | None = (
                     self._merge_filter
                     or SchemaGroundingFilter(
@@ -5978,16 +6048,29 @@ class WizardReasoning(ReasoningStrategy):
             active_filter = self._merge_filter
 
         new_data_keys: set[str] = set()
+        data_snapshot = dict(wizard_state.data)
         for k, v in extraction_data.items():
             if v is None:
                 continue
             if active_filter is not None:
                 existing = wizard_state.data.get(k)
                 prop_def = schema_props.get(k, {})
-                if not active_filter.should_merge(
+                decision = active_filter.filter(
                     k, v, existing, user_message, prop_def,
-                ):
+                    data_snapshot,
+                )
+                if decision.action == "reject":
+                    logger.debug(
+                        "Merge filter rejected %s=%r: %s",
+                        k, v, decision.reason,
+                    )
                     continue
+                if decision.action == "transform":
+                    v = decision.value
+                    logger.debug(
+                        "Merge filter transformed %s → %r: %s",
+                        k, v, decision.reason,
+                    )
             if k not in wizard_state.data or wizard_state.data[k] != v:
                 new_data_keys.add(k)
                 wizard_state.data[k] = v
@@ -6537,6 +6620,76 @@ Be concise and helpful.
             metadata=wizard_snapshot,
         )
 
+    def _build_clarification_groups(
+        self,
+        missing_fields: set[str],
+        stage: dict[str, Any],
+        wizard_state: WizardState | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build grouped clarification questions for missing fields.
+
+        Maps missing fields to configured groups.  Ungrouped fields get
+        individual questions derived from their schema description.
+
+        Args:
+            missing_fields: Set of required field names still missing.
+            stage: Current stage metadata (for schema access).
+            wizard_state: Current wizard state (for derivation source
+                checking).
+
+        Returns:
+            List of dicts with ``fields`` and ``question`` keys.
+            Empty list if no missing fields remain after filtering.
+        """
+        if not missing_fields:
+            return []
+
+        schema = stage.get("schema") or {}
+        properties = schema.get("properties", {})
+
+        # Filter out derivable fields if configured
+        effective_missing = set(missing_fields)
+        if (
+            self._clarification_exclude_derivable
+            and self._field_derivations
+            and wizard_state is not None
+        ):
+            available_fields = set(wizard_state.data) | effective_missing
+            derivable = {
+                rule.target
+                for rule in self._field_derivations
+                if rule.source in available_fields
+            }
+            effective_missing -= derivable
+
+        if not effective_missing:
+            return []
+
+        # Match to configured groups
+        grouped_fields: set[str] = set()
+        result: list[dict[str, Any]] = []
+
+        for group in self._clarification_groups:
+            group_fields = set(group.get("fields", []))
+            overlap = group_fields & effective_missing
+            if overlap:
+                result.append({
+                    "fields": sorted(overlap),
+                    "question": group["question"],
+                })
+                grouped_fields |= overlap
+
+        # Ungrouped fields get individual entries from schema description
+        for fld in sorted(effective_missing - grouped_fields):
+            prop = properties.get(fld, {})
+            description = prop.get("description", fld.replace("_", " "))
+            result.append({
+                "fields": [fld],
+                "question": f"What is the {description}?",
+            })
+
+        return result
+
     async def _generate_clarification_response(
         self,
         manager: Any,
@@ -6547,6 +6700,9 @@ Be concise and helpful.
         wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response asking for clarification.
+
+        When clarification groups are configured, replaces the generic
+        issue list with structured grouped questions.
 
         Args:
             manager: ConversationManager instance
@@ -6564,6 +6720,47 @@ Be concise and helpful.
             if issues
             else "- Response was ambiguous"
         )
+
+        # Build field groups for structured clarification when configured.
+        # Requires at least one group to be defined — exclude_derivable
+        # alone only affects group content, it doesn't replace the
+        # generic issue list.
+        if self._clarification_groups and wizard_state is not None:
+            schema = stage.get("schema") or {}
+            required = schema.get("required", [])
+            missing = {
+                f for f in required
+                if not self._field_is_present(wizard_state.data.get(f))
+            }
+            if missing:
+                groups = self._build_clarification_groups(
+                    missing, stage, wizard_state,
+                )
+                if groups:
+                    if self._clarification_template:
+                        try:
+                            from jinja2 import Template
+                            from jinja2 import TemplateError
+
+                            template = Template(
+                                self._clarification_template,
+                            )
+                            issue_list = template.render(
+                                field_groups=groups,
+                            )
+                        except TemplateError:
+                            logger.warning(
+                                "Clarification template rendering "
+                                "failed — falling back to default",
+                                exc_info=True,
+                            )
+                            issue_list = "\n".join(
+                                f"- {g['question']}" for g in groups
+                            )
+                    else:
+                        issue_list = "\n".join(
+                            f"- {g['question']}" for g in groups
+                        )
         suggestions = stage.get("suggestions", [])
         suggestions_text = (
             f"\n**Suggestions**: {', '.join(suggestions)}" if suggestions else ""

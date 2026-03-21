@@ -47,6 +47,7 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Focused Retry Strategy](#focused-retry-strategy)
   - [Per-Stage Override](#recovery-per-stage-override)
   - [Pipeline Examples](#pipeline-examples)
+  - [Clarification Grouping](#clarification-grouping)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -432,21 +433,29 @@ settings:
 ```
 
 The class must implement the `MergeFilter` protocol
-(`from dataknobs_bots.reasoning.wizard_grounding import MergeFilter`):
+(`from dataknobs_bots.reasoning.wizard_grounding import MergeFilter, MergeDecision`):
 
 ```python
 class MergeFilter(Protocol):
-    def should_merge(
+    def filter(
         self,
         field: str,
         new_value: Any,
-        existing_value: Any,
+        existing_value: Any | None,
         user_message: str,
         schema_property: dict[str, Any],
-    ) -> bool: ...
+        wizard_data: dict[str, Any],
+    ) -> MergeDecision: ...
 ```
 
-Custom filters replace the built-in grounding check entirely.
+The `MergeDecision` dataclass supports three actions:
+- `MergeDecision.accept()` — merge the value as-is
+- `MergeDecision.reject(reason="...")` — skip the value
+- `MergeDecision.transform(new_value, reason="...")` — merge a modified value
+
+Custom filters compose with the built-in grounding check via
+`CompositeMergeFilter` — grounding runs first, then the custom filter.
+Set `skip_builtin_grounding: true` to bypass grounding entirely.
 
 ### Walk-Through: Correction Scenario
 
@@ -805,6 +814,49 @@ settings:
   recovery:
     pipeline: []   # Empty list — no strategies run
 ```
+
+### Clarification Grouping
+
+When the confidence gate fires and the wizard asks for missing fields, the default behavior generates a generic clarification prompt. Clarification grouping improves this by organizing related missing fields into natural questions.
+
+#### Configuration
+
+```yaml
+settings:
+  recovery:
+    clarification:
+      exclude_derivable: true     # Don't ask about fields that can be derived
+      groups:
+        - fields: [domain_id, domain_name]
+          question: "What would you like to call your bot?"
+        - fields: [llm_provider, llm_model]
+          question: "Which LLM provider should the bot use?"
+      template: |                 # Optional Jinja2 template
+        I have most of your configuration. Could you also tell me:
+        {% for group in field_groups %}
+        - {{ group.question }}
+        {% endfor %}
+```
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `recovery.clarification.groups` | list of objects | `[]` | Field groups with `fields` (list) and `question` (string) |
+| `recovery.clarification.exclude_derivable` | bool | `false` | Exclude fields that have derivation rules from clarification |
+| `recovery.clarification.template` | string | `null` | Optional Jinja2 template for rendering grouped questions |
+
+#### How It Works
+
+When the confidence gate fires, the wizard identifies which required fields are still missing and:
+
+1. **Excludes derivable fields** (if `exclude_derivable: true`). Fields with configured derivation rules are omitted — they'll be derived once the source field is provided, so asking the user is unnecessary. This applies even when the source field is also missing: the clarification prompt will ask for the source, and once the user provides it, derivation fills the target automatically.
+
+2. **Matches missing fields to configured groups.** If a group contains missing fields, those fields are bundled into a single question. Only the *missing* fields from each group are included — if `domain_id` is already present but `domain_name` is missing, the group still fires but only for `domain_name`.
+
+3. **Generates individual questions for ungrouped fields.** Missing fields that don't belong to any group get their own question, derived from their JSON Schema `description` (or their field name if no description is set).
+
+4. **Renders the template** (if configured). The `template` receives a `field_groups` variable — a list of dicts with `fields` and `question` keys. If no template is set, the questions are rendered as a simple bullet list.
+
+When no groups are configured, the existing behavior is preserved — the wizard generates a generic clarification prompt from the extraction issues.
 
 ---
 
