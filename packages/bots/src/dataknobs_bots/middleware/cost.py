@@ -113,8 +113,8 @@ class CostTrackingMiddleware(Middleware):
             "total_input_tokens": 0,
             "total_output_tokens": 0,
             "total_cost_usd": 0.0,
-            "after_message_calls": 0,
-            "post_stream_calls": 0,
+            "chat_turns": 0,
+            "stream_turns": 0,
             "on_error_calls": 0,
             "on_hook_error_calls": 0,
             "by_provider": {},
@@ -246,7 +246,7 @@ class CostTrackingMiddleware(Middleware):
             estimated = True
 
         hook_counter = (
-            "post_stream_calls" if turn.is_streaming else "after_message_calls"
+            "stream_turns" if turn.is_streaming else "chat_turns"
         )
         cost = self._record_usage(
             client_id, hook_counter,

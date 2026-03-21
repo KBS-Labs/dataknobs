@@ -303,6 +303,16 @@ class MyTool(ContextAwareTool):
 
 Use `on_turn_start` to strip PII and `after_turn` to restore it.
 
+**Note:** For `chat()` and `greet()`, mutations to `turn.response_content`
+in `after_turn` propagate to the caller. For `stream_chat()`, chunks were
+already yielded before `after_turn` runs — mutations update
+`turn.response_content` (available for logging/storage) but do not affect
+the content the streaming consumer already received.
+
+The transformed message also replaces the original in conversation history
+and memory. For PII stripping this is typically desired (the original PII
+is not persisted).
+
 ```python
 class PIIMiddleware(Middleware):
     async def on_turn_start(self, turn: TurnState) -> str | None:
@@ -311,8 +321,14 @@ class PIIMiddleware(Middleware):
         return stripped  # Transformed message sent to LLM
 
     async def after_turn(self, turn: TurnState) -> None:
+        # For chat/greet this updates the returned response.
+        # For streaming, this updates turn.response_content for
+        # logging/storage but does not affect already-yielded chunks.
         mappings = turn.plugin_data.get("pii.mappings", {})
-        turn.response_content = restore_pii(turn.response_content, mappings)
+        if mappings:
+            turn.response_content = restore_pii(
+                turn.response_content, mappings
+            )
 ```
 
 ### Example: Rate Limiting Middleware

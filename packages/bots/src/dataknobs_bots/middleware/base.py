@@ -129,16 +129,21 @@ class Middleware:
     ) -> None:
         """Called when a middleware hook itself raises an exception.
 
-        This fires when a middleware's ``after_message``, ``post_stream``,
-        or ``on_error`` hook raises.  Unlike ``on_error``, this does NOT
-        mean the request failed — the response was already delivered to the
-        caller.  It means a middleware could not complete its own
-        post-processing (e.g., a logging sink was unreachable, a metrics
-        backend timed out).
+        This fires when a post-generation middleware hook raises:
+        ``after_turn``, ``on_tool_executed``, ``after_message``,
+        ``post_stream``, or ``on_error``.  The response was already
+        delivered — the middleware could not complete its own
+        post-processing (e.g., a logging sink was unreachable, a
+        metrics backend timed out).
+
+        Note: ``on_turn_start`` exceptions are NOT routed here —
+        they are re-raised to abort the request (matching
+        ``before_message`` semantics), so ``on_error`` fires instead.
 
         Args:
-            hook_name: Name of the hook that failed (e.g. ``"after_message"``,
-                ``"post_stream"``, ``"on_error"``)
+            hook_name: Name of the hook that failed (e.g.
+                ``"after_turn"``, ``"on_tool_executed"``,
+                ``"on_error"``)
             error: The exception raised by the middleware hook
             context: Bot context
         """

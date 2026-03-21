@@ -114,6 +114,43 @@ class TurnState:
             self.model = chunk.model
         self._extract_provider_name(provider)
 
+    def accumulate_usage(self, response: Any) -> None:
+        """Add usage from an intermediate LLM response to the running total.
+
+        Called during the tool execution loop to capture token counts
+        from re-generation calls that would otherwise be discarded when
+        ``populate_from_response`` overwrites ``self.usage`` with the
+        final call's data.
+        """
+        resp_usage = getattr(response, "usage", None)
+        if not resp_usage:
+            return
+        self._add_usage(resp_usage)
+
+    def accumulate_usage_from_stream(self) -> None:
+        """Snapshot current streaming usage before a re-stream round.
+
+        In the streaming tool loop, ``populate_from_final_stream_chunk``
+        overwrites ``self.usage`` each round.  Call this before each
+        re-stream to fold the current round's usage into the running
+        total.
+        """
+        if self.usage:
+            # Stash current usage — populate_from_final_stream_chunk will
+            # overwrite self.usage with the next round's data.
+            stashed = dict(self.usage)
+            self.usage = None
+            self._add_usage(stashed)
+
+    def _add_usage(self, new_usage: dict[str, int]) -> None:
+        """Merge token counts into the running total."""
+        if self.usage is None:
+            self.usage = {}
+        for key in ("input", "output", "prompt_tokens", "completion_tokens",
+                     "total_tokens"):
+            if key in new_usage:
+                self.usage[key] = self.usage.get(key, 0) + new_usage[key]
+
     def _extract_provider_name(self, provider: Any) -> None:
         """Set provider_name from a provider instance."""
         if provider is None:

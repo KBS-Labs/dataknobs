@@ -131,6 +131,12 @@ class ReActReasoning(ReasoningStrategy):
         Returns:
             Final LLM response
         """
+        # Clear any stale tool executions from a previous call.
+        # Each generate() call should start with a fresh list so
+        # concurrent async calls on the same strategy instance don't
+        # accumulate records from earlier calls.
+        self._tool_executions.clear()
+
         if not tools:
             # No tools available, fall back to simple generation
             logger.info(

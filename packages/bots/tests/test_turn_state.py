@@ -332,8 +332,8 @@ class TestCostTrackingAfterTurn:
         assert stats is not None
         assert stats["total_input_tokens"] == 100
         assert stats["total_output_tokens"] == 200
-        # Streaming path should increment post_stream_calls
-        assert stats["post_stream_calls"] == 1
+        # Streaming path should increment stream_turns
+        assert stats["stream_turns"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -578,16 +578,11 @@ class TestLLMMiddlewareBridge:
             },
             middleware=[plugin_mw],
         ) as harness:
-            # Inject ConversationMiddleware onto the manager
-            # We need to do a chat first to create the manager, then add MW
-            # Actually, let's add it to the bot's conversation storage config
-            # Better: do a chat, get the manager, add middleware, do another chat
+            # Create the manager via a first chat, then inject LLM-layer MW
             await harness.chat("Setup turn")
-
-            # Get the cached manager and add our spy middleware
-            manager = harness.bot._conversation_managers[
+            manager = harness.bot.get_conversation_manager(
                 harness.context.conversation_id
-            ]
+            )
             manager.middleware.append(SpyConvMiddleware())
 
             # Second chat — spy should see plugin_data
@@ -619,11 +614,11 @@ class TestLLMMiddlewareBridge:
             },
             middleware=[tracker],
         ) as harness:
-            # Setup manager
+            # Create the manager via a first chat, then inject LLM-layer MW
             await harness.chat("Setup turn")
-            manager = harness.bot._conversation_managers[
+            manager = harness.bot.get_conversation_manager(
                 harness.context.conversation_id
-            ]
+            )
             manager.middleware.append(WriterConvMiddleware())
 
             await harness.chat("Write test")

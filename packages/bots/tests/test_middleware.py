@@ -127,13 +127,13 @@ class TestCostTrackingMiddleware:
         assert stats["total_requests"] == 1
         assert stats["total_input_tokens"] > 0
         assert stats["total_output_tokens"] > 0
-        assert stats["after_message_calls"] == 1  # non-streaming → after_message counter
+        assert stats["chat_turns"] == 1
 
     @pytest.mark.asyncio
     async def test_after_turn_streaming_increments_stream_counter(
         self, bot_context: BotContext
     ):
-        """Streaming turns increment the post_stream_calls counter."""
+        """Streaming turns increment the stream_turns stat counter."""
         middleware = CostTrackingMiddleware()
 
         turn = _make_turn(
@@ -147,8 +147,8 @@ class TestCostTrackingMiddleware:
 
         stats = middleware.get_client_stats("test-client")
         assert stats is not None
-        assert stats["post_stream_calls"] == 1
-        assert stats["after_message_calls"] == 0
+        assert stats["stream_turns"] == 1
+        assert stats["chat_turns"] == 0
 
     @pytest.mark.asyncio
     async def test_after_turn_with_disabled_tracking(
@@ -178,8 +178,8 @@ class TestCostTrackingMiddleware:
         stats = middleware.get_client_stats("test-client")
         assert stats is not None
         assert stats["on_error_calls"] == 1
-        assert stats["after_message_calls"] == 0
-        assert stats["post_stream_calls"] == 0
+        assert stats["chat_turns"] == 0
+        assert stats["stream_turns"] == 0
 
     @pytest.mark.asyncio
     async def test_counters_accumulate_across_turn_types(
@@ -212,8 +212,8 @@ class TestCostTrackingMiddleware:
 
         stats = middleware.get_client_stats("test-client")
         assert stats is not None
-        assert stats["after_message_calls"] == 1
-        assert stats["post_stream_calls"] == 1
+        assert stats["chat_turns"] == 1
+        assert stats["stream_turns"] == 1
         assert stats["on_error_calls"] == 1
         assert stats["total_requests"] == 2  # chat + stream
 

@@ -207,8 +207,9 @@ class DynaBot:
         self.default_max_tokens = default_max_tokens
         self._context_transform = context_transform
         self._max_tool_iterations = max_tool_iterations
+        self._owns_llm = True  # Set False by from_config() when llm= injected
         self._conversation_managers: dict[str, ConversationManager] = {}
-        self._turn_checkpoints: dict[str, list[str]] = {}
+        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
 
     def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
@@ -338,9 +339,11 @@ class DynaBot:
             # Caller-owned provider — skip creation/initialization.
             # Caller is responsible for lifecycle (initialize/close).
             llm_config = config.get("llm", {})
-            return await cls._build_from_config(
+            bot = await cls._build_from_config(
                 config, llm, llm_config, middleware_override=middleware
             )
+            bot._owns_llm = False  # Caller owns lifecycle
+            return bot
 
         # Create LLM provider from config
         llm_config = config["llm"]
@@ -873,7 +876,7 @@ class DynaBot:
                 tool = None
 
             if tool is None:
-                observation = f"Error: Tool '{tool_name}' not found"
+                observation = "Tool not found"
                 turn.tool_executions.append(ToolExecution(
                     tool_name=tool_name,
                     parameters=tool_call.parameters,
@@ -920,9 +923,7 @@ class DynaBot:
                         },
                     )
                 except Exception as exc:
-                    observation = (
-                        f"Error executing tool {tool_name}: {exc!s}"
-                    )
+                    observation = f"Error: {exc!s}"
                     turn.tool_executions.append(ToolExecution(
                         tool_name=tool_name,
                         parameters=tool_call.parameters,
@@ -1045,9 +1046,16 @@ class DynaBot:
         return a transformed message. Transforms chain: each middleware
         receives the message as modified by the previous one.
 
+        Every middleware gets called even if an earlier one raises.
+        If any raise, the first error is re-raised after all have
+        been called (so the outer try block can route it to on_error).
+        This matches ``before_message`` semantics — middleware can
+        raise to abort the request (e.g. rate limiting, auth).
+
         Args:
             turn: Turn state at the start of the pipeline.
         """
+        first_error: Exception | None = None
         for mw in self.middleware:
             try:
                 result = await mw.on_turn_start(turn)
@@ -1058,9 +1066,10 @@ class DynaBot:
                     "Middleware %s.on_turn_start raised",
                     type(mw).__name__,
                 )
-                await self._call_on_hook_error_middleware(
-                    "on_turn_start", exc, turn.context
-                )
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     async def _call_before_message_middleware(
         self, message: str, context: BotContext
@@ -1331,12 +1340,29 @@ class DynaBot:
                 ):
                     break
                 await self._execute_tools(turn, response.tool_calls)
+                # Accumulate usage from intermediate LLM calls
+                turn.accumulate_usage(response)
                 response = await turn.manager.complete(
                     tools=list(self.tool_registry),
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     llm_config_overrides=llm_config_overrides,
                 )
+            else:
+                # Loop completed without break — cap hit
+                if self.tool_registry and getattr(
+                    response, "tool_calls", None
+                ):
+                    logger.warning(
+                        "Tool execution loop reached max iterations (%d) "
+                        "with pending tool_calls",
+                        self._max_tool_iterations,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
 
             turn.response = response
             turn.response_content = self._extract_response_content(response)
@@ -1374,10 +1400,11 @@ class DynaBot:
             Greeting string, or None if the bot does not support greetings
 
         Note:
-            Middleware lifecycle for greet: ``before_message("")`` is
-            called before greeting generation; ``after_message(...)`` is
-            called on success.  If an error occurs, ``on_error`` hooks
-            receive ``message=""`` since there is no user message.  If a
+            Middleware lifecycle for greet: ``on_turn_start(turn)`` and
+            ``before_message("")`` are called before greeting generation;
+            ``after_turn(turn)`` and ``after_message(...)`` are called on
+            success.  If an error occurs, ``on_error`` hooks receive
+            ``message=""`` since there is no user message.  If a
             middleware hook itself fails, ``on_hook_error`` is called on
             all middleware.
 
@@ -1586,6 +1613,8 @@ class DynaBot:
                 if not pending_tool_calls or not self.tool_registry:
                     break
                 await self._execute_tools(turn, pending_tool_calls)
+                # Accumulate usage from intermediate streaming rounds
+                turn.accumulate_usage_from_stream()
                 pending_tool_calls = None
 
                 async for chunk in turn.manager.stream_complete(
@@ -1609,6 +1638,19 @@ class DynaBot:
                         )
                     else:
                         yield chunk
+            else:
+                # Loop completed without break — cap hit
+                if pending_tool_calls and self.tool_registry:
+                    logger.warning(
+                        "Streaming tool execution loop reached max "
+                        "iterations (%d) with pending tool_calls",
+                        self._max_tool_iterations,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
 
         except Exception as e:
             streaming_error = e
@@ -1816,8 +1858,9 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing conversation storage")
 
-        # Close main LLM provider (DynaBot is the originator)
-        if self.llm and hasattr(self.llm, "close"):
+        # Close main LLM provider only if DynaBot created it.
+        # When from_config(llm=...) was used, the caller owns the lifecycle.
+        if self._owns_llm and self.llm and hasattr(self.llm, "close"):
             try:
                 await self.llm.close()
             except Exception:
@@ -1845,6 +1888,24 @@ class DynaBot:
             exc_tb: Exception traceback if an exception occurred
         """
         await self.close()
+
+    def get_conversation_manager(
+        self, conversation_id: str
+    ) -> ConversationManager | None:
+        """Get a cached conversation manager by conversation ID.
+
+        Returns ``None`` if no manager exists for the given ID (i.e. no
+        turn has been processed for that conversation yet).  Use this for
+        cross-layer integration testing (e.g. injecting LLM-layer
+        ``ConversationMiddleware`` into a manager after construction).
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Cached ConversationManager, or None
+        """
+        return self._conversation_managers.get(conversation_id)
 
     async def _get_or_create_conversation(
         self, context: BotContext
