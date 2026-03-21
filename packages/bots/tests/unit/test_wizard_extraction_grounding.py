@@ -15,9 +15,9 @@ from dataknobs_bots.reasoning.wizard_grounding import (
     MergeFilter,
     SchemaGroundingFilter,
     _has_negation,
-    _word_in_text,
     significant_words,
 )
+from dataknobs_bots.reasoning.wizard_utils import word_in_text
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm import LLMConfig
@@ -871,13 +871,13 @@ class TestWordBoundaryMatching:
     def setup_method(self) -> None:
         self.f = SchemaGroundingFilter()
 
-    def test_word_in_text_helper_matches_whole_word(self) -> None:
-        assert _word_in_text("base", "the base is ready")
-        assert not _word_in_text("base", "use a database")
+    def testword_in_text_helper_matches_whole_word(self) -> None:
+        assert word_in_text("base", "the base is ready")
+        assert not word_in_text("base", "use a database")
 
-    def test_word_in_text_helper_case_sensitive(self) -> None:
-        assert _word_in_text("tutor", "find a tutor")
-        assert not _word_in_text("tutor", "find a Tutor")  # case matters
+    def testword_in_text_helper_case_sensitive(self) -> None:
+        assert word_in_text("tutor", "find a tutor")
+        assert not word_in_text("tutor", "find a Tutor")  # case matters
 
     def test_boolean_base_not_in_database(self) -> None:
         """'base' from description should not match 'database'."""

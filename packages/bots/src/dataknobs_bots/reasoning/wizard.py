@@ -33,6 +33,7 @@ from .wizard_derivations import (
 )
 from .wizard_grounding import MergeFilter, SchemaGroundingFilter
 from .wizard_hooks import WizardHooks
+from .wizard_utils import word_in_text
 
 if TYPE_CHECKING:
     from dataknobs_data import SyncDatabase
@@ -207,12 +208,12 @@ def _normalize_enum_value(
         if ev.lower() == value_lower:
             return ev
 
-    # Tier 3: substring match (bidirectional)
+    # Tier 3: whole-word substring match (bidirectional)
     # "tutor bot" contains "tutor"; "study_companion" contains "study"
-    # Skip when either side is shorter than 2 characters to avoid
-    # false positives with single-char or very short enum values.
-    # When multiple enums substring-match, prefer the longest match
-    # to avoid schema-order-dependent ambiguity.
+    # Uses word-boundary anchors to prevent false positives like
+    # "no" matching "nobody" or "base" matching "database".
+    # When multiple enums match, prefer the longest match to avoid
+    # schema-order-dependent ambiguity.
     val_norm = value_lower.replace("_", " ").replace("-", " ")
     if len(val_norm) >= 2:
         tier3_match: str | None = None
@@ -221,7 +222,7 @@ def _normalize_enum_value(
             ev_norm = ev.lower().replace("_", " ").replace("-", " ")
             if len(ev_norm) < 2:
                 continue
-            if ev_norm in val_norm or val_norm in ev_norm:
+            if word_in_text(ev_norm, val_norm) or word_in_text(val_norm, ev_norm):
                 if len(ev_norm) > tier3_len:
                     tier3_match = ev
                     tier3_len = len(ev_norm)
@@ -4300,6 +4301,10 @@ class WizardReasoning(ReasoningStrategy):
         * **Array shortcut expansion** - ``["all"]`` for ``array`` + ``items.enum``
           → all enum values; ``["none"]`` → ``[]``
         * **Number coercion** - string digits for ``integer``/``number`` → cast
+        * **Enum normalization** - string values for fields with ``enum``
+          constraints → matched to the canonical enum entry via
+          case-insensitive and fuzzy matching when ``enum_normalize``
+          is enabled (default ``True``)
 
         Args:
             data:   Extracted data dict (will be shallow-copied).

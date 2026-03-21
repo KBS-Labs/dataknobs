@@ -115,6 +115,23 @@ class TestNormalizeEnumValue:
         # "y" is a substring of "yesterday" but tier 3 skips len < 2
         assert _normalize_enum_value("yesterday", enum) is None
 
+    def test_word_boundary_prevents_partial_match(self) -> None:
+        """Enum 'no' must not match 'nobody' via character containment."""
+        enum = ["no", "yes"]
+        assert _normalize_enum_value("nobody", enum) is None
+        assert _normalize_enum_value("notable", enum) is None
+
+    def test_word_boundary_prevents_suffix_match(self) -> None:
+        """Enum 'tutor' must not match 'tutored' or 'tutoring'."""
+        enum = ["tutor", "quiz"]
+        assert _normalize_enum_value("tutored", enum) is None
+        assert _normalize_enum_value("tutoring", enum) is None
+
+    def test_word_boundary_allows_whole_word(self) -> None:
+        """Enum 'no' should still match when it appears as a whole word."""
+        enum = ["no", "yes"]
+        assert _normalize_enum_value("no thanks", enum) == "no"
+
     def test_longest_substring_wins(self) -> None:
         """When multiple enums substring-match, longest match wins."""
         enum = ["quiz", "study_companion"]

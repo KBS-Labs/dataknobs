@@ -20,6 +20,8 @@ import logging
 import re
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_bots.reasoning.wizard_utils import word_in_text
+
 logger = logging.getLogger(__name__)
 
 # Words too common to carry grounding signal
@@ -63,14 +65,6 @@ def significant_words(text: str) -> set[str]:
     }
 
 
-def _word_in_text(word: str, text: str) -> bool:
-    r"""Check if *word* appears as a whole word in *text*.
-
-    Uses ``\b`` word-boundary anchors to avoid substring
-    false positives (e.g. ``"base"`` matching ``"database"``).
-    """
-    return bool(re.search(r"\b" + re.escape(word) + r"\b", text))
-
 
 def _field_keywords(
     field: str,
@@ -108,7 +102,7 @@ def _has_negation(
     """
     if proximity <= 0 or field_keywords is None:
         # No proximity requirement --- just check presence.
-        return any(_word_in_text(w, msg_lower) for w in negation_keywords)
+        return any(word_in_text(w, msg_lower) for w in negation_keywords)
 
     # Proximity check: split message into words, find positions.
     words = [
@@ -275,7 +269,7 @@ class SchemaGroundingFilter:
 
         # Explicit grounding mode overrides type-based dispatch
         if grounding_mode == "exact":
-            return _word_in_text(str(value).lower(), msg_lower)
+            return word_in_text(str(value).lower(), msg_lower)
 
         if grounding_mode == "fuzzy":
             return True
@@ -335,7 +329,7 @@ class SchemaGroundingFilter:
           and field keyword (``0`` = anywhere in message)
         """
         keywords = _field_keywords(field, schema_property)
-        field_mentioned = any(_word_in_text(w, msg_lower) for w in keywords)
+        field_mentioned = any(word_in_text(w, msg_lower) for w in keywords)
         if not field_mentioned:
             return False
 
@@ -404,7 +398,7 @@ class SchemaGroundingFilter:
             )
             proximity = x_ext.get("negation_proximity", 0)
             return (
-                any(_word_in_text(w, msg_lower) for w in keywords)
+                any(word_in_text(w, msg_lower) for w in keywords)
                 and _has_negation(
                     msg_lower, neg_keywords,
                     field_keywords=keywords,
@@ -412,7 +406,7 @@ class SchemaGroundingFilter:
                 )
             )
         return any(
-            _word_in_text(str(item).lower(), msg_lower)
+            word_in_text(str(item).lower(), msg_lower)
             for item in value
         )
 
@@ -440,7 +434,7 @@ class SchemaGroundingFilter:
             )
             proximity = x_ext.get("negation_proximity", 0)
             return (
-                any(_word_in_text(w, msg_lower) for w in keywords)
+                any(word_in_text(w, msg_lower) for w in keywords)
                 and _has_negation(
                     msg_lower, neg_keywords,
                     field_keywords=keywords,
@@ -450,7 +444,7 @@ class SchemaGroundingFilter:
 
         # Enum: check if value matches an enum entry found in message
         if "enum" in schema_property:
-            return _word_in_text(value.lower(), msg_lower)
+            return word_in_text(value.lower(), msg_lower)
 
         # General string: word overlap check
         value_words = significant_words(value)
