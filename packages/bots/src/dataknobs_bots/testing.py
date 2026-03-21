@@ -115,6 +115,7 @@ class WizardConfigBuilder:
         auto_advance: bool | None = None,
         skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
+        recovery_enabled: bool | None = None,
     ) -> WizardConfigBuilder:
         """Add a stage to the wizard config.
 
@@ -132,6 +133,8 @@ class WizardConfigBuilder:
             skip_extraction: Whether to skip extraction on this stage.
             derivation_enabled: Per-stage field derivation override.
                 Set to ``False`` to suppress derivation on this stage.
+            recovery_enabled: Per-stage recovery pipeline override.
+                Set to ``False`` to suppress all recovery on this stage.
 
         Returns:
             Self for method chaining.
@@ -154,6 +157,8 @@ class WizardConfigBuilder:
             stage["skip_extraction"] = skip_extraction
         if derivation_enabled is not None:
             stage["derivation_enabled"] = derivation_enabled
+        if recovery_enabled is not None:
+            stage["recovery_enabled"] = recovery_enabled
 
         self._current_stage = stage
         return self
