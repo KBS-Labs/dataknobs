@@ -12,13 +12,24 @@ Grounding Architecture::
     Layer 3 (opt-in):     Per-field x-extraction config hints
     Layer 4 (escape):     Pluggable custom merge filter
 
+Merge Filter Composition::
+
+    Built-in grounding → Custom filter(s) → Merge into wizard_data
+
+    When both grounding and a custom filter are configured, they
+    compose via :class:`CompositeMergeFilter`.  Grounding runs first
+    to reject ungrounded values; the custom filter sees only values
+    that passed grounding.  Set ``skip_builtin_grounding: true`` to
+    bypass grounding and run only the custom filter.
+
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from dataknobs_bots.reasoning.wizard_utils import word_in_text
 
@@ -128,6 +139,43 @@ def _has_negation(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class MergeDecision:
+    """Result of a merge filter decision.
+
+    Use the class methods :meth:`accept`, :meth:`reject`, and
+    :meth:`transform` for ergonomic construction.
+
+    Attributes:
+        action: One of ``"accept"``, ``"reject"``, or ``"transform"``.
+        value: The transformed value (used only when action is
+            ``"transform"``).
+        reason: Optional human-readable explanation for tracing and
+            debugging.
+    """
+
+    action: Literal["accept", "reject", "transform"]
+    value: Any = None
+    reason: str | None = None
+
+    @classmethod
+    def accept(cls, *, reason: str | None = None) -> MergeDecision:
+        """Accept the value as-is."""
+        return cls(action="accept", reason=reason)
+
+    @classmethod
+    def reject(cls, *, reason: str | None = None) -> MergeDecision:
+        """Reject the value — it will not be merged."""
+        return cls(action="reject", reason=reason)
+
+    @classmethod
+    def transform(
+        cls, value: Any, *, reason: str | None = None,
+    ) -> MergeDecision:
+        """Accept but substitute a different value."""
+        return cls(action="transform", value=value, reason=reason)
+
+
 @runtime_checkable
 class MergeFilter(Protocol):
     """Protocol for filtering extraction results before merge.
@@ -136,18 +184,19 @@ class MergeFilter(Protocol):
     should be merged into wizard state.  The built-in
     :class:`SchemaGroundingFilter` uses the JSON Schema definition
     and the user's message to make this decision.  Custom filters
-    can replace it entirely for domain-specific logic.
+    can compose with grounding via :class:`CompositeMergeFilter`.
     """
 
-    def should_merge(
+    def filter(
         self,
         field: str,
         new_value: Any,
-        existing_value: Any,
+        existing_value: Any | None,
         user_message: str,
         schema_property: dict[str, Any],
-    ) -> bool:
-        """Decide whether to merge an extracted value into wizard state.
+        wizard_data: dict[str, Any],
+    ) -> MergeDecision:
+        """Decide whether to accept, reject, or transform a value.
 
         Args:
             field: Schema property name.
@@ -158,9 +207,12 @@ class MergeFilter(Protocol):
             user_message: Raw user message text.
             schema_property: JSON Schema property definition for
                 this field.
+            wizard_data: Read-only snapshot of the current wizard
+                state data dict.  Do not mutate.
 
         Returns:
-            True to merge, False to skip.
+            A :class:`MergeDecision` indicating what to do with the
+            value.
         """
         ...
 
@@ -209,21 +261,22 @@ class SchemaGroundingFilter:
     def __init__(self, overlap_threshold: float = 0.5) -> None:
         self._overlap_threshold = overlap_threshold
 
-    def should_merge(
+    def filter(
         self,
         field: str,
         new_value: Any,
-        existing_value: Any,
+        existing_value: Any | None,
         user_message: str,
         schema_property: dict[str, Any],
-    ) -> bool:
+        wizard_data: dict[str, Any],
+    ) -> MergeDecision:
         """Decide whether to merge based on grounding in user message."""
         # Layer 3: per-field x-extraction hints override Layer 2
         x_ext = schema_property.get("x-extraction", {})
 
         grounding_mode = x_ext.get("grounding")
         if grounding_mode == "skip":
-            return True  # Author says: always merge this field
+            return MergeDecision.accept(reason="grounding=skip")
 
         # Core decision: grounded values always merge; ungrounded
         # values merge only when there's no existing data to protect.
@@ -236,18 +289,20 @@ class SchemaGroundingFilter:
         )
 
         if grounded:
-            return True
+            return MergeDecision.accept(reason="grounded")
 
         if existing_value is None:
             # No existing data to protect --- benefit of the doubt.
-            return True
+            return MergeDecision.accept(
+                reason="ungrounded but no existing value",
+            )
 
-        logger.debug(
-            "Grounding check blocked overwrite of '%s': "
-            "extracted %r not grounded in message, existing %r preserved",
-            field, new_value, existing_value,
+        return MergeDecision.reject(
+            reason=(
+                f"ungrounded: extracted {new_value!r} not in message, "
+                f"existing {existing_value!r} preserved"
+            ),
         )
-        return False
 
     # ------------------------------------------------------------------
     # Type-dispatched grounding checks
@@ -453,3 +508,47 @@ class SchemaGroundingFilter:
         msg_words = significant_words(msg_lower)
         overlap = value_words & msg_words
         return len(overlap) / len(value_words) >= overlap_threshold
+
+
+class CompositeMergeFilter:
+    """Chain multiple merge filters in sequence.
+
+    Short-circuits on the first ``reject``.  When a filter returns
+    ``transform``, the transformed value is passed as ``new_value``
+    to subsequent filters.
+
+    Satisfies the :class:`MergeFilter` protocol via duck typing.
+    """
+
+    def __init__(self, filters: list[MergeFilter]) -> None:
+        self._filters = filters
+
+    def filter(
+        self,
+        field: str,
+        new_value: Any,
+        existing_value: Any | None,
+        user_message: str,
+        schema_property: dict[str, Any],
+        wizard_data: dict[str, Any],
+    ) -> MergeDecision:
+        """Run each filter in order, short-circuiting on reject."""
+        current_value = new_value
+        transformed = False
+        last_reason: str | None = None
+        for f in self._filters:
+            decision = f.filter(
+                field, current_value, existing_value,
+                user_message, schema_property, wizard_data,
+            )
+            if decision.action == "reject":
+                return decision
+            if decision.action == "transform":
+                current_value = decision.value
+                last_reason = decision.reason
+                transformed = True
+        if transformed:
+            return MergeDecision.transform(
+                current_value, reason=last_reason,
+            )
+        return MergeDecision.accept(reason=last_reason)

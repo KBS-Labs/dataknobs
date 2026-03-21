@@ -172,7 +172,8 @@ builder.set_settings(
 |-----|------|---------|-------------|
 | `extraction_grounding` | `bool` | `True` | Enable schema-driven grounding checks. When enabled, extracted values must be grounded in the user's message before they can overwrite existing data. |
 | `grounding_overlap_threshold` | `float` | `0.5` | Minimum word-overlap ratio for string grounding (0.0--1.0). |
-| `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Replaces the built-in grounding check entirely. |
+| `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Composes with the built-in grounding check (grounding runs first, then the custom filter). |
+| `skip_builtin_grounding` | `bool` | `False` | When `True` and a `merge_filter` is set, bypass the built-in grounding check entirely — only the custom filter runs. |
 | `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. |
 
 See [Extraction Grounding](context-aware-wizards.md#extraction-grounding) and [Enum Normalization](context-aware-wizards.md#enum-normalization) for full documentation.
