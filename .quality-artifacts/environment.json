@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-20T17:22:11Z",
+  "timestamp": "2026-03-21T05:03:51Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/quick-gap-fixes",
-  "git_commit": "c814b8154491da74497096447582d1cf0183daa6",
+  "git_branch": "sbk/add-turn-context",
+  "git_commit": "d0ef71de8243e3cde8a4089f5751677d72d663de",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
