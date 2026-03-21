@@ -16,7 +16,11 @@ from dataknobs_bots.bot.context import BotContext
 from dataknobs_bots.bot.turn import ToolExecution, TurnState
 from dataknobs_bots.middleware.base import Middleware
 from dataknobs_bots.testing import BotTestHarness
-from dataknobs_llm.testing import text_response, tool_call_response
+from dataknobs_llm.testing import (
+    multi_tool_response,
+    text_response,
+    tool_call_response,
+)
 from dataknobs_llm.tools.base import Tool
 
 
@@ -152,11 +156,11 @@ class TestChatToolExecution:
 
     @pytest.mark.asyncio
     async def test_max_iterations_prevents_infinite_loop(self) -> None:
-        """Tool loop stops after _MAX_TOOL_ITERATIONS."""
+        """Tool loop stops after max_tool_iterations."""
         echo_tool = EchoTool()
         responses = [
             tool_call_response("echo", {"text": f"iter{i}"})
-            for i in range(DynaBot._MAX_TOOL_ITERATIONS + 2)
+            for i in range(DynaBot._DEFAULT_MAX_TOOL_ITERATIONS + 2)
         ]
         async with await BotTestHarness.create(
             bot_config=_SIMPLE_BOT_CONFIG,
@@ -164,8 +168,9 @@ class TestChatToolExecution:
             tools=[echo_tool],
         ) as harness:
             await harness.chat("loop forever")
+            max_iters = harness.bot._max_tool_iterations
 
-        assert len(echo_tool.calls) == DynaBot._MAX_TOOL_ITERATIONS
+        assert len(echo_tool.calls) == max_iters
 
     @pytest.mark.asyncio
     async def test_no_tools_registered_skips_loop(self) -> None:
@@ -339,7 +344,7 @@ class TestStreamChatToolExecution:
 
     @pytest.mark.asyncio
     async def test_stream_is_final_suppressed_on_intermediate(self) -> None:
-        """Intermediate rounds suppress is_final=True."""
+        """Intermediate rounds suppress is_final; final chunk is from re-gen."""
         echo_tool = EchoTool()
         async with await BotTestHarness.create(
             bot_config=_SIMPLE_BOT_CONFIG,
@@ -354,7 +359,10 @@ class TestStreamChatToolExecution:
                 chunks.append(chunk)
 
         is_final_chunks = [c for c in chunks if c.is_final]
-        assert len(is_final_chunks) == 1  # Only one truly final chunk
+        assert len(is_final_chunks) == 1
+        # The full streamed text must include the post-tool re-generation
+        full_text = "".join(c.delta for c in chunks)
+        assert "done" in full_text
 
     @pytest.mark.asyncio
     async def test_stream_multi_round(self) -> None:
@@ -415,6 +423,105 @@ class TestStreamChatToolExecution:
 
         assert len(tracker.executions) == 1
         assert tracker.executions[0].tool_name == "echo"
+
+    @pytest.mark.asyncio
+    async def test_stream_max_iterations_prevents_infinite_loop(self) -> None:
+        """Streaming tool loop stops after max_tool_iterations."""
+        echo_tool = EchoTool()
+        responses = [
+            tool_call_response("echo", {"text": f"iter{i}"})
+            for i in range(DynaBot._DEFAULT_MAX_TOOL_ITERATIONS + 2)
+        ]
+        async with await BotTestHarness.create(
+            bot_config=_SIMPLE_BOT_CONFIG,
+            main_responses=responses,
+            tools=[echo_tool],
+        ) as harness:
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "loop forever", harness.context
+            ):
+                chunks.append(chunk)
+            max_iters = harness.bot._max_tool_iterations
+
+        assert len(echo_tool.calls) == max_iters
+
+    @pytest.mark.asyncio
+    async def test_stream_no_tools_registered_ignores_tool_calls(self) -> None:
+        """Streaming with tool_calls but no registry passes through as-is."""
+        async with await BotTestHarness.create(
+            bot_config=_SIMPLE_BOT_CONFIG,
+            main_responses=[
+                tool_call_response("echo", {"text": "hello"}),
+            ],
+        ) as harness:
+            chunks = []
+            async for chunk in harness.bot.stream_chat("hi", harness.context):
+                chunks.append(chunk)
+
+        # Response passes through without tool execution
+        is_final_chunks = [c for c in chunks if c.is_final]
+        assert len(is_final_chunks) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-tool call tests (both paths)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiToolExecution:
+    """Multiple tool calls in a single LLM response."""
+
+    @pytest.mark.asyncio
+    async def test_chat_multi_tool_single_response(self) -> None:
+        """Multiple tools called in one response are all executed."""
+        echo_tool = EchoTool()
+        failing_tool = FailingTool()
+        tracker = ToolExecutionTracker()
+        async with await BotTestHarness.create(
+            bot_config=_SIMPLE_BOT_CONFIG,
+            main_responses=[
+                multi_tool_response([
+                    ("echo", {"text": "first"}),
+                    ("echo", {"text": "second"}),
+                ]),
+                text_response("both done"),
+            ],
+            tools=[echo_tool, failing_tool],
+            middleware=[tracker],
+        ) as harness:
+            result = await harness.chat("do two things at once")
+
+        assert result.response == "both done"
+        assert len(echo_tool.calls) == 2
+        assert echo_tool.calls[0]["kwargs"] == {"text": "first"}
+        assert echo_tool.calls[1]["kwargs"] == {"text": "second"}
+        assert len(tracker.executions) == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_multi_tool_single_response(self) -> None:
+        """Multiple tools in one streaming response are all executed."""
+        echo_tool = EchoTool()
+        async with await BotTestHarness.create(
+            bot_config=_SIMPLE_BOT_CONFIG,
+            main_responses=[
+                multi_tool_response([
+                    ("echo", {"text": "a"}),
+                    ("echo", {"text": "b"}),
+                ]),
+                text_response("multi done"),
+            ],
+            tools=[echo_tool],
+        ) as harness:
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "do two at once", harness.context
+            ):
+                chunks.append(chunk)
+
+        full_text = "".join(c.delta for c in chunks)
+        assert "multi done" in full_text
+        assert len(echo_tool.calls) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -189,8 +189,15 @@ class Middleware:
     ) -> None:
         """Called after each tool execution within a turn.
 
-        Fired once per tool invocation, before ``after_turn``. Useful
-        for tool usage auditing, cost tracking, or logging.
+        Fired once per tool invocation, before ``after_turn``.  All
+        ``on_tool_executed`` calls happen **post-turn** during
+        ``_finalize_turn()``, not in real-time as tools execute — this
+        hook is for auditing and logging, not for aborting or
+        rate-limiting mid-turn.
+
+        Ordering note: DynaBot-level tool executions appear first,
+        followed by strategy-level executions (e.g. ReAct).  In
+        practice only one source produces executions per turn.
 
         Args:
             execution: Record of the tool execution (name, params, result,

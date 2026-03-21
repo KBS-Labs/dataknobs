@@ -7,78 +7,53 @@ Middleware components for request/response lifecycle processing in DataKnobs Bot
 Middleware provides hooks into the bot request/response lifecycle, enabling:
 
 - **Logging**: Track all interactions for debugging and analytics
-- **Cost Tracking**: Monitor LLM usage and costs
+- **Cost Tracking**: Monitor LLM usage and costs per turn
+- **Tool Observability**: React to tool executions (audit, cost, analytics)
+- **Dependency Injection**: Inject per-request resources (DB sessions, auth tokens)
+- **Message Transforms**: Strip PII, sanitize input, detect attacks
 - **Metrics**: Export performance data to monitoring systems
 - **Rate Limiting**: Control request rates
 - **Authentication**: Validate requests before processing
 
 ### Lifecycle Hooks
 
-The middleware lifecycle differs slightly between non-streaming (`chat()`) and streaming (`stream_chat()`) responses:
+The middleware pipeline uses a unified lifecycle based on `TurnState`. All turn
+types (`chat()`, `stream_chat()`, `greet()`) flow through the same hooks:
 
-**Non-Streaming Flow (`chat()`)**:
 ```
-User Message
+User Message (or greet)
     │
     ▼
-┌─────────────────────┐
-│  before_message()   │  ← Pre-processing
-└─────────────────────┘
+┌─────────────────────────┐
+│    on_turn_start(turn)   │  ← Pre-processing, plugin_data, message transforms
+└─────────────────────────┘
     │
     ▼
-┌─────────────────────┐
-│   Bot Processing    │
-└─────────────────────┘
+┌─────────────────────────┐
+│    Bot Processing        │  ← Generation + tool execution loop
+│    (tool_calls? →        │
+│     _execute_tools →     │
+│     re-generate)         │
+└─────────────────────────┘
     │
-    ▼ (success)          ▼ (error)
-┌─────────────────────┐  ┌─────────────────────┐
-│  after_message()    │  │     on_error()      │
-└─────────────────────┘  └─────────────────────┘
-    │                        │
-    ▼                        ▼
-Response                Error re-raised
-```
-
-**Streaming Flow (`stream_chat()`)**:
-```
-User Message
+    ▼ (success)               ▼ (error)
+┌─────────────────────────┐  ┌─────────────────────────┐
+│  on_tool_executed(exec)  │  │     on_error()          │
+│  (once per tool call)    │  └─────────────────────────┘
+├─────────────────────────┤       │
+│  after_turn(turn)        │       ▼
+└─────────────────────────┘  Error re-raised
     │
     ▼
-┌─────────────────────┐
-│  before_message()   │  ← Pre-processing
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│   Stream Response   │ ──► chunks yielded to caller
-└─────────────────────┘
-    │
-    ▼ (stream complete)  ▼ (error)
-┌─────────────────────┐  ┌─────────────────────┐
-│   post_stream()     │  │     on_error()      │
-└─────────────────────┘  └─────────────────────┘
-    │                        │
-    ▼                        ▼
-Complete               Error re-raised
+Response (or stream complete)
 ```
 
 **Hook failure handling (`on_hook_error`)**:
 
 If any middleware hook itself raises (e.g., a logging sink is down during
-`after_message`), the exception is caught, logged, and all middleware are
+`after_turn`), the exception is caught, logged, and all middleware are
 notified via `on_hook_error(hook_name, error, context)`.  This is separate
 from `on_error`, which fires for request-level failures.
-
-```
-┌─────────────────────┐
-│  after_message()    │ ──► raises Exception
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│  on_hook_error()    │  ← All middleware notified
-└─────────────────────┘     (hook_name="after_message")
-```
 
 ### Error Semantics
 
@@ -87,14 +62,26 @@ from `on_error`, which fires for request-level failures.
 | `on_error` | Request preparation or generation fails | No |
 | `on_hook_error` | A middleware hook itself raises | Yes (response already delivered) |
 
-This distinction lets middleware differentiate "the request failed" from
-"observability/post-processing broke."  Error-tracking middleware can count
-request failures via `on_error` and infrastructure failures via
-`on_hook_error` independently.
+### Middleware Base Class
+
+`Middleware` is a concrete class with all hooks as no-ops. Subclasses override
+only the hooks they need — no need to implement every method:
+
+```python
+from dataknobs_bots.middleware.base import Middleware
+from dataknobs_bots.bot.turn import TurnState
+
+class MyCostTracker(Middleware):
+    # Only override what you need — everything else is a no-op
+    async def after_turn(self, turn: TurnState) -> None:
+        if turn.usage:
+            await save_usage(turn.usage, turn.context.client_id)
+```
 
 ## Built-in Middleware
 
-DataKnobs Bots provides two built-in middleware classes.
+DataKnobs Bots provides two built-in middleware classes. Both are fully migrated
+to the unified `TurnState` hooks (`on_turn_start`, `after_turn`).
 
 ### CostTrackingMiddleware
 
@@ -102,7 +89,7 @@ Tracks LLM API costs and token usage across different providers.
 
 #### Features
 
-- Token tracking per request
+- Real token usage from provider responses (via `after_turn`)
 - Cost calculation with configurable rates
 - Statistics by client and provider
 - Export to JSON/CSV
@@ -215,49 +202,88 @@ INFO:dataknobs_bots.middleware.logging.ConversationLogger:User message: {'timest
 
 ## Creating Custom Middleware
 
-### Basic Template
+### Basic Template — Unified Hooks (Preferred)
+
+Override only the hooks you need. All others are no-ops.
 
 ```python
-from dataknobs_bots.middleware import Middleware
-from dataknobs_bots import BotContext
-from typing import Any
+from dataknobs_bots.middleware.base import Middleware
+from dataknobs_bots.bot.turn import TurnState, ToolExecution
+from dataknobs_bots.bot.context import BotContext
 
 
 class MyMiddleware(Middleware):
-    """Custom middleware description."""
+    """Custom middleware — override only what you need."""
 
-    def __init__(self, option1: str = "default", option2: int = 10):
-        self.option1 = option1
-        self.option2 = option2
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        """Pre-processing before LLM generation."""
+        turn.plugin_data["request_id"] = generate_id()
+        return None  # or return sanitized_message
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        """Called before processing user message."""
-        print(f"Processing message from {context.client_id}")
+    async def after_turn(self, turn: TurnState) -> None:
+        """Post-processing after any turn completes."""
+        if turn.usage:
+            log.info(
+                "Turn complete: %s tokens",
+                turn.usage.get("input", 0) + turn.usage.get("output", 0),
+            )
 
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
+    async def on_tool_executed(
+        self, execution: ToolExecution, context: BotContext
     ) -> None:
-        """Called after generating bot response (non-streaming)."""
-        tokens = kwargs.get("tokens_used", {})
-        print(f"Response generated, tokens used: {tokens}")
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        """Called after streaming response completes."""
-        print(f"Streamed response to '{message[:30]}...': {len(response)} chars")
+        """Called after each tool execution."""
+        log.info("Tool %s: %s", execution.tool_name, execution.result)
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:
         """Called when a request-level error occurs."""
-        print(f"Error: {error} for message: {message[:50]}...")
+        log.error("Request failed: %s", error)
+```
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
-        """Called when a middleware hook itself raises."""
-        print(f"Hook {hook_name} failed: {error}")
+### Example: Per-Request Dependency Injection
+
+Use `on_turn_start` to inject per-request resources and `after_turn` to clean up.
+Resources are available to tools via `ToolExecutionContext.extra["turn_data"]`.
+
+```python
+class SessionMiddleware(Middleware):
+    """Inject a database session for each turn."""
+
+    def __init__(self, db_factory):
+        self._db_factory = db_factory
+
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        turn.plugin_data["db.session"] = await self._db_factory()
+        return None
+
+    async def after_turn(self, turn: TurnState) -> None:
+        session = turn.plugin_data.get("db.session")
+        if session:
+            await session.close()
+```
+
+Tools access the session via the context bridge:
+
+```python
+class MyTool(ContextAwareTool):
+    async def execute(self, **kwargs):
+        session = self.context.extra["turn_data"]["db.session"]
+        return await session.execute(...)
+```
+
+### Example: PII Stripping with Restoration
+
+```python
+class PIIMiddleware(Middleware):
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        stripped, mappings = strip_pii(turn.message)
+        turn.plugin_data["pii.mappings"] = mappings
+        return stripped  # Transformed message sent to LLM
+
+    async def after_turn(self, turn: TurnState) -> None:
+        mappings = turn.plugin_data.get("pii.mappings", {})
+        turn.response_content = restore_pii(turn.response_content, mappings)
 ```
 
 ### Example: Rate Limiting Middleware
@@ -269,51 +295,118 @@ from dataknobs_common.ratelimit import (
     InMemoryRateLimiter, RateLimit, RateLimiterConfig,
 )
 from dataknobs_common.exceptions import RateLimitError
-from dataknobs_bots.middleware import Middleware
-from dataknobs_bots import BotContext
+from dataknobs_bots.middleware.base import Middleware
+from dataknobs_bots.bot.turn import TurnState
 
 
 class RateLimitMiddleware(Middleware):
     """Rate limiting middleware backed by InMemoryRateLimiter."""
 
     def __init__(self, max_requests: int = 10, window_seconds: int = 60):
-        self.max_requests = max_requests
         config = RateLimiterConfig(
             default_rates=[RateLimit(limit=max_requests, interval=window_seconds)],
         )
         self._limiter = InMemoryRateLimiter(config)
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        client_id = context.client_id
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        client_id = turn.context.client_id
         if not await self._limiter.try_acquire(client_id):
             status = await self._limiter.get_status(client_id)
             raise RateLimitError(
                 f"Rate limit exceeded for {client_id}",
                 retry_after=status.reset_after,
             )
-
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs
-    ) -> None:
-        pass
-
-    async def post_stream(
-        self, message: str, response: str, context: BotContext
-    ) -> None:
-        pass  # Rate limiting handled in before_message
-
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
-        pass
-
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
-        pass
+        return None
 ```
 
 See the [Rate Limiting guide](../../../packages/common/ratelimit.md) for the full `InMemoryRateLimiter` API, including per-category rates, weighted operations, and distributed backends.
+
+## TurnState Reference
+
+`TurnState` (`dataknobs_bots.bot.turn`) is the per-turn state carrier. Created at
+the start of each `chat()`, `stream_chat()`, or `greet()` call. Available to
+middleware via `on_turn_start` and `after_turn`.
+
+### Key Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | `TurnMode` | How the turn was initiated: `CHAT`, `STREAM`, `GREET` |
+| `message` | `str` | User message (`""` for greet) |
+| `context` | `BotContext` | Bot context (client_id, conversation_id, user_id, etc.) |
+| `response_content` | `str` | Final response text (populated after generation) |
+| `usage` | `dict[str, int] \| None` | Token usage: `{"input": N, "output": M}` |
+| `model` | `str \| None` | Model that generated the response |
+| `provider_name` | `str \| None` | Provider name (e.g., `"OpenAIProvider"`) |
+| `tool_executions` | `list[ToolExecution]` | Tool executions recorded during the turn |
+| `plugin_data` | `dict[str, Any]` | Cross-middleware communication dict |
+
+### ToolExecution
+
+`ToolExecution` (`dataknobs_bots.bot.turn`) records a single tool execution:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool_name` | `str` | Name of the tool |
+| `parameters` | `dict[str, Any]` | Parameters passed to the tool |
+| `result` | `Any` | Tool return value (if successful) |
+| `error` | `str \| None` | Error message (if failed) |
+| `duration_ms` | `float \| None` | Execution time in milliseconds |
+
+### plugin_data
+
+`plugin_data` is a per-turn writable dict that bridges across the entire pipeline:
+
+```
+on_turn_start(turn)          ← write plugin_data
+  → ConversationMiddleware   ← reads/writes via state.turn_data (same dict)
+    → Tool execution         ← reads via context.extra["turn_data"]
+  → after_turn(turn)         ← reads final plugin_data
+```
+
+Namespace by convention with dotted keys: `"pii.mappings"`, `"session.db"`,
+`"auth.claims"`.
+
+## Middleware Interface
+
+All hooks are concrete no-ops on the `Middleware` base class. Override only
+what you need.
+
+### Preferred Hooks
+
+| Hook | Signature | When |
+|------|-----------|------|
+| `on_turn_start` | `(turn: TurnState) -> str \| None` | Before processing; can transform message and write plugin_data |
+| `after_turn` | `(turn: TurnState) -> None` | After any turn completes (chat, stream, greet) |
+| `on_tool_executed` | `(execution: ToolExecution, context: BotContext) -> None` | After each tool call (post-turn, not real-time) |
+
+### Error Hooks
+
+| Hook | Signature | When |
+|------|-----------|------|
+| `on_error` | `(error: Exception, message: str, context: BotContext) -> None` | Request failed |
+| `on_hook_error` | `(hook_name: str, error: Exception, context: BotContext) -> None` | A middleware hook itself failed |
+
+### `on_tool_executed` Timing
+
+`on_tool_executed` fires **post-turn** during `_finalize_turn()`, not in real-time
+as tools execute. This hook is for auditing and logging, not for aborting or
+rate-limiting mid-turn. Tool executions are also available as
+`turn.tool_executions` in the `after_turn` hook for batch processing.
+
+## Legacy Hooks
+
+The following hooks are kept for backward compatibility but are deprecated.
+Existing middleware using these hooks will continue to work. Migrate to the
+unified hooks at your convenience.
+
+| Legacy Hook | Replacement | Notes |
+|-------------|-------------|-------|
+| `before_message(message, context)` | `on_turn_start(turn)` | `on_turn_start` provides full TurnState + plugin_data + message transforms |
+| `after_message(response, context, **kwargs)` | `after_turn(turn)` | `after_turn` fires for all turn types with real usage data |
+| `post_stream(message, response, context)` | `after_turn(turn)` | `after_turn` eliminates the chat-vs-stream split |
+
+Both legacy and unified hooks fire on every turn — you can migrate incrementally.
 
 ## Configuration
 
@@ -339,47 +432,53 @@ middleware:
       json_format: false
 
   # Custom middleware
-  - class: my_middleware.RateLimitMiddleware
+  - class: my_app.middleware.RateLimitMiddleware
     params:
       max_requests: 100
       window_seconds: 60
 ```
 
-### Python Configuration
+### Programmatic Middleware via `from_config()`
+
+Use the `middleware=` keyword argument to inject middleware programmatically,
+bypassing config-driven middleware construction:
 
 ```python
 from dataknobs_bots import DynaBot
 from dataknobs_bots.middleware import CostTrackingMiddleware, LoggingMiddleware
 
-config = {
-    "llm": {"provider": "openai", "model": "gpt-4o"},
-    "conversation_storage": {"backend": "memory"},
-    "middleware": [
-        {
-            "class": "dataknobs_bots.middleware.CostTrackingMiddleware",
-            "params": {"track_tokens": True}
-        },
-        {
-            "class": "dataknobs_bots.middleware.LoggingMiddleware",
-            "params": {"log_level": "INFO", "json_format": True}
-        }
-    ]
-}
+cost_tracker = CostTrackingMiddleware()
+logger_mw = LoggingMiddleware(json_format=True)
 
-bot = await DynaBot.from_config(config)
+bot = await DynaBot.from_config(
+    config,
+    middleware=[cost_tracker, logger_mw],  # Overrides config middleware
+)
 ```
+
+When `middleware=` is passed, it completely replaces any middleware defined in the
+config dict. Pass `middleware=[]` to explicitly disable all middleware.
 
 ## Best Practices
 
-1. **Order Matters**: Middleware executes in order. Put logging first to capture all requests.
+1. **Use Unified Hooks**: Prefer `on_turn_start` and `after_turn` over legacy hooks.
+   They provide the full `TurnState` and work uniformly across all turn types.
 
-2. **Error Handling**: Implement `on_error` for request failures and `on_hook_error` for middleware infrastructure failures.
+2. **Order Matters**: Middleware executes in list order. `on_turn_start` message
+   transforms chain: each middleware receives the message as modified by the
+   previous one.
 
-3. **Performance**: Keep middleware lightweight. Offload heavy processing to background tasks.
+3. **Namespace plugin_data**: Use dotted keys (`"pii.mappings"`, `"session.db"`)
+   to avoid collisions between middleware.
 
-4. **Testing**: Test middleware independently before integration.
+4. **Error Handling**: Implement `on_error` for request failures and `on_hook_error`
+   for middleware infrastructure failures.
 
-5. **Stateless Design**: Prefer stateless middleware when possible for scalability.
+5. **Performance**: Keep middleware lightweight. Offload heavy processing to
+   background tasks.
+
+6. **Testing**: Use `BotTestHarness` with `middleware=[...]` to test middleware
+   in integration.
 
 ## Related Documentation
 

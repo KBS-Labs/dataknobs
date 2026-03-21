@@ -25,6 +25,8 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 from dataknobs_llm.tools.context import ToolExecutionContext
 
+from dataknobs_common.exceptions import NotFoundError
+
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from ..middleware.base import Middleware
@@ -138,14 +140,8 @@ class DynaBot:
         default_max_tokens: Default max tokens for LLM generation
     """
 
-    _MAX_TOOL_ITERATIONS = 5
-    """Maximum number of tool execution rounds before returning.
-
-    When a strategy (e.g. SimpleReasoning) returns a response with
-    ``tool_calls``, DynaBot executes the tools and re-generates.
-    This cap prevents infinite loops when the model keeps requesting
-    the same tools.
-    """
+    _DEFAULT_MAX_TOOL_ITERATIONS = 5
+    """Default maximum number of tool execution rounds before returning."""
 
     def __init__(
         self,
@@ -164,6 +160,7 @@ class DynaBot:
         default_temperature: float = 0.7,
         default_max_tokens: int = 1000,
         context_transform: Callable[[str], str] | None = None,
+        max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
     ):
         """Initialize DynaBot.
 
@@ -188,6 +185,11 @@ class DynaBot:
                 (KB chunks, memory context) before it is injected into the
                 prompt.  Use this to sanitize or fence external content
                 against prompt injection.
+            max_tool_iterations: Maximum number of tool execution rounds
+                before returning.  When a strategy returns a response with
+                ``tool_calls``, DynaBot executes the tools and re-generates.
+                This cap prevents infinite loops when the model keeps
+                requesting the same tools.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -204,6 +206,7 @@ class DynaBot:
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
         self._context_transform = context_transform
+        self._max_tool_iterations = max_tool_iterations
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[str]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
@@ -566,8 +569,15 @@ class DynaBot:
                 context_transform = context_transform_ref
             elif isinstance(context_transform_ref, str):
                 from dataknobs_bots.tools.resolve import resolve_callable
+                from dataknobs_common.exceptions import ConfigurationError
 
-                context_transform = resolve_callable(context_transform_ref)
+                try:
+                    context_transform = resolve_callable(context_transform_ref)
+                except (ImportError, AttributeError, ValueError) as exc:
+                    raise ConfigurationError(
+                        f"context_transform: could not resolve "
+                        f"'{context_transform_ref}': {exc}"
+                    ) from exc
             else:
                 logger.warning(
                     "context_transform must be a callable or dotted import "
@@ -604,6 +614,9 @@ class DynaBot:
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
             context_transform=context_transform,
+            max_tool_iterations=config.get(
+                "max_tool_iterations", cls._DEFAULT_MAX_TOOL_ITERATIONS
+            ),
         )
 
         for role, provider in subsystem_providers.items():
@@ -851,13 +864,12 @@ class DynaBot:
             turn: Current turn state (tool executions are appended here).
             tool_calls: List of ``ToolCall`` objects from the LLM response.
         """
-        tool_context = ToolExecutionContext.from_manager(turn.manager)
-
         for tool_call in tool_calls:
             tool_name = tool_call.name
+            tool_context = ToolExecutionContext.from_manager(turn.manager)
             try:
                 tool = self.tool_registry.get_tool(tool_name)
-            except Exception:
+            except NotFoundError:
                 tool = None
 
             if tool is None:
@@ -949,12 +961,16 @@ class DynaBot:
         if self.memory and turn.response_content:
             await self.memory.add_message(turn.response_content, role="assistant")
 
-        # Collect tool executions from strategy
+        # Collect tool executions from strategy (appended after DynaBot-level
+        # executions — ordering is by source, not chronological).  For current
+        # strategies, only one source produces executions per turn: either
+        # ReAct (strategy-level) or the DynaBot loop (for non-ReAct strategies).
         if self.reasoning_strategy:
             strategy_tools = self.reasoning_strategy.get_and_clear_tool_executions()
             turn.tool_executions.extend(strategy_tools)
 
-        # Fire on_tool_executed for each tool execution
+        # Fire on_tool_executed for each tool execution (post-turn, not
+        # real-time — middleware cannot abort or rate-limit mid-turn).
         for execution in turn.tool_executions:
             await self._call_on_tool_executed_middleware(execution, turn.context)
 
@@ -1308,7 +1324,7 @@ class DynaBot:
             # DynaBot-level tool execution loop.  Strategies that handle
             # tool_calls internally (e.g. ReAct) return responses without
             # tool_calls, so this loop is a no-op for them.
-            for _iteration in range(self._MAX_TOOL_ITERATIONS):
+            for _iteration in range(self._max_tool_iterations):
                 if (
                     not self.tool_registry
                     or not getattr(response, "tool_calls", None)
@@ -1396,6 +1412,11 @@ class DynaBot:
 
             turn.response = response
             turn.response_content = self._extract_response_content(response)
+            # Note: greet responses are not checked for tool_calls.
+            # Greetings are bot-initiated and strategies are not expected
+            # to request tool calls during greet.  If this assumption
+            # changes, add the tool execution loop here (matching
+            # chat/stream_chat).
             turn.populate_from_response(response, self.llm)
             await self._finalize_turn(turn)
             return turn.response_content
@@ -1561,7 +1582,7 @@ class DynaBot:
             # DynaBot-level tool execution loop for streaming.
             # Execute pending tool_calls, then re-stream until no
             # more tool_calls or max iterations reached.
-            for _iteration in range(self._MAX_TOOL_ITERATIONS):
+            for _iteration in range(self._max_tool_iterations):
                 if not pending_tool_calls or not self.tool_registry:
                     break
                 await self._execute_tools(turn, pending_tool_calls)
@@ -1578,7 +1599,7 @@ class DynaBot:
                         turn.populate_from_final_stream_chunk(
                             chunk, self.llm
                         )
-                    if chunk.tool_calls:
+                    if chunk.tool_calls and self.tool_registry:
                         pending_tool_calls = chunk.tool_calls
                         yield LLMStreamResponse(
                             delta=chunk.delta,

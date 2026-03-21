@@ -235,7 +235,12 @@ class CostTrackingMiddleware(Middleware):
             )
             estimated = False
         else:
-            # Estimate from text length (~4 chars per token)
+            # Estimate from text length (~4 chars per token).
+            # Note: turn.message is the user's message before KB/memory
+            # augmentation.  The actual LLM input includes system prompt,
+            # KB chunks, and memory context, so this underestimates real
+            # input tokens.  When real usage data is available (above
+            # branch), this fallback is not reached.
             input_tokens = len(turn.message) // 4
             output_tokens = len(turn.response_content) // 4
             estimated = True
