@@ -114,6 +114,7 @@ class WizardConfigBuilder:
         extraction_scope: str | None = None,
         auto_advance: bool | None = None,
         skip_extraction: bool | None = None,
+        derivation_enabled: bool | None = None,
     ) -> WizardConfigBuilder:
         """Add a stage to the wizard config.
 
@@ -129,6 +130,8 @@ class WizardConfigBuilder:
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.
             skip_extraction: Whether to skip extraction on this stage.
+            derivation_enabled: Per-stage field derivation override.
+                Set to ``False`` to suppress derivation on this stage.
 
         Returns:
             Self for method chaining.
@@ -149,6 +152,8 @@ class WizardConfigBuilder:
             stage["auto_advance"] = auto_advance
         if skip_extraction is not None:
             stage["skip_extraction"] = skip_extraction
+        if derivation_enabled is not None:
+            stage["derivation_enabled"] = derivation_enabled
 
         self._current_stage = stage
         return self

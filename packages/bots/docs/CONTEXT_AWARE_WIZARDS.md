@@ -27,6 +27,14 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Grounding Configuration](#grounding-configuration)
   - [Custom Merge Filters](#custom-merge-filters)
   - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
+- [Field Derivation Recovery](#field-derivation-recovery)
+  - [The Problem](#derivation-problem)
+  - [How It Works](#derivation-how-it-works)
+  - [Built-In Transforms](#built-in-transforms)
+  - [Template Derivation](#template-derivation)
+  - [Guard Conditions](#guard-conditions)
+  - [Per-Stage Override](#derivation-per-stage-override)
+  - [Custom Transforms](#custom-transforms)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -215,7 +223,7 @@ For values that don't match the target schema (e.g., `intent: custom` derives `t
 
 Derivations do **not** overwrite existing values in wizard state. If a key already exists in `wizard_state.data`, the derived value is silently skipped. This protects user-provided data from being overwritten by derivation rules.
 
-Empty Jinja2 renders (when the referenced variable is undefined) are also skipped — no empty strings are set.
+Templates use strict undefined checking — if any referenced variable is missing, the derivation is skipped rather than producing a partial result.
 
 ## Dynamic Suggestions
 
@@ -438,6 +446,136 @@ All fields extracted, no existing data → all merge normally.
 | domain_id | "" | no negation keyword | "history-quizzer" | **Skip** (protected) |
 
 Result: only `intent` is updated to "tutor"; `subject` and `domain_id` are preserved.
+
+---
+
+## Field Derivation Recovery
+
+### The Problem {#derivation-problem}
+
+Some fields have deterministic relationships: `domain_id` and `domain_name` are typically derivable from each other (`chess-champ` ↔ `Chess Champ`). When an extraction model captures one but misses the other, the wizard treats the missing field as unsatisfied — blocking auto-advance or forcing a clarification question for information the framework could infer.
+
+Field derivation fills missing fields from present ones using pure functions — no LLM call, no I/O. This is the cheapest recovery strategy.
+
+### How It Works {#derivation-how-it-works}
+
+Derivation runs in the extraction pipeline **after** merge, scope escalation, and schema defaults, and **before** the confidence gate:
+
+```
+1. Extract from message (SchemaExtractor)
+2. Merge with existing wizard_data (grounding filter)
+3. Scope escalation (if enabled)
+4. Apply schema defaults
+5. Apply field derivations  ← fills missing fields from present ones
+6. Confidence gate (required fields check)
+7. Transition derivations
+8. FSM step
+```
+
+This ordering ensures derived values count toward the required-field check and are available for transition conditions.
+
+### Configuration
+
+```yaml
+settings:
+  derivations:
+    - source: domain_id
+      target: domain_name
+      transform: title_case
+      when: target_missing
+
+    - source: domain_name
+      target: domain_id
+      transform: lower_hyphen
+      when: target_missing
+```
+
+Each rule specifies:
+- **source** — field to derive from (must be present)
+- **target** — field to fill
+- **transform** — how to transform the source value
+- **when** — guard condition (default: `target_missing`)
+
+### Built-In Transforms
+
+| Transform | Input → Output | Use Case |
+|-----------|---------------|----------|
+| `title_case` | `chess-champ` → `Chess Champ` | ID → display name |
+| `lower_hyphen` | `Chess Champ` → `chess-champ` | Display name → slug ID |
+| `lower_underscore` | `Chess Champ` → `chess_champ` | Display name → snake_case |
+| `copy` | Direct copy of source value | Aliased fields |
+| `template` | Jinja2 template rendered with wizard data | Composite derivation |
+
+### Template Derivation
+
+For deriving a field from multiple source fields, use the `template` transform with a Jinja2 template:
+
+```yaml
+settings:
+  derivations:
+    - source: intent        # trigger: derive when intent is present
+      target: description
+      transform: template
+      template: "A {{ intent }} bot for {{ subject }}"
+      when: target_missing
+```
+
+The template has access to the full wizard data dict. If any referenced variable is undefined, the derivation is skipped (the template uses strict undefined checking to prevent partial renders).
+
+### Guard Conditions
+
+| Condition | Meaning | Default? |
+|-----------|---------|----------|
+| `target_missing` | Source is present, target is not | Yes |
+| `target_empty` | Source is present, target is `None` or empty string | No |
+| `always` | Always derive, overwriting existing values | No |
+
+`target_missing` is the safe default — it never overwrites user-provided or extracted data. The `always` option exists for cases where derived values should take precedence (e.g., enforcing a naming convention).
+
+### Per-Stage Override {#derivation-per-stage-override}
+
+Disable derivation on specific stages:
+
+```yaml
+stages:
+  - name: review
+    derivation_enabled: false   # suppress derivation on this stage
+```
+
+### Custom Transforms
+
+For transforms beyond the built-in set, provide a class implementing the `FieldTransform` protocol:
+
+```yaml
+settings:
+  derivations:
+    - source: subject
+      target: domain_id
+      transform: custom
+      custom_class: mypackage.transforms.SubjectToId
+```
+
+The class must implement:
+
+```python
+from dataknobs_bots.reasoning.wizard_derivations import FieldTransform
+
+class SubjectToId:
+    def transform(self, value: Any, wizard_data: dict[str, Any]) -> Any:
+        # Return the derived value
+        return value.lower().replace(" ", "-")
+```
+
+Custom classes are loaded once at config time and cached.
+
+### Rule Ordering
+
+Rules are processed in order. Each rule runs at most once per turn. When two rules derive from each other (A→B and B→A), the first rule whose source is present wins. For example, with both `domain_id → domain_name` and `domain_name → domain_id` configured:
+
+- If `domain_id` is present: first rule fires (→ `domain_name`), second rule skips (target now present)
+- If `domain_name` is present: first rule skips (source missing), second rule fires (→ `domain_id`)
+
+Derivations can also chain: rule A→B fires, then rule B→C fires in the same pass since B is now present.
 
 ---
 

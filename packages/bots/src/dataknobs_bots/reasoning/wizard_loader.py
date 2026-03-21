@@ -53,6 +53,7 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "collection_mode", "collection_config",
     "capture_mode",
     "extraction_scope", "extraction_grounding",
+    "derivation_enabled",
 })
 
 # Patterns that suggest a condition is natural language rather than Python
@@ -614,6 +615,7 @@ class WizardConfigLoader:
                 # Per-stage extraction overrides
                 "extraction_scope": stage.get("extraction_scope"),
                 "extraction_grounding": stage.get("extraction_grounding"),
+                "derivation_enabled": stage.get("derivation_enabled"),
             }
 
         # Add global tasks to the first stage's metadata

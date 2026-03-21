@@ -26,6 +26,11 @@ from .observability import (
     WizardTaskList,
     create_transition_record,
 )
+from .wizard_derivations import (
+    DerivationRule,
+    apply_field_derivations,
+    parse_derivation_rules,
+)
 from .wizard_grounding import MergeFilter, SchemaGroundingFilter
 from .wizard_hooks import WizardHooks
 
@@ -598,6 +603,7 @@ class WizardReasoning(ReasoningStrategy):
         scope_escalation_enabled: bool = False,
         scope_escalation_scope: str = "wizard_session",
         recent_messages_count: int = 3,
+        field_derivations: list[DerivationRule] | None = None,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -658,6 +664,13 @@ class WizardReasoning(ReasoningStrategy):
                 when using the ``"recent_messages"`` extraction scope.
                 Defaults to 3.  Configured under ``scope_escalation``
                 in the wizard settings YAML.
+            field_derivations: List of
+                :class:`~dataknobs_bots.reasoning.wizard_derivations.DerivationRule`
+                objects defining deterministic field-to-field transforms.
+                When a source field is present but a target field is
+                missing, the framework derives the target without an
+                LLM call.  Configured under ``derivations`` in the
+                wizard settings YAML.
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -701,6 +714,7 @@ class WizardReasoning(ReasoningStrategy):
         self._scope_escalation_enabled = scope_escalation_enabled
         self._scope_escalation_scope = scope_escalation_scope
         self._recent_messages_count = recent_messages_count
+        self._field_derivations = field_derivations or []
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1539,6 +1553,17 @@ class WizardReasoning(ReasoningStrategy):
             "recent_messages_count", 3,
         )
 
+        # Load field derivation rules
+        derivation_config = wizard_fsm.settings.get("derivations", [])
+        field_derivations: list[DerivationRule] = []
+        if derivation_config and isinstance(derivation_config, list):
+            field_derivations = parse_derivation_rules(derivation_config)
+            if field_derivations:
+                logger.info(
+                    "Loaded %d field derivation rules",
+                    len(field_derivations),
+                )
+
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
 
@@ -1634,6 +1659,7 @@ class WizardReasoning(ReasoningStrategy):
             scope_escalation_enabled=scope_escalation_enabled,
             scope_escalation_scope=scope_escalation_scope,
             recent_messages_count=recent_messages_count,
+            field_derivations=field_derivations,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -1953,6 +1979,8 @@ class WizardReasoning(ReasoningStrategy):
         if _skip_extraction:
             # Auto-advance landing stage — skip extraction and fall through
             # to transition evaluation / response generation below.
+            # Field derivations are also skipped here — they already ran
+            # on the prior turn when extraction executed.
             pass
         elif is_conversation:
             # Conversation mode: skip extraction, run intent detection
@@ -2146,6 +2174,19 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 if default_keys:
                     new_data_keys |= default_keys
+
+                # ── Field derivations ──
+                # Derive missing fields from present ones using
+                # configured rules (e.g. domain_id → domain_name
+                # via title_case).  Runs before the confidence gate
+                # so derived fields count as "present" for the
+                # required-field check.
+                if self._field_derivations:
+                    derived_keys = self._apply_field_derivations(
+                        wizard_state, stage,
+                    )
+                    if derived_keys:
+                        new_data_keys |= derived_keys
 
                 # ── Confidence gate ──
                 # After merge, check whether we have enough data to
@@ -5380,6 +5421,41 @@ class WizardReasoning(ReasoningStrategy):
         visited = len(set(state.history))
         # Subtract 1 for end state in progress calculation
         return min(1.0, visited / max(1, total_stages - 1))
+
+    def _apply_field_derivations(
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+    ) -> set[str]:
+        """Apply field derivation rules to fill missing fields.
+
+        Runs after merge/escalation/defaults and before the confidence
+        gate.  Derived values never overwrite user-provided or extracted
+        data unless the rule specifies ``when: always``.
+
+        Per-stage override: set ``derivation_enabled: false`` on a
+        stage to suppress derivation for that stage.
+
+        Args:
+            wizard_state: Current wizard state (data modified in-place).
+            stage: Current stage metadata.
+
+        Returns:
+            Set of keys that were derived (newly added to data).
+        """
+        if not self._field_derivations:
+            return set()
+
+        # Per-stage override
+        stage_enabled = stage.get("derivation_enabled")
+        if stage_enabled is False:
+            return set()
+
+        return apply_field_derivations(
+            self._field_derivations,
+            wizard_state.data,
+            field_is_present=self._field_is_present,
+        )
 
     def _apply_transition_derivations(
         self,

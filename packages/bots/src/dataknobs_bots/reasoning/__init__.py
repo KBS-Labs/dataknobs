@@ -35,6 +35,7 @@ from .task_injection import (
     TaskInjector,
 )
 from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
+from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
@@ -77,6 +78,9 @@ __all__ = [
     "transition_record_to_execution_record",
     "execution_record_to_transition_record",
     "transition_stats_to_execution_stats",
+    # Field derivation
+    "DerivationRule",
+    "FieldTransform",
     # FSM observability (re-exported)
     "ExecutionRecord",
     "ExecutionHistoryQuery",
