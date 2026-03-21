@@ -27,6 +27,14 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Grounding Configuration](#grounding-configuration)
   - [Custom Merge Filters](#custom-merge-filters)
   - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
+- [Field Derivation Recovery](#field-derivation-recovery)
+  - [The Problem](#derivation-problem)
+  - [How It Works](#derivation-how-it-works)
+  - [Built-In Transforms](#built-in-transforms)
+  - [Template Derivation](#template-derivation)
+  - [Guard Conditions](#guard-conditions)
+  - [Per-Stage Override](#derivation-per-stage-override)
+  - [Custom Transforms](#custom-transforms)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -441,6 +449,136 @@ Result: only `intent` is updated to "tutor"; `subject` and `domain_id` are prese
 
 ---
 
+## Field Derivation Recovery
+
+### The Problem {#derivation-problem}
+
+Some fields have deterministic relationships: `domain_id` and `domain_name` are typically derivable from each other (`chess-champ` ↔ `Chess Champ`). When an extraction model captures one but misses the other, the wizard treats the missing field as unsatisfied — blocking auto-advance or forcing a clarification question for information the framework could infer.
+
+Field derivation fills missing fields from present ones using pure functions — no LLM call, no I/O. This is the cheapest recovery strategy.
+
+### How It Works {#derivation-how-it-works}
+
+Derivation runs in the extraction pipeline **after** merge, scope escalation, and schema defaults, and **before** the confidence gate:
+
+```
+1. Extract from message (SchemaExtractor)
+2. Merge with existing wizard_data (grounding filter)
+3. Scope escalation (if enabled)
+4. Apply schema defaults
+5. Apply field derivations  ← fills missing fields from present ones
+6. Confidence gate (required fields check)
+7. Transition derivations
+8. FSM step
+```
+
+This ordering ensures derived values count toward the required-field check and are available for transition conditions.
+
+### Configuration
+
+```yaml
+settings:
+  derivations:
+    - source: domain_id
+      target: domain_name
+      transform: title_case
+      when: target_missing
+
+    - source: domain_name
+      target: domain_id
+      transform: lower_hyphen
+      when: target_missing
+```
+
+Each rule specifies:
+- **source** — field to derive from (must be present)
+- **target** — field to fill
+- **transform** — how to transform the source value
+- **when** — guard condition (default: `target_missing`)
+
+### Built-In Transforms
+
+| Transform | Input → Output | Use Case |
+|-----------|---------------|----------|
+| `title_case` | `chess-champ` → `Chess Champ` | ID → display name |
+| `lower_hyphen` | `Chess Champ` → `chess-champ` | Display name → slug ID |
+| `lower_underscore` | `Chess Champ` → `chess_champ` | Display name → snake_case |
+| `copy` | Direct copy of source value | Aliased fields |
+| `template` | Jinja2 template rendered with wizard data | Composite derivation |
+
+### Template Derivation
+
+For deriving a field from multiple source fields, use the `template` transform with a Jinja2 template:
+
+```yaml
+settings:
+  derivations:
+    - source: intent        # trigger: derive when intent is present
+      target: description
+      transform: template
+      template: "A {{ intent }} bot for {{ subject }}"
+      when: target_missing
+```
+
+The template has access to the full wizard data dict. If the rendered result is empty (e.g., a referenced variable is undefined), the derivation is skipped.
+
+### Guard Conditions
+
+| Condition | Meaning | Default? |
+|-----------|---------|----------|
+| `target_missing` | Source is present, target is not | Yes |
+| `target_empty` | Source is present, target is `None` or empty string | No |
+| `always` | Always derive, overwriting existing values | No |
+
+`target_missing` is the safe default — it never overwrites user-provided or extracted data. The `always` option exists for cases where derived values should take precedence (e.g., enforcing a naming convention).
+
+### Per-Stage Override {#derivation-per-stage-override}
+
+Disable derivation on specific stages:
+
+```yaml
+stages:
+  - name: review
+    derivation_enabled: false   # suppress derivation on this stage
+```
+
+### Custom Transforms
+
+For transforms beyond the built-in set, provide a class implementing the `FieldTransform` protocol:
+
+```yaml
+settings:
+  derivations:
+    - source: subject
+      target: domain_id
+      transform: custom
+      custom_class: mypackage.transforms.SubjectToId
+```
+
+The class must implement:
+
+```python
+from dataknobs_bots.reasoning.wizard_derivations import FieldTransform
+
+class SubjectToId:
+    def transform(self, value: Any, wizard_data: dict[str, Any]) -> Any:
+        # Return the derived value
+        return value.lower().replace(" ", "-")
+```
+
+Custom classes are loaded once at config time and cached.
+
+### Rule Ordering
+
+Rules are processed in order. Each rule runs at most once per turn. When two rules derive from each other (A→B and B→A), the first rule whose source is present wins. For example, with both `domain_id → domain_name` and `domain_name → domain_id` configured:
+
+- If `domain_id` is present: first rule fires (→ `domain_name`), second rule skips (target now present)
+- If `domain_name` is present: first rule skips (source missing), second rule fires (→ `domain_id`)
+
+Derivations can also chain: rule A→B fires, then rule B→C fires in the same pass since B is now present.
+
+---
+
 ## Message Stages
 
 Message stages display informational content to the user without collecting data, then auto-advance to the next stage — all within a single user turn. They are configured using existing fields: `auto_advance: true` + `response_template`, with no `schema`.
@@ -679,3 +817,81 @@ settings:
 ```
 
 Escalation is disabled by default for backward compatibility. The `recent_messages_count` setting applies both when `extraction_scope` is `"recent_messages"` directly and when escalation targets `"recent_messages"`.
+
+---
+
+## Automatic Context Injection
+
+Beyond the config-driven context features above, the wizard automatically injects
+runtime context into the system prompt. These behaviors require no configuration —
+they activate based on stage type and collected data.
+
+### Collection Progress (CD-2)
+
+During collection-mode stages (e.g. gathering ingredients), the wizard injects a
+**Collection Progress** section showing what has been collected so far:
+
+```
+## Collection Progress (ingredients)
+3 items collected so far:
+- flour, 2 cups
+- sugar, 1 cup
+- chocolate chips, 1 cup
+```
+
+This compensates for conversation tree branching. Each collection iteration starts
+a new sibling branch, so the LLM cannot see prior iterations in the conversation
+history. The injected summary provides the full picture.
+
+Up to 20 items are shown; beyond that, a "... and N more" summary appears.
+
+### Collection Summary / Boundary Snapshot (CD-3)
+
+When a stage uses ReAct reasoning (tool-driven review stages), the wizard injects a
+**Collection Summary** showing all artifact fields and section records:
+
+```
+## Collection Summary
+- recipe_name: Chocolate Chip Cookies
+
+### ingredients (3 records)
+- flour, 2 cups
+- sugar, 1 cup
+- chocolate chips, 1 cup
+
+### instructions (3 records)
+- Mix dry and wet ingredients separately
+- Combine wet and dry ingredients
+- Bake at 325 degrees for 12 minutes
+```
+
+This serves as a boundary snapshot at the guided-to-dynamic transition — the LLM
+sees the complete artifact overview without needing tool calls to discover it.
+
+The summary is refreshed between ReAct iterations via the `prompt_refresher`
+callback, so if a tool mutates the artifact mid-loop (e.g. `load_from_catalog`),
+the next iteration sees the updated data.
+
+### Non-Happy-Path Context (CD-8)
+
+Clarification, validation error, and restart-offer responses now receive the full
+stage context — the same system prompt enhancement as normal responses. Previously,
+these code paths used minimal context (~314 tokens), causing the LLM to lose track
+of what was being collected.
+
+Affected code paths:
+- Clarification responses (when extraction fails or input is ambiguous)
+- Validation error responses (when extracted data fails schema validation)
+- Restart-offer responses (when the user's input suggests they want to start over)
+
+### System Prompt Override Persistence (CD-10)
+
+Every system prompt override used for an LLM call is persisted in the assistant
+message's node metadata under the `system_prompt_override` key. This enables:
+
+- **Replay**: Reconstruct the exact prompt the LLM received for any response
+- **Debugging**: Compare prompts across iterations to diagnose context issues
+- **Auditing**: Verify that context injection is working as expected
+
+The override is stored by `ConversationManager._finalize_completion()` in the
+`dataknobs-llm` package, following the same pattern as `config_overrides_applied`.
