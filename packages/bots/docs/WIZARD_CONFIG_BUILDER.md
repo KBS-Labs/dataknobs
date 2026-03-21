@@ -118,6 +118,7 @@ builder.set_settings(
     extraction_scope="current_message",
     conflict_strategy="latest_wins",
     extraction_grounding=True,
+    extraction_hints={"enum_normalize": True, "normalize_threshold": 0.7},
     timeout_seconds=300,
     scope_escalation={
         "enabled": True,
@@ -127,7 +128,7 @@ builder.set_settings(
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `extraction_hints`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
 
 #### Extraction Scope
 
@@ -172,8 +173,9 @@ builder.set_settings(
 | `extraction_grounding` | `bool` | `True` | Enable schema-driven grounding checks. When enabled, extracted values must be grounded in the user's message before they can overwrite existing data. |
 | `grounding_overlap_threshold` | `float` | `0.5` | Minimum word-overlap ratio for string grounding (0.0--1.0). |
 | `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Replaces the built-in grounding check entirely. |
+| `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. |
 
-See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) for full documentation.
+See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) and [Enum Normalization](CONTEXT_AWARE_WIZARDS.md#enum-normalization) for full documentation.
 
 ### Stage Methods
 

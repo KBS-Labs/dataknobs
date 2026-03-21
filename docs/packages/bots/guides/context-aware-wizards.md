@@ -27,6 +27,11 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Grounding Configuration](#grounding-configuration)
   - [Custom Merge Filters](#custom-merge-filters)
   - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
+- [Enum Normalization](#enum-normalization)
+  - [The Problem](#enum-problem)
+  - [How It Works](#enum-how-it-works)
+  - [Configuration](#enum-configuration)
+  - [Matching Algorithm](#matching-algorithm)
 - [Field Derivation Recovery](#field-derivation-recovery)
   - [The Problem](#derivation-problem)
   - [How It Works](#derivation-how-it-works)
@@ -354,6 +359,9 @@ settings:
   extraction_grounding: true          # default: true
   grounding_overlap_threshold: 0.5    # word overlap ratio for strings
   merge_filter: null                  # custom MergeFilter class (dotted path)
+  extraction_hints:
+    enum_normalize: true              # default: true — normalize enum values
+    normalize_threshold: 0.7          # fuzzy match threshold (0.0–1.0)
 ```
 
 #### Per-Stage Override
@@ -404,6 +412,8 @@ schema:
 | `check_direction` | `true` / `false` | Boolean fields: verify value direction via negation detection (default `true`) |
 | `negation_keywords` | `list[str]` | Override the default negation keyword set for this field |
 | `negation_proximity` | `int` | Max word distance between negation and field keyword (`0` = anywhere in message; default `0`) |
+| `normalize` | `true` / `false` | Override enum normalization for this field (see [Enum Normalization](#enum-normalization)) |
+| `normalize_threshold` | `float` | Per-field token overlap threshold for fuzzy enum matching (default `0.7`) |
 
 ### Custom Merge Filters
 
@@ -449,6 +459,82 @@ Result: only `intent` is updated to "tutor"; `subject` and `domain_id` are prese
 
 ---
 
+## Enum Normalization
+
+### The Problem {#enum-problem}
+
+Extraction models often return values that are semantically correct but syntactically wrong for an enum constraint. For example, an extraction model may return `"Tutor"`, `"TUTOR"`, or `"tutor bot"` for a field with `enum: [tutor, quiz, study_companion, custom]`. The intent is clearly `"tutor"`, but the value doesn't match the canonical entry exactly — causing downstream transition conditions like `data.get('intent') == 'tutor'` to fail.
+
+### How It Works {#enum-how-it-works}
+
+Enum normalization runs in `_normalize_extracted_data()` **before** the grounding check, so the grounding filter sees the canonical value:
+
+```
+1. Extract from message (SchemaExtractor)
+2. Normalize extracted data (type coercion + enum normalization)  ← here
+3. Merge with existing wizard_data (grounding filter)
+4. Scope escalation (if enabled)
+5. Apply schema defaults
+6. Apply field derivations
+7. Confidence gate (required fields check)
+```
+
+When enabled, each string field with an `enum` constraint is matched against the canonical entries using a tiered algorithm. Exact matches pass through untouched — normalization only acts when the extracted value doesn't already match.
+
+### Configuration {#enum-configuration}
+
+Enum normalization is **enabled by default**. Control it at two levels:
+
+#### Class-Level (Wizard Settings)
+
+Apply to all enum fields at once:
+
+```yaml
+settings:
+  extraction_hints:
+    enum_normalize: true          # default: true
+    normalize_threshold: 0.7      # fuzzy match threshold (default: 0.7)
+```
+
+#### Per-Field Override
+
+Override the class-level setting for individual fields via `x-extraction`:
+
+```yaml
+schema:
+  properties:
+    intent:
+      type: string
+      enum: [tutor, quiz, study_companion, custom]
+      x-extraction:
+        normalize: true             # redundant (default is true), shown for clarity
+        normalize_threshold: 0.8    # stricter matching for this field
+    provider:
+      type: string
+      enum: [ollama, openai, anthropic]
+      x-extraction:
+        normalize: false            # require exact match for this field
+```
+
+Per-field `normalize` overrides the class-level `enum_normalize` in both directions: `normalize: true` on a field enables normalization even when `enum_normalize: false`, and vice versa.
+
+### Matching Algorithm
+
+The normalization algorithm uses a tiered strategy. The first tier that produces a match wins:
+
+| Tier | Strategy | Example |
+|------|----------|---------|
+| 1 | **Exact match** (case-sensitive) | `"tutor"` → `"tutor"` |
+| 2 | **Case-insensitive** | `"Tutor"`, `"TUTOR"` → `"tutor"` |
+| 3 | **Substring** (after `_`/`-` → space normalization) | `"tutor bot"` → `"tutor"`, `"study companion"` → `"study_companion"` |
+| 4 | **Token overlap** ≥ threshold | `"interactive quiz"` → `"quiz"` (overlap = 0.5) |
+
+If no tier produces a match, the original value passes through unchanged.
+
+The `normalize_threshold` controls tier 4 sensitivity. At `0.7` (default), at least 70% of tokens must overlap. At `1.0`, tier 4 requires all tokens to match (effectively disabling fuzzy matching while still allowing tiers 1-3).
+
+---
+
 ## Field Derivation Recovery
 
 ### The Problem {#derivation-problem}
@@ -463,13 +549,14 @@ Derivation runs in the extraction pipeline **after** merge, scope escalation, an
 
 ```
 1. Extract from message (SchemaExtractor)
-2. Merge with existing wizard_data (grounding filter)
-3. Scope escalation (if enabled)
-4. Apply schema defaults
-5. Apply field derivations  ← fills missing fields from present ones
-6. Confidence gate (required fields check)
-7. Transition derivations
-8. FSM step
+2. Normalize extracted data (type coercion + enum normalization)
+3. Merge with existing wizard_data (grounding filter)
+4. Scope escalation (if enabled)
+5. Apply schema defaults
+6. Apply field derivations  ← fills missing fields from present ones
+7. Confidence gate (required fields check)
+8. Transition derivations
+9. FSM step
 ```
 
 This ordering ensures derived values count toward the required-field check and are available for transition conditions.

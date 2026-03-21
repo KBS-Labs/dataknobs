@@ -33,6 +33,7 @@ from .wizard_derivations import (
 )
 from .wizard_grounding import MergeFilter, SchemaGroundingFilter
 from .wizard_hooks import WizardHooks
+from .wizard_utils import word_in_text
 
 if TYPE_CHECKING:
     from dataknobs_data import SyncDatabase
@@ -159,6 +160,95 @@ def _load_merge_filter(dotted_path: str) -> MergeFilter:
             context={"merge_filter": dotted_path},
         )
     return instance
+
+
+def _normalize_enum_value(
+    value: str,
+    enum_values: list[str],
+    *,
+    threshold: float = 0.7,
+) -> str | None:
+    """Normalize an extracted value to the closest enum match.
+
+    Returns the canonical enum value if a match is found above the
+    *threshold*, or ``None`` if no match is close enough.
+
+    Matching tiers (first match wins):
+
+    1. Exact match (case-sensitive)
+    2. Case-insensitive match
+    3. Substring match (enum value ⊆ extracted or extracted ⊆ enum,
+       after underscore/hyphen normalisation)
+    4. Token overlap ≥ *threshold*
+
+    Args:
+        value: Raw extracted string.
+        enum_values: Canonical enum entries from the JSON Schema.
+        threshold: Minimum token-overlap score for tier-4 matching.
+
+    Returns:
+        Canonical enum entry, or ``None`` when no match qualifies.
+    """
+    if not value or not enum_values:
+        return None
+
+    # Filter to string entries only — JSON Schema enums may contain
+    # integers or other types that would crash .lower() calls.
+    str_enums = [ev for ev in enum_values if isinstance(ev, str)]
+    if not str_enums:
+        return None
+
+    # Tier 1: exact match
+    if value in str_enums:
+        return value
+
+    # Tier 2: case-insensitive
+    value_lower = value.lower()
+    for ev in str_enums:
+        if ev.lower() == value_lower:
+            return ev
+
+    # Tier 3: whole-word substring match (bidirectional)
+    # "tutor bot" contains "tutor"; "study_companion" contains "study"
+    # Uses word-boundary anchors to prevent false positives like
+    # "no" matching "nobody" or "base" matching "database".
+    # When multiple enums match, prefer the longest match to avoid
+    # schema-order-dependent ambiguity.
+    val_norm = value_lower.replace("_", " ").replace("-", " ")
+    if len(val_norm) >= 2:
+        tier3_match: str | None = None
+        tier3_len = 0
+        for ev in str_enums:
+            ev_norm = ev.lower().replace("_", " ").replace("-", " ")
+            if len(ev_norm) < 2:
+                continue
+            if word_in_text(ev_norm, val_norm) or word_in_text(val_norm, ev_norm):
+                if len(ev_norm) > tier3_len:
+                    tier3_match = ev
+                    tier3_len = len(ev_norm)
+        if tier3_match is not None:
+            return tier3_match
+
+    # Tier 4: token overlap
+    val_tokens = set(val_norm.split())
+    best_match: str | None = None
+    best_score = 0.0
+    for ev in str_enums:
+        ev_tokens = set(
+            ev.lower().replace("_", " ").replace("-", " ").split()
+        )
+        if not ev_tokens:
+            continue
+        overlap = val_tokens & ev_tokens
+        score = len(overlap) / max(len(val_tokens), len(ev_tokens))
+        if score > best_score:
+            best_score = score
+            best_match = ev
+
+    if best_score >= threshold and best_match is not None:
+        return best_match
+
+    return None
 
 
 @dataclass
@@ -604,6 +694,8 @@ class WizardReasoning(ReasoningStrategy):
         scope_escalation_scope: str = "wizard_session",
         recent_messages_count: int = 3,
         field_derivations: list[DerivationRule] | None = None,
+        enum_normalize: bool = True,
+        normalize_threshold: float = 0.7,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
     ):
@@ -671,6 +763,15 @@ class WizardReasoning(ReasoningStrategy):
                 missing, the framework derives the target without an
                 LLM call.  Configured under ``derivations`` in the
                 wizard settings YAML.
+            enum_normalize: When True (default), normalize extracted enum
+                values to canonical enum entries via case-insensitive and
+                fuzzy matching.  Per-field ``x-extraction.normalize``
+                overrides this setting.  Configured under
+                ``extraction_hints.enum_normalize`` in wizard settings.
+            normalize_threshold: Minimum token-overlap score (0.0--1.0)
+                for fuzzy enum matching.  Defaults to 0.7.  Only used
+                when enum normalization is active.  Per-field
+                ``x-extraction.normalize_threshold`` overrides.
             initial_data: Optional dict of data to inject into the wizard state
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
@@ -715,6 +816,8 @@ class WizardReasoning(ReasoningStrategy):
         self._scope_escalation_scope = scope_escalation_scope
         self._recent_messages_count = recent_messages_count
         self._field_derivations = field_derivations or []
+        self._enum_normalize = enum_normalize
+        self._normalize_threshold = normalize_threshold
         self._initial_data: dict[str, Any] = initial_data or {}
         self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
@@ -1564,6 +1667,11 @@ class WizardReasoning(ReasoningStrategy):
                     len(field_derivations),
                 )
 
+        # Load extraction hints (class-level normalization settings)
+        extraction_hints = wizard_fsm.settings.get("extraction_hints") or {}
+        enum_normalize = extraction_hints.get("enum_normalize", True)
+        normalize_threshold = extraction_hints.get("normalize_threshold", 0.7)
+
         store_trace = wizard_fsm.settings.get("store_trace", False)
         verbose = wizard_fsm.settings.get("verbose", False)
 
@@ -1660,6 +1768,8 @@ class WizardReasoning(ReasoningStrategy):
             scope_escalation_scope=scope_escalation_scope,
             recent_messages_count=recent_messages_count,
             field_derivations=field_derivations,
+            enum_normalize=enum_normalize,
+            normalize_threshold=normalize_threshold,
             default_store_trace=store_trace,
             default_verbose=verbose,
             initial_data=config.get("initial_data"),
@@ -4191,6 +4301,10 @@ class WizardReasoning(ReasoningStrategy):
         * **Array shortcut expansion** - ``["all"]`` for ``array`` + ``items.enum``
           → all enum values; ``["none"]`` → ``[]``
         * **Number coercion** - string digits for ``integer``/``number`` → cast
+        * **Enum normalization** - string values for fields with ``enum``
+          constraints → matched to the canonical enum entry via
+          case-insensitive and fuzzy matching when ``enum_normalize``
+          is enabled (default ``True``)
 
         Args:
             data:   Extracted data dict (will be shallow-copied).
@@ -4274,6 +4388,34 @@ class WizardReasoning(ReasoningStrategy):
                         normalized[field_name] = []
                         logger.debug(
                             "Normalized %s: 'none' → []", field_name
+                        )
+
+            # --- Enum normalization ---
+            # Runs independently of type coercion above: a string field
+            # with an enum constraint may have already been coerced (or
+            # not), and the value still may not match the canonical enum
+            # entry exactly.  This step normalises case and fuzzy matches.
+            current_value = normalized[field_name]
+            if (
+                "enum" in prop
+                and isinstance(current_value, str)
+            ):
+                x_ext = prop.get("x-extraction", {})
+                should_normalize = x_ext.get(
+                    "normalize", self._enum_normalize,
+                )
+                if should_normalize:
+                    threshold = x_ext.get(
+                        "normalize_threshold", self._normalize_threshold,
+                    )
+                    match = _normalize_enum_value(
+                        current_value, prop["enum"], threshold=threshold,
+                    )
+                    if match is not None and match != current_value:
+                        normalized[field_name] = match
+                        logger.debug(
+                            "Normalized %s enum: %r → %r",
+                            field_name, current_value, match,
                         )
 
         return normalized

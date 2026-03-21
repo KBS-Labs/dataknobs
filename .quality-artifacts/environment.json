@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-21T17:20:48Z",
+  "timestamp": "2026-03-21T18:59:06Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/extractor-field-derivation",
-  "git_commit": "da5dbde180759bfe0b14c648318d8ea48ccde5ec",
+  "git_branch": "sbk/extraction-hints-framework",
+  "git_commit": "30ee682420878816f4511851a7be8173b630f9f0",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
