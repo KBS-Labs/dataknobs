@@ -37,7 +37,7 @@ from .reasoning import (
     SimpleReasoning,
     create_reasoning_from_config,
 )
-from .testing import CaptureReplay, inject_providers
+from .testing import BotTestHarness, CaptureReplay, TurnResult, WizardConfigBuilder, inject_providers
 from .tools import (
     AddKBResourceTool,
     CheckKnowledgeSourceTool,
@@ -60,6 +60,7 @@ __all__ = [
     "BotContext",
     "BotManager",
     "BotRegistry",
+    "BotTestHarness",
     "BufferMemory",
     "CaptureReplay",
     "CompositeMemory",
@@ -99,8 +100,10 @@ __all__ = [
     "UndoResult",
     "ToolCatalog",
     "ToolEntry",
+    "TurnResult",
     "ValidationResult",
     "VectorMemory",
+    "WizardConfigBuilder",
     "create_default_catalog",
     "create_knowledge_base_from_config",
     "create_memory_from_config",
