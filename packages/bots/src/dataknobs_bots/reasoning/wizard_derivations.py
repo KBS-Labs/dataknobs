@@ -42,10 +42,19 @@ class FieldTransform(Protocol):
 
     Implementations receive the source field value and the full
     wizard data dict, returning the derived target value.
+
+    Return ``None`` to signal that the derivation should be skipped
+    (e.g., when preconditions are not met).  Any other value —
+    including falsy values like ``0``, ``False``, or ``""`` — will
+    be stored as the derived result.
     """
 
     def transform(self, value: Any, wizard_data: dict[str, Any]) -> Any:
-        """Transform a source field value into a target field value."""
+        """Transform a source field value into a target field value.
+
+        Returns:
+            The derived value, or ``None`` to skip the derivation.
+        """
         ...
 
 
@@ -89,29 +98,38 @@ class DerivationRule:
 #   (value: Any, wizard_data: dict[str, Any]) -> Any
 
 
-def _title_case(value: Any, _data: dict[str, Any]) -> str:
+def _title_case(value: Any, _data: dict[str, Any]) -> str | None:
     """Convert a hyphen/underscore-separated ID to Title Case.
 
     ``"chess-champ"`` → ``"Chess Champ"``
+
+    Returns ``None`` for empty/whitespace-only input.
     """
     s = str(value)
-    return s.replace("-", " ").replace("_", " ").title().strip()
+    result = s.replace("-", " ").replace("_", " ").title().strip()
+    return result or None
 
 
-def _lower_hyphen(value: Any, _data: dict[str, Any]) -> str:
+def _lower_hyphen(value: Any, _data: dict[str, Any]) -> str | None:
     """Convert a display name to a lowercase hyphenated slug.
 
     ``"Chess Champ"`` → ``"chess-champ"``
+
+    Returns ``None`` for empty/whitespace-only input.
     """
-    return re.sub(r"[\s_]+", "-", str(value)).strip("-").lower()
+    result = re.sub(r"[\s_]+", "-", str(value)).strip("-").lower()
+    return result or None
 
 
-def _lower_underscore(value: Any, _data: dict[str, Any]) -> str:
+def _lower_underscore(value: Any, _data: dict[str, Any]) -> str | None:
     """Convert a display name to snake_case.
 
     ``"Chess Champ"`` → ``"chess_champ"``
+
+    Returns ``None`` for empty/whitespace-only input.
     """
-    return re.sub(r"[\s-]+", "_", str(value)).strip("_").lower()
+    result = re.sub(r"[\s-]+", "_", str(value)).strip("_").lower()
+    return result or None
 
 
 def _copy(value: Any, _data: dict[str, Any]) -> Any:
@@ -227,10 +245,12 @@ def apply_field_derivations(
 ) -> set[str]:
     """Apply derivation rules to wizard state data (in-place).
 
-    Rules are processed in order.  Each rule runs at most once per
-    invocation — this prevents circular derivation loops.  When two
-    rules derive from each other (A→B and B→A), the first rule whose
-    source is present wins.
+    Rules are applied in a single pass through the list — there is
+    no multi-pass re-evaluation, so each rule executes at most once.
+    For bidirectional pairs (A→B and B→A) with the default
+    ``target_missing`` guard, the first rule whose source is present
+    wins; with ``when: always``, both rules fire in order and later
+    rules may overwrite earlier results.
 
     Args:
         rules: Parsed derivation rules from
@@ -267,7 +287,17 @@ def apply_field_derivations(
         elif rule.when == "target_empty":
             if is_present(target_value) and target_value != "":
                 continue  # Target has a non-empty value — skip
-        # "always" — no guard, always derive
+        elif rule.when == "always":
+            pass  # No guard — always derive
+        else:
+            logger.warning(
+                "Unknown 'when' condition %r at execution time for "
+                "rule %s → %s — skipping.",
+                rule.when,
+                rule.source,
+                rule.target,
+            )
+            continue
 
         # Execute transform
         result = _execute_transform(rule, source_value, data)
@@ -311,7 +341,7 @@ def _execute_transform(
             # silently.  This is expected when the template references
             # multiple fields and only some have been extracted so far.
             return None
-        except Exception:
+        except jinja2.TemplateError:
             logger.warning(
                 "Derivation template render failed for %s → %s",
                 rule.source,
@@ -323,7 +353,7 @@ def _execute_transform(
     if rule.transform_name == "custom" and rule.custom_transform is not None:
         try:
             return rule.custom_transform.transform(source_value, data)
-        except Exception:
+        except Exception:  # Custom user code — cannot predict exception types
             logger.warning(
                 "Custom derivation transform failed for %s → %s",
                 rule.source,
@@ -343,7 +373,7 @@ def _execute_transform(
 
     try:
         return transform_fn(source_value, data)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         logger.warning(
             "Derivation transform %s failed for %s → %s",
             rule.transform_name,
@@ -364,6 +394,13 @@ def _load_custom_transform(dotted_path: str) -> FieldTransform | None:
     Returns:
         Instantiated transform, or ``None`` on failure.
     """
+    if not re.match(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)+$", dotted_path):
+        logger.warning(
+            "Invalid dotted path for custom transform: %r",
+            dotted_path,
+        )
+        return None
+
     try:
         module_path, class_name = dotted_path.rsplit(".", 1)
         module = importlib.import_module(module_path)
@@ -377,7 +414,7 @@ def _load_custom_transform(dotted_path: str) -> FieldTransform | None:
             )
             return None
         return instance
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         logger.warning(
             "Failed to load custom transform %s",
             dotted_path,

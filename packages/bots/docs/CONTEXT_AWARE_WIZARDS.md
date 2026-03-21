@@ -223,7 +223,7 @@ For values that don't match the target schema (e.g., `intent: custom` derives `t
 
 Derivations do **not** overwrite existing values in wizard state. If a key already exists in `wizard_state.data`, the derived value is silently skipped. This protects user-provided data from being overwritten by derivation rules.
 
-Empty Jinja2 renders (when the referenced variable is undefined) are also skipped — no empty strings are set.
+Templates use strict undefined checking — if any referenced variable is missing, the derivation is skipped rather than producing a partial result.
 
 ## Dynamic Suggestions
 
@@ -520,7 +520,7 @@ settings:
       when: target_missing
 ```
 
-The template has access to the full wizard data dict. If the rendered result is empty (e.g., a referenced variable is undefined), the derivation is skipped.
+The template has access to the full wizard data dict. If any referenced variable is undefined, the derivation is skipped (the template uses strict undefined checking to prevent partial renders).
 
 ### Guard Conditions
 
