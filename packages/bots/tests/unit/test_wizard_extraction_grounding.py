@@ -884,6 +884,90 @@ class TestPerStageReEnable:
         assert ws.data["tone"] == "formal"
 
 
+class TestStageOverrideWithSkipBuiltinGrounding:
+    """Stage extraction_grounding: true must override skip_builtin_grounding."""
+
+    @pytest.mark.asyncio
+    async def test_stage_reenable_overrides_skip_builtin(self) -> None:
+        """Stage extraction_grounding: true works even when
+        skip_builtin_grounding=True globally."""
+        config: dict[str, Any] = {
+            "name": "skip-override-test",
+            "version": "1.0",
+            "settings": {
+                "extraction_grounding": True,
+            },
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Tell me.",
+                    "extraction_grounding": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "tone": {"type": "string"},
+                            "extra": {"type": "string"},
+                        },
+                        "required": ["subject", "tone", "extra"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "done",
+                            "condition": (
+                                "data.get('subject') and "
+                                "data.get('tone') and "
+                                "data.get('extra')"
+                            ),
+                        },
+                    ],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done!"},
+            ],
+        }
+
+        extractor = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(
+                    data={"subject": "history", "tone": "casual"},
+                    confidence=0.9,
+                ),
+                SimpleExtractionResult(
+                    data={"subject": "", "tone": "formal", "extra": "val"},
+                    confidence=0.9,
+                ),
+            ],
+        )
+        reasoning = _build_reasoning(
+            config, extractor, skip_builtin_grounding=True,
+        )
+        manager, provider = await _create_manager()
+        provider.set_responses(["Got it!", "Updated!"])
+
+        # Turn 1: fill subject + tone (extra still missing → no transition)
+        await manager.add_message(
+            role="user", content="history casual",
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        assert ws.data["subject"] == "history"
+
+        # Turn 2: stage grounding=True should protect subject from ""
+        await manager.add_message(
+            role="user", content="change tone to formal",
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        assert ws.data["subject"] == "history", (
+            "Stage extraction_grounding=True should override "
+            "skip_builtin_grounding and protect existing data"
+        )
+        assert ws.data["tone"] == "formal"
+
+
 class TestAdditionalEdgeCases:
     """Additional edge case tests from code review."""
 

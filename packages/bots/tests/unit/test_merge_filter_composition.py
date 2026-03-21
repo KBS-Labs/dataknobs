@@ -21,6 +21,13 @@ from dataknobs_bots.reasoning.wizard_grounding import (
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_derivations import parse_derivation_rules
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm import LLMConfig
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.conversations.storage import DataknobsConversationStorage
+from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.prompts import ConfigPromptLibrary
+from dataknobs_llm.prompts.builders import AsyncPromptBuilder
 from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
 
 
@@ -712,3 +719,96 @@ class TestFromConfigSkipBuiltinGrounding:
         }
         reasoning = WizardReasoning.from_config(config)
         assert reasoning._skip_builtin_grounding is False
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: transform action through generate()
+# ---------------------------------------------------------------------------
+
+
+async def _create_manager() -> tuple[ConversationManager, EchoProvider]:
+    """Create a ConversationManager + EchoProvider pair for testing."""
+    config = LLMConfig(
+        provider="echo",
+        model="echo-test",
+        options={"echo_prefix": ""},
+    )
+    provider = EchoProvider(config)
+    library = ConfigPromptLibrary({
+        "system": {
+            "assistant": {
+                "template": "You are a helpful assistant.",
+            },
+        },
+    })
+    builder = AsyncPromptBuilder(library=library)
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+    manager = await ConversationManager.create(
+        llm=provider,
+        prompt_builder=builder,
+        storage=storage,
+    )
+    return manager, provider
+
+
+class _UpperCaseFilter:
+    """Test filter that transforms string values to uppercase."""
+
+    def filter(
+        self,
+        field: str,
+        new_value: Any,
+        existing_value: Any | None,
+        user_message: str,
+        schema_property: dict[str, Any],
+        wizard_data: dict[str, Any],
+    ) -> MergeDecision:
+        if isinstance(new_value, str) and new_value:
+            return MergeDecision.transform(
+                new_value.upper(), reason="uppercased",
+            )
+        return MergeDecision.accept()
+
+
+class TestTransformEndToEnd:
+    """End-to-end test: transform filter through generate()."""
+
+    @pytest.mark.asyncio
+    async def test_transform_filter_stores_transformed_value(self) -> None:
+        """A custom filter that transforms values should result in
+        the transformed value being stored in wizard_state.data."""
+        extractor = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(
+                    data={
+                        "intent": "quiz",
+                        "subject": "history",
+                        "domain_id": "my-bot",
+                        "domain_name": "My Bot",
+                    },
+                    confidence=0.9,
+                ),
+            ],
+        )
+        custom_filter = _UpperCaseFilter()
+        reasoning = _build_reasoning(
+            BASIC_WIZARD_CONFIG,
+            extractor,
+            merge_filter=custom_filter,
+            skip_builtin_grounding=True,
+        )
+        manager, provider = await _create_manager()
+        provider.set_responses(["Got it!"])
+
+        await manager.add_message(
+            role="user",
+            content="I want a history quiz bot called My Bot",
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        # All string values should be uppercased by the transform filter
+        assert ws.data["intent"] == "QUIZ"
+        assert ws.data["subject"] == "HISTORY"
+        assert ws.data["domain_id"] == "MY-BOT"
+        assert ws.data["domain_name"] == "MY BOT"

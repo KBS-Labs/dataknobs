@@ -854,7 +854,7 @@ settings:
 
 When the confidence gate fires, the wizard identifies which required fields are still missing and:
 
-1. **Excludes derivable fields** (if `exclude_derivable: true`). Fields with configured derivation rules are omitted — they'll be derived once the source field is provided, so asking the user is unnecessary.
+1. **Excludes derivable fields** (if `exclude_derivable: true`). Fields with configured derivation rules are omitted — they'll be derived once the source field is provided, so asking the user is unnecessary. This applies even when the source field is also missing: the clarification prompt will ask for the source, and once the user provides it, derivation fills the target automatically.
 
 2. **Matches missing fields to configured groups.** If a group contains missing fields, those fields are bundled into a single question. Only the *missing* fields from each group are included — if `domain_id` is already present but `domain_name` is missing, the group still fires but only for `domain_name`.
 

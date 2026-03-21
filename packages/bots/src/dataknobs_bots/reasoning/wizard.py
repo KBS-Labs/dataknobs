@@ -841,6 +841,9 @@ class WizardReasoning(ReasoningStrategy):
             clarification_exclude_derivable: When True, exclude fields
                 that have derivation rules from clarification questions
                 (they'll be derived once a source field is provided).
+                This applies even when the source is also missing —
+                the clarification prompt will ask for the source, and
+                derivation fills the target from the user's answer.
             clarification_template: Optional Jinja2 template string for
                 rendering clarification questions.  Receives a
                 ``field_groups`` variable (list of dicts with ``fields``
@@ -6021,19 +6024,24 @@ class WizardReasoning(ReasoningStrategy):
         schema_props = schema.get("properties", {}) if schema else {}
 
         # Resolve merge filter: per-stage grounding override, then
-        # fall back to wizard-level filter.  Respect
-        # skip_builtin_grounding when creating fallback filters.
+        # fall back to wizard-level filter.
+        #
+        # When a stage explicitly sets extraction_grounding: true, it
+        # overrides skip_builtin_grounding — the stage-level opt-in
+        # always creates a grounding filter as fallback.
         stage_grounding = stage.get("extraction_grounding")
         if stage_grounding is not None:
             if stage_grounding:
-                if self._merge_filter is not None:
-                    active_filter: MergeFilter | None = self._merge_filter
-                elif not self._skip_builtin_grounding:
-                    active_filter = SchemaGroundingFilter(
+                # Stage explicitly enables grounding.  Use the
+                # wizard-level composite filter if available, otherwise
+                # create a fresh grounding filter.  This overrides
+                # skip_builtin_grounding for this stage.
+                active_filter: MergeFilter | None = (
+                    self._merge_filter
+                    or SchemaGroundingFilter(
                         overlap_threshold=self._grounding_overlap_threshold,
                     )
-                else:
-                    active_filter = None
+                )
             else:
                 active_filter = None
         else:
@@ -6732,6 +6740,7 @@ Be concise and helpful.
                     if self._clarification_template:
                         try:
                             from jinja2 import Template
+                            from jinja2 import TemplateError
 
                             template = Template(
                                 self._clarification_template,
@@ -6739,7 +6748,7 @@ Be concise and helpful.
                             issue_list = template.render(
                                 field_groups=groups,
                             )
-                        except Exception:
+                        except TemplateError:
                             logger.warning(
                                 "Clarification template rendering "
                                 "failed — falling back to default",
