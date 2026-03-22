@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-03-22T15:05:47Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-03-22T17:00:58Z",
+  "overall_status": "PASS_WITH_SKIPS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "all",

@@ -899,6 +899,8 @@ if [ "$PR_MODE" = "yes" ]; then
     OVERALL_STATUS="PASS"
     if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
+    elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
+        OVERALL_STATUS="PASS_WITH_SKIPS"
     fi
 
     cat > "$ARTIFACTS_DIR/quality-summary.json" <<EOF
@@ -1104,7 +1106,7 @@ if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_ST
     OVERALL_STATUS="FAIL"
 fi
 
-if [ "$OVERALL_STATUS" = "PASS" ]; then
+if [ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
     echo ""
     echo -e "${GREEN}✓ All critical checks passed!${NC}"
     if [ "$PR_MODE" = "yes" ]; then

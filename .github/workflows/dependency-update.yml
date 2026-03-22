@@ -11,13 +11,38 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
     
+    - name: Check GitHub Actions for security advisories
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Checking GitHub Actions for security advisories..."
+        found_issues=0
+        # Extract unique action references from all workflow files
+        actions=$(grep -rh 'uses:' .github/workflows/*.yml \
+          | sed 's/.*uses: *//' \
+          | sed 's/@.*//' \
+          | sort -u)
+        for action in $actions; do
+          advisories=$(gh api "repos/${action}/security/advisories" \
+            --jq '[.[] | select(.state == "published")] | length' 2>/dev/null || echo "0")
+          if [ "$advisories" != "0" ] && [ "$advisories" != "" ]; then
+            echo "::warning::${action} has ${advisories} published security advisory(ies)"
+            gh api "repos/${action}/security/advisories" \
+              --jq '.[] | select(.state == "published") | "  - \(.severity): \(.summary) (published \(.published_at))"' 2>/dev/null
+            found_issues=1
+          fi
+        done
+        if [ "$found_issues" = "0" ]; then
+          echo "No security advisories found for any GitHub Actions."
+        fi
+
     - name: Update dependencies
       run: |
         # Update all dependencies to latest compatible versions
@@ -29,7 +54,7 @@ jobs:
         bin/dk testquick
     
     - name: Create Pull Request
-      uses: peter-evans/create-pull-request@v6
+      uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: 'chore: update dependencies'
