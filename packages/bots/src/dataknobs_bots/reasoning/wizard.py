@@ -727,6 +727,7 @@ class WizardReasoning(ReasoningStrategy):
         field_derivations: list[DerivationRule] | None = None,
         enum_normalize: bool = True,
         normalize_threshold: float = 0.7,
+        reject_unmatched: bool = True,
         recovery_pipeline: list[str] | None = None,
         focused_retry_enabled: bool = False,
         focused_retry_max_retries: int = 1,
@@ -817,6 +818,15 @@ class WizardReasoning(ReasoningStrategy):
                 for fuzzy enum matching.  Defaults to 0.7.  Only used
                 when enum normalization is active.  Per-field
                 ``x-extraction.normalize_threshold`` overrides.
+            reject_unmatched: When True (default), enum values that are
+                not valid entries after normalization are rejected — the
+                field is set to None so it is not merged into wizard
+                data.  Works independently of normalization: when
+                normalization is disabled, acts as a strict enum
+                membership check.  Per-field
+                ``x-extraction.reject_unmatched`` overrides.  Configured
+                under ``extraction_hints.reject_unmatched`` in wizard
+                settings YAML.
             recovery_pipeline: Ordered list of recovery strategy names
                 to execute when required fields are missing after
                 initial extraction.  Valid names: ``"derivation"``,
@@ -902,6 +912,7 @@ class WizardReasoning(ReasoningStrategy):
         self._field_derivations = field_derivations or []
         self._enum_normalize = enum_normalize
         self._normalize_threshold = normalize_threshold
+        self._reject_unmatched = reject_unmatched
         # Recovery pipeline
         if recovery_pipeline is not None:
             unknown = set(recovery_pipeline) - VALID_RECOVERY_STRATEGIES
@@ -1779,6 +1790,7 @@ class WizardReasoning(ReasoningStrategy):
         extraction_hints = wizard_fsm.settings.get("extraction_hints") or {}
         enum_normalize = extraction_hints.get("enum_normalize", True)
         normalize_threshold = extraction_hints.get("normalize_threshold", 0.7)
+        reject_unmatched = extraction_hints.get("reject_unmatched", True)
 
         # Load recovery pipeline settings
         recovery_config = wizard_fsm.settings.get("recovery", {})
@@ -1898,6 +1910,7 @@ class WizardReasoning(ReasoningStrategy):
             field_derivations=field_derivations,
             enum_normalize=enum_normalize,
             normalize_threshold=normalize_threshold,
+            reject_unmatched=reject_unmatched,
             recovery_pipeline=recovery_pipeline,
             focused_retry_enabled=focused_retry_enabled,
             focused_retry_max_retries=focused_retry_max_retries,
@@ -4358,13 +4371,19 @@ class WizardReasoning(ReasoningStrategy):
           constraints → matched to the canonical enum entry via
           case-insensitive and fuzzy matching when ``enum_normalize``
           is enabled (default ``True``)
+        * **Enum rejection** - when ``reject_unmatched`` is enabled
+          (default ``True``), string values that are not valid enum
+          entries (after normalization, if active) are set to ``None``.
+          The merge step skips ``None`` values, so the field is not
+          stored in wizard state.  Works independently of normalization.
 
         Args:
             data:   Extracted data dict (will be shallow-copied).
             schema: JSON Schema for the current stage.
 
         Returns:
-            New dict with normalized values.
+            New dict with normalized values.  Fields set to ``None``
+            indicate rejected values that should not be merged.
         """
         properties = schema.get("properties", {})
         if not properties:
@@ -4443,11 +4462,12 @@ class WizardReasoning(ReasoningStrategy):
                             "Normalized %s: 'none' → []", field_name
                         )
 
-            # --- Enum normalization ---
+            # --- Enum normalization + rejection ---
             # Runs independently of type coercion above: a string field
             # with an enum constraint may have already been coerced (or
             # not), and the value still may not match the canonical enum
-            # entry exactly.  This step normalises case and fuzzy matches.
+            # entry exactly.  Normalization tries fuzzy matching;
+            # rejection drops values that don't match any enum entry.
             current_value = normalized[field_name]
             if (
                 "enum" in prop
@@ -4469,6 +4489,27 @@ class WizardReasoning(ReasoningStrategy):
                         logger.debug(
                             "Normalized %s enum: %r → %r",
                             field_name, current_value, match,
+                        )
+
+                # Reject values that are not valid enum entries.
+                # Runs after normalization (if enabled) so the check
+                # sees the normalized value.  When normalization is
+                # disabled, this acts as a strict enum membership check.
+                final_value = normalized[field_name]
+                if (
+                    final_value is not None
+                    and final_value not in prop["enum"]
+                ):
+                    should_reject = x_ext.get(
+                        "reject_unmatched", self._reject_unmatched,
+                    )
+                    if should_reject:
+                        normalized[field_name] = None
+                        logger.debug(
+                            "Rejected %s enum value %r: "
+                            "no match in %s",
+                            field_name, final_value,
+                            prop["enum"],
                         )
 
         return normalized

@@ -203,7 +203,10 @@ class TestEnumNormalizationIntegration:
                     "provider", field_type="string",
                     enum=["ollama", "openai", "anthropic"],
                     required=True,
-                    x_extraction={"normalize": False},
+                    x_extraction={
+                        "normalize": False,
+                        "reject_unmatched": False,
+                    },
                 )
                 .transition("done", "has('provider')")
             .stage("done", is_end=True, prompt="Done!")
@@ -216,7 +219,7 @@ class TestEnumNormalizationIntegration:
             extraction_results=[[{"provider": "Ollama"}]],
         ) as harness:
             await harness.chat("Use Ollama")
-            # Normalization disabled per-field: value preserved as-is
+            # Normalization disabled per-field, reject disabled: value as-is
             assert harness.wizard_data["provider"] == "Ollama"
 
     @pytest.mark.asyncio
@@ -326,8 +329,8 @@ class TestEnumNormalizationIntegration:
             assert harness.wizard_data["intent"] == "quiz"
 
     @pytest.mark.asyncio
-    async def test_no_match_value_preserved(self) -> None:
-        """When no enum matches, the original value passes through."""
+    async def test_no_match_rejected_by_default(self) -> None:
+        """Default: non-matching enum values are rejected (not merged)."""
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What type?")
@@ -347,5 +350,190 @@ class TestEnumNormalizationIntegration:
             extraction_results=[[{"intent": "completely_unrelated"}]],
         ) as harness:
             await harness.chat("something random")
-            # No match — value stored as-is (grounding may still block it)
+            # reject_unmatched=True by default — field not merged
+            assert "intent" not in harness.wizard_data
+            assert harness.wizard_stage == "gather"
+
+    @pytest.mark.asyncio
+    async def test_no_match_preserved_when_reject_disabled(self) -> None:
+        """With reject_unmatched=false, non-matching values pass through."""
+        config = (
+            WizardConfigBuilder("test")
+            .settings(extraction_hints={
+                "enum_normalize": True,
+                "reject_unmatched": False,
+            })
+            .stage("gather", is_start=True, prompt="What type?")
+                .field(
+                    "intent", field_type="string",
+                    enum=["tutor", "quiz"],
+                    required=True,
+                )
+                .transition("done", "has('intent')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"intent": "completely_unrelated"}]],
+        ) as harness:
+            await harness.chat("something random")
+            # reject_unmatched=False — value stored as-is
             assert harness.wizard_data.get("intent") == "completely_unrelated"
+
+    @pytest.mark.asyncio
+    async def test_per_field_reject_override(self) -> None:
+        """Per-field reject_unmatched overrides class-level setting."""
+        config = (
+            WizardConfigBuilder("test")
+            .settings(extraction_hints={
+                "enum_normalize": True,
+                "reject_unmatched": False,
+            })
+            .stage("gather", is_start=True, prompt="Pick a provider.")
+                .field(
+                    "provider", field_type="string",
+                    enum=["ollama", "openai", "anthropic"],
+                    required=True,
+                    x_extraction={"reject_unmatched": True},
+                )
+                .transition("done", "has('provider')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"provider": "magic"}]],
+        ) as harness:
+            await harness.chat("use magic")
+            # Per-field reject=True overrides class-level reject=False
+            assert "provider" not in harness.wizard_data
+            assert harness.wizard_stage == "gather"
+
+    @pytest.mark.asyncio
+    async def test_reject_does_not_affect_valid_match(self) -> None:
+        """reject_unmatched only applies when normalization finds no match."""
+        config = (
+            WizardConfigBuilder("test")
+            .stage("gather", is_start=True, prompt="Pick a provider.")
+                .field(
+                    "provider", field_type="string",
+                    enum=["ollama", "openai", "anthropic"],
+                    required=True,
+                )
+                .transition("done", "data.get('provider')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"provider": "Ollama"}]],
+        ) as harness:
+            await harness.chat("use ollama")
+            # Case-insensitive match succeeds — value normalized and accepted
+            assert harness.wizard_data["provider"] == "ollama"
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_reject_keeps_wizard_at_stage(self) -> None:
+        """Rejected enum value doesn't satisfy required field — stays at stage."""
+        config = (
+            WizardConfigBuilder("test")
+            .stage("gather", is_start=True, prompt="What type?")
+                .field(
+                    "intent", field_type="string",
+                    enum=["tutor", "quiz"],
+                    required=True,
+                )
+                .transition("done", "data.get('intent')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Got it!"],
+            extraction_results=[
+                [{"intent": "magic"}],      # Rejected — no match
+                [{"intent": "tutor"}],       # Accepted — exact match
+            ],
+        ) as harness:
+            await harness.chat("use magic")
+            assert "intent" not in harness.wizard_data
+            assert harness.wizard_stage == "gather"
+
+            await harness.chat("tutor please")
+            assert harness.wizard_data["intent"] == "tutor"
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_reject_preserves_existing_valid_data(self) -> None:
+        """Rejected value on a subsequent turn does not clobber valid data."""
+        config = (
+            WizardConfigBuilder("test")
+            .stage("gather", is_start=True, prompt="Pick a provider.")
+                .field(
+                    "provider", field_type="string",
+                    enum=["ollama", "openai", "anthropic"],
+                    required=True,
+                )
+                .transition("done", "data.get('provider')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Got it!"],
+            extraction_results=[
+                [{"provider": "ollama"}],    # Valid — stored
+                [{"provider": "magic"}],     # Invalid — rejected
+            ],
+        ) as harness:
+            await harness.chat("use ollama")
+            assert harness.wizard_data["provider"] == "ollama"
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_reject_without_normalization(self) -> None:
+        """reject_unmatched works as strict enum check when normalize=false."""
+        config = (
+            WizardConfigBuilder("test")
+            .settings(extraction_hints={
+                "enum_normalize": False,
+                "reject_unmatched": True,
+            })
+            .stage("gather", is_start=True, prompt="Pick a provider.")
+                .field(
+                    "provider", field_type="string",
+                    enum=["ollama", "openai", "anthropic"],
+                    required=True,
+                )
+                .transition("done", "data.get('provider')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Got it!"],
+            extraction_results=[
+                [{"provider": "Ollama"}],    # Case mismatch — rejected (no normalization)
+                [{"provider": "ollama"}],    # Exact match — accepted
+            ],
+        ) as harness:
+            await harness.chat("use Ollama")
+            # normalize=False, so "Ollama" is not normalized to "ollama"
+            # reject_unmatched=True, so "Ollama" is rejected (not in enum)
+            assert "provider" not in harness.wizard_data
+            assert harness.wizard_stage == "gather"
+
+            await harness.chat("use ollama")
+            assert harness.wizard_data["provider"] == "ollama"
+            assert harness.wizard_stage == "done"
