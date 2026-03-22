@@ -35,6 +35,8 @@ from .wizard_grounding import (
     CompositeMergeFilter,
     MergeFilter,
     SchemaGroundingFilter,
+    detect_boolean_signal,
+    field_keywords,
 )
 from .wizard_hooks import WizardHooks
 from .wizard_utils import word_in_text
@@ -69,6 +71,7 @@ SCOPE_BREADTH: dict[str, int] = {
 RECOVERY_DERIVATION = "derivation"
 RECOVERY_SCOPE_ESCALATION = "scope_escalation"
 RECOVERY_FOCUSED_RETRY = "focused_retry"
+RECOVERY_BOOLEAN = "boolean_recovery"
 RECOVERY_CLARIFICATION = "clarification"
 
 # Default pipeline order (when no explicit pipeline is configured).
@@ -88,8 +91,33 @@ VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
     RECOVERY_DERIVATION,
     RECOVERY_SCOPE_ESCALATION,
     RECOVERY_FOCUSED_RETRY,
+    RECOVERY_BOOLEAN,
     RECOVERY_CLARIFICATION,
 })
+
+# Default signal words for boolean extraction recovery.
+# Overridable per-field via x-extraction.affirmative_signals
+# and x-extraction.negative_signals.
+_DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset({
+    "yes", "confirm", "save", "approve", "correct", "sure",
+    "ok", "okay", "agreed", "accept", "absolutely", "definitely",
+    "yep", "yeah",
+})
+
+_DEFAULT_AFFIRMATIVE_PHRASES: tuple[str, ...] = (
+    "looks good", "go ahead", "that's right", "sounds good",
+    "i confirm", "let's do it", "let's go",
+)
+
+_DEFAULT_NEGATIVE_SIGNALS: frozenset[str] = frozenset({
+    "no", "wait", "stop", "cancel", "wrong", "redo", "nope",
+    "nah", "incorrect",
+})
+
+_DEFAULT_NEGATIVE_PHRASES: tuple[str, ...] = (
+    "not yet", "hold on", "start over", "go back", "not right",
+    "don't save", "i disagree",
+)
 
 
 @dataclass
@@ -728,6 +756,7 @@ class WizardReasoning(ReasoningStrategy):
         enum_normalize: bool = True,
         normalize_threshold: float = 0.7,
         reject_unmatched: bool = True,
+        boolean_recovery: bool = False,
         recovery_pipeline: list[str] | None = None,
         focused_retry_enabled: bool = False,
         focused_retry_max_retries: int = 1,
@@ -827,13 +856,22 @@ class WizardReasoning(ReasoningStrategy):
                 ``x-extraction.reject_unmatched`` overrides.  Configured
                 under ``extraction_hints.reject_unmatched`` in wizard
                 settings YAML.
+            boolean_recovery: When True, enable deterministic signal-word
+                recovery for boolean fields that extraction failed to
+                fill.  Scans the user's message for affirmative/negative
+                signal words and sets the field value accordingly.
+                Defaults to False — consumers must opt in.  Per-field
+                ``x-extraction.boolean_recovery`` overrides.  Configured
+                under ``extraction_hints.boolean_recovery`` in wizard
+                settings YAML.
             recovery_pipeline: Ordered list of recovery strategy names
                 to execute when required fields are missing after
                 initial extraction.  Valid names: ``"derivation"``,
                 ``"scope_escalation"``, ``"focused_retry"``,
-                ``"clarification"``.  Defaults to
-                ``["derivation", "scope_escalation"]``.  Add
-                ``"focused_retry"`` explicitly to opt in.
+                ``"boolean_recovery"``, ``"clarification"``.  Defaults
+                to ``["derivation", "scope_escalation"]``.  Add
+                ``"boolean_recovery"`` or ``"focused_retry"`` explicitly
+                to opt in.
                 The pipeline short-circuits when all required fields
                 are satisfied.
             focused_retry_enabled: When True, the ``"focused_retry"``
@@ -913,6 +951,7 @@ class WizardReasoning(ReasoningStrategy):
         self._enum_normalize = enum_normalize
         self._normalize_threshold = normalize_threshold
         self._reject_unmatched = reject_unmatched
+        self._boolean_recovery = boolean_recovery
         # Recovery pipeline
         if recovery_pipeline is not None:
             unknown = set(recovery_pipeline) - VALID_RECOVERY_STRATEGIES
@@ -1791,6 +1830,7 @@ class WizardReasoning(ReasoningStrategy):
         enum_normalize = extraction_hints.get("enum_normalize", True)
         normalize_threshold = extraction_hints.get("normalize_threshold", 0.7)
         reject_unmatched = extraction_hints.get("reject_unmatched", True)
+        boolean_recovery = extraction_hints.get("boolean_recovery", False)
 
         # Load recovery pipeline settings
         recovery_config = wizard_fsm.settings.get("recovery", {})
@@ -1911,6 +1951,7 @@ class WizardReasoning(ReasoningStrategy):
             enum_normalize=enum_normalize,
             normalize_threshold=normalize_threshold,
             reject_unmatched=reject_unmatched,
+            boolean_recovery=boolean_recovery,
             recovery_pipeline=recovery_pipeline,
             focused_retry_enabled=focused_retry_enabled,
             focused_retry_max_retries=focused_retry_max_retries,
@@ -6299,6 +6340,135 @@ class WizardReasoning(ReasoningStrategy):
 
         return set(), None
 
+    def _run_boolean_recovery(
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        user_message: str,
+    ) -> set[str]:
+        """Recover missing boolean fields via signal word detection.
+
+        For each missing boolean field with ``boolean_recovery`` enabled,
+        scans the user's message for affirmative/negative signal words
+        and sets the field value deterministically.  No LLM call needed.
+
+        When multiple boolean fields are missing, requires field-specific
+        keywords in the message to avoid filling unrelated fields.  When
+        only one boolean field is missing, the message is assumed to
+        refer to it (no scope restriction).
+
+        Signal word lists default to module-level constants but can be
+        overridden per-field via ``x-extraction.affirmative_signals``
+        and ``x-extraction.negative_signals``.
+
+        Args:
+            wizard_state: Wizard state (modified in-place).
+            stage: Current stage metadata with schema.
+            user_message: Raw user message.
+
+        Returns:
+            Set of field names that were filled by recovery.
+        """
+        schema = stage.get("schema")
+        if not schema:
+            return set()
+        properties = schema.get("properties", {})
+        required_fields = set(schema.get("required", []))
+
+        msg_lower = user_message.lower()
+
+        # Identify candidate boolean fields: required, missing, boolean
+        # type, and boolean_recovery enabled.  Collect x-extraction
+        # hints once per candidate for reuse in scope check and signal
+        # resolution.
+        candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        for field_name, prop in properties.items():
+            if prop.get("type") != "boolean":
+                continue
+            if field_name not in required_fields:
+                continue
+            if self._field_is_present(wizard_state.data.get(field_name)):
+                continue
+            x_ext = prop.get("x-extraction", {})
+            enabled = x_ext.get("boolean_recovery", self._boolean_recovery)
+            if enabled:
+                candidates.append((field_name, prop, x_ext))
+
+        if not candidates:
+            logger.debug(
+                "Boolean recovery: no eligible boolean fields "
+                "(none missing, none with recovery enabled, or "
+                "no boolean fields in schema)",
+            )
+            return set()
+
+        # Scope restriction: when multiple boolean fields are missing,
+        # require field keywords in the message to disambiguate.
+        need_scope_check = len(candidates) > 1
+
+        recovered: set[str] = set()
+        for field_name, prop, x_ext in candidates:
+            if need_scope_check:
+                keywords = field_keywords(field_name, prop)
+                if not keywords:
+                    logger.warning(
+                        "Boolean recovery: field %r has no extractable "
+                        "keywords — add a description to enable scope "
+                        "restriction; recovery skipped",
+                        field_name,
+                    )
+                    continue
+                field_mentioned = any(
+                    word_in_text(w, msg_lower) for w in keywords
+                )
+                if not field_mentioned:
+                    logger.debug(
+                        "Boolean recovery: skipping %s — field keywords "
+                        "not found in message (scope restriction)",
+                        field_name,
+                    )
+                    continue
+
+            # Resolve per-field signal overrides
+            custom_aff = x_ext.get("affirmative_signals")
+            aff_signals = (
+                frozenset(custom_aff) if custom_aff is not None
+                else _DEFAULT_AFFIRMATIVE_SIGNALS
+            )
+            custom_aff_phrases = x_ext.get("affirmative_phrases")
+            aff_phrases = (
+                tuple(custom_aff_phrases) if custom_aff_phrases is not None
+                else _DEFAULT_AFFIRMATIVE_PHRASES
+            )
+            custom_neg = x_ext.get("negative_signals")
+            neg_signals = (
+                frozenset(custom_neg) if custom_neg is not None
+                else _DEFAULT_NEGATIVE_SIGNALS
+            )
+            custom_neg_phrases = x_ext.get("negative_phrases")
+            neg_phrases = (
+                tuple(custom_neg_phrases) if custom_neg_phrases is not None
+                else _DEFAULT_NEGATIVE_PHRASES
+            )
+
+            signal = detect_boolean_signal(
+                msg_lower,
+                affirmative_signals=aff_signals,
+                affirmative_phrases=aff_phrases,
+                negative_signals=neg_signals,
+                negative_phrases=neg_phrases,
+            )
+
+            if signal is not None:
+                wizard_state.data[field_name] = signal
+                recovered.add(field_name)
+                logger.debug(
+                    "Boolean recovery: %s → %s (signal detection)",
+                    field_name, signal,
+                )
+
+        return recovered
+
     async def _run_recovery_pipeline(
         self,
         extraction: Any,
@@ -6352,6 +6522,17 @@ class WizardReasoning(ReasoningStrategy):
                     logger.debug(
                         "Recovery pipeline: derivation filled %s",
                         sorted(derived),
+                    )
+
+            elif strategy == RECOVERY_BOOLEAN:
+                recovered = self._run_boolean_recovery(
+                    wizard_state, stage, user_message,
+                )
+                if recovered:
+                    new_data_keys |= recovered
+                    logger.debug(
+                        "Recovery pipeline: boolean_recovery filled %s",
+                        sorted(recovered),
                     )
 
             elif strategy == RECOVERY_SCOPE_ESCALATION:

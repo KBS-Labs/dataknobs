@@ -44,6 +44,7 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [The Problem](#recovery-problem)
   - [How It Works](#recovery-how-it-works)
   - [Pipeline Configuration](#pipeline-configuration)
+  - [Boolean Recovery Strategy](#boolean-recovery-strategy)
   - [Focused Retry Strategy](#focused-retry-strategy)
   - [Per-Stage Override](#recovery-per-stage-override)
   - [Pipeline Examples](#pipeline-examples)
@@ -424,6 +425,11 @@ schema:
 | `normalize` | `true` / `false` | Override enum normalization for this field (see [Enum Normalization](#enum-normalization)) |
 | `normalize_threshold` | `float` | Per-field token overlap threshold for fuzzy enum matching (default `0.7`) |
 | `reject_unmatched` | `true` / `false` | Override enum reject behavior for this field (default `true`; see [Enum Normalization](#enum-normalization)) |
+| `boolean_recovery` | `true` / `false` | Enable signal-word recovery for this boolean field (default `false`; see [Boolean Recovery Strategy](#boolean-recovery-strategy)) |
+| `affirmative_signals` | `list[str]` | Override default affirmative signal words for boolean recovery |
+| `affirmative_phrases` | `list[str]` | Override default affirmative multi-word phrases for boolean recovery |
+| `negative_signals` | `list[str]` | Override default negative signal words for boolean recovery |
+| `negative_phrases` | `list[str]` | Override default negative multi-word phrases for boolean recovery |
 
 ### Custom Merge Filters
 
@@ -698,20 +704,19 @@ Derivations can also chain: rule A→B fires, then rule B→C fires in the same 
 
 ## Recovery Pipeline
 
-### The Problem {: #recovery-problem }
-
+### The Problem 
 The wizard provides several extraction recovery strategies — [field derivation](#field-derivation-recovery), [scope escalation](#extraction-scope-escalation), and [enum normalization](#enum-normalization) — that each address different failure classes. However, extraction failures are often compound: a single turn might need derivation for one field AND scope escalation for another. Without a composition mechanism, strategies run in a hardcoded sequence with no awareness of each other, potentially wasting LLM calls when a cheaper strategy would have been sufficient.
 
-### How It Works {: #recovery-how-it-works }
-
+### How It Works 
 The recovery pipeline runs after initial extraction and merge, executing strategies in a configurable order. It **short-circuits** as soon as all required fields are satisfied — minimizing LLM calls and latency in the common case.
 
 ```
 Extract → Normalize → Merge (grounded) → Schema defaults
   → Recovery pipeline (if required fields missing):
     1. derivation         [free — pure functions, no LLM call]
-    2. scope_escalation   [1 LLM call — broader context]
-    3. focused_retry      [1 LLM call — focused prompt]
+    2. boolean_recovery   [free — signal word matching, no LLM call]
+    3. scope_escalation   [1 LLM call — broader context]
+    4. focused_retry      [1 LLM call — focused prompt]
   → Confidence gate
     → PASS: proceed to transitions
     → FAIL: clarification (ask the user)
@@ -725,8 +730,7 @@ Key design choices:
 - **Derivation runs first** (before scope escalation). Prior to the recovery pipeline, scope escalation ran before field derivation. The pipeline reverses this ordering because derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
 - **Each LLM-backed strategy** (scope escalation, focused retry) runs normalize + merge on its results automatically, including grounding checks.
 
-### Pipeline Configuration {: #pipeline-configuration }
-
+### Pipeline Configuration 
 Configure the pipeline under the `recovery` settings key:
 
 ```yaml
@@ -747,14 +751,76 @@ settings:
 | `recovery.focused_retry.enabled` | bool | `false` | Enable the focused retry strategy |
 | `recovery.focused_retry.max_retries` | int | `1` | Maximum focused retry attempts per turn |
 
-Valid strategy names: `derivation`, `scope_escalation`, `focused_retry`, `clarification`.
+Valid strategy names: `derivation`, `boolean_recovery`, `scope_escalation`, `focused_retry`, `clarification`.
 
 The `clarification` strategy is a no-op placeholder — clarification is handled by the confidence gate after the pipeline, regardless of whether it appears in the list. Including it documents intent but doesn't change behavior.
 
-**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation`. Scope escalation requires `scope_escalation.enabled: true` to fire, so without any configuration only derivation runs (if rules are configured). Add `focused_retry` to the pipeline explicitly to opt in.
+**Default behavior (zero-config):** When no `recovery` settings are provided, the default pipeline runs `derivation → scope_escalation`. Scope escalation requires `scope_escalation.enabled: true` to fire, so without any configuration only derivation runs (if rules are configured). Add `boolean_recovery` or `focused_retry` to the pipeline explicitly to opt in.
 
-### Focused Retry Strategy {: #focused-retry-strategy }
+### Boolean Recovery Strategy
+When extraction fails to produce a value for a boolean field, boolean recovery scans the user's message for affirmative and negative signal words and fills the field deterministically. This is common at confirmation stages where the user says "Yes, save it!" but the extraction model fails to produce a value.
 
+**No LLM call required** — boolean recovery uses word-boundary matching against configurable signal word lists, making it as cheap as derivation.
+
+#### Configuration
+
+Enable boolean recovery at the class level via `extraction_hints` and add it to the recovery pipeline:
+
+```yaml
+settings:
+  extraction_hints:
+    boolean_recovery: true    # Enable for all boolean fields
+  recovery:
+    pipeline:
+      - derivation
+      - boolean_recovery      # Must be explicitly added
+      - scope_escalation
+```
+
+Or enable per-field via `x-extraction`:
+
+```yaml
+schema:
+  properties:
+    confirmed:
+      type: boolean
+      description: "User confirms the configuration is correct."
+      x-extraction:
+        boolean_recovery: true
+```
+
+Custom signal words can be configured per-field:
+
+```yaml
+schema:
+  properties:
+    confirmed:
+      type: boolean
+      x-extraction:
+        boolean_recovery: true
+        affirmative_signals: ["proceed", "ship", "deploy"]
+        negative_signals: ["abort", "reject", "rollback"]
+```
+
+#### How It Works
+
+1. After initial extraction and merge, the pipeline identifies **required boolean fields** that are still missing and have `boolean_recovery` enabled.
+2. For each candidate field, the user's message is scanned for signal words:
+   - **Affirmative signals** (→ `True`): "yes", "confirm", "save", "approve", "correct", "sure", "ok", "yep", "yeah", and phrases like "looks good", "go ahead", "sounds good", "i confirm".
+   - **Negative signals** (→ `False`): "no", "wait", "stop", "cancel", "wrong", "nope", and phrases like "not yet", "hold on", "start over", "don't save".
+3. If both affirmative and negative signals are present, the result depends on signal strength: phrases beat single words. If the conflict cannot be resolved, the field is left unset (no guessing).
+4. **Scope restriction**: when multiple boolean fields are missing in the same stage, recovery requires field-specific keywords (from the field name and description) to appear in the message. This prevents a generic "yes" from filling unrelated boolean fields. When only one boolean field is missing, this restriction is relaxed.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `extraction_hints.boolean_recovery` | bool | `false` | Enable boolean recovery for all boolean fields |
+| `x-extraction.boolean_recovery` | bool | inherits class | Per-field override |
+| `x-extraction.affirmative_signals` | list[str] | built-in set | Override affirmative signal words |
+| `x-extraction.affirmative_phrases` | list[str] | built-in set | Override affirmative phrases |
+| `x-extraction.negative_signals` | list[str] | built-in set | Override negative signal words |
+| `x-extraction.negative_phrases` | list[str] | built-in set | Override negative phrases |
+
+### Focused Retry Strategy
 When scope escalation doesn't recover all fields (or is skipped), focused retry re-extracts targeting **only the missing fields**. It builds a minimal schema containing just the missing required fields, then extracts using the full wizard session context.
 
 This works better than full re-extraction because extracting 1-2 fields from a conversation is a much simpler task than extracting 12 fields. Models that fail on the full schema often succeed on a focused subset.
@@ -772,8 +838,7 @@ settings:
 
 Focused retry always uses `wizard_session` scope (broadest available context) and forces LLM extraction (never verbatim capture), since the goal is to recover fields that simpler approaches missed.
 
-### Per-Stage Override {: #recovery-per-stage-override }
-
+### Per-Stage Override 
 Recovery can be disabled on individual stages using the `recovery_enabled` stage field:
 
 ```yaml
@@ -791,8 +856,7 @@ stages:
 
 When `recovery_enabled: false`, no recovery strategies run for that stage — the pipeline is skipped entirely. This is useful for stages where recovery would be counterproductive (e.g., confirmation stages where you want the user to explicitly provide missing information).
 
-### Pipeline Examples {: #pipeline-examples }
-
+### Pipeline Examples 
 **Minimal pipeline — derivation only (no LLM calls):**
 
 ```yaml
@@ -811,6 +875,8 @@ settings:
 ```yaml
 settings:
   extraction_scope: current_message
+  extraction_hints:
+    boolean_recovery: true
   scope_escalation:
     enabled: true
     escalation_scope: wizard_session
@@ -821,6 +887,7 @@ settings:
   recovery:
     pipeline:
       - derivation
+      - boolean_recovery
       - scope_escalation
       - focused_retry
     focused_retry:

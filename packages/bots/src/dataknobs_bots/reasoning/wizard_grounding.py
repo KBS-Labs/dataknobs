@@ -77,7 +77,7 @@ def significant_words(text: str) -> set[str]:
 
 
 
-def _field_keywords(
+def field_keywords(
     field: str,
     schema_property: dict[str, Any],
 ) -> set[str]:
@@ -137,6 +137,90 @@ def _has_negation(
         for np in neg_positions
         for fp in field_positions
     )
+
+
+def detect_boolean_signal(
+    msg_lower: str,
+    *,
+    affirmative_signals: frozenset[str],
+    affirmative_phrases: tuple[str, ...],
+    negative_signals: frozenset[str],
+    negative_phrases: tuple[str, ...],
+) -> bool | None:
+    """Detect affirmative or negative boolean signal in a message.
+
+    Scans the message for signal words and phrases, returning
+    ``True`` for affirmative, ``False`` for negative, or ``None``
+    when the signal is ambiguous or absent.
+
+    All matching — both single words and multi-word phrases — uses
+    word-boundary checks to prevent substring false positives
+    (e.g., ``"go back"`` should not match inside ``"go background"``).
+
+    When only affirmative signals are found, the function checks for
+    negation keywords (from ``_NEGATION_KEYWORDS``, excluding words
+    already in ``negative_signals`` to avoid double-counting) to
+    catch negated affirmatives like ``"no, I don't confirm"``.
+
+    When both affirmative and negative signals are present, the
+    result is ``None`` (ambiguous) — the function does not guess.
+
+    Args:
+        msg_lower: Lowercased user message.
+        affirmative_signals: Single-word affirmative keywords.
+        affirmative_phrases: Multi-word affirmative phrases.
+        negative_signals: Single-word negative keywords.
+        negative_phrases: Multi-word negative phrases.
+
+    Returns:
+        ``True`` if affirmative signal detected, ``False`` if negative
+        signal detected, ``None`` if ambiguous or no signal.
+    """
+    # Check for phrase matches (multi-word, word-boundary aware)
+    has_affirmative_phrase = any(
+        word_in_text(p, msg_lower) for p in affirmative_phrases
+    )
+    has_negative_phrase = any(
+        word_in_text(p, msg_lower) for p in negative_phrases
+    )
+
+    # Check for single-word signal matches (word-boundary aware)
+    has_affirmative_word = any(
+        word_in_text(w, msg_lower) for w in affirmative_signals
+    )
+    has_negative_word = any(
+        word_in_text(w, msg_lower) for w in negative_signals
+    )
+
+    has_affirmative = has_affirmative_phrase or has_affirmative_word
+    has_negative = has_negative_phrase or has_negative_word
+
+    if not has_affirmative and not has_negative:
+        return None  # No signals at all
+
+    if has_negative and not has_affirmative:
+        return False
+
+    if has_affirmative and not has_negative:
+        # Check for negation that could flip the affirmative.
+        # Exclude words already in negative_signals to avoid
+        # double-counting (e.g., "no" is both a negative signal
+        # and a negation keyword — if it matched as negative it
+        # would have been caught above, so here we only want
+        # negation modifiers like "don't", "not", etc.).
+        neg_kw = _NEGATION_KEYWORDS - negative_signals
+        if neg_kw and _has_negation(msg_lower, neg_kw):
+            return False
+        return True
+
+    # Both affirmative and negative signals present — ambiguous.
+    # Phrases carry stronger intent than single words.
+    if has_negative_phrase and not has_affirmative_phrase:
+        return False
+    if has_affirmative_phrase and not has_negative_phrase:
+        return True
+
+    return None  # Truly ambiguous
 
 
 @dataclasses.dataclass(frozen=True)
@@ -383,7 +467,7 @@ class SchemaGroundingFilter:
         - ``negation_proximity``: max word distance between negation
           and field keyword (``0`` = anywhere in message)
         """
-        keywords = _field_keywords(field, schema_property)
+        keywords = field_keywords(field, schema_property)
         field_mentioned = any(word_in_text(w, msg_lower) for w in keywords)
         if not field_mentioned:
             return False
@@ -445,7 +529,7 @@ class SchemaGroundingFilter:
             x_ext = schema_property.get("x-extraction", {})
             if x_ext.get("empty_allowed", False):
                 return True
-            keywords = _field_keywords(field, schema_property)
+            keywords = field_keywords(field, schema_property)
             custom_neg = x_ext.get("negation_keywords")
             neg_keywords = (
                 frozenset(custom_neg) if custom_neg is not None
@@ -481,7 +565,7 @@ class SchemaGroundingFilter:
             if empty_allowed:
                 return True
             x_ext = schema_property.get("x-extraction", {})
-            keywords = _field_keywords(field, schema_property)
+            keywords = field_keywords(field, schema_property)
             custom_neg = x_ext.get("negation_keywords")
             neg_keywords = (
                 frozenset(custom_neg) if custom_neg is not None
