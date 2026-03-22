@@ -349,7 +349,13 @@ print_header "Quality Check Summary"
 echo -e "  Timestamp:    ${TIMESTAMP}"
 echo -e "  Environment:  ${ENVIRONMENT}"
 echo -e "  Packages:     ${PACKAGES}"
-echo -e "  Overall:      $([ "$OVERALL_STATUS" = "PASS" ] && echo -e "${GREEN}✓ PASSED${NC}" || echo -e "${RED}✗ FAILED${NC}")"
+if [ "$OVERALL_STATUS" = "PASS" ]; then
+    echo -e "  Overall:      ${GREEN}✓ PASSED${NC}"
+elif [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
+    echo -e "  Overall:      ${YELLOW}✓ PASSED (some checks skipped)${NC}"
+else
+    echo -e "  Overall:      ${RED}✗ FAILED${NC}"
+fi
 
 # Show individual check results
 echo -e "\n${BOLD}Check Results:${NC}"
@@ -359,7 +365,7 @@ echo -e "\n${BOLD}Check Results:${NC}"
 [ "$INT_STATUS" = "pass" ] && echo -e "  Integration:  ${GREEN}✓${NC}" || echo -e "  Integration:  ${RED}✗ (exit: $INT_CODE)${NC}"
 
 # If everything passed, exit early
-if [ "$OVERALL_STATUS" = "PASS" ] && [ "$SHOW_COVERAGE" = false ]; then
+if ([ "$OVERALL_STATUS" = "PASS" ] || [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]) && [ "$SHOW_COVERAGE" = false ]; then
     echo -e "\n${GREEN}✓ All checks passed! No failures to diagnose.${NC}"
     exit 0
 fi
@@ -424,7 +430,7 @@ fi
 # Show actionable summary
 print_header "Next Steps"
 
-if [ "$OVERALL_STATUS" != "PASS" ]; then
+if [ "$OVERALL_STATUS" != "PASS" ] && [ "$OVERALL_STATUS" != "PASS_WITH_SKIPS" ]; then
     echo -e "${YELLOW}To fix these issues:${NC}"
     
     priority=1

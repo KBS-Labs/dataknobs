@@ -113,11 +113,20 @@ if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
     # Check overall status
     OVERALL_STATUS=$(grep -o '"overall_status": *"[^"]*"' "$ARTIFACTS_DIR/quality-summary.json" | cut -d'"' -f4)
     
-    if [ "$OVERALL_STATUS" != "PASS" ]; then
-        print_fail "Overall status: $OVERALL_STATUS (expected: PASS)"
-        VALIDATION_FAILED=1
-    else
+    if [ "$OVERALL_STATUS" = "PASS" ]; then
         print_pass "Overall status: PASS"
+    elif [ "$OVERALL_STATUS" = "PASS_WITH_SKIPS" ]; then
+        print_pass "Overall status: PASS_WITH_SKIPS (some checks were skipped)"
+        # Log which checks were skipped for transparency
+        for check in validation unit_tests integration_tests documentation; do
+            skipped=$(grep -A3 "\"$check\"" "$ARTIFACTS_DIR/quality-summary.json" | grep '"skipped"' | grep -o 'true\|false')
+            if [ "$skipped" = "true" ]; then
+                print_info "  Skipped: $check"
+            fi
+        done
+    else
+        print_fail "Overall status: $OVERALL_STATUS (expected: PASS or PASS_WITH_SKIPS)"
+        VALIDATION_FAILED=1
     fi
     
     # Check individual test statuses

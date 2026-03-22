@@ -56,6 +56,11 @@ flowchart TD
 
 ## GitHub Actions Workflows
 
+> **Security note:** All GitHub Actions references in these examples are pinned to
+> full commit SHAs, not branch or tag refs. Mutable refs (`@master`, `@v1`) can be
+> redirected if a repository is compromised. Always pin to an immutable SHA and add
+> a version comment for readability.
+
 ### Main CI Workflow
 
 ```yaml
@@ -82,15 +87,15 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
     - name: Install Poetry
-      uses: snok/install-poetry@v1
+      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
       with:
         version: ${{ env.POETRY_VERSION }}
     
@@ -124,7 +129,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
     
     - name: Run Bandit (security linting)
       run: |
@@ -132,7 +137,7 @@ jobs:
         bandit -r packages/ -f json -o bandit-report.json
     
     - name: Upload Bandit results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
       if: always()
       with:
         name: bandit-results
@@ -144,7 +149,7 @@ jobs:
         safety check --json --output safety-report.json
     
     - name: Upload Safety results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
       if: always()
       with:
         name: safety-results
@@ -166,15 +171,15 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
     
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: ${{ matrix.python-version }}
     
     - name: Install Poetry
-      uses: snok/install-poetry@v1
+      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
       with:
         version: ${{ env.POETRY_VERSION }}
     
@@ -196,7 +201,7 @@ jobs:
           --junit-xml=junit-integration.xml
     
     - name: Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
       if: always()
       with:
         name: test-results-${{ matrix.os }}-${{ matrix.python-version }}
@@ -205,7 +210,7 @@ jobs:
           coverage.xml
     
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457  # v3
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
       with:
         file: ./coverage.xml
@@ -220,17 +225,17 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         fetch-depth: 0  # Full history for versioning
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
     
     - name: Install Poetry
-      uses: snok/install-poetry@v1
+      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
       with:
         version: ${{ env.POETRY_VERSION }}
     
@@ -242,7 +247,7 @@ jobs:
         cd ../xization && poetry build
     
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5  # v3
       with:
         name: packages
         path: packages/*/dist/
@@ -276,17 +281,17 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: '3.11'
     
     - name: Install Poetry
-      uses: snok/install-poetry@v1
+      uses: snok/install-poetry@76e04a911780d5b312d89783f7b1cd627778900a  # v1
       with:
         version: '1.6.1'
     
@@ -307,7 +312,7 @@ jobs:
         cd ../xization && poetry publish
     
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844  # v1
       with:
         files: packages/*/dist/*
         generate_release_notes: true
@@ -335,10 +340,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c  # v4
       with:
         python-version: '3.11'
     
@@ -352,7 +357,7 @@ jobs:
     
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@v3
+      uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847  # v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./site
@@ -606,14 +611,14 @@ semgrep --config=python packages/
 ```yaml
 # .github/workflows/security.yml
 - name: Run Trivy vulnerability scanner
-  uses: aquasecurity/trivy-action@master
+  uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284  # v0.34.0
   with:
     image-ref: 'dataknobs:latest'
     format: 'sarif'
     output: 'trivy-results.sarif'
 
 - name: Upload Trivy scan results
-  uses: github/codeql-action/upload-sarif@v2
+  uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0  # v3.28.9
   with:
     sarif_file: 'trivy-results.sarif'
 ```
@@ -626,7 +631,7 @@ semgrep --config=python packages/
 # Slack notifications for failures
 - name: Notify Slack on failure
   if: failure()
-  uses: 8398a7/action-slack@v3
+  uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
   with:
     status: failure
     channel: '#ci-cd'
