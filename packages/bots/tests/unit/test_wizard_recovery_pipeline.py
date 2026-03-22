@@ -12,6 +12,7 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import (
     DEFAULT_RECOVERY_PIPELINE,
+    RECOVERY_BOOLEAN,
     RECOVERY_CLARIFICATION,
     RECOVERY_DERIVATION,
     RECOVERY_FOCUSED_RETRY,
@@ -65,6 +66,7 @@ class TestRecoveryConstants:
             RECOVERY_DERIVATION,
             RECOVERY_SCOPE_ESCALATION,
             RECOVERY_FOCUSED_RETRY,
+            RECOVERY_BOOLEAN,
             RECOVERY_CLARIFICATION,
         }
         assert VALID_RECOVERY_STRATEGIES == expected

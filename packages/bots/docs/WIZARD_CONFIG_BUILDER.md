@@ -174,7 +174,7 @@ builder.set_settings(
 | `grounding_overlap_threshold` | `float` | `0.5` | Minimum word-overlap ratio for string grounding (0.0--1.0). |
 | `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Composes with the built-in grounding check (grounding runs first, then the custom filter). |
 | `skip_builtin_grounding` | `bool` | `False` | When `True` and a `merge_filter` is set, bypass the built-in grounding check entirely — only the custom filter runs. |
-| `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. `reject_unmatched` (default `true`): reject enum values that don't match any entry. |
+| `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. `reject_unmatched` (default `true`): reject enum values that don't match any entry. `boolean_recovery` (default `true`): enable signal-word recovery for boolean fields that extraction fails to fill; only active when `"boolean_recovery"` is in the recovery pipeline. |
 
 See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) and [Enum Normalization](CONTEXT_AWARE_WIZARDS.md#enum-normalization) for full documentation.
 

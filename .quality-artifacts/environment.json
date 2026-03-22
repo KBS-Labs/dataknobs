@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-22T01:05:53Z",
+  "timestamp": "2026-03-22T03:56:06Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.12 (Homebrew 2026-03-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-strategy-tools",
-  "git_commit": "470d896df15a6c52f68de95f5dbfd39b3fa09cfa",
+  "git_branch": "sbk/boolean-extraction-recovery",
+  "git_commit": "34efab29601f5836311416416815b726e8b996d2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
