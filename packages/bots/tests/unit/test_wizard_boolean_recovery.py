@@ -327,8 +327,9 @@ class TestBooleanRecoveryIntegration:
             assert harness.wizard_stage == "review"
 
     @pytest.mark.asyncio
-    async def test_recovery_disabled_by_default(self) -> None:
-        """With boolean_recovery=False (default), no recovery happens."""
+    async def test_recovery_disabled_via_class_level_flag(self) -> None:
+        """With boolean_recovery=False, no recovery happens even when
+        the strategy is in the pipeline."""
         config = _confirm_stage_config(
             boolean_recovery=False,
             pipeline=[RECOVERY_BOOLEAN],

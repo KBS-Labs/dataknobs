@@ -76,8 +76,9 @@ RECOVERY_CLARIFICATION = "clarification"
 
 # Default pipeline order (when no explicit pipeline is configured).
 # Each strategy only fires when required fields are still missing.
-# Note: focused_retry is not in the default — consumers opt in by
-# adding it to their pipeline AND setting focused_retry.enabled: true.
+# Note: focused_retry and boolean_recovery are not in the default —
+# consumers opt in by adding them to their pipeline.  focused_retry
+# additionally requires focused_retry.enabled: true.
 DEFAULT_RECOVERY_PIPELINE: list[str] = [
     RECOVERY_DERIVATION,
     RECOVERY_SCOPE_ESCALATION,
@@ -756,7 +757,7 @@ class WizardReasoning(ReasoningStrategy):
         enum_normalize: bool = True,
         normalize_threshold: float = 0.7,
         reject_unmatched: bool = True,
-        boolean_recovery: bool = False,
+        boolean_recovery: bool = True,
         recovery_pipeline: list[str] | None = None,
         focused_retry_enabled: bool = False,
         focused_retry_max_retries: int = 1,
@@ -856,11 +857,12 @@ class WizardReasoning(ReasoningStrategy):
                 ``x-extraction.reject_unmatched`` overrides.  Configured
                 under ``extraction_hints.reject_unmatched`` in wizard
                 settings YAML.
-            boolean_recovery: When True, enable deterministic signal-word
-                recovery for boolean fields that extraction failed to
-                fill.  Scans the user's message for affirmative/negative
-                signal words and sets the field value accordingly.
-                Defaults to False — consumers must opt in.  Per-field
+            boolean_recovery: When True (default), enable deterministic
+                signal-word recovery for boolean fields that extraction
+                failed to fill.  Scans the user's message for
+                affirmative/negative signal words and sets the field
+                value accordingly.  Only runs when ``"boolean_recovery"``
+                is included in the recovery pipeline.  Per-field
                 ``x-extraction.boolean_recovery`` overrides.  Configured
                 under ``extraction_hints.boolean_recovery`` in wizard
                 settings YAML.
@@ -1830,7 +1832,7 @@ class WizardReasoning(ReasoningStrategy):
         enum_normalize = extraction_hints.get("enum_normalize", True)
         normalize_threshold = extraction_hints.get("normalize_threshold", 0.7)
         reject_unmatched = extraction_hints.get("reject_unmatched", True)
-        boolean_recovery = extraction_hints.get("boolean_recovery", False)
+        boolean_recovery = extraction_hints.get("boolean_recovery", True)
 
         # Load recovery pipeline settings
         recovery_config = wizard_fsm.settings.get("recovery", {})
@@ -6358,8 +6360,10 @@ class WizardReasoning(ReasoningStrategy):
         refer to it (no scope restriction).
 
         Signal word lists default to module-level constants but can be
-        overridden per-field via ``x-extraction.affirmative_signals``
-        and ``x-extraction.negative_signals``.
+        overridden per-field via ``x-extraction.affirmative_signals``,
+        ``x-extraction.affirmative_phrases``,
+        ``x-extraction.negative_signals``, and
+        ``x-extraction.negative_phrases``.
 
         Args:
             wizard_state: Wizard state (modified in-place).

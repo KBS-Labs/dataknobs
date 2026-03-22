@@ -47,8 +47,8 @@ _STOPWORDS = frozenset({
 
 # Keywords indicating intent to clear/remove/negate a value.
 # Used by boolean direction checking, empty-string grounding,
-# and empty-array grounding.  Overridable per-field via
-# ``x-extraction.negation_keywords``.
+# empty-array grounding, and boolean signal detection (recovery).
+# Overridable per-field via ``x-extraction.negation_keywords``.
 _NEGATION_KEYWORDS = frozenset({
     "no", "skip", "none", "remove", "clear", "without", "blank",
     "empty", "delete", "disable", "disabled", "off",
@@ -81,7 +81,22 @@ def field_keywords(
     field: str,
     schema_property: dict[str, Any],
 ) -> set[str]:
-    """Derive grounding keywords from field name and schema description."""
+    """Derive grounding keywords from field name and schema description.
+
+    Extracts significant words from the field's ``description`` (or the
+    field name itself when no description is set) and the field name
+    split on underscores.  Used by grounding checks and boolean recovery
+    scope restriction.
+
+    Args:
+        field: Field name (e.g., ``"save_confirmed"``).
+        schema_property: JSON Schema property dict for the field.
+
+    Returns:
+        Set of lowercase keywords longer than 2 characters, excluding
+        common stopwords.  May be empty for fields with very short
+        names and no description.
+    """
     desc_words = significant_words(
         schema_property.get("description", field)
     )
@@ -160,10 +175,13 @@ def detect_boolean_signal(
     When only affirmative signals are found, the function checks for
     negation keywords (from ``_NEGATION_KEYWORDS``, excluding words
     already in ``negative_signals`` to avoid double-counting) to
-    catch negated affirmatives like ``"no, I don't confirm"``.
+    catch negated affirmatives like ``"I will skip confirming"``
+    (where ``"skip"`` is a negation keyword).
 
-    When both affirmative and negative signals are present, the
-    result is ``None`` (ambiguous) — the function does not guess.
+    When both affirmative and negative signals are present (e.g.,
+    ``"no, I don't confirm"`` contains both ``"no"`` and
+    ``"confirm"``), the result is ``None`` (ambiguous) unless
+    phrases provide a tiebreaker.
 
     Args:
         msg_lower: Lowercased user message.

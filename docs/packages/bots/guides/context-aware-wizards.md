@@ -425,7 +425,7 @@ schema:
 | `normalize` | `true` / `false` | Override enum normalization for this field (see [Enum Normalization](#enum-normalization)) |
 | `normalize_threshold` | `float` | Per-field token overlap threshold for fuzzy enum matching (default `0.7`) |
 | `reject_unmatched` | `true` / `false` | Override enum reject behavior for this field (default `true`; see [Enum Normalization](#enum-normalization)) |
-| `boolean_recovery` | `true` / `false` | Enable signal-word recovery for this boolean field (default `false`; see [Boolean Recovery Strategy](#boolean-recovery-strategy)) |
+| `boolean_recovery` | `true` / `false` | Enable/disable signal-word recovery for this boolean field (default `true` when strategy is in pipeline; see [Boolean Recovery Strategy](#boolean-recovery-strategy)) |
 | `affirmative_signals` | `list[str]` | Override default affirmative signal words for boolean recovery |
 | `affirmative_phrases` | `list[str]` | Override default affirmative multi-word phrases for boolean recovery |
 | `negative_signals` | `list[str]` | Override default negative signal words for boolean recovery |
@@ -764,29 +764,26 @@ When extraction fails to produce a value for a boolean field, boolean recovery s
 
 #### Configuration
 
-Enable boolean recovery at the class level via `extraction_hints` and add it to the recovery pipeline:
+Add `boolean_recovery` to the recovery pipeline to enable it:
 
 ```yaml
 settings:
-  extraction_hints:
-    boolean_recovery: true    # Enable for all boolean fields
   recovery:
     pipeline:
       - derivation
-      - boolean_recovery      # Must be explicitly added
+      - boolean_recovery      # Must be explicitly added to pipeline
       - scope_escalation
 ```
 
-Or enable per-field via `x-extraction`:
+Boolean recovery is enabled for all boolean fields by default when the strategy is in the pipeline. To disable it for specific fields, use per-field `x-extraction`:
 
 ```yaml
 schema:
   properties:
-    confirmed:
+    auto_enabled:
       type: boolean
-      description: "User confirms the configuration is correct."
       x-extraction:
-        boolean_recovery: true
+        boolean_recovery: false   # Disable for this specific field
 ```
 
 Custom signal words can be configured per-field:
@@ -813,7 +810,7 @@ schema:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `extraction_hints.boolean_recovery` | bool | `false` | Enable boolean recovery for all boolean fields |
+| `extraction_hints.boolean_recovery` | bool | `true` | Enable boolean recovery for all boolean fields (only active when strategy is in pipeline) |
 | `x-extraction.boolean_recovery` | bool | inherits class | Per-field override |
 | `x-extraction.affirmative_signals` | list[str] | built-in set | Override affirmative signal words |
 | `x-extraction.affirmative_phrases` | list[str] | built-in set | Override affirmative phrases |
