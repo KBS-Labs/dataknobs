@@ -605,15 +605,17 @@ semgrep --config=python packages/
 
 ```yaml
 # .github/workflows/security.yml
+# Pin GitHub Actions to full commit SHAs, not branch/tag refs.
+# Mutable refs (@master, @v1) can be redirected by a compromised repo.
 - name: Run Trivy vulnerability scanner
-  uses: aquasecurity/trivy-action@master
+  uses: aquasecurity/trivy-action@18f2510ee396bbf400402947e7b218b1e2e55bb2  # v0.29.0
   with:
     image-ref: 'dataknobs:latest'
     format: 'sarif'
     output: 'trivy-results.sarif'
 
 - name: Upload Trivy scan results
-  uses: github/codeql-action/upload-sarif@v2
+  uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa9ceb6b1738f7e269594bdd67f0  # v3.28.9
   with:
     sarif_file: 'trivy-results.sarif'
 ```
