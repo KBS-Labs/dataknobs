@@ -298,7 +298,7 @@ class TestEchoProviderIntegration:
         ])
 
         # First call returns tool call
-        response1 = await provider.complete("Do something")
+        response1 = await provider.complete("Do something", tools=["my_tool"])
         assert response1.tool_calls is not None
         assert response1.tool_calls[0].name == "my_tool"
 
@@ -340,7 +340,7 @@ class TestEchoProviderIntegration:
         assert data["stage"] == "identity"
 
         # Step 2: Tool call
-        resp2 = await provider.complete("Show preview")
+        resp2 = await provider.complete("Show preview", tools=["preview_config"])
         assert resp2.tool_calls is not None
         assert resp2.tool_calls[0].name == "preview_config"
 
@@ -361,7 +361,9 @@ class TestEchoProviderIntegration:
         ])
 
         # First call returns multiple tools
-        response1 = await provider.complete("Preview and validate")
+        response1 = await provider.complete(
+            "Preview and validate", tools=["preview_config", "validate_config"]
+        )
         assert response1.tool_calls is not None
         assert len(response1.tool_calls) == 2
         assert response1.tool_calls[0].name == "preview_config"

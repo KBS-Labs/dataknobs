@@ -33,6 +33,12 @@ from dataknobs_llm.testing import text_response, tool_call_response
 # ---------------------------------------------------------------------------
 
 
+# Minimal tool list for tests that use tool_call_response.  EchoProvider's
+# strict_tools mode requires tools to be passed when the scripted response
+# contains tool_calls (matching real provider behavior).
+_DUMMY_TOOLS: list[str] = ["placeholder"]
+
+
 @pytest.fixture
 def echo_config() -> dict:
     return {"provider": "echo", "model": "echo-test", "options": {"echo_prefix": ""}}
@@ -122,7 +128,9 @@ class TestEchoStreamToolCalls:
         ])
 
         chunks: list[LLMStreamResponse] = []
-        async for chunk in provider.stream_complete("What's the weather?"):
+        async for chunk in provider.stream_complete(
+            "What's the weather?", tools=_DUMMY_TOOLS
+        ):
             chunks.append(chunk)
 
         assert len(chunks) > 0
@@ -143,7 +151,7 @@ class TestEchoStreamToolCalls:
             tool_call_response("search", {"q": "test"}),
         ])
 
-        chunks = [c async for c in provider.stream_complete("search")]
+        chunks = [c async for c in provider.stream_complete("search", tools=_DUMMY_TOOLS)]
         final = chunks[-1]
         # tool_call_response sets finish_reason="tool_calls"
         assert final.finish_reason == "tool_calls"
@@ -171,7 +179,7 @@ class TestEchoStreamEmptyContent:
             tool_call_response("do_thing", {"x": 1}, content=""),
         ])
 
-        chunks = [c async for c in provider.stream_complete("trigger")]
+        chunks = [c async for c in provider.stream_complete("trigger", tools=_DUMMY_TOOLS)]
         assert len(chunks) == 1
         assert chunks[0].is_final is True
         assert chunks[0].delta == ""
@@ -242,7 +250,7 @@ class TestManagerStreamTreePreservation:
         ])
         mgr = await _make_manager(manager_components)
 
-        _ = [c async for c in mgr.stream_complete()]
+        _ = [c async for c in mgr.stream_complete(tools=_DUMMY_TOOLS)]
 
         # The assistant node message should carry tool_calls natively
         node = mgr.state.get_current_node()
@@ -262,7 +270,7 @@ class TestManagerStreamTreePreservation:
         ])
         mgr = await _make_manager(manager_components)
 
-        _ = [c async for c in mgr.stream_complete()]
+        _ = [c async for c in mgr.stream_complete(tools=_DUMMY_TOOLS)]
 
         # The LLMMessage on the assistant node should carry tool_calls
         node = mgr.state.get_current_node()
@@ -286,7 +294,7 @@ class TestManagerCompleteRegression:
         ])
         mgr = await _make_manager(manager_components)
 
-        response = await mgr.complete()
+        response = await mgr.complete(tools=_DUMMY_TOOLS)
 
         assert response.tool_calls is not None
         assert response.tool_calls[0].name == "search"
@@ -327,7 +335,7 @@ class TestCompletionPathParity:
             ),
         ])
         mgr1 = await _make_manager(manager_components)
-        await mgr1.complete()
+        await mgr1.complete(tools=_DUMMY_TOOLS)
         node1 = mgr1.state.get_current_node()
         assert node1 is not None
 
@@ -342,7 +350,7 @@ class TestCompletionPathParity:
             AsyncMemoryDatabase()
         )
         mgr2 = await _make_manager(manager_components)
-        _ = [c async for c in mgr2.stream_complete()]
+        _ = [c async for c in mgr2.stream_complete(tools=_DUMMY_TOOLS)]
         node2 = mgr2.state.get_current_node()
         assert node2 is not None
 
@@ -392,7 +400,7 @@ class TestStreamResponseModelField:
             tool_call_response("do_thing", {"x": 1}, content=""),
         ])
 
-        chunks = [c async for c in provider.stream_complete("trigger")]
+        chunks = [c async for c in provider.stream_complete("trigger", tools=_DUMMY_TOOLS)]
         assert len(chunks) == 1
         assert chunks[0].model is not None
 

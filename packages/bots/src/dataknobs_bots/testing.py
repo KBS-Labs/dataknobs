@@ -431,6 +431,7 @@ class BotTestHarness:
         extraction_scope: str = "current_message",
         tools: list[Any] | None = None,
         middleware: list[Any] | None = None,
+        strict_tools: bool = True,
     ) -> BotTestHarness:
         """Create a harness with a fully wired DynaBot.
 
@@ -461,6 +462,11 @@ class BotTestHarness:
             middleware: Optional list of ``Middleware`` instances to append
                 to the bot. Useful for testing middleware hooks like
                 ``after_turn`` and ``on_tool_executed``.
+            strict_tools: If True (default), the EchoProvider raises
+                ValueError when a scripted response contains tool_calls
+                but no tools were provided to complete(). Set to False
+                for tests that intentionally exercise unexpected
+                tool_calls with no registered tools.
 
         Returns:
             Configured ``BotTestHarness`` instance.
@@ -528,7 +534,10 @@ class BotTestHarness:
             await original_provider.close()
 
         # Create a fresh provider with known state
-        provider = EchoProvider({"provider": "echo", "model": "echo-test"})
+        provider = EchoProvider(
+            {"provider": "echo", "model": "echo-test"},
+            strict_tools=strict_tools,
+        )
         if main_responses:
             provider.set_responses(main_responses)
 

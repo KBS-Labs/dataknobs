@@ -228,5 +228,5 @@ class TestEchoProviderAnalyzeResponse:
             tool_call_response("search", {"query": "test"}),
         ])
         await provider.initialize()
-        result = await provider.complete(_msg())
+        result = await provider.complete(_msg(), tools=["search"])
         assert "thinking_only" not in result.metadata
