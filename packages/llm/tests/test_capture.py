@@ -343,7 +343,7 @@ class TestCapturingProvider:
         ])
 
         capturing = CapturingProvider(provider)
-        response = await capturing.complete("search for test")
+        response = await capturing.complete("search for test", tools=["search"])
 
         assert response.tool_calls is not None
         call = capturing.captured_calls[0]

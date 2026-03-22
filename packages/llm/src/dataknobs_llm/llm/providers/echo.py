@@ -86,6 +86,7 @@ class EchoProvider(AsyncLLMProvider):
         prompt_builder: AsyncPromptBuilder | None = None,
         responses: List[Union[str, LLMResponse]] | None = None,
         response_fn: ResponseFunction | None = None,
+        strict_tools: bool = True,
     ):
         """Initialize EchoProvider.
 
@@ -94,6 +95,13 @@ class EchoProvider(AsyncLLMProvider):
             prompt_builder: Optional prompt builder
             responses: Optional list of responses to return in order
             response_fn: Optional function to generate responses dynamically
+            strict_tools: If True (default), raise ValueError when a scripted
+                response contains tool_calls but no tools were provided to
+                complete(). Real providers never return tool_calls unless tool
+                definitions are sent in the request, so this catches callers
+                that forget to pass tools. Set to False only for tests that
+                intentionally exercise edge cases (e.g. "what happens if
+                tool_calls arrive unexpectedly").
         """
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -118,6 +126,7 @@ class EchoProvider(AsyncLLMProvider):
         self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
         self._init_count: int = 0
         self._close_count: int = 0
+        self._strict_tools: bool = strict_tools
 
     # =========================================================================
     # Scripted Response API
@@ -552,6 +561,22 @@ class EchoProvider(AsyncLLMProvider):
             )
 
         response = self._analyze_response(response)
+
+        # Validate tool_calls vs tools consistency
+        if (
+            self._strict_tools
+            and getattr(response, "tool_calls", None)
+            and not tools
+        ):
+            raise ValueError(
+                "EchoProvider returned a response with tool_calls but no "
+                "tools were provided to complete(). Real LLM providers only "
+                "return tool_calls when tool definitions are included in the "
+                "request. This usually means the caller forgot to pass "
+                "tools=... to complete() or stream_complete(). Set "
+                "strict_tools=False on EchoProvider to disable this check "
+                "for tests that intentionally exercise unexpected tool_calls."
+            )
 
         # Record the call
         self._call_history.append({

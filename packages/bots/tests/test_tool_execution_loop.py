@@ -180,6 +180,7 @@ class TestChatToolExecution:
             main_responses=[
                 tool_call_response("echo", {"text": "hello"}),
             ],
+            strict_tools=False,
         ) as harness:
             result = await harness.chat("hi")
 
@@ -454,6 +455,7 @@ class TestStreamChatToolExecution:
             main_responses=[
                 tool_call_response("echo", {"text": "hello"}),
             ],
+            strict_tools=False,
         ) as harness:
             chunks = []
             async for chunk in harness.bot.stream_chat("hi", harness.context):
@@ -568,3 +570,55 @@ class TestNoStrategyToolExecution:
         full_text = "".join(c.delta for c in chunks)
         assert "done" in full_text
         assert len(echo_tool.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_no_strategy_passes_tools_to_provider(self) -> None:
+        """chat() without strategy passes tool definitions to the LLM provider."""
+        echo_tool = EchoTool()
+        async with await BotTestHarness.create(
+            bot_config=_NO_STRATEGY_BOT_CONFIG,
+            main_responses=[text_response("no tools needed")],
+            tools=[echo_tool],
+        ) as harness:
+            await harness.chat("what is 2+2?")
+
+        # Verify tools were passed to the provider in the initial call
+        provider = harness.provider
+        assert provider.call_count == 1
+        initial_call = provider.calls[0]
+        assert initial_call["tools"] is not None
+        assert len(initial_call["tools"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_no_strategy_passes_tools_to_provider(self) -> None:
+        """stream_chat() without strategy passes tool definitions to the LLM."""
+        echo_tool = EchoTool()
+        async with await BotTestHarness.create(
+            bot_config=_NO_STRATEGY_BOT_CONFIG,
+            main_responses=[text_response("no tools needed")],
+            tools=[echo_tool],
+        ) as harness:
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "what is 2+2?", harness.context
+            ):
+                chunks.append(chunk)
+
+        # Verify tools were passed to the provider in the initial call
+        provider = harness.provider
+        assert provider.call_count == 1
+        initial_call = provider.calls[0]
+        assert initial_call["tools"] is not None
+        assert len(initial_call["tools"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_no_strategy_no_tools_registered(self) -> None:
+        """chat() without strategy and without tools passes tools=None."""
+        async with await BotTestHarness.create(
+            bot_config=_NO_STRATEGY_BOT_CONFIG,
+            main_responses=[text_response("hello")],
+        ) as harness:
+            await harness.chat("hello")
+
+        provider = harness.provider
+        assert provider.calls[0]["tools"] is None

@@ -1016,12 +1016,13 @@ class DynaBot:
             return await self.reasoning_strategy.generate(
                 manager=manager,
                 llm=self.llm,
-                tools=list(self.tool_registry),
+                tools=list(self.tool_registry) or None,
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
                 llm_config_overrides=llm_config_overrides,
             )
         return await manager.complete(
+            tools=list(self.tool_registry) or None,
             llm_config_overrides=llm_config_overrides,
             temperature=temperature or self.default_temperature,
             max_tokens=max_tokens or self.default_max_tokens,
@@ -1343,7 +1344,7 @@ class DynaBot:
                 # Accumulate usage from intermediate LLM calls
                 turn.accumulate_usage(response)
                 response = await turn.manager.complete(
-                    tools=list(self.tool_registry),
+                    tools=list(self.tool_registry) or None,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     llm_config_overrides=llm_config_overrides,
@@ -1541,7 +1542,7 @@ class DynaBot:
                 async for chunk in self.reasoning_strategy.stream_generate(
                     manager=turn.manager,
                     llm=self.llm,
-                    tools=list(self.tool_registry),
+                    tools=list(self.tool_registry) or None,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     llm_config_overrides=llm_config_overrides,
@@ -1587,6 +1588,7 @@ class DynaBot:
             else:
                 # No reasoning strategy — stream directly from LLM
                 async for chunk in turn.manager.stream_complete(
+                    tools=list(self.tool_registry) or None,
                     llm_config_overrides=llm_config_overrides,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
@@ -1618,7 +1620,7 @@ class DynaBot:
                 pending_tool_calls = None
 
                 async for chunk in turn.manager.stream_complete(
-                    tools=list(self.tool_registry),
+                    tools=list(self.tool_registry) or None,
                     temperature=temperature or self.default_temperature,
                     max_tokens=max_tokens or self.default_max_tokens,
                     llm_config_overrides=llm_config_overrides,

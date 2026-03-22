@@ -531,7 +531,7 @@ class TestConversationManager:
             storage=test_components["storage"],
         )
         await manager.add_message(role="user", content="Calculate 2+2")
-        await manager.complete()
+        await manager.complete(tools=["calculator"])
 
         current_node = manager.state.get_current_node()
         tool_calls = current_node.data.message.tool_calls

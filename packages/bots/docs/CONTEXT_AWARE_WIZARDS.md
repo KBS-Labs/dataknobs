@@ -370,6 +370,7 @@ settings:
   extraction_hints:
     enum_normalize: true              # default: true — normalize enum values
     normalize_threshold: 0.7          # fuzzy match threshold (0.0–1.0)
+    reject_unmatched: true            # default: true — reject values with no enum match
 ```
 
 #### Per-Stage Override
@@ -422,6 +423,7 @@ schema:
 | `negation_proximity` | `int` | Max word distance between negation and field keyword (`0` = anywhere in message; default `0`) |
 | `normalize` | `true` / `false` | Override enum normalization for this field (see [Enum Normalization](#enum-normalization)) |
 | `normalize_threshold` | `float` | Per-field token overlap threshold for fuzzy enum matching (default `0.7`) |
+| `reject_unmatched` | `true` / `false` | Override enum reject behavior for this field (default `true`; see [Enum Normalization](#enum-normalization)) |
 
 ### Custom Merge Filters
 
@@ -510,7 +512,14 @@ settings:
   extraction_hints:
     enum_normalize: true          # default: true
     normalize_threshold: 0.7      # fuzzy match threshold (default: 0.7)
+    reject_unmatched: true        # default: true — reject values with no enum match
 ```
+
+When `reject_unmatched` is `true` (the default), any value that is not a valid enum entry after normalization is rejected — the field is not merged into wizard data. This prevents invalid values like `"magic"` from satisfying a required field with `enum: [ollama, openai, anthropic]`. The wizard stays at the current stage and can prompt for a valid value.
+
+`reject_unmatched` works independently of normalization. When normalization is disabled (`enum_normalize: false`), it acts as a strict enum membership check — only exact matches are accepted.
+
+Set `reject_unmatched: false` to restore permissive behavior where non-matching values pass through unchanged.
 
 #### Per-Field Override
 
@@ -530,9 +539,14 @@ schema:
       enum: [ollama, openai, anthropic]
       x-extraction:
         normalize: false            # require exact match for this field
+    mode:
+      type: string
+      enum: [interactive, batch, hybrid]
+      x-extraction:
+        reject_unmatched: false     # allow non-matching values for this field
 ```
 
-Per-field `normalize` overrides the class-level `enum_normalize` in both directions: `normalize: true` on a field enables normalization even when `enum_normalize: false`, and vice versa.
+Per-field `normalize` overrides the class-level `enum_normalize` in both directions: `normalize: true` on a field enables normalization even when `enum_normalize: false`, and vice versa. The same applies to `reject_unmatched`.
 
 ### Matching Algorithm
 
@@ -545,7 +559,7 @@ The normalization algorithm uses a tiered strategy. The first tier that produces
 | 3 | **Substring** (after `_`/`-` → space normalization) | `"tutor bot"` → `"tutor"`, `"study companion"` → `"study_companion"` |
 | 4 | **Token overlap** ≥ threshold | `"interactive quiz"` → `"quiz"` (overlap = 0.5) |
 
-If no tier produces a match, the original value passes through unchanged.
+If no tier produces a match and `reject_unmatched` is `true` (the default), the value is rejected — it is not merged into wizard data, leaving the field unset. If `reject_unmatched` is `false`, the original value passes through unchanged.
 
 The `normalize_threshold` controls tier 4 sensitivity. At `0.7` (default), at least 70% of tokens must overlap. At `1.0`, tier 4 requires all tokens to match (effectively disabling fuzzy matching while still allowing tiers 1-3).
 
