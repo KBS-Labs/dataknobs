@@ -484,6 +484,14 @@ else
     exit 1
 fi
 
+# Lint GitHub Actions workflows
+print_status "Linting GitHub Actions workflow files..."
+if "$SCRIPT_DIR/lint-workflows.sh"; then
+    print_success "Workflow files are valid"
+else
+    print_error "Workflow lint failed"
+fi
+
 # Build documentation (PR mode only, skip if no docs changes in pr mode)
 if [ "$PR_MODE" = "yes" ]; then
     if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then

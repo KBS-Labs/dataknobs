@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-22T17:00:58Z",
+  "timestamp": "2026-03-22T17:56:38Z",
   "overall_status": "PASS_WITH_SKIPS",
   "run_mode": "pr",
   "environment": "host",
@@ -9,7 +9,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {
