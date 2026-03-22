@@ -704,10 +704,10 @@ Derivations can also chain: rule A→B fires, then rule B→C fires in the same 
 
 ## Recovery Pipeline
 
-### The Problem 
+### The Problem {#recovery-problem}
 The wizard provides several extraction recovery strategies — [field derivation](#field-derivation-recovery), [scope escalation](#extraction-scope-escalation), and [enum normalization](#enum-normalization) — that each address different failure classes. However, extraction failures are often compound: a single turn might need derivation for one field AND scope escalation for another. Without a composition mechanism, strategies run in a hardcoded sequence with no awareness of each other, potentially wasting LLM calls when a cheaper strategy would have been sufficient.
 
-### How It Works 
+### How It Works {#recovery-how-it-works}
 The recovery pipeline runs after initial extraction and merge, executing strategies in a configurable order. It **short-circuits** as soon as all required fields are satisfied — minimizing LLM calls and latency in the common case.
 
 ```
@@ -838,7 +838,7 @@ settings:
 
 Focused retry always uses `wizard_session` scope (broadest available context) and forces LLM extraction (never verbatim capture), since the goal is to recover fields that simpler approaches missed.
 
-### Per-Stage Override 
+### Per-Stage Override {#recovery-per-stage-override}
 Recovery can be disabled on individual stages using the `recovery_enabled` stage field:
 
 ```yaml
