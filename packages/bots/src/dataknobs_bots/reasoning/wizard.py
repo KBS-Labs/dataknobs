@@ -4356,9 +4356,10 @@ class WizardReasoning(ReasoningStrategy):
         """Normalize extracted data to match schema types.
 
         Applies deterministic, schema-driven corrections to LLM-extracted
-        data *before* it enters wizard state.  Only acts when the extracted
-        type doesn't match the declared schema type, so existing well-typed
-        extractions are passed through untouched.
+        data *before* it enters wizard state.  Performs type coercion when
+        the extracted type doesn't match the declared schema type, enum
+        normalization for fuzzy matching, and enum rejection for values
+        that are not valid entries.
 
         Normalizations performed:
 

@@ -477,13 +477,20 @@ class TestEnumNormalizationIntegration:
         """Rejected value on a subsequent turn does not clobber valid data."""
         config = (
             WizardConfigBuilder("test")
-            .stage("gather", is_start=True, prompt="Pick a provider.")
+            .stage("gather", is_start=True, prompt="Pick provider and model.")
                 .field(
                     "provider", field_type="string",
                     enum=["ollama", "openai", "anthropic"],
                     required=True,
                 )
-                .transition("done", "data.get('provider')")
+                .field(
+                    "model", field_type="string",
+                    required=True,
+                )
+                .transition(
+                    "done",
+                    "data.get('provider') and data.get('model')",
+                )
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -492,12 +499,20 @@ class TestEnumNormalizationIntegration:
             wizard_config=config,
             main_responses=["Got it!", "Got it!"],
             extraction_results=[
-                [{"provider": "ollama"}],    # Valid — stored
-                [{"provider": "magic"}],     # Invalid — rejected
+                [{"provider": "ollama"}],                # Valid — stored
+                [{"provider": "magic", "model": "llama"}],  # provider rejected, model accepted
             ],
         ) as harness:
             await harness.chat("use ollama")
             assert harness.wizard_data["provider"] == "ollama"
+            # Still at gather — model not yet provided
+            assert harness.wizard_stage == "gather"
+
+            await harness.chat("use magic model llama")
+            # "magic" rejected — existing "ollama" preserved
+            assert harness.wizard_data["provider"] == "ollama"
+            # "model" accepted — no enum constraint
+            assert harness.wizard_data["model"] == "llama"
             assert harness.wizard_stage == "done"
 
     @pytest.mark.asyncio
