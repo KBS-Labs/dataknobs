@@ -5,6 +5,105 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-23
+
+### dataknobs-bots [0.6.6]
+
+#### Added
+- added `BotTestHarness` and `WizardConfigBuilder` testing utilities for
+  standardized bot test setup (PR #184)
+- added `TurnState` per-turn cross-middleware communication and bridged
+  LLM + state middleware (PR #186)
+- added `from_config` direct injection capability for providers and
+  middleware (PR #186)
+- added wizard extraction field grounding to validate extracted values
+  against field schemas (PR #181)
+- added extraction scope escalation strategy for multi-field extraction
+  retries (PR #183)
+- added wizard extractor field derivations for computed/dependent
+  fields (PR #187)
+- added enum-based extraction normalization in hints framework (PR #188)
+- added extraction recovery pipeline for retrying failed
+  extractions (PR #189)
+- added custom merge filter protocol for wizard data merging (PR #190)
+- added boolean extraction recovery with negation handling (PR #192)
+- added security hardening for `context_transform` and summary memory
+  injection resistance (PR #186)
+
+#### Fixed
+- fixed auto_advance and override logic and landing stage extraction
+  from transition messages (PR #175)
+- fixed `skip_extraction` lifecycle and stale `_message` injection in
+  wizard reasoning (PR #176)
+- fixed `store_trace` and `verbose` forwarding through ReAct wizard
+  reasoning (PR #177)
+- fixed wizard extraction from polluted prompts by managing raw user
+  content (PR #178)
+- fixed partial wizard data accumulation across multi-turn
+  extraction (PRs #179, #180)
+- fixed strategy tools gap — reject non-enum values in tool
+  registration (PR #191)
+- unified hook migration, deprecating legacy hooks (PR #186)
+
+### dataknobs-llm [0.5.3]
+
+#### Added
+- added `turn_data` transient state on `ConversationState` for per-turn
+  cross-middleware communication (PR #186)
+- added `turn_data` bridging into `ToolExecutionContext` so tools can
+  access per-turn plugin data (PR #186)
+- added `strict_tools` mode on `EchoProvider` to catch missing tool
+  definitions in tests (PR #191)
+- added `ConfigurableExtractor` and `scripted_schema_extractor` testing
+  utilities (PR #184)
+
+#### Fixed
+- improved extraction prompts — explicit omission rules, boolean
+  negation handling, better error messages (PR #178)
+
+### dataknobs-fsm [0.1.13]
+
+#### Fixed
+- fixed `InMemoryStorage` to use separate databases for history and step
+  records, avoiding namespace collisions (PR #185)
+- added explicit `owns_databases` parameter on `UnifiedDatabaseStorage`
+  for ownership control of injected databases (PR #185)
+
+### dataknobs-config [0.3.7]
+
+#### Fixed
+- fixed `substitute_env_vars` to use `os.path.expanduser()` instead of
+  `Path.expanduser()`, preventing URL corruption (collapsing `://` to
+  `:/`) (PR #185)
+
+### dataknobs-data [0.4.12]
+
+#### Fixed
+- fixed PgVectorStore `add_vectors` to upsert all columns (content,
+  domain_id, document_id, chunk_index) on ID conflict, preserving
+  `created_at` timestamp (PR #185)
+
+### dataknobs-config [0.3.7]
+
+#### Fixed
+- miscellaneous bug fixes
+
+### dataknobs-xization [1.2.6]
+
+#### Fixed
+- quality review fixes
+
+### Infrastructure / CI
+
+- pinned all GitHub Actions to SHAs for supply chain security (PR #193)
+- added Dependabot configuration for automated action updates (PR #193)
+- bumped `peter-evans/create-pull-request`, `actions/upload-artifact`,
+  `actions/upload-pages-artifact` (PR #204)
+- added workflow syntax and pinned SHA validation checks (PR #200)
+- updated dependency update workflow to wrap Dependabot PRs in addition
+  to the Monday morning schedule (PR #207)
+
+
 ## Release - 2026-03-16
 
 ### dataknobs-llm [0.5.2]
