@@ -65,44 +65,50 @@ jobs:
         echo "skip=false" >> "$GITHUB_OUTPUT"
 
     - name: Merge pending dependency PRs
+      id: merge_deps
       if: steps.debounce.outputs.skip != 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        set -e
         echo "Checking for open dependency PRs..."
-        merged_any=false
 
-        # Get all open dependency PRs (there may be more than one)
-        branches=$(gh pr list \
+        # Capture PR numbers and branches together so close step uses the same list
+        prs=$(gh pr list \
           --label "dependencies" \
           --state open \
-          --json headRefName \
-          --jq '.[].headRefName')
+          --json number,headRefName \
+          --jq '.[] | "\(.number) \(.headRefName)"')
 
-        for branch in $branches; do
-          echo "Merging dependency branch: ${branch}"
+        if [ -z "$prs" ]; then
+          echo "No pending dependency PRs found."
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        merged_numbers=""
+        while read -r pr_number branch; do
+          echo "Merging dependency branch: ${branch} (PR #${pr_number})"
           git fetch origin "${branch}"
           git merge "origin/${branch}" --no-edit
-          merged_any=true
-        done
+          merged_numbers="${merged_numbers} ${pr_number}"
+        done <<< "$prs"
 
-        echo "DEPENDABOT_MERGED=${merged_any}" >> "$GITHUB_ENV"
+        echo "merged=true" >> "$GITHUB_OUTPUT"
+        echo "pr_numbers=${merged_numbers}" >> "$GITHUB_OUTPUT"
 
-    - name: Close dependency PRs
-      if: steps.debounce.outputs.skip != 'true' && env.DEPENDABOT_MERGED == 'true'
+    - name: Close merged dependency PRs
+      if: steps.debounce.outputs.skip != 'true' && steps.merge_deps.outputs.merged == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "Closing dependency PRs (changes included in combined PR)..."
-        gh pr list \
-          --label "dependencies" \
-          --state open \
-          --json number \
-          --jq '.[].number' | while read -r pr_number; do
-            gh pr close "$pr_number" \
-              --comment "Changes included in the consolidated weekly dependency update PR." \
-              --delete-branch
-          done
+        echo "Closing merged dependency PRs..."
+        for pr_number in ${{ steps.merge_deps.outputs.pr_numbers }}; do
+          echo "Closing PR #${pr_number}"
+          gh pr close "$pr_number" \
+            --comment "Changes included in the consolidated weekly dependency update PR." \
+            --delete-branch
+        done
 
     - name: Install uv
       if: steps.debounce.outputs.skip != 'true'
@@ -129,7 +135,7 @@ jobs:
           Automated weekly dependency update.
 
           **Python dependencies:** Updated via `uv lock --upgrade`.
-          **GitHub Actions:** ${{ env.DEPENDABOT_MERGED == 'true' && 'Included from dependency PR.' || 'No pending updates.' }}
+          **GitHub Actions:** ${{ steps.merge_deps.outputs.merged == 'true' && 'Included from dependency PR.' || 'No pending updates.' }}
 
           Lock file verified. Run `bin/dk pr --all` locally before merging.
         branch: update-dependencies
