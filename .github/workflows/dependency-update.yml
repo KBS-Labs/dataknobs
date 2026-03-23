@@ -1,67 +1,142 @@
 name: Update Dependencies
 
+# Consolidated weekly dependency update workflow.
+#
+# Triggers:
+#   1. When a PR with the 'dependencies' label is opened (e.g., dependabot) —
+#      merges it in, updates Python deps, creates a single combined PR.
+#   2. Weekly Monday schedule — updates Python deps (and picks up any pending
+#      'dependencies' PRs that haven't been processed yet).
+#   3. Manual dispatch.
+#
+# Security alerts remain handled by Dependabot at the repo level
+# (Settings > Code security and analysis) — independent of dependabot.yml.
+
 on:
+  pull_request:
+    types: [opened, labeled]
   schedule:
-    # Run weekly on Monday at 9 AM UTC
-    - cron: '0 9 * * 1'
+    # Run weekly on Monday at 15:00 UTC (9 AM MDT / 8 AM MST)
+    - cron: '0 15 * * 1'
   workflow_dispatch:
+
+concurrency:
+  group: dependency-updates
+  cancel-in-progress: false
 
 jobs:
   update-dependencies:
+    # Run on schedule/dispatch always; on pull_request only for 'dependencies' label
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'dependencies')
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       with:
+        ref: main
         token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Install uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
-    
-    - name: Check GitHub Actions for security advisories
+        fetch-depth: 0
+
+    - name: Check for recent update
+      id: debounce
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "Checking GitHub Actions for security advisories..."
-        found_issues=0
-        # Extract unique action references from all workflow files
-        actions=$(grep -rh 'uses:' .github/workflows/*.yml \
-          | sed 's/.*uses: *//' \
-          | sed 's/@.*//' \
-          | sort -u)
-        for action in $actions; do
-          advisories=$(gh api "repos/${action}/security/advisories" \
-            --jq '[.[] | select(.state == "published")] | length' 2>/dev/null || echo "0")
-          if [ "$advisories" != "0" ] && [ "$advisories" != "" ]; then
-            echo "::warning::${action} has ${advisories} published security advisory(ies)"
-            gh api "repos/${action}/security/advisories" \
-              --jq '.[] | select(.state == "published") | "  - \(.severity): \(.summary) (published \(.published_at))"' 2>/dev/null
-            found_issues=1
+        # Skip if the update-dependencies branch was pushed within the last 2 hours
+        last_updated=$(gh api "repos/${{ github.repository }}/branches/update-dependencies" \
+          --jq '.commit.commit.committer.date' 2>/dev/null || echo "")
+
+        if [ -n "$last_updated" ]; then
+          last_epoch=$(date -d "$last_updated" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$last_updated" +%s 2>/dev/null || echo "0")
+          now_epoch=$(date +%s)
+          age_hours=$(( (now_epoch - last_epoch) / 3600 ))
+          echo "update-dependencies branch last updated ${age_hours}h ago"
+          if [ "$age_hours" -lt 2 ]; then
+            echo "Skipping — updated less than 2 hours ago."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-        done
-        if [ "$found_issues" = "0" ]; then
-          echo "No security advisories found for any GitHub Actions."
+        fi
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
+    - name: Merge pending dependency PRs
+      id: merge_deps
+      if: steps.debounce.outputs.skip != 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -e
+        echo "Checking for open dependency PRs..."
+
+        # Capture PR numbers and branches together so close step uses the same list
+        prs=$(gh pr list \
+          --label "dependencies" \
+          --state open \
+          --json number,headRefName \
+          --jq '.[] | "\(.number) \(.headRefName)"')
+
+        if [ -z "$prs" ]; then
+          echo "No pending dependency PRs found."
+          echo "merged=false" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
 
-    - name: Update dependencies
+        merged_numbers=""
+        while read -r pr_number branch; do
+          echo "Merging dependency branch: ${branch} (PR #${pr_number})"
+          git fetch origin "${branch}"
+          git merge "origin/${branch}" --no-edit
+          merged_numbers="${merged_numbers} ${pr_number}"
+        done <<< "$prs"
+
+        echo "merged=true" >> "$GITHUB_OUTPUT"
+        echo "pr_numbers=${merged_numbers}" >> "$GITHUB_OUTPUT"
+
+    - name: Close merged dependency PRs
+      if: steps.debounce.outputs.skip != 'true' && steps.merge_deps.outputs.merged == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Update all dependencies to latest compatible versions
+        echo "Closing merged dependency PRs..."
+        for pr_number in ${{ steps.merge_deps.outputs.pr_numbers }}; do
+          echo "Closing PR #${pr_number}"
+          gh pr close "$pr_number" \
+            --comment "Changes included in the consolidated weekly dependency update PR." \
+            --delete-branch
+        done
+
+    - name: Install uv
+      if: steps.debounce.outputs.skip != 'true'
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+    - name: Update Python dependencies
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
         uv lock --upgrade
-    
-    - name: Run tests
+
+    - name: Verify lock file resolves
+      if: steps.debounce.outputs.skip != 'true'
       run: |
         uv sync --all-packages
-        bin/dk testquick
-    
+
     - name: Create Pull Request
+      if: steps.debounce.outputs.skip != 'true'
       uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0  # v8.1.0
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: 'chore: update dependencies'
         title: 'chore: update dependencies'
         body: |
-          This PR updates the project dependencies to their latest compatible versions.
-          
-          Please review the changes and ensure all tests pass before merging.
+          Automated weekly dependency update.
+
+          **Python dependencies:** Updated via `uv lock --upgrade`.
+          **GitHub Actions:** ${{ steps.merge_deps.outputs.merged == 'true' && 'Included from dependency PR.' || 'No pending updates.' }}
+
+          Lock file verified. Run `bin/dk pr --all` locally before merging.
         branch: update-dependencies
         delete-branch: true
