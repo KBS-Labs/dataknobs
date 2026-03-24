@@ -4,6 +4,7 @@ from dataknobs_xization import (
     annotations,
     authorities,
     content_transformer,
+    html,
     ingestion,
     json,
     lexicon,
@@ -16,6 +17,11 @@ from dataknobs_xization.content_transformer import (
     csv_to_markdown,
     json_to_markdown,
     yaml_to_markdown,
+)
+from dataknobs_xization.html import (
+    HTMLConverter,
+    HTMLConverterConfig,
+    html_to_markdown,
 )
 from dataknobs_xization.markdown import (
     AdaptiveStreamingProcessor,
@@ -71,6 +77,11 @@ __all__ = [
     "csv_to_markdown",
     "json_to_markdown",
     "yaml_to_markdown",
+    # HTML conversion
+    "html",
+    "HTMLConverter",
+    "HTMLConverterConfig",
+    "html_to_markdown",
     # JSON module
     "json",
     "JSONChunk",

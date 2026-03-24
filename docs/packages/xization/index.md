@@ -26,6 +26,10 @@ The Xization package specializes in text preprocessing and includes:
   - Template-based or field-selection text generation
   - Streaming support for large JSONL files
   - GZIP compression support
+- **HTML Conversion**: Convert HTML documents to markdown for RAG ingestion
+  - Standard HTML with semantic tags (headings, lists, tables, code blocks)
+  - IETF RFC markup auto-detection and conversion
+  - Configurable link handling, element stripping, and frontmatter
 - **Knowledge Base Ingestion**: Batch process directories of documents
   - Pattern-based file selection with exclusions
   - Per-file type configuration
@@ -43,6 +47,9 @@ dataknobs-xization/
 ├── src/
 │   └── dataknobs_xization/
 │       ├── __init__.py
+│       ├── html/
+│       │   ├── html_converter.py  # HTML to markdown conversion
+│       │   └── __init__.py
 │       ├── markdown/
 │       │   ├── md_parser.py       # Markdown parsing to Tree structure
 │       │   ├── md_chunker.py      # Chunking with configurable parameters
@@ -496,8 +503,10 @@ For complete API documentation, see the [Xization API Reference](api.md).
 
 ## Module Documentation
 
+- [HTML Conversion](html-conversion.md) - Convert HTML documents to markdown
 - [Markdown Chunking](markdown-chunking.md) - Parse and chunk markdown for RAG
 - [JSON Chunking](json-chunking.md) - Chunk JSON and JSONL documents
+- [Content Transformation](content-transformation.md) - Convert JSON, YAML, CSV, HTML to markdown
 - [Ingestion Module](ingestion.md) - Batch directory processing
 - [Tokenization](tokenization.md) - Character-based tokenization
 - [Normalization](normalization.md) - Text normalization functions

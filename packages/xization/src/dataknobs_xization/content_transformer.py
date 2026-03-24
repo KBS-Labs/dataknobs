@@ -1,7 +1,7 @@
 """Content transformation utilities for converting various formats to markdown.
 
-This module provides tools for converting structured data formats (JSON, YAML, CSV)
-into markdown format suitable for RAG ingestion and chunking.
+This module provides tools for converting structured data formats (JSON, YAML, CSV,
+HTML) into markdown format suitable for RAG ingestion and chunking.
 
 The ContentTransformer supports:
 - Generic conversion that preserves structure through heading hierarchy
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class ContentTransformer:
     """Transform structured content into markdown for RAG ingestion.
 
-    This class converts various data formats (JSON, YAML, CSV) into well-structured
+    This class converts various data formats (JSON, YAML, CSV, HTML) into well-structured
     markdown that can be parsed by MarkdownParser and chunked by MarkdownChunker.
 
     The transformer creates markdown with appropriate heading hierarchy so that
@@ -114,8 +114,9 @@ class ContentTransformer:
 
         Args:
             content: Content to transform (dict, list, string, or file path)
-            format: Content format - "json", "yaml", or "csv"
-            schema: Optional schema name for custom conversion
+            format: Content format - "json", "yaml", "csv", or "html"
+            schema: Optional schema name for custom conversion (applies to
+                "json" and "yaml" formats only; ignored for "csv" and "html")
             title: Optional document title
 
         Returns:
@@ -134,9 +135,17 @@ class ContentTransformer:
         elif format == "yaml":
             return self.transform_yaml(content, schema=schema, title=title)
         elif format == "csv":
+            if schema is not None:
+                logger.warning("schema parameter is ignored for CSV format")
             return self.transform_csv(content, title=title)
+        elif format == "html":
+            if schema is not None:
+                logger.warning("schema parameter is ignored for HTML format")
+            return self.transform_html(content, title=title)
         else:
-            raise ValueError(f"Unsupported format: {format}. Use 'json', 'yaml', or 'csv'.")
+            raise ValueError(
+                f"Unsupported format: {format}. Use 'json', 'yaml', 'csv', or 'html'."
+            )
 
     def transform_json(
         self,
@@ -273,6 +282,28 @@ class ContentTransformer:
             lines.extend(["---", ""])
 
         return "\n".join(lines)
+
+    def transform_html(
+        self,
+        content: str | Path,
+        title: str | None = None,
+    ) -> str:
+        """Transform HTML content to markdown.
+
+        Supports standard HTML with semantic tags and IETF RFC markup.
+        Auto-detects the document format and applies appropriate conversion.
+
+        Args:
+            content: HTML string or file path
+            title: Optional document title
+
+        Returns:
+            Markdown formatted string
+        """
+        from dataknobs_xization.html import HTMLConverter
+
+        converter = HTMLConverter(base_heading_level=self.base_heading_level)
+        return converter.convert(content, title=title)
 
     def _transform_with_schema(
         self,
