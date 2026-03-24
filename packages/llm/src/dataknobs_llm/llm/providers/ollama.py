@@ -105,6 +105,30 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _find_matching_models(configured_model: str, available_models: list[str]) -> list[str]:
+    """Find available models that match the configured model name.
+
+    Matches the exact model name or the base name with any tag suffix.
+    For example, ``"llama2"`` matches ``"llama2:latest"`` but NOT
+    ``"llama2-uncensored:latest"``.
+
+    Args:
+        configured_model: The model name from configuration (e.g., ``"llama2"``).
+        available_models: List of model names from the Ollama API.
+
+    Returns:
+        List of matching model names (may be empty).
+    """
+    if configured_model in available_models:
+        return [configured_model]
+    base_model = configured_model.split(":", maxsplit=1)[0]
+    return [
+        m for m in available_models
+        if m == base_model or m.startswith(base_model + ":")
+    ]
+
+
 # Regex for <think>...</think> blocks emitted by reasoning models.
 # DOTALL so '.' matches newlines inside the tag.
 _THINK_TAG_RE = re.compile(r"^<think>(.*?)</think>\s*(.*)", re.DOTALL)
@@ -431,32 +455,21 @@ class OllamaProvider(AsyncLLMProvider):
                         models = [m['name'] for m in data.get('models', [])]
                         if models:
                             # Check if configured model is available
-                            if self.config.model not in models:
-                                # Try matching base name with any tag
-                                # (e.g., 'llama2' matches 'llama2:latest' but
-                                # NOT 'llama2-uncensored:latest')
-                                base_model = self.config.model.split(':')[0]
-                                matching_models = [
-                                    m for m in models
-                                    if m == base_model or m.startswith(base_model + ":")
-                                ]
-                                if matching_models:
-                                    # Use first matching model
-                                    self.config.model = matching_models[0]
-                                    import logging
-                                    logging.info(f"Ollama: Using model {self.config.model}")
-                                else:
-                                    import logging
-                                    logging.warning(f"Ollama: Model {self.config.model} not found. Available: {models}")
+                            matching = _find_matching_models(self.config.model, models)
+                            if matching and matching[0] != self.config.model:
+                                self.config.model = matching[0]
+                                logger.info("Ollama: Using model %s", self.config.model)
+                            elif not matching:
+                                logger.warning(
+                                    "Ollama: Model %s not found. Available: %s",
+                                    self.config.model, models,
+                                )
                         else:
-                            import logging
-                            logging.warning("Ollama: No models found. Please pull a model first.")
+                            logger.warning("Ollama: No models found. Please pull a model first.")
                     else:
-                        import logging
-                        logging.warning(f"Ollama: API returned status {response.status}")
+                        logger.warning("Ollama: API returned status %s", response.status)
             except Exception as e:
-                import logging
-                logging.warning(f"Ollama: Could not connect to {self.base_url}: {e}")
+                logger.warning("Ollama: Could not connect to %s: %s", self.base_url, e)
 
             self._is_initialized = True
         except ImportError as e:
@@ -477,11 +490,7 @@ class OllamaProvider(AsyncLLMProvider):
                 if response.status == 200:
                     data = await response.json()
                     models = [m['name'] for m in data.get('models', [])]
-                    # Check exact match or base model match
-                    if self.config.model in models:
-                        return True
-                    base_model = self.config.model.split(':')[0]
-                    return any(m.startswith(base_model) for m in models)
+                    return bool(_find_matching_models(self.config.model, models))
         except Exception:
             return False
         return False

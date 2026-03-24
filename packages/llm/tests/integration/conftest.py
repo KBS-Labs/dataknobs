@@ -92,9 +92,11 @@ def verify_ollama_model(
         True if model is available, False otherwise
     """
     models = get_available_models(host, port)
-    # Check if our model is in the list (handle both with and without tag)
-    base_model = model.split(":")[0]
-    return any(m.startswith(base_model) for m in models)
+    # Check if our model is in the list (handle both with and without tag).
+    # Match exact name or name with any tag suffix (e.g., 'llama2' matches
+    # 'llama2:latest' but NOT 'llama2-uncensored:latest').
+    base_model = model.split(":", maxsplit=1)[0]
+    return any(m == base_model or m.startswith(base_model + ":") for m in models)
 
 
 @pytest.fixture(scope="session")

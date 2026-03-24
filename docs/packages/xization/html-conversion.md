@@ -297,7 +297,7 @@ class HTMLConverterConfig:
     strip_nav: bool = True
     strip_scripts: bool = True
     preserve_code_blocks: bool = True
-    link_style: str = "inline"       # "inline", "reference", or "text"
+    link_style: Literal["inline", "reference", "text"] = "inline"
     strip_images: bool = False
     wrap_width: int = 0              # 0 = no wrapping
     frontmatter: dict[str, Any] | None = None

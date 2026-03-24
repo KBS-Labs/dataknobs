@@ -555,8 +555,8 @@ class TestFrontmatter:
             "<p>Content.</p>",
             frontmatter={"tags": ["oauth", "security"]},
         )
-        assert "  - oauth" in md
-        assert "  - security" in md
+        assert "- oauth" in md
+        assert "- security" in md
 
 
 class TestFileInput:

@@ -125,14 +125,19 @@ class HTMLConverter:
             self.config = config
         else:
             self.config = HTMLConverterConfig(**kwargs)
-        # Per-conversion state for reference-style links.
-        self._link_references: list[tuple[str, str]] = []
 
     def convert(self, content: str | Path, title: str | None = None) -> str:
         """Convert HTML content to markdown.
 
         Auto-detects whether the document is standard HTML or IETF RFC markup
         and applies the appropriate conversion strategy.
+
+        Note:
+            Each call uses internal state for reference-style link collection.
+            Do not call ``convert()`` concurrently on the same instance from
+            multiple threads. Create separate ``HTMLConverter`` instances for
+            concurrent use, or use the ``html_to_markdown()`` convenience
+            function which creates a fresh instance per call.
 
         Args:
             content: HTML string or path to an HTML file.
@@ -147,8 +152,8 @@ class HTMLConverter:
         elif not isinstance(content, str):
             raise TypeError(f"content must be str or Path, got {type(content).__name__}")
 
-        # Reset per-conversion state.
-        self._link_references = []
+        # Per-conversion state for reference-style link collection.
+        self._link_references: list[tuple[str, str]] = []
 
         soup = BeautifulSoup(content, "html.parser")
 
@@ -833,20 +838,24 @@ class HTMLConverter:
 
     def _render_frontmatter(self, metadata: dict[str, Any]) -> str:
         """Render a YAML frontmatter block."""
-        lines = ["---"]
-        for key, value in metadata.items():
-            if isinstance(value, list):
-                lines.append(f"{key}:")
-                for item in value:
-                    lines.append(f"  - {item}")
-            elif isinstance(value, dict):
-                lines.append(f"{key}:")
-                for k, v in value.items():
-                    lines.append(f"  {k}: {v}")
-            else:
-                lines.append(f"{key}: {value}")
-        lines.append("---")
-        return "\n".join(lines)
+        try:
+            import yaml
+            body = yaml.safe_dump(
+                metadata, default_flow_style=False, sort_keys=False,
+            ).rstrip("\n")
+            return f"---\n{body}\n---"
+        except ImportError:
+            # Fallback for simple scalar/list metadata when PyYAML is absent.
+            lines = ["---"]
+            for key, value in metadata.items():
+                if isinstance(value, list):
+                    lines.append(f"{key}:")
+                    for item in value:
+                        lines.append(f"  - {item}")
+                else:
+                    lines.append(f"{key}: {value}")
+            lines.append("---")
+            return "\n".join(lines)
 
     def _normalize_whitespace(self, text: str) -> str:
         """Clean up excessive blank lines and trailing whitespace."""
