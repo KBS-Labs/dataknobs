@@ -156,6 +156,8 @@ class OllamaAdapter(LLMAdapter):
 
         Args:
             messages: Standard LLMMessage list.
+            system_prompt: Accepted for interface compatibility but
+                ignored — Ollama passes system content as a normal message.
 
         Returns:
             List of message dicts in Ollama format.
@@ -275,17 +277,46 @@ class OllamaAdapter(LLMAdapter):
         Returns:
             List of Ollama tool definitions.
         """
+        return [self._tool_to_dict(tool) for tool in tools]
+
+    def adapt_raw_functions(
+        self, functions: list[Dict[str, Any]],
+    ) -> list[Dict[str, Any]]:
+        """Convert raw function dicts to Ollama tools format.
+
+        Used by the deprecated ``function_call()`` method which receives
+        raw dicts rather than Tool objects.
+
+        Args:
+            functions: List of raw function definition dicts with
+                ``name``, ``description``, and ``parameters`` keys.
+
+        Returns:
+            List of Ollama tool definitions.
+        """
         return [
             {
                 "type": "function",
                 "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.schema if hasattr(tool, "schema") else {},
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {}),
                 },
             }
-            for tool in tools
+            for func in functions
         ]
+
+    @staticmethod
+    def _tool_to_dict(tool: Any) -> Dict[str, Any]:
+        """Convert a single Tool or raw dict to Ollama format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.schema if hasattr(tool, "schema") else {},
+            },
+        }
 
 
 class OllamaProvider(AsyncLLMProvider):
@@ -821,19 +852,9 @@ class OllamaProvider(AsyncLLMProvider):
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
 
-        # function_call() receives raw dicts, not Tool objects — convert
-        # directly to Ollama format.
-        ollama_tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                },
-            }
-            for func in functions
-        ]
+        # function_call() receives raw dicts, not Tool objects — delegate
+        # to the adapter's raw function converter.
+        ollama_tools = self.adapter.adapt_raw_functions(functions)
 
         # Build payload with tools
         payload = {

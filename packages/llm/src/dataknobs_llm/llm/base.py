@@ -1986,8 +1986,9 @@ class LLMAdapter(ABC):
 
     Adapters translate between the standard dataknobs LLM format
     (LLMMessage, LLMResponse, LLMConfig) and provider-specific formats
-    (OpenAI, Anthropic, etc.). Each provider implementation should
-    have a corresponding adapter.
+    (OpenAI, Anthropic, etc.). Providers with complex multi-format APIs
+    (OpenAI, Anthropic, Ollama) have corresponding adapters. Simpler
+    providers (EchoProvider, HuggingFaceProvider) do not require adapters.
 
     This enables provider-agnostic code that works across different
     LLM APIs without modification.
@@ -2047,7 +2048,9 @@ class LLMAdapter(ABC):
 
         # Use adapter in provider
         adapter = MyProviderAdapter()
-        provider_messages = adapter.adapt_messages(messages)
+        provider_messages = adapter.adapt_messages(
+            messages, system_prompt="You are helpful.",
+        )
         ```
 
     See Also:

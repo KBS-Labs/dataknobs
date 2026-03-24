@@ -79,6 +79,14 @@ class OpenAIAdapter(LLMAdapter):
 
         ``system_prompt`` is accepted for interface compatibility but
         ignored — OpenAI passes system content as a normal message.
+
+        Args:
+            messages: Standard LLMMessage list.
+            system_prompt: Accepted for interface compatibility but
+                ignored — OpenAI passes system content as a normal message.
+
+        Returns:
+            List of message dicts in OpenAI format.
         """
         adapted = []
         for msg in messages:
@@ -104,6 +112,12 @@ class OpenAIAdapter(LLMAdapter):
                         msg.name,
                     )
                     message['tool_call_id'] = msg.name
+                else:
+                    logger.warning(
+                        "Tool result message has no tool_call_id or name; "
+                        "using 'unknown'. OpenAI will likely reject this.",
+                    )
+                    message['tool_call_id'] = 'unknown'
             # Include tool_calls on assistant messages so the model
             # retains structured memory of what it called.
             if msg.tool_calls and msg.role == 'assistant':

@@ -16,6 +16,65 @@ from dataknobs_llm.llm.base import LLMConfig, LLMMessage, ToolCall
 
 
 # ---------------------------------------------------------------------------
+# Reusable test helpers
+# ---------------------------------------------------------------------------
+
+
+def make_anthropic_response(
+    content_blocks: list[dict],
+    model: str = "claude-3",
+    stop_reason: str = "end_turn",
+    input_tokens: int = 10,
+    output_tokens: int = 20,
+) -> object:
+    """Build a fake Anthropic Message-like response object.
+
+    Avoids a hard test dependency on the ``anthropic`` package while
+    faithfully reproducing the attribute-access interface of
+    ``anthropic.types.Message``.
+    """
+    class Block:
+        def __init__(self, **kwargs: object) -> None:
+            self.__dict__.update(kwargs)
+
+    class Usage:
+        def __init__(self) -> None:
+            self.input_tokens = input_tokens
+            self.output_tokens = output_tokens
+
+    class Response:
+        def __init__(self) -> None:
+            self.content = [Block(**b) for b in content_blocks]
+            self.model = model
+            self.stop_reason = stop_reason
+            self.usage = Usage()
+
+    return Response()
+
+
+class FakeTool:
+    """Minimal Tool-like object for adapter tests.
+
+    Mirrors the ``Tool`` ABC's public interface (``name``,
+    ``description``, ``schema``) without requiring a concrete
+    implementation of ``execute()``.
+    """
+
+    def __init__(
+        self,
+        name: str = "search",
+        description: str = "Search the web",
+        schema: dict | None = None,
+    ) -> None:
+        self.name = name
+        self.description = description
+        self.schema = schema or {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+        }
+
+
+# ---------------------------------------------------------------------------
 # LLMConfig.generation_params() tests
 # ---------------------------------------------------------------------------
 
@@ -290,37 +349,18 @@ class TestAnthropicAdaptMessages:
 class TestAnthropicAdaptResponse:
     """Test AnthropicAdapter.adapt_response() content block parsing.
 
-    Uses simple namespace objects to simulate Anthropic SDK response types.
+    Uses ``make_anthropic_response`` helper to simulate Anthropic SDK
+    response types without requiring the ``anthropic`` package.
     """
 
     def _adapter(self):
         from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
         return AnthropicAdapter()
 
-    def _make_response(self, content_blocks, model="claude-3", stop_reason="end_turn"):
-        """Build a fake Anthropic Message-like object."""
-        class Block:
-            def __init__(self, **kwargs):
-                self.__dict__.update(kwargs)
-
-        class Usage:
-            def __init__(self):
-                self.input_tokens = 10
-                self.output_tokens = 20
-
-        class Response:
-            def __init__(self):
-                self.content = [Block(**b) for b in content_blocks]
-                self.model = model
-                self.stop_reason = stop_reason
-                self.usage = Usage()
-
-        return Response()
-
     def test_text_only_response(self):
         """Single text block should produce content string."""
         adapter = self._adapter()
-        resp = self._make_response([{"type": "text", "text": "Hello!"}])
+        resp = make_anthropic_response([{"type": "text", "text": "Hello!"}])
         parsed = adapter.adapt_response(resp)
         assert parsed.content == "Hello!"
         assert parsed.tool_calls is None
@@ -328,7 +368,7 @@ class TestAnthropicAdaptResponse:
     def test_tool_use_only_response(self):
         """Single tool_use block (no text) should not crash."""
         adapter = self._adapter()
-        resp = self._make_response([{
+        resp = make_anthropic_response([{
             "type": "tool_use",
             "id": "toolu_abc",
             "name": "search",
@@ -345,7 +385,7 @@ class TestAnthropicAdaptResponse:
     def test_mixed_text_and_tool_use(self):
         """Mixed response should capture both text and tool calls."""
         adapter = self._adapter()
-        resp = self._make_response([
+        resp = make_anthropic_response([
             {"type": "text", "text": "I'll search for that."},
             {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"q": "x"}},
             {"type": "tool_use", "id": "toolu_2", "name": "calc", "input": {"expr": "1+1"}},
@@ -359,7 +399,7 @@ class TestAnthropicAdaptResponse:
     def test_usage_extracted(self):
         """Usage stats should be extracted from the response."""
         adapter = self._adapter()
-        resp = self._make_response([{"type": "text", "text": "Hi"}])
+        resp = make_anthropic_response([{"type": "text", "text": "Hi"}])
         parsed = adapter.adapt_response(resp)
         assert parsed.usage["prompt_tokens"] == 10
         assert parsed.usage["completion_tokens"] == 20
@@ -381,12 +421,6 @@ class TestAnthropicAdaptTools:
     def test_converts_tool_objects(self):
         """Tool objects should be converted to Anthropic format."""
         adapter = self._adapter()
-
-        class FakeTool:
-            name = "search"
-            description = "Search the web"
-            schema = {"type": "object", "properties": {"q": {"type": "string"}}}
-
         result = adapter.adapt_tools([FakeTool()])
         assert len(result) == 1
         assert result[0]["name"] == "search"

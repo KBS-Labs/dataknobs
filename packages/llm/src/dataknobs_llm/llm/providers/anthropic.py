@@ -215,6 +215,9 @@ class AnthropicAdapter(LLMAdapter):
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
         """Build Anthropic API parameters from config.
 
+        Shared by ``complete()``, ``stream_complete()``, and
+        ``function_call()`` to prevent parameter drift between methods.
+
         Args:
             config: Standard LLMConfig.
 
@@ -251,6 +254,34 @@ class AnthropicAdapter(LLMAdapter):
                 "input_schema": tool.schema if hasattr(tool, "schema") else {},
             }
             for tool in tools
+        ]
+
+    def adapt_raw_functions(
+        self, functions: list[Dict[str, Any]],
+    ) -> list[Dict[str, Any]]:
+        """Convert raw function dicts to Anthropic tools format.
+
+        Used by the deprecated ``function_call()`` method which receives
+        raw dicts rather than Tool objects.
+
+        Args:
+            functions: List of raw function definition dicts with
+                ``name``, ``description``, and ``parameters`` keys.
+
+        Returns:
+            List of Anthropic tool definitions.
+        """
+        return [
+            {
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "input_schema": func.get("parameters", {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                }),
+            }
+            for func in functions
         ]
 
 
@@ -574,20 +605,9 @@ class AnthropicProvider(AsyncLLMProvider):
             messages, system_prompt=self.config.system_prompt,
         )
 
-        # function_call() receives raw dicts, not Tool objects — convert
-        # directly to Anthropic format.
-        tools = [
-            {
-                "name": func.get("name", ""),
-                "description": func.get("description", ""),
-                "input_schema": func.get("parameters", {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                }),
-            }
-            for func in functions
-        ]
+        # function_call() receives raw dicts, not Tool objects — delegate
+        # to the adapter's raw function converter.
+        tools = self.adapter.adapt_raw_functions(functions)
 
         try:
             fc_kwargs = self.adapter.adapt_config(self.config)
