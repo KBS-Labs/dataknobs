@@ -1836,22 +1836,41 @@ moved to transient (with a warning log), even if not declared in `ephemeral_keys
 
 **Per-Turn Keys:**
 
-Some fields change value every turn (e.g., `action` cycling through `accept`,
-`view_bank`, `generate_more`). These should be cleared at the start of each turn
-to prevent stale values from persisting when extraction fails. Declare them in
-`settings.per_turn_keys`:
+Some fields represent **current-turn user intent** rather than persistent wizard data
+(e.g., `action` cycling through `accept`, `view_bank`, `generate_more`; or `confirmed`
+toggling between `true` and `false` at a review stage). These must be cleared at the
+start of each turn to prevent stale values from triggering incorrect transitions when
+extraction misses the field. Declare them in `settings.per_turn_keys`:
 
 ```yaml
 settings:
   per_turn_keys:
     - action               # User action per turn (accept, skip, edit, etc.)
     - feedback             # User feedback text (only relevant for current turn)
+    - confirmed            # Confirmation boolean (only meaningful at review)
+    - edit_section         # Which section to edit (only meaningful when editing)
 ```
 
 Per-turn keys are:
 - **Cleared** from `state.data` and `state.transient` at the start of each `generate()` call
 - **Merged** into ephemeral keys (never persisted to storage)
 - **Suppressed** in conflict detection (no "Data conflict detected" warnings)
+
+**When to use per-turn keys:** Any schema field that controls a transition based on the
+user's intent *this turn* (rather than accumulated data) should be a per-turn key. The
+critical signal: if the field's *absence* should mean "do nothing" rather than "use the
+last known value", it belongs in `per_turn_keys`. Without this, a stale `edit_section`
+from a previous edit request can re-trigger the edit transition after the user returns
+to the stage, creating an infinite loop.
+
+**When NOT to use:** Fields that accumulate over the wizard lifecycle (`domain_name`,
+`subject`, `kb_enabled`) should NOT be per-turn keys — their values persist intentionally.
+Guard flags (`_quiz_configured`, `_kb_configured`) that track completion state also persist.
+
+**Relationship to derive:** Note that `derive` blocks on transitions cannot overwrite
+existing keys (line 5782). Per-turn keys solve the complementary problem: clearing stale
+values that derive cannot touch. Use derive for *setting* new values, per-turn keys for
+*clearing* intent signals between turns.
 
 **Post-Completion Amendments:**
 
