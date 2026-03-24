@@ -432,9 +432,14 @@ class OllamaProvider(AsyncLLMProvider):
                         if models:
                             # Check if configured model is available
                             if self.config.model not in models:
-                                # Try without tag (e.g., 'llama2' instead of 'llama2:latest')
+                                # Try matching base name with any tag
+                                # (e.g., 'llama2' matches 'llama2:latest' but
+                                # NOT 'llama2-uncensored:latest')
                                 base_model = self.config.model.split(':')[0]
-                                matching_models = [m for m in models if m.startswith(base_model)]
+                                matching_models = [
+                                    m for m in models
+                                    if m == base_model or m.startswith(base_model + ":")
+                                ]
                                 if matching_models:
                                     # Use first matching model
                                     self.config.model = matching_models[0]
