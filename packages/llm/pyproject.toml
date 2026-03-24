@@ -30,7 +30,7 @@ huggingface = [
 ]
 embeddings = [
     "transformers>=4.30.0",
-    "torch>=2.0.0",
+    "torch>=2.8.0",
 ]
 sqlite-cache = [
     "aiosqlite>=0.19.0",
