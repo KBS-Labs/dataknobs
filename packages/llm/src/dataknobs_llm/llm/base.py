@@ -222,6 +222,8 @@ class LLMMessage:
         role: Message role - 'system', 'user', 'assistant', 'tool', or 'function'
         content: Message content text
         name: Optional name for function/tool messages or multi-user scenarios
+        tool_call_id: Provider-assigned ID for pairing tool results with
+            invocations (required by OpenAI and Anthropic APIs)
         function_call: Function call data for tool-using models
         tool_calls: Tool calls made by the assistant in this message
         metadata: Additional metadata (timestamps, IDs, etc.)
@@ -262,6 +264,7 @@ class LLMMessage:
     role: str  # 'system', 'user', 'assistant', 'tool', 'function'
     content: str
     name: str | None = None  # For function/tool messages
+    tool_call_id: str | None = None  # Provider-assigned tool call ID for pairing results
     function_call: Dict[str, Any] | None = None  # For function calling
     tool_calls: list[ToolCall] | None = None  # Tool calls from assistant
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -280,6 +283,8 @@ class LLMMessage:
         }
         if self.name is not None:
             d["name"] = self.name
+        if self.tool_call_id is not None:
+            d["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
         if self.function_call is not None:
@@ -309,6 +314,7 @@ class LLMMessage:
             role=data["role"],
             content=data.get("content", ""),
             name=data.get("name"),
+            tool_call_id=data.get("tool_call_id"),
             tool_calls=tool_calls,
             function_call=data.get("function_call"),
             metadata=data.get("metadata", {}),
@@ -1980,8 +1986,9 @@ class LLMAdapter(ABC):
 
     Adapters translate between the standard dataknobs LLM format
     (LLMMessage, LLMResponse, LLMConfig) and provider-specific formats
-    (OpenAI, Anthropic, etc.). Each provider implementation should
-    have a corresponding adapter.
+    (OpenAI, Anthropic, etc.). Providers with complex multi-format APIs
+    (OpenAI, Anthropic, Ollama) have corresponding adapters. Simpler
+    providers (EchoProvider, HuggingFaceProvider) do not require adapters.
 
     This enables provider-agnostic code that works across different
     LLM APIs without modification.
@@ -1996,7 +2003,8 @@ class LLMAdapter(ABC):
 
             def adapt_messages(
                 self,
-                messages: List[LLMMessage]
+                messages: List[LLMMessage],
+                system_prompt: str | None = None,
             ) -> List[Dict[str, str]]:
                 \"\"\"Convert to provider format.\"\"\"
                 return [
@@ -2028,9 +2036,21 @@ class LLMAdapter(ABC):
                     "max_length": config.max_tokens
                 }
 
+            def adapt_tools(
+                self,
+                tools: list[Any]
+            ) -> list[Dict[str, Any]]:
+                \"\"\"Convert tools to provider format.\"\"\"
+                return [
+                    {"name": t.name, "schema": t.schema}
+                    for t in tools
+                ]
+
         # Use adapter in provider
         adapter = MyProviderAdapter()
-        provider_messages = adapter.adapt_messages(messages)
+        provider_messages = adapter.adapt_messages(
+            messages, system_prompt="You are helpful.",
+        )
         ```
 
     See Also:
@@ -2041,12 +2061,17 @@ class LLMAdapter(ABC):
     @abstractmethod
     def adapt_messages(
         self,
-        messages: List[LLMMessage]
+        messages: List[LLMMessage],
+        system_prompt: str | None = None,
     ) -> Any:
         """Adapt messages to provider format.
 
         Args:
             messages: Standard LLMMessage list
+            system_prompt: Optional system prompt from provider config.
+                Providers that require system content as a separate API
+                parameter (e.g. Anthropic) merge this with any system
+                messages found in the list. Other providers may ignore it.
 
         Returns:
             Provider-specific message format
@@ -2080,6 +2105,22 @@ class LLMAdapter(ABC):
 
         Returns:
             Provider-specific config dict
+        """
+        pass
+
+    @abstractmethod
+    def adapt_tools(
+        self,
+        tools: list[Any]
+    ) -> list[Dict[str, Any]]:
+        """Adapt Tool objects to provider-specific tool format.
+
+        Args:
+            tools: List of Tool objects with ``name``, ``description``,
+                and ``schema`` attributes.
+
+        Returns:
+            Provider-specific tool definitions.
         """
         pass
 

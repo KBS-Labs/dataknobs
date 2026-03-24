@@ -216,6 +216,38 @@ class TestOpenAIMessageConversion:
         result = adapter.adapt_messages(messages)
         assert result[0]["name"] == "calc"
 
+    def test_tool_call_id_included_when_set(self) -> None:
+        """tool_call_id should be forwarded on tool result messages."""
+        adapter = self._make_adapter()
+        messages = [
+            LLMMessage(
+                role="tool",
+                content='{"result": "ok"}',
+                name="my_tool",
+                tool_call_id="call_abc123",
+            ),
+        ]
+        result = adapter.adapt_messages(messages)
+        assert result[0]["tool_call_id"] == "call_abc123"
+
+    def test_tool_call_id_falls_back_to_name(self) -> None:
+        """tool_call_id should fall back to name when not set."""
+        adapter = self._make_adapter()
+        messages = [
+            LLMMessage(role="tool", content="result", name="my_tool"),
+        ]
+        result = adapter.adapt_messages(messages)
+        assert result[0]["tool_call_id"] == "my_tool"
+
+    def test_tool_call_id_falls_back_to_unknown(self) -> None:
+        """tool_call_id should fall back to 'unknown' when both are absent."""
+        adapter = self._make_adapter()
+        messages = [
+            LLMMessage(role="tool", content="result"),
+        ]
+        result = adapter.adapt_messages(messages)
+        assert result[0]["tool_call_id"] == "unknown"
+
 
 class TestMetadataDeepCopy:
     """Tests for deep-copy of tool_call parameters in metadata."""

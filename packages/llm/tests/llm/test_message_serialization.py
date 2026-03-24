@@ -163,3 +163,28 @@ class TestLLMMessageSerialization:
         data = {"role": "system"}
         msg = LLMMessage.from_dict(data)
         assert msg.content == ""
+
+    def test_roundtrip_with_tool_call_id(self) -> None:
+        """tool_call_id should roundtrip through to_dict/from_dict."""
+        msg = LLMMessage(
+            role="tool",
+            content='{"result": "ok"}',
+            name="search",
+            tool_call_id="toolu_abc123",
+        )
+        data = msg.to_dict()
+        assert data["tool_call_id"] == "toolu_abc123"
+        restored = LLMMessage.from_dict(data)
+        assert restored.tool_call_id == "toolu_abc123"
+
+    def test_to_dict_omits_tool_call_id_when_none(self) -> None:
+        """tool_call_id should not appear in dict when None."""
+        msg = LLMMessage(role="tool", content="result", name="search")
+        data = msg.to_dict()
+        assert "tool_call_id" not in data
+
+    def test_from_dict_missing_tool_call_id(self) -> None:
+        """Missing tool_call_id in dict should default to None (backward compat)."""
+        data = {"role": "tool", "content": "result", "name": "search"}
+        msg = LLMMessage.from_dict(data)
+        assert msg.tool_call_id is None

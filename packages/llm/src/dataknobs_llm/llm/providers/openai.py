@@ -45,6 +45,7 @@ See Also:
 """
 
 import json
+import logging
 import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
@@ -59,16 +60,33 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
 
+logger = logging.getLogger(__name__)
+
 
 class OpenAIAdapter(LLMAdapter):
     """Adapter for OpenAI API format."""
 
-    def adapt_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
+    def adapt_messages(
+        self,
+        messages: List[LLMMessage],
+        system_prompt: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """Convert messages to OpenAI format.
 
         Handles assistant messages with ``tool_calls`` and tool result
         messages (``role="tool"``) so that multi-turn tool calling
         conversations retain full structured history.
+
+        ``system_prompt`` is accepted for interface compatibility but
+        ignored — OpenAI passes system content as a normal message.
+
+        Args:
+            messages: Standard LLMMessage list.
+            system_prompt: Accepted for interface compatibility but
+                ignored — OpenAI passes system content as a normal message.
+
+        Returns:
+            List of message dicts in OpenAI format.
         """
         adapted = []
         for msg in messages:
@@ -80,6 +98,26 @@ class OpenAIAdapter(LLMAdapter):
                 message['name'] = msg.name
             if msg.function_call:
                 message['function_call'] = msg.function_call
+            # Include tool_call_id on tool result messages so OpenAI can
+            # pair results with the specific tool invocation.
+            if msg.role == 'tool':
+                if msg.tool_call_id:
+                    message['tool_call_id'] = msg.tool_call_id
+                elif msg.name:
+                    # Fallback for backward compat with messages stored
+                    # before tool_call_id was available.
+                    logger.warning(
+                        "Tool result message for '%s' has no tool_call_id; "
+                        "falling back to name. OpenAI may reject this.",
+                        msg.name,
+                    )
+                    message['tool_call_id'] = msg.name
+                else:
+                    logger.warning(
+                        "Tool result message has no tool_call_id or name; "
+                        "using 'unknown'. OpenAI will likely reject this.",
+                    )
+                    message['tool_call_id'] = 'unknown'
             # Include tool_calls on assistant messages so the model
             # retains structured memory of what it called.
             if msg.tool_calls and msg.role == 'assistant':
@@ -144,6 +182,28 @@ class OpenAIAdapter(LLMAdapter):
             params['function_call'] = config.function_call
 
         return params
+
+    def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
+        """Convert Tool objects to OpenAI tools format.
+
+        Args:
+            tools: List of Tool objects with ``name``, ``description``,
+                and ``schema`` attributes.
+
+        Returns:
+            List of OpenAI tool definitions.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.schema if hasattr(tool, "schema") else {},
+                },
+            }
+            for tool in tools
+        ]
 
 
 class OpenAIProvider(AsyncLLMProvider):
@@ -353,17 +413,7 @@ class OpenAIProvider(AsyncLLMProvider):
 
         # Handle tools if provided
         if tools:
-            openai_tools = []
-            for tool in tools:
-                openai_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.schema if hasattr(tool, "schema") else {},
-                    },
-                })
-            params["tools"] = openai_tools
+            params["tools"] = self.adapter.adapt_tools(tools)
 
         # Make API call
         response = await self._client.chat.completions.create(
@@ -409,19 +459,9 @@ class OpenAIProvider(AsyncLLMProvider):
         params['stream'] = True
         params.update(kwargs)
 
-        # Handle tools if provided (same as complete())
+        # Handle tools if provided
         if tools:
-            openai_tools = []
-            for tool in tools:
-                openai_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.schema if hasattr(tool, "schema") else {},
-                    },
-                })
-            params["tools"] = openai_tools
+            params["tools"] = self.adapter.adapt_tools(tools)
 
         # Stream API call
         stream = await self._client.chat.completions.create(

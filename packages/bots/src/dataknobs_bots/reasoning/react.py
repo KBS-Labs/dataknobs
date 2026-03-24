@@ -356,6 +356,7 @@ class ReActReasoning(ReasoningStrategy):
                         content=f"Observation from {tool_call.name}: {observation}",
                         role="tool",
                         name=tool_call.name,
+                        tool_call_id=tool_call.id,
                     )
 
                 except Exception as e:
@@ -387,6 +388,7 @@ class ReActReasoning(ReasoningStrategy):
                         content=error_msg,
                         role="tool",
                         name=tool_call.name,
+                        tool_call_id=tool_call.id,
                     )
 
                 if trace is not None:

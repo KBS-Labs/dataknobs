@@ -94,8 +94,8 @@ import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
+    LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -132,6 +132,191 @@ def _find_matching_models(configured_model: str, available_models: list[str]) ->
 # Regex for <think>...</think> blocks emitted by reasoning models.
 # DOTALL so '.' matches newlines inside the tag.
 _THINK_TAG_RE = re.compile(r"^<think>(.*?)</think>\s*(.*)", re.DOTALL)
+
+
+class OllamaAdapter(LLMAdapter):
+    """Adapter for Ollama API format.
+
+    Converts between dataknobs standard types and Ollama's HTTP API format.
+    Handles assistant tool_calls, tool result messages, and vision images.
+    """
+
+    def adapt_messages(
+        self,
+        messages: List[LLMMessage],
+        system_prompt: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Convert LLMMessages to Ollama chat format.
+
+        Handles assistant messages with tool_calls, tool result messages,
+        and vision messages with images from metadata.
+
+        ``system_prompt`` is accepted for interface compatibility but
+        ignored — Ollama passes system content as a normal message.
+
+        Args:
+            messages: Standard LLMMessage list.
+            system_prompt: Accepted for interface compatibility but
+                ignored — Ollama passes system content as a normal message.
+
+        Returns:
+            List of message dicts in Ollama format.
+        """
+        ollama_messages = []
+        for msg in messages:
+            message: Dict[str, Any] = {
+                "role": msg.role,
+                "content": msg.content or "",
+            }
+
+            # Include tool_calls on assistant messages so the model
+            # retains structured memory of what it called.
+            if msg.tool_calls and msg.role == "assistant":
+                message["tool_calls"] = [
+                    {
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.parameters,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+
+            # Ollama supports images in messages for vision models
+            if msg.metadata.get("images"):
+                message["images"] = msg.metadata["images"]
+
+            ollama_messages.append(message)
+        return ollama_messages
+
+    def adapt_response(self, data: Any) -> LLMResponse:
+        """Parse Ollama JSON response into LLMResponse.
+
+        Args:
+            data: Parsed JSON dict from Ollama ``/api/chat`` response.
+
+        Returns:
+            Standard ``LLMResponse`` with content, tool_calls, and usage.
+        """
+        message = data.get("message", {})
+        content = message.get("content", "")
+        raw_tool_calls = message.get("tool_calls", [])
+
+        tool_calls = None
+        if raw_tool_calls:
+            tool_calls = [
+                ToolCall(
+                    name=tc.get("function", {}).get("name", ""),
+                    parameters=tc.get("function", {}).get("arguments", {}),
+                    id=tc.get("id"),
+                )
+                for tc in raw_tool_calls
+            ]
+
+        usage = None
+        if "eval_count" in data:
+            usage = {
+                "prompt_tokens": data.get("prompt_eval_count", 0),
+                "completion_tokens": data.get("eval_count", 0),
+                "total_tokens": (
+                    data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+                ),
+            }
+
+        return LLMResponse(
+            content=content,
+            model=data.get("model", ""),
+            finish_reason=(
+                "tool_calls" if tool_calls
+                else ("stop" if data.get("done") else "length")
+            ),
+            usage=usage,
+            tool_calls=tool_calls,
+            metadata={
+                "eval_duration": data.get("eval_duration"),
+                "total_duration": data.get("total_duration"),
+                "model_info": data.get("model", ""),
+            },
+        )
+
+    def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
+        """Build Ollama options dict from config.
+
+        Args:
+            config: Standard LLMConfig.
+
+        Returns:
+            Dictionary of Ollama options.
+        """
+        gen = config.generation_params()
+        options: Dict[str, Any] = {}
+
+        if "temperature" in gen:
+            options["temperature"] = float(gen["temperature"])
+        if "top_p" in gen:
+            options["top_p"] = float(gen["top_p"])
+        if "seed" in gen:
+            options["seed"] = int(gen["seed"])
+        if "max_tokens" in gen:
+            options["num_predict"] = int(gen["max_tokens"])
+        if "stop_sequences" in gen:
+            options["stop"] = list(gen["stop_sequences"])
+
+        return options
+
+    def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
+        """Convert Tool objects to Ollama tools format.
+
+        Ollama uses an OpenAI-compatible format with ``type: "function"``
+        wrapping.
+
+        Args:
+            tools: List of Tool objects with ``name``, ``description``,
+                and ``schema`` attributes.
+
+        Returns:
+            List of Ollama tool definitions.
+        """
+        return [self._tool_to_dict(tool) for tool in tools]
+
+    def adapt_raw_functions(
+        self, functions: list[Dict[str, Any]],
+    ) -> list[Dict[str, Any]]:
+        """Convert raw function dicts to Ollama tools format.
+
+        Used by the deprecated ``function_call()`` method which receives
+        raw dicts rather than Tool objects.
+
+        Args:
+            functions: List of raw function definition dicts with
+                ``name``, ``description``, and ``parameters`` keys.
+
+        Returns:
+            List of Ollama tool definitions.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {}),
+                },
+            }
+            for func in functions
+        ]
+
+    @staticmethod
+    def _tool_to_dict(tool: Any) -> Dict[str, Any]:
+        """Convert a single Tool or raw dict to Ollama format."""
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.schema if hasattr(tool, "schema") else {},
+            },
+        }
 
 
 class OllamaProvider(AsyncLLMProvider):
@@ -300,6 +485,8 @@ class OllamaProvider(AsyncLLMProvider):
         llm_config = normalize_llm_config(config)
         super().__init__(llm_config, prompt_builder=prompt_builder)
 
+        self.adapter = OllamaAdapter()
+
         # Check for Docker environment and adjust URL accordingly
         default_url = 'http://localhost:11434'
         if os.path.exists('/.dockerenv'):
@@ -312,29 +499,9 @@ class OllamaProvider(AsyncLLMProvider):
     def _build_options(self, config: LLMConfig | None = None) -> Dict[str, Any]:
         """Build options dict for Ollama API calls.
 
-        Args:
-            config: Config to use for options. If None, uses self.config.
-
-        Returns:
-            Dictionary of options for the API request.
+        Delegates to the adapter. Accepts ``None`` to use ``self.config``.
         """
-        cfg = config or self.config
-        gen = cfg.generation_params()
-        options: Dict[str, Any] = {}
-
-        # Map canonical names to Ollama names
-        if 'temperature' in gen:
-            options['temperature'] = float(gen['temperature'])
-        if 'top_p' in gen:
-            options['top_p'] = float(gen['top_p'])
-        if 'seed' in gen:
-            options['seed'] = int(gen['seed'])
-        if 'max_tokens' in gen:
-            options['num_predict'] = int(gen['max_tokens'])
-        if 'stop_sequences' in gen:
-            options['stop'] = list(gen['stop_sequences'])
-
-        return options
+        return self.adapter.adapt_config(config or self.config)
 
     def _analyze_response(self, response: LLMResponse) -> LLMResponse:
         """Parse ``<think>`` tags and run base-class thinking-only detection.
@@ -370,72 +537,9 @@ class OllamaProvider(AsyncLLMProvider):
     def _messages_to_ollama(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
         """Convert LLMMessage list to Ollama chat format.
 
-        Handles three special cases beyond basic role/content conversion:
-
-        1. **Assistant messages with tool_calls**: Includes the ``tool_calls``
-           list so the model sees what it previously called and with what
-           parameters on subsequent turns.
-        2. **Tool result messages** (``role="tool"``): Passed through directly
-           so Ollama receives structured tool results paired with the
-           assistant's tool_calls.
-        3. **Vision messages**: Includes ``images`` from metadata.
-
-        Args:
-            messages: List of LLM messages
-
-        Returns:
-            List of message dicts in Ollama format
+        Delegates to the adapter.
         """
-        ollama_messages = []
-        for msg in messages:
-            message: Dict[str, Any] = {
-                'role': msg.role,
-                'content': msg.content or '',
-            }
-
-            # Include tool_calls on assistant messages so the model
-            # retains structured memory of what it called.
-            if msg.tool_calls and msg.role == 'assistant':
-                message['tool_calls'] = [
-                    {
-                        'function': {
-                            'name': tc.name,
-                            'arguments': tc.parameters,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ]
-
-            # Ollama supports images in messages for vision models
-            if msg.metadata.get('images'):
-                message['images'] = msg.metadata['images']
-
-            ollama_messages.append(message)
-        return ollama_messages
-
-    def _adapt_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Adapt tools to Ollama format.
-
-        Ollama uses a similar format to OpenAI for tools.
-
-        Args:
-            tools: List of tool definitions
-
-        Returns:
-            List of tools in Ollama format
-        """
-        # Ollama format is similar to OpenAI
-        ollama_tools = []
-        for tool in tools:
-            ollama_tools.append({
-                'type': 'function',
-                'function': {
-                    'name': tool.get('name'),
-                    'description': tool.get('description', ''),
-                    'parameters': tool.get('parameters', {})
-                }
-            })
-        return ollama_tools
+        return self.adapter.adapt_messages(messages)
 
     async def initialize(self) -> None:
         """Initialize Ollama client."""
@@ -578,16 +682,7 @@ class OllamaProvider(AsyncLLMProvider):
 
         # Handle tools if provided
         if tools:
-            # Convert Tool objects to dict format for _adapt_tools
-            tool_dicts = []
-            for tool in tools:
-                tool_dicts.append({
-                    'name': tool.name,
-                    'description': tool.description,
-                    'parameters': tool.schema if hasattr(tool, 'schema') else {}
-                })
-            ollama_tools = self._adapt_tools(tool_dicts)
-            payload['tools'] = ollama_tools
+            payload['tools'] = self.adapter.adapt_tools(tools)
 
         # Forward 'think' parameter for reasoning models (e.g. qwen3, deepseek-r1).
         # When True, the model emits <think>...</think> blocks before the answer.
@@ -598,8 +693,6 @@ class OllamaProvider(AsyncLLMProvider):
         async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
             if response.status != 200:
                 error_text = await response.text()
-                import logging
-                logger = logging.getLogger(__name__)
 
                 # Handle tools not supported — raise explicit error
                 if response.status == 400 and "does not support tools" in error_text:
@@ -613,46 +706,16 @@ class OllamaProvider(AsyncLLMProvider):
                         ),
                     )
                 else:
-                    logger.error(f"Ollama API error (status {response.status}): {error_text}")
-                    logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
+                    logger.error("Ollama API error (status %s): %s", response.status, error_text)
+                    logger.error("Request payload: %s", json.dumps(payload, indent=2))
                     response.raise_for_status()
             else:
                 data = await response.json()
 
-        # Extract response and tool calls
-        message = data.get('message', {})
-        content = message.get('content', '')
-        raw_tool_calls = message.get('tool_calls', [])
-
-        # Convert tool calls to ToolCall objects
-        from ..base import ToolCall
-        tool_calls = None
-        if raw_tool_calls:
-            tool_calls = []
-            for tc in raw_tool_calls:
-                func = tc.get('function', {})
-                tool_calls.append(ToolCall(
-                    name=func.get('name', ''),
-                    parameters=func.get('arguments', {}),
-                    id=tc.get('id')
-                ))
-
-        return self._analyze_response(LLMResponse(
-            content=content,
-            model=runtime_config.model,
-            finish_reason='tool_calls' if tool_calls else ('stop' if data.get('done') else 'length'),
-            usage={
-                'prompt_tokens': data.get('prompt_eval_count', 0),
-                'completion_tokens': data.get('eval_count', 0),
-                'total_tokens': data.get('prompt_eval_count', 0) + data.get('eval_count', 0)
-            } if 'eval_count' in data else None,
-            tool_calls=tool_calls,
-            metadata={
-                'eval_duration': data.get('eval_duration'),
-                'total_duration': data.get('total_duration'),
-                'model_info': data.get('model', '')
-            }
-        ))
+        parsed = self.adapter.adapt_response(data)
+        # Override model with runtime config model (adapter uses response model)
+        parsed.model = runtime_config.model
+        return self._analyze_response(parsed)
 
     async def stream_complete(
         self,
@@ -705,14 +768,7 @@ class OllamaProvider(AsyncLLMProvider):
 
         # Handle tools if provided
         if tools:
-            tool_dicts = []
-            for tool in tools:
-                tool_dicts.append({
-                    'name': tool.name,
-                    'description': tool.description,
-                    'parameters': tool.schema if hasattr(tool, 'schema') else {}
-                })
-            payload['tools'] = self._adapt_tools(tool_dicts)
+            payload['tools'] = self.adapter.adapt_tools(tools)
 
         # Forward 'think' parameter for reasoning models (mirrors complete())
         think = runtime_config.options.get('think')
@@ -728,44 +784,22 @@ class OllamaProvider(AsyncLLMProvider):
                     msg = data.get('message', {})
                     done = data.get('done', False)
 
-                    # Build usage info from final chunk
-                    usage = None
-                    if done and 'eval_count' in data:
-                        usage = {
-                            'prompt_tokens': data.get('prompt_eval_count', 0),
-                            'completion_tokens': data.get('eval_count', 0),
-                            'total_tokens': (
-                                data.get('prompt_eval_count', 0)
-                                + data.get('eval_count', 0)
-                            ),
-                        }
-
-                    # Parse tool calls from final chunk
-                    tool_calls = None
-                    raw_tool_calls = msg.get('tool_calls', [])
-                    if raw_tool_calls:
-                        from ..base import ToolCall
-                        tool_calls = [
-                            ToolCall(
-                                name=tc.get('function', {}).get('name', ''),
-                                parameters=tc.get('function', {}).get('arguments', {}),
-                                id=tc.get('id'),
-                            )
-                            for tc in raw_tool_calls
-                        ]
-
-                    finish_reason = None
                     if done:
-                        finish_reason = 'tool_calls' if tool_calls else 'stop'
-
-                    yield LLMStreamResponse(
-                        delta=msg.get('content', ''),
-                        is_final=done,
-                        finish_reason=finish_reason,
-                        usage=usage,
-                        tool_calls=tool_calls,
-                        model=runtime_config.model if done else None,
-                    )
+                        # Use adapter for final chunk parsing
+                        parsed = self.adapter.adapt_response(data)
+                        yield LLMStreamResponse(
+                            delta=msg.get('content', ''),
+                            is_final=True,
+                            finish_reason=parsed.finish_reason,
+                            usage=parsed.usage,
+                            tool_calls=parsed.tool_calls,
+                            model=runtime_config.model,
+                        )
+                    else:
+                        yield LLMStreamResponse(
+                            delta=msg.get('content', ''),
+                            is_final=False,
+                        )
 
     async def embed(
         self,
@@ -818,8 +852,9 @@ class OllamaProvider(AsyncLLMProvider):
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
 
-        # Adapt tools to Ollama format
-        ollama_tools = self._adapt_tools(functions)
+        # function_call() receives raw dicts, not Tool objects — delegate
+        # to the adapter's raw function converter.
+        ollama_tools = self.adapter.adapt_raw_functions(functions)
 
         # Build payload with tools
         payload = {
