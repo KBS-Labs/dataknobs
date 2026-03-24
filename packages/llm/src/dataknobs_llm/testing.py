@@ -40,7 +40,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Union
 
 from .llm.base import (
@@ -51,6 +51,7 @@ from .llm.base import (
     ModelCapability,
     ToolCall,
 )
+from .extraction.schema_extractor import SimpleExtractionResult
 from .llm.providers.echo import ErrorResponse
 
 if TYPE_CHECKING:
@@ -376,32 +377,9 @@ class ResponseSequenceBuilder:
 # Schema extraction testing constructs
 # =============================================================================
 
-
-@dataclass
-class SimpleExtractionResult:
-    """Test-friendly extraction result matching SchemaExtractor's interface.
-
-    Use this instead of mocking ``ExtractionResult`` from
-    ``dataknobs_llm.extraction``.  The ``is_confident`` property uses the
-    same threshold (0.8) and error check as the production result class.
-
-    Example:
-        >>> result = SimpleExtractionResult(
-        ...     data={"name": "Alice"}, confidence=0.9
-        ... )
-        >>> result.is_confident
-        True
-    """
-
-    data: dict[str, Any] = field(default_factory=dict)
-    confidence: float = 0.9
-    errors: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_confident(self) -> bool:
-        """Whether extraction meets confidence threshold (>= 0.8, no errors)."""
-        return self.confidence >= 0.8 and not self.errors
+# SimpleExtractionResult: canonical definition lives in
+# extraction.schema_extractor alongside ExtractionResult.
+# Re-exported here (imported at top of file) for backward compatibility.
 
 
 class ConfigurableExtractor:

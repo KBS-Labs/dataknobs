@@ -1,11 +1,32 @@
 """Composite memory strategy combining multiple memory implementations."""
 
+import asyncio
 import logging
 from typing import Any
+
+from dataknobs_common.exceptions import DataknobsError
 
 from .base import Memory
 
 logger = logging.getLogger(__name__)
+
+# Transient infrastructure failures that warrant graceful degradation
+# (log + continue).  Programming errors (AttributeError, TypeError,
+# ValueError, KeyError, NotImplementedError, etc.) are NOT caught — they
+# should surface during development.
+#
+# DataknobsError covers the entire dataknobs exception hierarchy
+# (ResourceError, OperationError, RateLimitError, etc.) raised by
+# real backends.  asyncio.TimeoutError is included separately because
+# on Python 3.10 it does not inherit from builtins.TimeoutError.
+_STRATEGY_ERRORS = (
+    RuntimeError,
+    OSError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    DataknobsError,
+)
 
 
 class CompositeMemory(Memory):
@@ -70,7 +91,7 @@ class CompositeMemory(Memory):
         for i, strategy in enumerate(self._strategies):
             try:
                 await strategy.add_message(content, role, metadata)
-            except Exception:
+            except _STRATEGY_ERRORS:
                 logger.warning(
                     "Memory strategy %d (%s) failed on add_message",
                     i,
@@ -96,7 +117,7 @@ class CompositeMemory(Memory):
                 if key not in seen:
                     results.append(msg)
                     seen.add(key)
-        except Exception:
+        except _STRATEGY_ERRORS:
             logger.warning(
                 "Primary memory strategy (%s) failed on get_context",
                 type(self.primary).__name__,
@@ -114,7 +135,7 @@ class CompositeMemory(Memory):
                     if key not in seen:
                         results.append(msg)
                         seen.add(key)
-            except Exception:
+            except _STRATEGY_ERRORS:
                 logger.warning(
                     "Memory strategy %d (%s) failed on get_context",
                     i,
@@ -129,7 +150,7 @@ class CompositeMemory(Memory):
         for i, strategy in enumerate(self._strategies):
             try:
                 await strategy.clear()
-            except Exception:
+            except _STRATEGY_ERRORS:
                 logger.warning(
                     "Memory strategy %d (%s) failed on clear",
                     i,
@@ -150,7 +171,7 @@ class CompositeMemory(Memory):
         for i, strategy in enumerate(self._strategies):
             try:
                 await strategy.close()
-            except Exception:
+            except _STRATEGY_ERRORS:
                 logger.warning(
                     "Memory strategy %d (%s) failed on close",
                     i,

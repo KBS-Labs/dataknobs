@@ -1567,6 +1567,141 @@ Both Python (`True`/`False`/`None`) and YAML/JSON (`true`/`false`/`null`)
 boolean literals are accepted. Python builtins like `len`, `str`, `int` are
 also available.
 
+**Subflows:**
+
+Subflows are nested wizard FSMs pushed from a parent stage's transition. They enable
+complex optional paths (quiz configuration, KB setup) that run as isolated flows and
+return data to the parent via result mapping.
+
+```yaml
+# Parent wizard — inline subflow definition
+subflows:
+  quiz_config:
+    name: quiz_config
+    description: Configure quiz-specific settings
+    settings:
+      extraction_scope: current_message
+    stages:
+      - name: configure_quiz
+        label: "Quiz Setup"
+        is_start: true
+        prompt: "Configure quiz settings..."
+        schema:
+          type: object
+          properties:
+            quiz_question_count:
+              type: integer
+          required: [quiz_question_count]
+        transitions:
+          - target: quiz_complete
+            condition: "data.get('quiz_question_count')"
+            derive:
+              _quiz_configured: "true"
+
+      - name: quiz_complete
+        is_end: true
+        auto_advance: true
+        response_template: "Quiz settings saved!"
+        transitions: []
+```
+
+**Pushing into a subflow** — use `target: "_subflow"` on a transition:
+
+```yaml
+# In the parent stage's transitions:
+transitions:
+  - target: "_subflow"
+    condition: "data.get('intent') == 'quiz' and not data.get('_quiz_configured')"
+    subflow:
+      network: quiz_config           # Name of subflow defined in `subflows:`
+      return_stage: configure_options # Parent stage to return to after completion
+      data_mapping:                  # Fields copied parent → subflow on push
+        domain_id: domain_id
+        subject: subject
+      result_mapping:                # Fields copied subflow → parent on pop
+        quiz_question_count: quiz_question_count
+        _quiz_configured: _quiz_configured
+```
+
+**Subflow push/pop lifecycle:**
+
+| Step | What Happens |
+|------|-------------|
+| **Push** | Parent state saved. `data_mapping` copies fields to subflow. Subflow starts at its `is_start` stage. |
+| **In subflow** | Normal wizard processing (extraction, transitions, response templates). Parent state is frozen. |
+| **Pop** | Subflow reaches an `is_end` stage. `result_mapping` copies fields back to parent. Parent resumes at `return_stage`. |
+| **After pop** | Return stage renders its response. **Waits for user input** before evaluating transitions. |
+
+> **Critical:** After a subflow pops, the return stage does NOT automatically evaluate
+> transitions. It renders the return stage's response and waits for the next user message.
+> This means every subflow pop requires at least one user turn before the parent stage can
+> advance — including triggering a second subflow.
+
+**Sequential subflows** — when multiple subflows can fire from the same stage (e.g., quiz
+config and KB setup both triggered from `configure_options`), they execute one at a time:
+
+```
+User message → configure_options → quiz subflow pushes (condition matches first)
+  [quiz subflow processes across N turns]
+  quiz_complete (is_end) → pop → configure_options renders response
+User message → configure_options → KB subflow pushes (now its condition matches)
+  [KB subflow processes across N turns]
+  kb_complete (is_end) → pop → configure_options renders response
+User message → configure_options → review transition fires (all guards satisfied)
+```
+
+Each subflow requires a user turn to trigger. The response template on the return stage
+should guide the user through the sequence naturally:
+
+```yaml
+response_template: |
+  {% if _quiz_configured and kb_enabled and not _kb_configured %}
+  Quiz settings saved! Now let's set up your knowledge base.
+  {% elif _quiz_configured or _kb_configured %}
+  Settings configured. Ready to review?
+  {% else %}
+  Let's configure your options...
+  {% endif %}
+```
+
+**Guard flags** prevent re-push after edit-back. When a user completes a subflow, edits
+from review, and returns to the parent stage, the guard flag ensures the subflow doesn't
+fire again:
+
+```yaml
+transitions:
+  # Guard: only push if not already configured
+  - target: "_subflow"
+    condition: "data.get('intent') == 'quiz' and not data.get('_quiz_configured')"
+    subflow:
+      network: quiz_config
+      # ...
+      result_mapping:
+        _quiz_configured: _quiz_configured  # Set by derive in subflow
+
+  # Normal path: only fires when all subflows are complete
+  - target: review
+    condition: >
+      (data.get('intent') != 'quiz' or data.get('_quiz_configured')) and
+      (not data.get('kb_enabled') or data.get('_kb_configured'))
+```
+
+**Extraction context after pop:** When a subflow pops and the user sends their next
+message, that message is processed by the **parent stage's** extraction schema — not
+the subflow's. This means user messages like "Skip the knowledge base" can be
+misinterpreted as field updates by the parent stage (e.g., extracting `kb_enabled=false`
+instead of being a skip command within the KB subflow). Design conversation prompts to
+guide users toward messages that preserve parent state.
+
+**Subflow properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `network` | string | Name of the subflow (must match a key in `subflows:`) |
+| `return_stage` | string | Parent stage to resume at after subflow completes |
+| `data_mapping` | dict | Maps parent field names to subflow field names (copied on push) |
+| `result_mapping` | dict | Maps subflow field names to parent field names (copied on pop) |
+
 **Navigation Commands:**
 
 Users can navigate the wizard with natural language. The default keywords are:
@@ -1836,22 +1971,41 @@ moved to transient (with a warning log), even if not declared in `ephemeral_keys
 
 **Per-Turn Keys:**
 
-Some fields change value every turn (e.g., `action` cycling through `accept`,
-`view_bank`, `generate_more`). These should be cleared at the start of each turn
-to prevent stale values from persisting when extraction fails. Declare them in
-`settings.per_turn_keys`:
+Some fields represent **current-turn user intent** rather than persistent wizard data
+(e.g., `action` cycling through `accept`, `view_bank`, `generate_more`; or `confirmed`
+toggling between `true` and `false` at a review stage). These must be cleared at the
+start of each turn to prevent stale values from triggering incorrect transitions when
+extraction misses the field. Declare them in `settings.per_turn_keys`:
 
 ```yaml
 settings:
   per_turn_keys:
     - action               # User action per turn (accept, skip, edit, etc.)
     - feedback             # User feedback text (only relevant for current turn)
+    - confirmed            # Confirmation boolean (only meaningful at review)
+    - edit_section         # Which section to edit (only meaningful when editing)
 ```
 
 Per-turn keys are:
 - **Cleared** from `state.data` and `state.transient` at the start of each `generate()` call
 - **Merged** into ephemeral keys (never persisted to storage)
 - **Suppressed** in conflict detection (no "Data conflict detected" warnings)
+
+**When to use per-turn keys:** Any schema field that controls a transition based on the
+user's intent *this turn* (rather than accumulated data) should be a per-turn key. The
+critical signal: if the field's *absence* should mean "do nothing" rather than "use the
+last known value", it belongs in `per_turn_keys`. Without this, a stale `edit_section`
+from a previous edit request can re-trigger the edit transition after the user returns
+to the stage, creating an infinite loop.
+
+**When NOT to use:** Fields that accumulate over the wizard lifecycle (`domain_name`,
+`subject`, `kb_enabled`) should NOT be per-turn keys — their values persist intentionally.
+Guard flags (`_quiz_configured`, `_kb_configured`) that track completion state also persist.
+
+**Relationship to derive:** Note that `derive` blocks on transitions cannot overwrite
+existing keys (line 5782). Per-turn keys solve the complementary problem: clearing stale
+values that derive cannot touch. Use derive for *setting* new values, per-turn keys for
+*clearing* intent signals between turns.
 
 **Post-Completion Amendments:**
 

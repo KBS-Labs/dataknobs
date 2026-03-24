@@ -68,6 +68,7 @@ async def create_embedding_provider(
         "provider": provider_name,
         "model": model_name,
         **extra,
+        "mode": "embedding",  # Always forced — must come after **extra
     }
     try:
         provider = factory.create(provider_config)

@@ -32,6 +32,23 @@ When a subflow is triggered, the parent wizard's state is saved onto a stack, th
 
 Because the state is maintained on a stack (`WizardState.subflow_stack`), subflows can be nested -- a subflow can itself push another subflow.
 
+### First-Render Confirmation in Subflow Stages
+
+Subflow stages follow the same first-render confirmation behavior as main flow stages: when a stage has a `response_template` and receives new extracted data on its first visit, the wizard renders the template and returns **before evaluating transitions**. The next user message triggers transition evaluation.
+
+This means each subflow stage that collects data via a schema adds one confirmation turn to the conversation. Plan for this when estimating turn counts:
+
+```
+[parent] User provides data → subflow pushes → lands on subflow start stage
+[subflow] Bot renders subflow stage template (confirmation)     ← Turn N
+[subflow] User confirms → extraction → transition fires → pop   ← Turn N+1
+[parent] Bot renders return stage template
+```
+
+Stages with `reasoning: react` skip this confirmation and evaluate transitions immediately. If your subflow stages don't need the confirmation step, consider using ReAct reasoning on the subflow stage, or omitting the `response_template` (let the LLM generate the response instead).
+
+> **Future:** A per-stage `confirm_first_render: false` flag is planned to allow opting out of this behavior without switching to ReAct reasoning. See implementation tracker item #44.
+
 ## Configuration
 
 ### Transition Syntax

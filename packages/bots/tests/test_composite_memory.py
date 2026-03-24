@@ -59,6 +59,22 @@ class _FailingMemory(Memory):
         raise RuntimeError("close intentionally broken")
 
 
+class _BrokenAttributeMemory(Memory):
+    """A memory with an AttributeError bug — should NOT be caught."""
+
+    async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+        raise AttributeError("typo in attribute name")
+
+    async def get_context(self, current_message):  # type: ignore[override]
+        raise AttributeError("typo in attribute name")
+
+    async def clear(self):
+        raise AttributeError("typo in attribute name")
+
+    async def close(self):
+        raise AttributeError("typo in attribute name")
+
+
 # ===========================================================================
 # VectorMemory scoping
 # ===========================================================================
@@ -350,6 +366,138 @@ class TestCompositeMemoryDegradation:
         composite = CompositeMemory([buf, failing])
 
         # Should not raise even though failing.close() throws
+        await composite.close()
+
+
+# ===========================================================================
+# CompositeMemory — narrowed exception handling (Gap 14)
+# ===========================================================================
+
+
+class TestCompositeMemoryNarrowedExceptions:
+    """Programming errors (e.g. AttributeError) must propagate, not be swallowed."""
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_propagates_from_add_message(self):
+        """AttributeError is NOT caught — it surfaces as a programming bug."""
+        buf = BufferMemory(max_messages=10)
+        broken = _BrokenAttributeMemory()
+        composite = CompositeMemory([buf, broken])
+
+        with pytest.raises(AttributeError, match="typo"):
+            await composite.add_message("hello", "user")
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_propagates_from_get_context(self):
+        buf = BufferMemory(max_messages=10)
+        broken = _BrokenAttributeMemory()
+        composite = CompositeMemory([buf, broken])
+
+        with pytest.raises(AttributeError, match="typo"):
+            await composite.get_context("x")
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_propagates_from_clear(self):
+        buf = BufferMemory(max_messages=10)
+        broken = _BrokenAttributeMemory()
+        composite = CompositeMemory([buf, broken])
+
+        with pytest.raises(AttributeError, match="typo"):
+            await composite.clear()
+
+    @pytest.mark.asyncio
+    async def test_attribute_error_propagates_from_close(self):
+        buf = BufferMemory(max_messages=10)
+        broken = _BrokenAttributeMemory()
+        composite = CompositeMemory([buf, broken])
+
+        with pytest.raises(AttributeError, match="typo"):
+            await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_connection_error_still_caught(self):
+        """ConnectionError (a runtime failure) is still gracefully caught."""
+
+        class _ConnectionFailMemory(Memory):
+            async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+                raise ConnectionError("network down")
+
+            async def get_context(self, current_message):  # type: ignore[override]
+                raise ConnectionError("network down")
+
+            async def clear(self):
+                raise ConnectionError("network down")
+
+            async def close(self):
+                raise ConnectionError("network down")
+
+        buf = BufferMemory(max_messages=10)
+        failing = _ConnectionFailMemory()
+        composite = CompositeMemory([buf, failing])
+
+        # Should NOT raise — ConnectionError is in the caught set
+        await composite.add_message("hello", "user")
+        ctx = await buf.get_context("x")
+        assert len(ctx) == 1
+
+        await composite.clear()
+        await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_dataknobs_error_still_caught(self):
+        """DataknobsError subclasses (real backend failures) are gracefully caught."""
+        from dataknobs_common.exceptions import ResourceError
+
+        class _DataknobsFailMemory(Memory):
+            async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+                raise ResourceError("database connection lost")
+
+            async def get_context(self, current_message):  # type: ignore[override]
+                raise ResourceError("database connection lost")
+
+            async def clear(self):
+                raise ResourceError("database connection lost")
+
+            async def close(self):
+                raise ResourceError("database connection lost")
+
+        buf = BufferMemory(max_messages=10)
+        failing = _DataknobsFailMemory()
+        composite = CompositeMemory([buf, failing])
+
+        # Should NOT raise — DataknobsError hierarchy is in the caught set
+        await composite.add_message("hello", "user")
+        ctx = await buf.get_context("x")
+        assert len(ctx) == 1
+
+        await composite.clear()
+        await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_asyncio_timeout_error_still_caught(self):
+        """asyncio.TimeoutError is caught (important for Python 3.10)."""
+        import asyncio
+
+        class _AsyncTimeoutMemory(Memory):
+            async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+                raise asyncio.TimeoutError()
+
+            async def get_context(self, current_message):  # type: ignore[override]
+                raise asyncio.TimeoutError()
+
+            async def clear(self):
+                raise asyncio.TimeoutError()
+
+            async def close(self):
+                raise asyncio.TimeoutError()
+
+        buf = BufferMemory(max_messages=10)
+        failing = _AsyncTimeoutMemory()
+        composite = CompositeMemory([buf, failing])
+
+        # Should NOT raise — asyncio.TimeoutError is in the caught set
+        await composite.add_message("hello", "user")
+        await composite.clear()
         await composite.close()
 
 
