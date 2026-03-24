@@ -1,10 +1,10 @@
 # Content Transformation
 
-The Content Transformation module provides tools for converting structured data formats (JSON, YAML, CSV) into well-formatted markdown suitable for RAG ingestion and chunking.
+The Content Transformation module provides tools for converting structured data formats (JSON, YAML, CSV, HTML) into well-formatted markdown suitable for RAG ingestion and chunking.
 
 ## Overview
 
-When building RAG (Retrieval-Augmented Generation) systems, you often need to ingest structured data like JSON configuration files, YAML documentation, or CSV datasets. The `ContentTransformer` class converts these formats into markdown with appropriate heading hierarchies, enabling the markdown chunker to create semantic boundaries around logical content units.
+When building RAG (Retrieval-Augmented Generation) systems, you often need to ingest structured data like JSON configuration files, YAML documentation, CSV datasets, or HTML documents. The `ContentTransformer` class converts these formats into markdown with appropriate heading hierarchies, enabling the markdown chunker to create semantic boundaries around logical content units.
 
 ## Quick Start
 
@@ -243,12 +243,26 @@ markdown = transformer.transform_csv("data.csv", title="My Dataset")
 
 Each row becomes a section with the first column (or `title_field`) as the heading.
 
+## HTML Transformation
+
+HTML content (including IETF RFC markup) can be converted to markdown. See the dedicated [HTML Conversion](html-conversion.md) guide for full details.
+
+```python
+# Via ContentTransformer
+markdown = transformer.transform(html_string, format="html")
+markdown = transformer.transform_html(html_string, title="My Page")
+
+# Via convenience function
+from dataknobs_xization import html_to_markdown
+markdown = html_to_markdown("<h1>Title</h1><p>Content.</p>")
+```
+
 ## Convenience Functions
 
 For quick one-off conversions:
 
 ```python
-from dataknobs_xization import json_to_markdown, yaml_to_markdown, csv_to_markdown
+from dataknobs_xization import json_to_markdown, yaml_to_markdown, csv_to_markdown, html_to_markdown
 
 # JSON to markdown
 md = json_to_markdown(data, title="Document Title", base_heading_level=2)
@@ -258,6 +272,9 @@ md = yaml_to_markdown("config.yaml", title="Configuration")
 
 # CSV to markdown
 md = csv_to_markdown("data.csv", title="Data", title_field="name")
+
+# HTML to markdown
+md = html_to_markdown("<h1>Title</h1><p>Content.</p>", title="Document")
 ```
 
 ## Integration with RAG
@@ -323,6 +340,12 @@ class ContentTransformer:
         title: str | None = None,
     ) -> str
 
+    def transform_html(
+        self,
+        content: str | Path,
+        title: str | None = None,
+    ) -> str
+
     def transform_json(
         self,
         data: dict[str, Any] | list[Any],
@@ -365,5 +388,13 @@ def csv_to_markdown(
     title: str | None = None,
     title_field: str | None = None,
     base_heading_level: int = 2,
+) -> str
+
+def html_to_markdown(
+    content: str | Path,
+    title: str | None = None,
+    base_heading_level: int = 1,
+    include_links: bool = True,
+    frontmatter: dict[str, Any] | None = None,
 ) -> str
 ```

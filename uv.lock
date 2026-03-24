@@ -1975,6 +1975,7 @@ name = "dataknobs-xization"
 version = "1.2.6"
 source = { editable = "packages/xization" }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "dataknobs-common" },
     { name = "dataknobs-structures" },
     { name = "dataknobs-utils" },
@@ -1988,6 +1989,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
