@@ -366,6 +366,7 @@ class ConversationManager:
         rag_configs: List[Dict[str, Any]] | None = None,
         metadata: Dict[str, Any] | None = None,
         name: str | None = None,
+        tool_call_id: str | None = None,
     ) -> ConversationNode:
         """Add a message to the current conversation node.
 
@@ -391,6 +392,9 @@ class ConversationManager:
             metadata: Optional metadata for this message node
             name: Optional name for the message — used for tool result
                 messages to identify which tool produced the result.
+            tool_call_id: Optional provider-assigned tool call ID — used for
+                tool result messages to pair the result with the specific
+                tool invocation (required by Anthropic and OpenAI APIs).
 
         Returns:
             The created ConversationNode
@@ -518,7 +522,9 @@ class ConversationManager:
                     rag_metadata_to_store = result.rag_metadata
 
         # Create message
-        message = LLMMessage(role=role, content=content, name=name)
+        message = LLMMessage(
+            role=role, content=content, name=name, tool_call_id=tool_call_id,
+        )
 
         # Prepare node metadata
         node_metadata = metadata or {}

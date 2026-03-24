@@ -57,20 +57,201 @@ See Also:
     - anthropic Python package: https://github.com/anthropics/anthropic-sdk-python
 """
 
-import os
 import json
+import logging
+import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
+    LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
     AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
+
+
+class AnthropicAdapter(LLMAdapter):
+    """Adapter for Anthropic Messages API format.
+
+    Converts between dataknobs standard types (LLMMessage, LLMResponse,
+    LLMConfig) and Anthropic-specific formats. Key differences from other
+    providers:
+
+    - System messages are a top-level ``system`` parameter, not in the
+      message list.
+    - Assistant tool calls use ``content`` blocks with ``type="tool_use"``.
+    - Tool results are ``role="user"`` messages with ``type="tool_result"``
+      content blocks paired via ``tool_use_id``.
+    """
+
+    # Anthropic requires max_tokens on every request.
+    DEFAULT_MAX_TOKENS: int = 1024
+
+    def adapt_messages(
+        self,
+        messages: List[LLMMessage],
+        system_prompt: str | None = None,
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        """Convert LLMMessages to Anthropic Messages API format.
+
+        Args:
+            messages: Standard LLMMessage list.
+            system_prompt: Optional system prompt from provider config to
+                merge with any system messages found in the list.
+
+        Returns:
+            Tuple of ``(system_content, anthropic_messages)`` where
+            ``system_content`` should be passed as the ``system`` API
+            parameter and ``anthropic_messages`` as ``messages``.
+        """
+        anthropic_messages: List[Dict[str, Any]] = []
+        system_content = system_prompt or ""
+
+        for msg in messages:
+            if msg.role == "system":
+                system_content = (
+                    f"{system_content}\n\n{msg.content}"
+                    if system_content
+                    else msg.content
+                )
+            elif msg.role == "assistant" and msg.tool_calls:
+                content_blocks: List[Dict[str, Any]] = []
+                if msg.content:
+                    content_blocks.append({"type": "text", "text": msg.content})
+                for tc in msg.tool_calls:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc.id or tc.name,
+                        "name": tc.name,
+                        "input": tc.parameters,
+                    })
+                anthropic_messages.append({
+                    "role": "assistant",
+                    "content": content_blocks,
+                })
+            elif msg.role == "tool":
+                # Anthropic expects tool results as user messages with
+                # tool_result content blocks paired by tool_use_id.
+                # Consecutive tool results must be consolidated into a
+                # single user message — the API rejects consecutive
+                # messages with the same role.
+                tool_use_id = msg.tool_call_id or msg.name or "unknown"
+                result_block = {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": msg.content,
+                }
+                if (
+                    anthropic_messages
+                    and anthropic_messages[-1]["role"] == "user"
+                    and isinstance(anthropic_messages[-1]["content"], list)
+                    and anthropic_messages[-1]["content"]
+                    and anthropic_messages[-1]["content"][0].get("type") == "tool_result"
+                ):
+                    # Append to existing tool_result user message
+                    anthropic_messages[-1]["content"].append(result_block)
+                else:
+                    anthropic_messages.append({
+                        "role": "user",
+                        "content": [result_block],
+                    })
+            else:
+                anthropic_messages.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                })
+
+        return system_content, anthropic_messages
+
+    def adapt_response(self, response: Any) -> LLMResponse:
+        """Parse Anthropic response into LLMResponse.
+
+        Iterates content blocks to handle text, tool_use, and mixed
+        responses. Builds ``ToolCall`` objects from ``tool_use`` blocks.
+
+        Args:
+            response: Anthropic ``Message`` object from the SDK.
+
+        Returns:
+            Standard ``LLMResponse`` with content, tool_calls, and usage.
+        """
+        content = ""
+        tool_calls: list[ToolCall] = []
+
+        for block in response.content:
+            if block.type == "text":
+                content += block.text
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    name=block.name,
+                    parameters=block.input if isinstance(block.input, dict) else {},
+                    id=block.id,
+                ))
+
+        usage = None
+        if hasattr(response, "usage"):
+            usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": (
+                    response.usage.input_tokens + response.usage.output_tokens
+                ),
+            }
+
+        return LLMResponse(
+            content=content,
+            model=response.model,
+            finish_reason=response.stop_reason,
+            usage=usage,
+            tool_calls=tool_calls if tool_calls else None,
+        )
+
+    def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
+        """Build Anthropic API parameters from config.
+
+        Args:
+            config: Standard LLMConfig.
+
+        Returns:
+            Dictionary of Anthropic API parameters.
+        """
+        gen = config.generation_params()
+        params: Dict[str, Any] = {
+            "model": config.model,
+            "max_tokens": gen.get("max_tokens", self.DEFAULT_MAX_TOKENS),
+        }
+        if "temperature" in gen:
+            params["temperature"] = gen["temperature"]
+        if "top_p" in gen:
+            params["top_p"] = gen["top_p"]
+        if "stop_sequences" in gen:
+            params["stop_sequences"] = gen["stop_sequences"]
+        return params
+
+    def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
+        """Convert Tool objects to Anthropic tools format.
+
+        Args:
+            tools: List of Tool objects with ``name``, ``description``,
+                and ``schema`` attributes.
+
+        Returns:
+            List of Anthropic tool definitions.
+        """
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.schema if hasattr(tool, "schema") else {},
+            }
+            for tool in tools
+        ]
 
 
 class AnthropicProvider(AsyncLLMProvider):
@@ -190,10 +371,6 @@ class AnthropicProvider(AsyncLLMProvider):
         Anthropic API Docs: https://docs.anthropic.com/
     """
 
-    # Anthropic's API requires max_tokens on every request.  When the
-    # caller hasn't set it explicitly we fall back to this value.
-    DEFAULT_MAX_TOKENS: int = 1024
-
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
@@ -202,6 +379,7 @@ class AnthropicProvider(AsyncLLMProvider):
         # Normalize config first
         llm_config = normalize_llm_config(config)
         super().__init__(llm_config, prompt_builder=prompt_builder)
+        self.adapter = AnthropicAdapter()
 
     async def initialize(self) -> None:
         """Initialize Anthropic client."""
@@ -258,34 +436,6 @@ class AnthropicProvider(AsyncLLMProvider):
 
         return capabilities
 
-    def _build_api_params(self, config: LLMConfig) -> Dict[str, Any]:
-        """Build Anthropic API parameters from config.
-
-        Shared by complete(), stream_complete(), and function_call()
-        to prevent parameter drift between methods.
-
-        Args:
-            config: LLMConfig to extract parameters from.
-
-        Returns:
-            Dictionary of API parameters.
-        """
-        gen = config.generation_params()
-        # Anthropic requires max_tokens on every request, so fall back to
-        # DEFAULT_MAX_TOKENS when the caller hasn't set it explicitly.
-        params: Dict[str, Any] = {
-            "model": config.model,
-            "max_tokens": gen.get("max_tokens", self.DEFAULT_MAX_TOKENS),
-        }
-        if "temperature" in gen:
-            params["temperature"] = gen["temperature"]
-        if "top_p" in gen:
-            params["top_p"] = gen["top_p"]
-        if "stop_sequences" in gen:
-            params["stop_sequences"] = gen["stop_sequences"]
-        # Anthropic doesn't support frequency_penalty/presence_penalty
-        return params
-
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -310,50 +460,28 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Convert to Anthropic format
         if isinstance(messages, str):
-            prompt = messages
+            msg_list = [LLMMessage(role="user", content=messages)]
         else:
-            # Build prompt from messages
-            prompt = ""
-            for msg in messages:
-                if msg.role == 'system':
-                    prompt = msg.content + "\n\n" + prompt
-                elif msg.role == 'user':
-                    prompt += f"\n\nHuman: {msg.content}"
-                elif msg.role == 'assistant':
-                    prompt += f"\n\nAssistant: {msg.content}"
-                elif msg.role == 'tool':
-                    tool_name = msg.name or "tool"
-                    prompt += f"\n\n[Tool result from {tool_name}]: {msg.content}"
-            prompt += "\n\nAssistant:"
+            msg_list = messages
+
+        system_content, anthropic_messages = self.adapter.adapt_messages(
+            msg_list, system_prompt=self.config.system_prompt,
+        )
 
         # Build API call kwargs
-        api_kwargs = self._build_api_params(runtime_config)
-        api_kwargs["messages"] = [{"role": "user", "content": prompt}]
+        api_kwargs = self.adapter.adapt_config(runtime_config)
+        api_kwargs["messages"] = anthropic_messages
+        if system_content:
+            api_kwargs["system"] = system_content
 
         # Handle tools if provided
         if tools:
-            anthropic_tools = []
-            for tool in tools:
-                anthropic_tools.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.schema if hasattr(tool, "schema") else {},
-                })
-            api_kwargs["tools"] = anthropic_tools
+            api_kwargs["tools"] = self.adapter.adapt_tools(tools)
 
         # Make API call
         response = await self._client.messages.create(**api_kwargs)
 
-        return self._analyze_response(LLMResponse(
-            content=response.content[0].text,
-            model=response.model,
-            finish_reason=response.stop_reason,
-            usage={
-                'prompt_tokens': response.usage.input_tokens,
-                'completion_tokens': response.usage.output_tokens,
-                'total_tokens': response.usage.input_tokens + response.usage.output_tokens
-            } if hasattr(response, 'usage') else None
-        ))
+        return self._analyze_response(self.adapter.adapt_response(response))
 
     async def stream_complete(
         self,
@@ -379,58 +507,43 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Convert to Anthropic format
         if isinstance(messages, str):
-            prompt = messages
+            msg_list = [LLMMessage(role="user", content=messages)]
         else:
-            prompt = self._build_prompt(messages)
+            msg_list = messages
+
+        system_content, anthropic_messages = self.adapter.adapt_messages(
+            msg_list, system_prompt=self.config.system_prompt,
+        )
 
         # Build stream kwargs
-        stream_kwargs = self._build_api_params(runtime_config)
-        stream_kwargs["messages"] = [{"role": "user", "content": prompt}]
+        stream_kwargs = self.adapter.adapt_config(runtime_config)
+        stream_kwargs["messages"] = anthropic_messages
+        if system_content:
+            stream_kwargs["system"] = system_content
 
-        # Handle tools if provided (same as complete())
+        # Handle tools if provided
         if tools:
-            anthropic_tools = []
-            for tool in tools:
-                anthropic_tools.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.schema if hasattr(tool, "schema") else {},
-                })
-            stream_kwargs["tools"] = anthropic_tools
+            stream_kwargs["tools"] = self.adapter.adapt_tools(tools)
 
         # Stream API call
         async with self._client.messages.stream(**stream_kwargs) as stream:
             async for chunk in stream:
                 if chunk.type == 'content_block_delta':
-                    # Text deltas
                     if hasattr(chunk.delta, 'text'):
                         yield LLMStreamResponse(
                             delta=chunk.delta.text,
                             is_final=False
                         )
 
-            # Final message — extract tool_use blocks as ToolCall objects
+            # Final message — use adapter to parse content blocks
             message = await stream.get_final_message()
-            tool_calls = None
-            tool_use_blocks = [
-                block for block in message.content
-                if block.type == "tool_use"
-            ]
-            if tool_use_blocks:
-                tool_calls = [
-                    ToolCall(
-                        name=block.name,
-                        parameters=block.input if isinstance(block.input, dict) else {},
-                        id=block.id,
-                    )
-                    for block in tool_use_blocks
-                ]
+            parsed = self.adapter.adapt_response(message)
 
             yield LLMStreamResponse(
                 delta='',
                 is_final=True,
-                finish_reason=message.stop_reason,
-                tool_calls=tool_calls,
+                finish_reason=parsed.finish_reason,
+                tool_calls=parsed.tool_calls,
                 model=runtime_config.model,
             )
 
@@ -446,111 +559,66 @@ class AnthropicProvider(AsyncLLMProvider):
         self,
         messages: List[LLMMessage],
         functions: List[Dict[str, Any]],
-        **kwargs
+        **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling with native Anthropic tools API (Claude 3+)."""
-        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "function_call() is deprecated, use complete(tools=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self._is_initialized:
             await self.initialize()
 
-        # Convert to Anthropic message format.
-        # Anthropic uses a different structure for tool calling:
-        # - System messages go into the system parameter
-        # - Assistant tool calls use content blocks with type="tool_use"
-        # - Tool results use role="user" with type="tool_result" blocks
-        anthropic_messages: List[Dict[str, Any]] = []
-        system_content = self.config.system_prompt or ''
+        system_content, anthropic_messages = self.adapter.adapt_messages(
+            messages, system_prompt=self.config.system_prompt,
+        )
 
-        for msg in messages:
-            if msg.role == 'system':
-                system_content = msg.content if not system_content else f"{system_content}\n\n{msg.content}"
-            elif msg.role == 'assistant' and msg.tool_calls:
-                # Build content blocks for assistant tool use
-                content_blocks: List[Dict[str, Any]] = []
-                if msg.content:
-                    content_blocks.append({'type': 'text', 'text': msg.content})
-                for tc in msg.tool_calls:
-                    content_blocks.append({
-                        'type': 'tool_use',
-                        'id': tc.id or tc.name,
-                        'name': tc.name,
-                        'input': tc.parameters,
-                    })
-                anthropic_messages.append({
-                    'role': 'assistant',
-                    'content': content_blocks,
-                })
-            elif msg.role == 'tool':
-                # Anthropic expects tool results as user messages
-                # with tool_result content blocks
-                anthropic_messages.append({
-                    'role': 'user',
-                    'content': [{
-                        'type': 'tool_result',
-                        'tool_use_id': msg.name or 'unknown',
-                        'content': msg.content,
-                    }],
-                })
-            else:
-                anthropic_messages.append({
-                    'role': msg.role,
-                    'content': msg.content,
-                })
-
-        # Convert functions to Anthropic tools format
-        tools = []
-        for func in functions:
-            tool = {
-                'name': func.get('name', ''),
-                'description': func.get('description', ''),
-                'input_schema': func.get('parameters', {
-                    'type': 'object',
-                    'properties': {},
-                    'required': []
-                })
+        # function_call() receives raw dicts, not Tool objects — convert
+        # directly to Anthropic format.
+        tools = [
+            {
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "input_schema": func.get("parameters", {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                }),
             }
-            tools.append(tool)
+            for func in functions
+        ]
 
-        # Make API call with tools
         try:
-            fc_kwargs = self._build_api_params(self.config)
+            fc_kwargs = self.adapter.adapt_config(self.config)
             fc_kwargs["messages"] = anthropic_messages
             fc_kwargs["tools"] = tools
             if system_content:
                 fc_kwargs["system"] = system_content
             response = await self._client.messages.create(**fc_kwargs)
 
-            # Extract response content and tool use
-            content = ''
+            parsed = self.adapter.adapt_response(response)
+
+            # Legacy function_call format: extract first tool call as
+            # function_call dict for backward compatibility.
             tool_use = None
+            if parsed.tool_calls:
+                tc = parsed.tool_calls[0]
+                tool_use = {"name": tc.name, "arguments": tc.parameters}
 
-            for block in response.content:
-                if block.type == 'text':
-                    content += block.text
-                elif block.type == 'tool_use':
-                    tool_use = {
-                        'name': block.name,
-                        'arguments': block.input
-                    }
-
-            llm_response = LLMResponse(
-                content=content,
-                model=response.model,
-                finish_reason=response.stop_reason,
-                usage={
-                    'prompt_tokens': response.usage.input_tokens,
-                    'completion_tokens': response.usage.output_tokens,
-                    'total_tokens': response.usage.input_tokens + response.usage.output_tokens
-                },
-                function_call=tool_use
+            return LLMResponse(
+                content=parsed.content,
+                model=parsed.model,
+                finish_reason=parsed.finish_reason,
+                usage=parsed.usage,
+                function_call=tool_use,
             )
-
-            return llm_response
 
         except Exception as e:
             # Fallback to prompt-based approach for older models
-            import logging
-            logging.warning(f"Anthropic native tools failed, falling back to prompt-based: {e}")
+            logger.warning(
+                "Anthropic native tools failed, falling back to prompt-based: %s", e,
+            )
 
             function_descriptions = "\n".join([
                 f"- {f['name']}: {f['description']}"
@@ -567,34 +635,18 @@ FUNCTION_CALL: {{
 }}"""
 
             messages_with_system = [
-                LLMMessage(role='system', content=system_prompt)
+                LLMMessage(role="system", content=system_prompt)
             ] + list(messages)
 
             response = await self.complete(messages_with_system, **kwargs)
 
             # Parse function call from response
-            if 'FUNCTION_CALL:' in response.content:
+            if "FUNCTION_CALL:" in response.content:
                 try:
-                    func_json = response.content.split('FUNCTION_CALL:')[1].strip()
+                    func_json = response.content.split("FUNCTION_CALL:")[1].strip()
                     function_call = json.loads(func_json)
                     response.function_call = function_call
                 except (json.JSONDecodeError, IndexError):
                     pass
 
             return response
-
-    def _build_prompt(self, messages: List[LLMMessage]) -> str:
-        """Build Anthropic-style prompt from messages."""
-        prompt = ""
-        for msg in messages:
-            if msg.role == 'system':
-                prompt = msg.content + "\n\n" + prompt
-            elif msg.role == 'user':
-                prompt += f"\n\nHuman: {msg.content}"
-            elif msg.role == 'assistant':
-                prompt += f"\n\nAssistant: {msg.content}"
-            elif msg.role == 'tool':
-                tool_name = msg.name or "tool"
-                prompt += f"\n\n[Tool result from {tool_name}]: {msg.content}"
-        prompt += "\n\nAssistant:"
-        return prompt

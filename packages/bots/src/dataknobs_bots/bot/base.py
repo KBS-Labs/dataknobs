@@ -945,6 +945,7 @@ class DynaBot:
                 content=f"Observation from {tool_name}: {observation}",
                 role="tool",
                 name=tool_name,
+                tool_call_id=tool_call.id,
             )
 
     async def _finalize_turn(self, turn: TurnState) -> None:
