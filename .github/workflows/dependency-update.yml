@@ -9,6 +9,9 @@ name: Update Dependencies
 #      'dependencies' PRs that haven't been processed yet).
 #   3. Manual dispatch.
 #
+# After updating, osv-scanner audits the resolved lock file for known
+# CVEs. Findings are included in the PR body so reviewers see them.
+#
 # Security alerts remain handled by Dependabot at the repo level
 # (Settings > Code security and analysis) — independent of dependabot.yml.
 
@@ -124,6 +127,41 @@ jobs:
       run: |
         uv sync --all-packages
 
+    - name: Install osv-scanner
+      if: steps.debounce.outputs.skip != 'true'
+      env:
+        OSV_SCANNER_VERSION: "2.3.3"
+      run: |
+        curl -fsSL "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" \
+          -o /usr/local/bin/osv-scanner
+        chmod +x /usr/local/bin/osv-scanner
+        osv-scanner --version
+
+    - name: Audit dependencies for known vulnerabilities
+      id: audit
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        # osv-scanner exits non-zero when vulnerabilities are found
+        set +e
+        output=$(osv-scanner scan --lockfile uv.lock --format table 2>&1)
+        exit_code=$?
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
+          echo "vuln_summary=No known vulnerabilities found." >> "$GITHUB_OUTPUT"
+        else
+          # Capture for PR body (escape newlines for GitHub Actions)
+          {
+            echo "vuln_summary<<AUDIT_EOF"
+            echo "**Known vulnerabilities detected — review before merging.**"
+            echo ""
+            echo '```'
+            echo "$output"
+            echo '```'
+            echo "AUDIT_EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Create Pull Request
       if: steps.debounce.outputs.skip != 'true'
       uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0  # v8.1.0
@@ -136,6 +174,7 @@ jobs:
 
           **Python dependencies:** Updated via `uv lock --upgrade`.
           **GitHub Actions:** ${{ steps.merge_deps.outputs.merged == 'true' && 'Included from dependency PR.' || 'No pending updates.' }}
+          **Vulnerability audit:** ${{ steps.audit.outputs.vuln_summary }}
 
           Lock file verified. Run `bin/dk pr --all` locally before merging.
         branch: update-dependencies
