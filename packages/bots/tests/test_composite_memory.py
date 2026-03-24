@@ -443,6 +443,63 @@ class TestCompositeMemoryNarrowedExceptions:
         await composite.clear()
         await composite.close()
 
+    @pytest.mark.asyncio
+    async def test_dataknobs_error_still_caught(self):
+        """DataknobsError subclasses (real backend failures) are gracefully caught."""
+        from dataknobs_common.exceptions import ResourceError
+
+        class _DataknobsFailMemory(Memory):
+            async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+                raise ResourceError("database connection lost")
+
+            async def get_context(self, current_message):  # type: ignore[override]
+                raise ResourceError("database connection lost")
+
+            async def clear(self):
+                raise ResourceError("database connection lost")
+
+            async def close(self):
+                raise ResourceError("database connection lost")
+
+        buf = BufferMemory(max_messages=10)
+        failing = _DataknobsFailMemory()
+        composite = CompositeMemory([buf, failing])
+
+        # Should NOT raise — DataknobsError hierarchy is in the caught set
+        await composite.add_message("hello", "user")
+        ctx = await buf.get_context("x")
+        assert len(ctx) == 1
+
+        await composite.clear()
+        await composite.close()
+
+    @pytest.mark.asyncio
+    async def test_asyncio_timeout_error_still_caught(self):
+        """asyncio.TimeoutError is caught (important for Python 3.10)."""
+        import asyncio
+
+        class _AsyncTimeoutMemory(Memory):
+            async def add_message(self, content, role, metadata=None):  # type: ignore[override]
+                raise asyncio.TimeoutError()
+
+            async def get_context(self, current_message):  # type: ignore[override]
+                raise asyncio.TimeoutError()
+
+            async def clear(self):
+                raise asyncio.TimeoutError()
+
+            async def close(self):
+                raise asyncio.TimeoutError()
+
+        buf = BufferMemory(max_messages=10)
+        failing = _AsyncTimeoutMemory()
+        composite = CompositeMemory([buf, failing])
+
+        # Should NOT raise — asyncio.TimeoutError is in the caught set
+        await composite.add_message("hello", "user")
+        await composite.clear()
+        await composite.close()
+
 
 # ===========================================================================
 # CompositeMemory — validation

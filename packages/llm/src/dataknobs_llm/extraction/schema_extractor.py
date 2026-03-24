@@ -185,8 +185,12 @@ class SimpleExtractionResult:
 
     @property
     def is_confident(self) -> bool:
-        """Whether extraction meets confidence threshold (>= 0.8, no errors)."""
-        return self.confidence >= 0.8 and not self.errors
+        """Whether extraction meets confidence threshold (>= 0.8, no errors).
+
+        Note: Uses round() to handle floating point precision issues,
+        matching :attr:`ExtractionResult.is_confident`.
+        """
+        return round(self.confidence, 10) >= 0.8 and not self.errors
 
 
 # Default extraction prompt template

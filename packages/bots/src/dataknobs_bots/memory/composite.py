@@ -1,7 +1,10 @@
 """Composite memory strategy combining multiple memory implementations."""
 
+import asyncio
 import logging
 from typing import Any
+
+from dataknobs_common.exceptions import DataknobsError
 
 from .base import Memory
 
@@ -11,7 +14,19 @@ logger = logging.getLogger(__name__)
 # (log + continue).  Programming errors (AttributeError, TypeError,
 # ValueError, KeyError, NotImplementedError, etc.) are NOT caught — they
 # should surface during development.
-_STRATEGY_ERRORS = (RuntimeError, OSError, ConnectionError, TimeoutError)
+#
+# DataknobsError covers the entire dataknobs exception hierarchy
+# (ResourceError, OperationError, RateLimitError, etc.) raised by
+# real backends.  asyncio.TimeoutError is included separately because
+# on Python 3.10 it does not inherit from builtins.TimeoutError.
+_STRATEGY_ERRORS = (
+    RuntimeError,
+    OSError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    DataknobsError,
+)
 
 
 class CompositeMemory(Memory):
