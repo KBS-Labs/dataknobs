@@ -18,6 +18,7 @@ from dataknobs_llm.extraction.schema_extractor import (
     ExtractedAssumption,
     ExtractionResult,
     SchemaExtractor,
+    SimpleExtractionResult,
 )
 
 __all__ = [
@@ -25,6 +26,11 @@ __all__ = [
     "ExtractedAssumption",
     "ExtractionResult",
     "SchemaExtractor",
+    # Stable re-export from testing (used as a production dependency by
+    # consumers for lightweight extraction results without a full
+    # SchemaExtractor pipeline).  The is_confident threshold (0.8) is a
+    # stable contract.
+    "SimpleExtractionResult",
     # Observability
     "ExtractionRecord",
     "ExtractionStats",

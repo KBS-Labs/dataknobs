@@ -3,6 +3,7 @@
 import pytest
 
 from dataknobs_bots.providers import create_embedding_provider
+from dataknobs_llm.llm.base import CompletionMode
 
 
 class TestCreateEmbeddingProvider:
@@ -129,5 +130,31 @@ class TestCreateEmbeddingProvider:
         try:
             assert provider.config.provider == "echo"
             assert provider.config.model == "default-test"
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    async def test_completion_mode_is_embedding(self) -> None:
+        """Provider config reflects CompletionMode.EMBEDDING."""
+        provider = await create_embedding_provider({
+            "embedding": {
+                "provider": "echo",
+                "model": "test-embed",
+            },
+        })
+        try:
+            assert provider.config.mode == CompletionMode.EMBEDDING
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    async def test_completion_mode_embedding_legacy_format(self) -> None:
+        """Legacy format also sets CompletionMode.EMBEDDING."""
+        provider = await create_embedding_provider({
+            "embedding_provider": "echo",
+            "embedding_model": "test-embed",
+        })
+        try:
+            assert provider.config.mode == CompletionMode.EMBEDDING
         finally:
             await provider.close()

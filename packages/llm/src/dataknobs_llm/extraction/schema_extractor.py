@@ -154,6 +154,41 @@ class ExtractionResult:
         return [a for a in self.assumptions if round(a.confidence, 10) < 0.8]
 
 
+@dataclass
+class SimpleExtractionResult:
+    """Lightweight extraction result without LLM-specific fields.
+
+    Provides the same core interface as :class:`ExtractionResult`
+    (``data``, ``confidence``, ``errors``, ``is_confident``) but omits
+    ``raw_response`` and ``assumptions``.  Useful for:
+
+    - Consumers that build extraction results without a full
+      :class:`SchemaExtractor` pipeline (e.g. rule-based or
+      verbatim-capture flows).
+    - Tests — use instead of mocking ``ExtractionResult``.
+
+    The ``is_confident`` threshold (``>= 0.8`` and no errors) is a stable
+    contract matching :attr:`ExtractionResult.is_confident`.
+
+    Example:
+        >>> result = SimpleExtractionResult(
+        ...     data={"name": "Alice"}, confidence=0.9
+        ... )
+        >>> result.is_confident
+        True
+    """
+
+    data: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.9
+    errors: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_confident(self) -> bool:
+        """Whether extraction meets confidence threshold (>= 0.8, no errors)."""
+        return self.confidence >= 0.8 and not self.errors
+
+
 # Default extraction prompt template
 DEFAULT_EXTRACTION_PROMPT = """Extract structured data from the user's message.
 

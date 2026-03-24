@@ -578,6 +578,127 @@ class TestSubflowLoading:
         assert wizard_fsm._subflow_registry == {}
 
 
+def _noop_transform(data: dict, context: object = None) -> dict:
+    """No-op transform function for testing."""
+    return data
+
+
+class TestTransitionTransformMetadata:
+    """Tests for transform names in transition metadata (Gap 20)."""
+
+    def test_no_transform_yields_empty_list(self) -> None:
+        """Transitions without transforms get an empty list."""
+        config: dict = {
+            "name": "test",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Go",
+                    "transitions": [{"target": "end"}],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(config)
+
+        start_meta = wizard_fsm._stage_metadata["start"]
+        assert start_meta["transitions"][0]["transforms"] == []
+
+    def test_string_transform_yields_single_name(self) -> None:
+        """A plain string transform becomes a one-element list."""
+        config: dict = {
+            "name": "test",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Go",
+                    "transitions": [
+                        {"target": "end", "transform": "apply_template"},
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(
+            config,
+            custom_functions={"apply_template": _noop_transform},
+        )
+
+        trans = wizard_fsm._stage_metadata["start"]["transitions"][0]
+        assert trans["transforms"] == ["apply_template"]
+
+    def test_dict_transform_extracts_name(self) -> None:
+        """A dict transform {name: ..., config: ...} extracts the name."""
+        config: dict = {
+            "name": "test",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Go",
+                    "transitions": [
+                        {
+                            "target": "end",
+                            "transform": {
+                                "name": "create_corpus",
+                                "config": {"corpus_type": "quiz_bank"},
+                            },
+                        },
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(
+            config,
+            custom_functions={"create_corpus": _noop_transform},
+        )
+
+        trans = wizard_fsm._stage_metadata["start"]["transitions"][0]
+        assert trans["transforms"] == ["create_corpus"]
+
+    def test_list_of_transforms_extracts_all_names(self) -> None:
+        """A list of mixed string/dict transforms extracts all names."""
+        config: dict = {
+            "name": "test",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Go",
+                    "transitions": [
+                        {
+                            "target": "end",
+                            "transform": [
+                                "apply_template",
+                                {"name": "create_corpus", "config": {}},
+                                "save",
+                            ],
+                        },
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(
+            config,
+            custom_functions={
+                "apply_template": _noop_transform,
+                "create_corpus": _noop_transform,
+                "save": _noop_transform,
+            },
+        )
+
+        trans = wizard_fsm._stage_metadata["start"]["transitions"][0]
+        assert trans["transforms"] == ["apply_template", "create_corpus", "save"]
+
+
 class TestTransformContextFactory:
     """Tests for transform_context_factory passthrough."""
 

@@ -566,6 +566,28 @@ class WizardConfigLoader:
                     "priority": transition.get("priority"),
                     "derive": transition.get("derive"),
                 }
+
+                # Normalize transform references to a list of names
+                raw_tf = transition.get("transform")
+                if raw_tf is None:
+                    tf_names: list[str] = []
+                elif isinstance(raw_tf, list):
+                    tf_names = [
+                        item["name"] if isinstance(item, dict) else item
+                        for item in raw_tf
+                    ]
+                elif isinstance(raw_tf, dict):
+                    tf_names = [raw_tf["name"]]
+                elif isinstance(raw_tf, str):
+                    tf_names = [raw_tf]
+                else:
+                    raise ValueError(
+                        f"Unsupported transform value type "
+                        f"{type(raw_tf).__name__!r} in stage "
+                        f"{stage['name']!r} — expected str, list, or dict"
+                    )
+                trans_meta["transforms"] = tf_names
+
                 # Include subflow config if this is a subflow transition
                 if transition.get("target") == SUBFLOW_TARGET:
                     trans_meta["is_subflow_transition"] = True
