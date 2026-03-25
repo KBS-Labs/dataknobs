@@ -3,8 +3,9 @@
 This module provides adapters for different I/O sources like files, databases, and APIs.
 """
 
-import json
+import asyncio
 import csv
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Union, AsyncIterator, Iterator
 import aiofiles
@@ -481,14 +482,19 @@ class HTTPIOAdapter(IOAdapter):
         return SyncHTTPProvider(config)
 
 
+# Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
+# callbacks can drain before event loop shutdown.  See dk-29 for full context.
+_AIOHTTP_DRAIN_SECS = 0.25
+
+
 class AsyncHTTPProvider(AsyncIOProvider):
     """Async HTTP/API I/O provider."""
-    
+
     def __init__(self, config: IOConfig):
         super().__init__(config)
         self.session = None
         self.adapter = HTTPIOAdapter()
-        
+
     async def open(self) -> None:
         """Open HTTP session."""
         import aiohttp
@@ -497,11 +503,12 @@ class AsyncHTTPProvider(AsyncIOProvider):
             timeout=aiohttp.ClientTimeout(total=self.config.timeout)
         )
         self._is_open = True
-        
+
     async def close(self) -> None:
         """Close HTTP session."""
         if self.session:
             await self.session.close()  # type: ignore[unreachable]
+            await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
         self._is_open = False
         
     async def validate(self) -> bool:

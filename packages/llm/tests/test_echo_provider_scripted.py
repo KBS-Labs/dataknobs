@@ -2,6 +2,7 @@
 
 import pytest
 
+from dataknobs_llm.exceptions import ResponseQueueExhaustedError
 from dataknobs_llm.llm import LLMConfig, LLMResponse
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
@@ -371,3 +372,212 @@ class TestInitializationOptions:
         response = await provider.complete("Test")
 
         assert response.content == "From init function"
+
+
+class TestStrictMode:
+    """Tests for strict mode (raises on exhausted queue)."""
+
+    @pytest.mark.asyncio
+    async def test_strict_raises_when_queue_exhausted(self) -> None:
+        """Strict mode raises when all scripted responses are consumed."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}},
+            strict=True,
+        )
+        provider.set_responses(["only one"])
+
+        await provider.complete("first")  # Consumes the response
+
+        with pytest.raises(
+            ResponseQueueExhaustedError, match="exhausted after 2 call"
+        ):
+            await provider.complete("second")
+
+    @pytest.mark.asyncio
+    async def test_strict_false_falls_back_to_echo(self) -> None:
+        """Default (non-strict) mode falls back to echo as before."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}},
+        )
+        provider.set_responses(["only one"])
+
+        await provider.complete("first")
+        response = await provider.complete("second call")
+
+        assert "second call" in response.content
+
+    @pytest.mark.asyncio
+    async def test_strict_via_options(self) -> None:
+        """Strict mode can be enabled via config options dict."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test", "options": {"strict": True}},
+        )
+        assert provider.strict is True
+
+        with pytest.raises(ResponseQueueExhaustedError):
+            await provider.complete("no responses queued")
+
+    @pytest.mark.asyncio
+    async def test_strict_with_cycle_mode_never_exhausts(self) -> None:
+        """Cycle mode never exhausts the queue, even in strict mode."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test", "options": {"echo_prefix": ""}},
+            strict=True,
+        )
+        provider.set_responses(["A"], cycle=True)
+
+        r1 = await provider.complete("1")
+        r2 = await provider.complete("2")
+        r3 = await provider.complete("3")
+
+        assert r1.content == "A"
+        assert r2.content == "A"
+        assert r3.content == "A"
+
+    @pytest.mark.asyncio
+    async def test_strict_with_pattern_responses(self) -> None:
+        """Pattern responses are not queue-based, so no exhaustion."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test"},
+            strict=True,
+        )
+        provider.add_pattern_response(r"hello", "Hi!")
+
+        r1 = await provider.complete("hello")
+        r2 = await provider.complete("hello again")
+
+        assert r1.content == "Hi!"
+        assert r2.content == "Hi!"
+
+    @pytest.mark.asyncio
+    async def test_strict_with_response_function(self) -> None:
+        """Response function always returns, so no exhaustion."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test"},
+            strict=True,
+        )
+        provider.set_response_function(lambda msgs: "dynamic")
+
+        r1 = await provider.complete("1")
+        r2 = await provider.complete("2")
+
+        assert r1.content == "dynamic"
+        assert r2.content == "dynamic"
+
+    @pytest.mark.asyncio
+    async def test_strict_error_recorded_in_history(self) -> None:
+        """Strict-mode error is recorded in call history."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test"},
+            strict=True,
+        )
+
+        with pytest.raises(ResponseQueueExhaustedError):
+            await provider.complete("test")
+
+        assert provider.call_count == 1
+        last = provider.get_last_call()
+        assert last is not None
+        assert last["error"] is True
+        assert last["response"] is None
+
+    @pytest.mark.asyncio
+    async def test_strict_property(self) -> None:
+        """Strict property reflects constructor argument."""
+        strict_provider = EchoProvider(
+            {"provider": "echo", "model": "test"}, strict=True
+        )
+        default_provider = EchoProvider(
+            {"provider": "echo", "model": "test"}
+        )
+
+        assert strict_provider.strict is True
+        assert default_provider.strict is False
+
+    @pytest.mark.asyncio
+    async def test_strict_stream_complete_raises(self) -> None:
+        """Strict mode also applies to stream_complete()."""
+        provider = EchoProvider(
+            {"provider": "echo", "model": "test"},
+            strict=True,
+        )
+
+        with pytest.raises(ResponseQueueExhaustedError):
+            async for _ in provider.stream_complete("test"):
+                pass  # pragma: no cover
+
+
+class TestInstanceTracking:
+    """Tests for class-level instance tracking."""
+
+    def setup_method(self) -> None:
+        """Clear tracking state before each test."""
+        EchoProvider.reset_tracking()
+
+    def test_last_instance_set_on_creation(self) -> None:
+        """Creating an EchoProvider sets last_instance."""
+        assert EchoProvider.get_last_instance() is None
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+
+        assert EchoProvider.get_last_instance() is provider
+
+    def test_last_instance_is_most_recent(self) -> None:
+        """last_instance always points to the most recently created."""
+        p1 = EchoProvider({"provider": "echo", "model": "test1"})
+        p2 = EchoProvider({"provider": "echo", "model": "test2"})
+
+        assert EchoProvider.get_last_instance() is p2
+        assert EchoProvider.get_last_instance() is not p1
+
+    def test_track_instances_context_manager(self) -> None:
+        """track_instances() collects instances within context."""
+        with EchoProvider.track_instances() as instances:
+            p1 = EchoProvider({"provider": "echo", "model": "test1"})
+            p2 = EchoProvider({"provider": "echo", "model": "test2"})
+
+        assert len(instances) == 2
+        assert instances[0] is p1
+        assert instances[1] is p2
+
+    def test_track_instances_empty_when_none_created(self) -> None:
+        """track_instances() returns empty list if no providers created."""
+        with EchoProvider.track_instances() as instances:
+            pass  # create nothing
+
+        assert instances == []
+
+    def test_track_instances_does_not_capture_outside(self) -> None:
+        """Instances created outside the context are not captured."""
+        EchoProvider({"provider": "echo", "model": "before"})
+
+        with EchoProvider.track_instances() as instances:
+            EchoProvider({"provider": "echo", "model": "inside"})
+
+        EchoProvider({"provider": "echo", "model": "after"})
+
+        assert len(instances) == 1
+        assert instances[0].config.model == "inside"
+
+    def test_reset_tracking_clears_last_instance(self) -> None:
+        """reset_tracking() clears last_instance."""
+        EchoProvider({"provider": "echo", "model": "test"})
+        assert EchoProvider.get_last_instance() is not None
+
+        EchoProvider.reset_tracking()
+
+        assert EchoProvider.get_last_instance() is None
+
+    def test_track_instances_nested_contexts(self) -> None:
+        """Nested track_instances() contexts each see their own providers."""
+        with EchoProvider.track_instances() as outer:
+            p1 = EchoProvider({"provider": "echo", "model": "outer1"})
+            with EchoProvider.track_instances() as inner:
+                p2 = EchoProvider({"provider": "echo", "model": "inner1"})
+            p3 = EchoProvider({"provider": "echo", "model": "outer2"})
+
+        # Outer sees all three (p1, p2, p3)
+        assert len(outer) == 3
+        # Inner sees only p2
+        assert len(inner) == 1
+        assert inner[0] is p2

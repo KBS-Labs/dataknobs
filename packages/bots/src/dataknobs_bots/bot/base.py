@@ -2263,19 +2263,33 @@ class DynaBot:
         the constructor parameters (unless already provided in ``params``).
 
         Args:
-            tool_config: Tool configuration (dict or string xref)
+            tool_config: Tool configuration (dict or string xref).
+                Dict configs support an ``optional`` key (default False).
+                When ``optional: true``, resolution failures log a warning
+                and return None.  When False (default), failures raise
+                ``ConfigurationError``.
             config: Full bot configuration for xref resolution
             dependencies: Optional resource dependencies to inject into tools
                 that declare them via catalog_metadata().requires
 
         Returns:
-            Tool instance or None if resolution fails
+            Tool instance, or None if resolution fails and tool is optional
+
+        Raises:
+            ConfigurationError: If the tool cannot be resolved and is not
+                marked ``optional: true``.
 
         Example:
-            # Direct instantiation
+            # Direct instantiation (required — fails loudly)
             tool_config = {
                 "class": "my_tools.CalculatorTool",
                 "params": {"precision": 2}
+            }
+
+            # Optional tool — skipped if unavailable
+            tool_config = {
+                "class": "my_tools.OptionalTool",
+                "optional": true,
             }
 
             # XRef to pre-defined tool
@@ -2291,48 +2305,91 @@ class DynaBot:
             # }
         """
         import importlib
-        import logging
 
-        logger = logging.getLogger(__name__)
+        from dataknobs_common.exceptions import ConfigurationError
+
+        optional = (
+            tool_config.get("optional", False)
+            if isinstance(tool_config, dict)
+            else False
+        )
 
         try:
             # Handle xref string format
             if isinstance(tool_config, str):
                 if tool_config.startswith("xref:"):
-                    # Parse xref (e.g., "xref:tools[calculator]")
-                    # Extract the reference name
                     import re
 
                     match = re.match(r"xref:tools\[([^\]]+)\]", tool_config)
                     if not match:
-                        logger.error(f"Invalid xref format: {tool_config}")
-                        return None
+                        if optional:
+                            logger.warning("Skipping optional tool: Invalid xref format: %s", tool_config)
+                            return None
+                        raise ConfigurationError(f"Invalid xref format: {tool_config}")
 
                     tool_name = match.group(1)
 
-                    # Look up in tool_definitions
                     tool_definitions = config.get("tool_definitions", {})
                     if tool_name not in tool_definitions:
-                        logger.error(
+                        msg = (
                             f"Tool definition not found: {tool_name}. "
                             f"Available: {list(tool_definitions.keys())}"
                         )
-                        return None
+                        if optional:
+                            logger.warning("Skipping optional tool: %s", msg)
+                            return None
+                        raise ConfigurationError(msg)
 
-                    # Recursively resolve the referenced config
-                    return DynaBot._resolve_tool(tool_definitions[tool_name], config, dependencies)
+                    # Propagate optional into the resolved definition so
+                    # that import/instantiation errors honour the flag.
+                    resolved = tool_definitions[tool_name]
+                    if optional and isinstance(resolved, dict) and not resolved.get("optional"):
+                        resolved = {**resolved, "optional": True}
+                    return DynaBot._resolve_tool(resolved, config, dependencies)
                 else:
-                    logger.error(f"String tool config must be xref format: {tool_config}")
-                    return None
+                    if optional:
+                        logger.warning(
+                            "Skipping optional tool: String tool config must be xref format: %s",
+                            tool_config,
+                        )
+                        return None
+                    raise ConfigurationError(
+                        f"String tool config must be xref format: {tool_config}"
+                    )
 
-            # Handle dict with xref key
+            # Handle dict with xref key — resolve the referenced string,
+            # injecting optional into the resolved definition if set.
             if isinstance(tool_config, dict) and "xref" in tool_config:
-                return DynaBot._resolve_tool(tool_config["xref"], config, dependencies)
+                xref_str = tool_config["xref"]
+                if not optional:
+                    return DynaBot._resolve_tool(xref_str, config, dependencies)
+                # optional=True: resolve the xref string inline so we
+                # can inject optional into the resolved definition
+                # (the string path recomputes optional=False for strings).
+                import re
+
+                match = re.match(r"xref:tools\[([^\]]+)\]", xref_str) if isinstance(xref_str, str) else None
+                if not match:
+                    logger.warning("Skipping optional tool: Invalid xref format: %s", xref_str)
+                    return None
+                tool_name = match.group(1)
+                tool_definitions = config.get("tool_definitions", {})
+                if tool_name not in tool_definitions:
+                    logger.warning(
+                        "Skipping optional tool: Tool definition not found: %s. Available: %s",
+                        tool_name,
+                        list(tool_definitions.keys()),
+                    )
+                    return None
+                resolved = tool_definitions[tool_name]
+                if isinstance(resolved, dict) and not resolved.get("optional"):
+                    resolved = {**resolved, "optional": True}
+                return DynaBot._resolve_tool(resolved, config, dependencies)
 
             # Handle dict with class key (direct instantiation)
             if isinstance(tool_config, dict) and "class" in tool_config:
                 class_path = tool_config["class"]
-                params = tool_config.get("params", {})
+                params = dict(tool_config.get("params", {}))
 
                 # Import the tool class
                 module_path, class_name = class_path.rsplit(".", 1)
@@ -2362,49 +2419,88 @@ class DynaBot:
                 from dataknobs_llm.tools import Tool
 
                 if not isinstance(tool, Tool):
-                    logger.error(
-                        f"Resolved class {class_path} is not a Tool instance: {type(tool)}"
+                    msg = (
+                        f"Resolved class {class_path} is not a Tool "
+                        f"instance: {type(tool)}"
                     )
-                    return None
+                    if optional:
+                        logger.warning("Skipping optional tool: %s", msg)
+                        return None
+                    raise ConfigurationError(msg)
 
-                logger.info(f"Successfully loaded tool: {tool.name} ({class_path})")
+                logger.info("Successfully loaded tool: %s (%s)", tool.name, class_path)
                 return tool
-            else:
-                logger.error(
-                    f"Invalid tool config format. Expected dict with 'class' or 'xref' key, "
-                    f"or xref string. Got: {type(tool_config)}"
-                )
-                return None
 
+            msg = (
+                f"Invalid tool config format. Expected dict with "
+                f"'class' or 'xref' key, or xref string. "
+                f"Got: {type(tool_config)}"
+            )
+            if optional:
+                logger.warning("Skipping optional tool: %s", msg)
+                return None
+            raise ConfigurationError(msg)
+
+        except ConfigurationError:
+            raise
         except ImportError as e:
-            logger.error(f"Failed to import tool class: {e}")
-            return None
+            msg = f"Failed to import tool class: {e}"
+            if optional:
+                logger.warning("Skipping optional tool: %s", msg)
+                return None
+            raise ConfigurationError(msg) from e
         except AttributeError as e:
-            logger.error(f"Failed to find tool class: {e}")
-            return None
+            msg = f"Failed to find tool class: {e}"
+            if optional:
+                logger.warning("Skipping optional tool: %s", msg)
+                return None
+            raise ConfigurationError(msg) from e
         except Exception as e:
-            logger.error(f"Failed to instantiate tool: {e}")
-            return None
+            msg = f"Failed to instantiate tool: {e}"
+            if optional:
+                logger.warning("Skipping optional tool: %s", msg)
+                return None
+            raise ConfigurationError(msg) from e
 
     @staticmethod
     def _create_middleware(config: dict[str, Any]) -> Middleware | None:
         """Create middleware from configuration.
 
         Args:
-            config: Middleware configuration
+            config: Middleware configuration dict with:
+                - class: Dotted import path to middleware class
+                - params: Optional constructor parameters
+                - optional: If True, log warning and skip on failure
+                  instead of raising (default: False)
 
         Returns:
-            Middleware instance or None
-        """
-        try:
-            import importlib
+            Middleware instance, or None if resolution fails and
+            middleware is optional
 
+        Raises:
+            ConfigurationError: If middleware cannot be resolved and
+                is not marked ``optional: true``.
+        """
+        import importlib
+
+        from dataknobs_common.exceptions import ConfigurationError
+
+        optional = config.get("optional", False)
+        class_path = config.get("class", "<missing>")
+
+        try:
             module_path, class_name = config["class"].rsplit(".", 1)
             module = importlib.import_module(module_path)
             middleware_class = getattr(module, class_name)
-            return middleware_class(**config.get("params", {}))
-        except Exception:
-            return None
+            return middleware_class(**dict(config.get("params", {})))
+        except ConfigurationError:
+            raise
+        except Exception as e:
+            msg = f"Failed to create middleware '{class_path}': {e}"
+            if optional:
+                logger.warning("Skipping optional middleware: %s", msg)
+                return None
+            raise ConfigurationError(msg) from e
 
     # -----------------------------------------------------------------
     # Undo / Rewind

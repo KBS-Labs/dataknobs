@@ -15,6 +15,7 @@ Run all tests:
 import os
 
 import pytest
+from dataknobs_common.exceptions import ConfigurationError
 
 from dataknobs_bots import BotContext, DynaBot
 from tests.fixtures.test_tools import SimpleTestTool, ParameterizedTestTool
@@ -404,8 +405,8 @@ class TestErrorHandling:
     """Test error handling in config-based tool loading using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_invalid_tool_skipped(self, echo_config):
-        """Test that invalid tools are skipped gracefully."""
+    async def test_invalid_tool_raises(self, echo_config):
+        """Required invalid tool raises ConfigurationError."""
         config = {
             "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
@@ -415,22 +416,44 @@ class TestErrorHandling:
                     "params": {},
                 },
                 {
-                    "class": "non.existent.Tool",  # Invalid
+                    "class": "non.existent.Tool",  # Invalid — required by default
                     "params": {},
+                },
+            ],
+        }
+
+        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+            await DynaBot.from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_optional_invalid_tool_skipped(self, echo_config):
+        """Optional invalid tool is skipped gracefully."""
+        config = {
+            "llm": echo_config,
+            "conversation_storage": {"backend": "memory"},
+            "tools": [
+                {
+                    "class": "tests.fixtures.test_tools.SimpleTestTool",
+                    "params": {},
+                },
+                {
+                    "class": "non.existent.Tool",
+                    "params": {},
+                    "optional": True,
                 },
             ],
         }
 
         bot = await DynaBot.from_config(config)
 
-        # Should have 1 tool (invalid one skipped)
+        # Should have 1 tool (optional invalid one skipped)
         tools = list(bot.tool_registry)
         assert len(tools) == 1
         assert isinstance(tools[0], SimpleTestTool)
 
     @pytest.mark.asyncio
-    async def test_invalid_xref_skipped(self, echo_config):
-        """Test that invalid xrefs are skipped gracefully."""
+    async def test_invalid_xref_raises(self, echo_config):
+        """Required invalid xref raises ConfigurationError."""
         config = {
             "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
@@ -442,32 +465,40 @@ class TestErrorHandling:
             },
             "tools": [
                 "xref:tools[valid]",
-                "xref:tools[nonexistent]",  # Invalid xref
+                "xref:tools[nonexistent]",  # Invalid xref — required by default
             ],
         }
 
-        bot = await DynaBot.from_config(config)
-
-        # Should have 1 tool (invalid xref skipped)
-        tools = list(bot.tool_registry)
-        assert len(tools) == 1
-        assert isinstance(tools[0], SimpleTestTool)
+        with pytest.raises(ConfigurationError, match="Tool definition not found"):
+            await DynaBot.from_config(config)
 
     @pytest.mark.asyncio
-    async def test_bot_creation_succeeds_with_no_valid_tools(self, echo_config):
-        """Test that bot creation succeeds even if no tools are valid."""
+    async def test_all_invalid_tools_raises(self, echo_config):
+        """All-invalid required tools raise ConfigurationError."""
         config = {
             "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {"class": "non.existent.Tool1", "params": {}},
-                {"class": "non.existent.Tool2", "params": {}},
             ],
         }
 
-        # Should not raise error
+        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+            await DynaBot.from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_all_optional_invalid_tools_creates_empty_registry(self, echo_config):
+        """All-optional invalid tools create bot with empty registry."""
+        config = {
+            "llm": echo_config,
+            "conversation_storage": {"backend": "memory"},
+            "tools": [
+                {"class": "non.existent.Tool1", "params": {}, "optional": True},
+                {"class": "non.existent.Tool2", "params": {}, "optional": True},
+            ],
+        }
+
         bot = await DynaBot.from_config(config)
 
-        # Should have no tools
         tools = list(bot.tool_registry)
         assert len(tools) == 0
