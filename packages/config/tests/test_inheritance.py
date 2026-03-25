@@ -191,6 +191,46 @@ class TestSubstituteEnvVars:
         result = substitute_env_vars(data)
         assert result == data
 
+    def test_dict_key_substitution(self, monkeypatch):
+        """Bug B5: Dict keys containing ${VAR} must be substituted."""
+        monkeypatch.setenv("TOKEN", "secret-abc-123")
+
+        result = substitute_env_vars({"${TOKEN}": {"role": "admin"}})
+        assert "secret-abc-123" in result
+        assert "${TOKEN}" not in result
+        assert result["secret-abc-123"]["role"] == "admin"
+
+    def test_dict_key_substitution_with_default(self, monkeypatch):
+        """Dict keys with default syntax ${VAR:default} must be substituted."""
+        monkeypatch.delenv("MISSING_KEY_VAR", raising=False)
+
+        result = substitute_env_vars({"${MISSING_KEY_VAR:fallback}": "value"})
+        assert "fallback" in result
+        assert result["fallback"] == "value"
+
+    def test_dict_key_non_string_unchanged(self):
+        """Non-string dict keys (ints, etc.) pass through unchanged."""
+        data = {42: "int-key", True: "bool-key"}
+        result = substitute_env_vars(data)
+        assert result[42] == "int-key"
+        assert result[True] == "bool-key"
+
+    def test_dict_key_substitution_nested(self, monkeypatch):
+        """Dict keys at multiple nesting levels must be substituted."""
+        monkeypatch.setenv("OUTER_KEY", "outer")
+        monkeypatch.setenv("INNER_KEY", "inner")
+
+        data = {"${OUTER_KEY}": {"${INNER_KEY}": "deep_value"}}
+        result = substitute_env_vars(data)
+        assert result["outer"]["inner"] == "deep_value"
+
+    def test_dict_key_tilde_expansion(self):
+        """Tilde expansion via os.path.expanduser applies to dict keys."""
+        result = substitute_env_vars({"~/configs": "value"})
+        key = next(iter(result))
+        assert "~" not in key
+        assert key.endswith("/configs")
+
 
 class TestInheritableConfigLoader:
     """Test InheritableConfigLoader class."""

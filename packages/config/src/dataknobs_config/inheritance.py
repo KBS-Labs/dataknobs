@@ -94,7 +94,11 @@ def substitute_env_vars(data: Any) -> Any:
     - ${VAR_NAME}: Required variable, raises error if not set
     - ${VAR_NAME:default_value}: Optional with default
 
-    Also expands ~ in string values after substitution using
+    Substitution applies to both dict keys and values, list items,
+    and top-level strings. Non-string dict keys (integers, booleans, etc.)
+    pass through unchanged.
+
+    Also expands ~ in string keys and values after substitution using
     os.path.expanduser(), which leaves non-path strings (URLs,
     connection strings) intact.
 
@@ -113,7 +117,10 @@ def substitute_env_vars(data: Any) -> Any:
         {'key': 'hello', 'default': 'world'}
     """
     if isinstance(data, dict):
-        return {k: substitute_env_vars(v) for k, v in data.items()}
+        return {
+            _substitute_string(k) if isinstance(k, str) else k: substitute_env_vars(v)
+            for k, v in data.items()
+        }
     elif isinstance(data, list):
         return [substitute_env_vars(item) for item in data]
     elif isinstance(data, str):
