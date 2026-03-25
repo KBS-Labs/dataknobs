@@ -2294,6 +2294,15 @@ class DynaBot:
 
             # XRef to pre-defined tool
             tool_config = "xref:tools[calculator]"
+            # Requires config to have:
+            # {
+            #     "tool_definitions": {
+            #         "calculator": {
+            #             "class": "my_tools.CalculatorTool",
+            #             "params": {}
+            #         }
+            #     }
+            # }
         """
         import importlib
 
@@ -2348,16 +2357,34 @@ class DynaBot:
                         f"String tool config must be xref format: {tool_config}"
                     )
 
-            # Handle dict with xref key — propagate optional into the
-            # recursive call so the referenced definition inherits it.
+            # Handle dict with xref key — resolve the referenced string,
+            # injecting optional into the resolved definition if set.
             if isinstance(tool_config, dict) and "xref" in tool_config:
                 xref_str = tool_config["xref"]
-                if optional and isinstance(xref_str, str):
-                    # Wrap the string in a dict so optional propagates.
-                    return DynaBot._resolve_tool(
-                        {"xref": xref_str, "optional": True}, config, dependencies
+                if not optional:
+                    return DynaBot._resolve_tool(xref_str, config, dependencies)
+                # optional=True: resolve the xref string inline so we
+                # can inject optional into the resolved definition
+                # (the string path recomputes optional=False for strings).
+                import re
+
+                match = re.match(r"xref:tools\[([^\]]+)\]", xref_str) if isinstance(xref_str, str) else None
+                if not match:
+                    logger.warning("Skipping optional tool: Invalid xref format: %s", xref_str)
+                    return None
+                tool_name = match.group(1)
+                tool_definitions = config.get("tool_definitions", {})
+                if tool_name not in tool_definitions:
+                    logger.warning(
+                        "Skipping optional tool: Tool definition not found: %s. Available: %s",
+                        tool_name,
+                        list(tool_definitions.keys()),
                     )
-                return DynaBot._resolve_tool(xref_str, config, dependencies)
+                    return None
+                resolved = tool_definitions[tool_name]
+                if isinstance(resolved, dict) and not resolved.get("optional"):
+                    resolved = {**resolved, "optional": True}
+                return DynaBot._resolve_tool(resolved, config, dependencies)
 
             # Handle dict with class key (direct instantiation)
             if isinstance(tool_config, dict) and "class" in tool_config:
