@@ -2477,8 +2477,8 @@ class WizardReasoning(ReasoningStrategy):
                 # confirmation before evaluating transitions.
                 #
                 # Two modes:
-                # 1. First-render (render_counts == 0): always confirm
-                #    when new data exists.
+                # 1. First-render (render_counts == 0): confirm when new
+                #    data exists, unless confirm_first_render is false.
                 # 2. confirm_on_new_data: re-confirm whenever schema
                 #    property values changed since the last render
                 #    (catches "change difficulty to hard" after the

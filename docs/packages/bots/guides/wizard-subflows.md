@@ -32,6 +32,28 @@ When a subflow is triggered, the parent wizard's state is saved onto a stack, th
 
 Because the state is maintained on a stack (`WizardState.subflow_stack`), subflows can be nested -- a subflow can itself push another subflow.
 
+### First-Render Confirmation
+
+When a subflow stage has a `response_template` and receives new extracted data on its first visit, the wizard renders the template and pauses before evaluating transitions. This adds an extra confirmation turn. To skip this and evaluate transitions immediately, set `confirm_first_render: false` on the stage:
+
+```yaml
+stages:
+  - name: configure_quiz
+    confirm_first_render: false
+    response_template: |
+      Quiz settings: {{ quiz_question_count }} questions
+    schema:
+      type: object
+      properties:
+        quiz_question_count: { type: integer }
+      required: [quiz_question_count]
+    transitions:
+      - target: quiz_complete
+        condition: "data.get('quiz_question_count')"
+```
+
+Stages with `reasoning: react` skip this confirmation automatically via a different code path.
+
 ## Configuration
 
 ### Transition Syntax

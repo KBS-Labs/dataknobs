@@ -210,7 +210,14 @@ class WizardConfigBuilder:
         if capture_mode is not None:
             stage["capture_mode"] = capture_mode
         if extra_fields:
-            stage.update(extra_fields)
+            # Prevent accidental override of structural keys set by
+            # positional/explicit parameters above.
+            reserved = {"name", "prompt", "is_start", "is_end"}
+            safe_fields = {
+                k: v for k, v in extra_fields.items()
+                if k not in reserved
+            }
+            stage.update(safe_fields)
 
         self._current_stage = stage
         return self
@@ -577,10 +584,10 @@ class BotTestHarness:
                 for stage_def in wizard_cfg.get("stages", []):
                     if (
                         stage_def.get("schema")
-                        and stage_def.get("capture_mode") is None
+                        and stage_def.get("capture_mode") in (None, "auto")
                     ):
                         col = stage_def.get("collection_config") or {}
-                        if col.get("capture_mode") is None:
+                        if col.get("capture_mode") in (None, "auto"):
                             stage_def["capture_mode"] = "extract"
 
             bot_config = {

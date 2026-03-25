@@ -187,7 +187,7 @@ class TestConfirmFirstRenderLoader:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
 
-        welcome_meta = wizard_fsm._stage_metadata.get("welcome", {})
+        welcome_meta = wizard_fsm.stages.get("welcome", {})
         assert welcome_meta.get("confirm_first_render") is True
 
     def test_confirm_first_render_loaded_when_false(self) -> None:
@@ -214,7 +214,7 @@ class TestConfirmFirstRenderLoader:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
 
-        meta = wizard_fsm._stage_metadata.get("start", {})
+        meta = wizard_fsm.stages.get("start", {})
         assert meta.get("confirm_first_render") is False
 
 
