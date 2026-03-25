@@ -1,9 +1,12 @@
 """Echo provider for testing and debugging."""
 
+from __future__ import annotations
+
 import hashlib
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -52,6 +55,10 @@ class EchoProvider(AsyncLLMProvider):
     - Mocks function calling with deterministic responses
     - Zero external dependencies
     - Instant responses
+    - **Strict mode**: raise when response queue is exhausted instead of
+      falling back to echo behavior (catches under-scripted tests)
+    - **Instance tracking**: class-level tracking of created instances
+      for inspecting providers created internally by ``from_config()``
 
     Scripted Response Features (for testing):
     - Response queue: Provide ordered list of responses
@@ -77,21 +84,40 @@ class EchoProvider(AsyncLLMProvider):
         # Check what was called
         assert provider.call_count == 2
         assert "hello" in provider.get_call(0).messages[0].content
+
+        # Strict mode - catch under-scripted tests
+        provider = EchoProvider(config, strict=True)
+        provider.set_responses(["only one"])
+        await provider.complete("first")   # Returns "only one"
+        await provider.complete("second")  # Raises ResponseQueueExhaustedError
+
+        # Instance tracking - inspect providers created by from_config()
+        with EchoProvider.track_instances() as instances:
+            bot = await DynaBot.from_config(config)
+        assert instances[0].close_count == 0  # or == 1 on error path
         ```
     """
 
+    # Class-level instance tracking
+    _last_instance: EchoProvider | None = None
+    _instance_collectors: list[list[EchoProvider]] = []
+
     def __init__(
         self,
-        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        config: Union[LLMConfig, Config, Dict[str, Any]],
         prompt_builder: AsyncPromptBuilder | None = None,
         responses: List[Union[str, LLMResponse]] | None = None,
         response_fn: ResponseFunction | None = None,
         strict_tools: bool = True,
+        strict: bool = False,
     ):
         """Initialize EchoProvider.
 
         Args:
-            config: LLM configuration
+            config: LLM configuration.  ``strict`` can also be enabled via
+                ``config["options"]["strict"] = True`` for cases where
+                the provider is created by a factory (e.g.
+                ``LLMProviderFactory``).
             prompt_builder: Optional prompt builder
             responses: Optional list of responses to return in order
             response_fn: Optional function to generate responses dynamically
@@ -102,6 +128,11 @@ class EchoProvider(AsyncLLMProvider):
                 that forget to pass tools. Set to False only for tests that
                 intentionally exercise edge cases (e.g. "what happens if
                 tool_calls arrive unexpectedly").
+            strict: If True, raise ``ResponseQueueExhaustedError`` when
+                ``complete()`` is called after all scripted responses have
+                been consumed, instead of falling back to echo behavior.
+                Use this to catch under-scripted tests and to exercise
+                error-cleanup paths in callers.
         """
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -127,6 +158,12 @@ class EchoProvider(AsyncLLMProvider):
         self._init_count: int = 0
         self._close_count: int = 0
         self._strict_tools: bool = strict_tools
+        self._strict: bool = strict or llm_config.options.get('strict', False)
+
+        # Instance tracking
+        EchoProvider._last_instance = self
+        for collector in EchoProvider._instance_collectors:
+            collector.append(self)
 
     # =========================================================================
     # Scripted Response API
@@ -136,7 +173,7 @@ class EchoProvider(AsyncLLMProvider):
         self,
         responses: List[Union[str, LLMResponse, ErrorResponse]],
         cycle: bool = False,
-    ) -> "EchoProvider":
+    ) -> EchoProvider:
         """Set queue of responses to return in order.
 
         Args:
@@ -152,7 +189,7 @@ class EchoProvider(AsyncLLMProvider):
 
     def add_response(
         self, response: Union[str, LLMResponse, ErrorResponse]
-    ) -> "EchoProvider":
+    ) -> EchoProvider:
         """Add a single response to the queue.
 
         Args:
@@ -167,7 +204,7 @@ class EchoProvider(AsyncLLMProvider):
     def set_response_function(
         self,
         fn: ResponseFunction,
-    ) -> "EchoProvider":
+    ) -> EchoProvider:
         """Set function to generate dynamic responses.
 
         The function receives the message list and returns either
@@ -187,7 +224,7 @@ class EchoProvider(AsyncLLMProvider):
         pattern: str,
         response: Union[str, LLMResponse, ErrorResponse],
         flags: int = re.IGNORECASE,
-    ) -> "EchoProvider":
+    ) -> EchoProvider:
         """Add pattern-matched response.
 
         When user message matches pattern, return the specified response.
@@ -204,7 +241,7 @@ class EchoProvider(AsyncLLMProvider):
         self._pattern_responses.append((compiled, response))
         return self
 
-    def clear_responses(self) -> "EchoProvider":
+    def clear_responses(self) -> EchoProvider:
         """Clear all scripted responses and reset to echo mode.
 
         Returns:
@@ -215,7 +252,7 @@ class EchoProvider(AsyncLLMProvider):
         self._pattern_responses.clear()
         return self
 
-    def clear_history(self) -> "EchoProvider":
+    def clear_history(self) -> EchoProvider:
         """Clear call history.
 
         Returns:
@@ -224,7 +261,7 @@ class EchoProvider(AsyncLLMProvider):
         self._call_history.clear()
         return self
 
-    def reset(self) -> "EchoProvider":
+    def reset(self) -> EchoProvider:
         """Reset all state (responses, history, init count, and close count).
 
         Returns:
@@ -235,6 +272,59 @@ class EchoProvider(AsyncLLMProvider):
         self._init_count = 0
         self._close_count = 0
         return self
+
+    # =========================================================================
+    # Instance Tracking (class-level)
+    # =========================================================================
+
+    @classmethod
+    def get_last_instance(cls) -> EchoProvider | None:
+        """Return the most recently created EchoProvider instance.
+
+        Useful for inspecting providers created internally by code like
+        ``DynaBot.from_config()`` where the test has no direct reference.
+        """
+        return cls._last_instance
+
+    @classmethod
+    @contextmanager
+    def track_instances(cls) -> Iterator[list[EchoProvider]]:
+        """Context manager that collects all EchoProvider instances created within.
+
+        Example::
+
+            with EchoProvider.track_instances() as instances:
+                bot = await DynaBot.from_config(config)
+            assert len(instances) == 1
+            assert instances[0].close_count == 1  # cleaned up on error path
+        """
+        collector: list[EchoProvider] = []
+        cls._instance_collectors.append(collector)
+        try:
+            yield collector
+        finally:
+            cls._instance_collectors.remove(collector)
+
+    @classmethod
+    def reset_tracking(cls) -> None:
+        """Clear all instance tracking state.
+
+        Resets ``_last_instance`` and removes any active collectors
+        (e.g. from a ``track_instances()`` context that was not
+        properly exited).  Call in test teardown to prevent cross-test
+        leakage.
+        """
+        cls._last_instance = None
+        cls._instance_collectors.clear()
+
+    # =========================================================================
+    # Properties
+    # =========================================================================
+
+    @property
+    def strict(self) -> bool:
+        """Whether strict mode is enabled (raises on exhausted queue)."""
+        return self._strict
 
     # =========================================================================
     # Call History API
@@ -532,6 +622,21 @@ class EchoProvider(AsyncLLMProvider):
                 'error': True,
             })
             raise
+
+        if response is None and self._strict:
+            from dataknobs_llm.exceptions import ResponseQueueExhaustedError
+
+            self._call_history.append({
+                'messages': messages,
+                'response': None,
+                'config_overrides': config_overrides,
+                'tools': tools,
+                'kwargs': kwargs,
+                'error': True,
+            })
+            raise ResponseQueueExhaustedError(
+                call_count=len(self._call_history),
+            )
 
         if response is None:
             # Fall back to default echo behavior

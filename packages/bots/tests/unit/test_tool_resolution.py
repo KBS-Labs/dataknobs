@@ -1,6 +1,7 @@
 """Unit tests for tool resolution from configuration."""
 
 import pytest
+from dataknobs_common.exceptions import ConfigurationError
 
 from dataknobs_bots import DynaBot
 from tests.fixtures.test_tools import (
@@ -106,21 +107,28 @@ class TestToolResolution:
         assert tool.multiplier == 2
 
     def test_resolve_invalid_class_path(self):
-        """Test handling of invalid class path."""
+        """Invalid class path raises ConfigurationError."""
         tool_config = {
             "class": "non.existent.Module",
             "params": {},
         }
 
-        config = {}
+        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+            DynaBot._resolve_tool(tool_config, {})
 
-        tool = DynaBot._resolve_tool(tool_config, config)
+    def test_resolve_invalid_class_path_optional(self):
+        """Invalid class path with optional: true returns None."""
+        tool_config = {
+            "class": "non.existent.Module",
+            "params": {},
+            "optional": True,
+        }
 
-        # Should return None for invalid class
+        tool = DynaBot._resolve_tool(tool_config, {})
         assert tool is None
 
     def test_resolve_invalid_xref(self):
-        """Test handling of invalid xref."""
+        """Non-existent xref target raises ConfigurationError."""
         config = {
             "tool_definitions": {
                 "existing_tool": {
@@ -131,49 +139,33 @@ class TestToolResolution:
 
         tool_config = "xref:tools[non_existent]"
 
-        tool = DynaBot._resolve_tool(tool_config, config)
-
-        # Should return None for non-existent tool
-        assert tool is None
+        with pytest.raises(ConfigurationError, match="Tool definition not found"):
+            DynaBot._resolve_tool(tool_config, config)
 
     def test_resolve_invalid_xref_format(self):
-        """Test handling of invalid xref format."""
-        config = {}
-
-        tool_config = "xref:invalid_format"
-
-        tool = DynaBot._resolve_tool(tool_config, config)
-
-        # Should return None for invalid format
-        assert tool is None
+        """Malformed xref string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid xref format"):
+            DynaBot._resolve_tool("xref:invalid_format", {})
 
     def test_resolve_non_tool_class(self):
-        """Test handling of class that's not a Tool."""
+        """Class that isn't a Tool raises ConfigurationError."""
         tool_config = {
             "class": "builtins.str",  # Not a Tool subclass
             "params": {},
         }
 
-        config = {}
-
-        tool = DynaBot._resolve_tool(tool_config, config)
-
-        # Should return None for non-Tool class
-        assert tool is None
+        with pytest.raises(ConfigurationError, match="not a Tool instance"):
+            DynaBot._resolve_tool(tool_config, {})
 
     def test_resolve_missing_class_key(self):
-        """Test handling of config without class or xref key."""
+        """Config without class or xref key raises ConfigurationError."""
         tool_config = {
             "name": "something",
             "other": "data",
         }
 
-        config = {}
-
-        tool = DynaBot._resolve_tool(tool_config, config)
-
-        # Should return None for invalid config
-        assert tool is None
+        with pytest.raises(ConfigurationError, match="Invalid tool config format"):
+            DynaBot._resolve_tool(tool_config, {})
 
     @pytest.mark.asyncio
     async def test_from_config_with_tool_resolution(self):
@@ -254,8 +246,8 @@ class TestToolResolution:
         assert param_tool.prefix == "xref-tool"
 
     @pytest.mark.asyncio
-    async def test_from_config_skips_invalid_tools(self):
-        """Test that bot creation continues when some tools fail to resolve."""
+    async def test_from_config_skips_optional_invalid_tools(self):
+        """Bot creation continues when optional tools fail to resolve."""
         config = {
             "llm": {
                 "provider": "ollama",
@@ -271,8 +263,9 @@ class TestToolResolution:
                     "params": {},
                 },
                 {
-                    "class": "non.existent.Tool",  # This will fail
+                    "class": "non.existent.Tool",
                     "params": {},
+                    "optional": True,
                 },
                 {
                     "class": "tests.fixtures.test_tools.ParameterizedTestTool",
@@ -283,7 +276,7 @@ class TestToolResolution:
 
         bot = await DynaBot.from_config(config)
 
-        # Should have 2 tools (skipped the invalid one)
+        # Should have 2 tools (skipped the optional invalid one)
         tools = list(bot.tool_registry)
         assert len(tools) == 2
 
@@ -291,6 +284,28 @@ class TestToolResolution:
         tool_types = {type(tool) for tool in tools}
         assert SimpleTestTool in tool_types
         assert ParameterizedTestTool in tool_types
+
+    @pytest.mark.asyncio
+    async def test_from_config_raises_on_required_invalid_tool(self):
+        """Bot creation fails when a required tool cannot be resolved."""
+        config = {
+            "llm": {
+                "provider": "echo",
+                "model": "test",
+            },
+            "conversation_storage": {
+                "backend": "memory",
+            },
+            "tools": [
+                {
+                    "class": "non.existent.Tool",
+                    "params": {},
+                },
+            ],
+        }
+
+        with pytest.raises(ConfigurationError, match="Failed to import tool class"):
+            await DynaBot.from_config(config)
 
     @pytest.mark.asyncio
     async def test_tool_execution_after_resolution(self):

@@ -17,6 +17,7 @@ LLMError = DataknobsError
 __all__ = [
     "LLMError",
     "RateLimitError",
+    "ResponseQueueExhaustedError",
     "SchemaVersionError",
     "StorageError",
     "ToolsNotSupportedError",
@@ -40,6 +41,24 @@ class SchemaVersionError(OperationError):
     """Exception raised for schema version incompatibilities."""
 
     pass
+
+
+class ResponseQueueExhaustedError(OperationError):
+    """EchoProvider response queue exhausted in strict mode.
+
+    Raised when ``strict=True`` and a ``complete()`` call is made after
+    all scripted responses have been consumed.  Indicates the test
+    scripted fewer responses than the code actually needed.
+    """
+
+    def __init__(self, call_count: int) -> None:
+        self.call_count = call_count
+        super().__init__(
+            f"EchoProvider response queue exhausted after {call_count} "
+            f"call(s) (strict mode). The test scripted fewer responses "
+            f"than the code requires. Either add more responses to the "
+            f"queue or set strict=False to fall back to echo behavior."
+        )
 
 
 class ToolsNotSupportedError(OperationError):

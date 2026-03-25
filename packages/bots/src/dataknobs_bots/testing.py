@@ -432,6 +432,7 @@ class BotTestHarness:
         tools: list[Any] | None = None,
         middleware: list[Any] | None = None,
         strict_tools: bool = True,
+        strict: bool = False,
     ) -> BotTestHarness:
         """Create a harness with a fully wired DynaBot.
 
@@ -467,6 +468,10 @@ class BotTestHarness:
                 but no tools were provided to complete(). Set to False
                 for tests that intentionally exercise unexpected
                 tool_calls with no registered tools.
+            strict: If True, the EchoProvider raises
+                ``ResponseQueueExhaustedError`` when all scripted
+                responses have been consumed, instead of falling back
+                to echo behavior.  Catches under-scripted tests.
 
         Returns:
             Configured ``BotTestHarness`` instance.
@@ -537,6 +542,7 @@ class BotTestHarness:
         provider = EchoProvider(
             {"provider": "echo", "model": "echo-test"},
             strict_tools=strict_tools,
+            strict=strict,
         )
         if main_responses:
             provider.set_responses(main_responses)

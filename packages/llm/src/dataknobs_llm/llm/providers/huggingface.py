@@ -1,5 +1,6 @@
 """HuggingFace Inference API provider implementation."""
 
+import asyncio
 import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
@@ -13,6 +14,10 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
+
+# Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
+# callbacks can drain before event loop shutdown.  See dk-29 for full context.
+_AIOHTTP_DRAIN_SECS = 0.25
 
 
 class HuggingFaceProvider(AsyncLLMProvider):
@@ -49,6 +54,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
         """Close the aiohttp session."""
         if hasattr(self, '_session') and self._session:
             await self._session.close()
+            await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
     async def validate_model(self) -> bool:
         """Validate model availability."""

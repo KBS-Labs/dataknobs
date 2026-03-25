@@ -86,6 +86,7 @@ See Also:
     - Ollama GitHub: https://github.com/ollama/ollama
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -104,6 +105,14 @@ if TYPE_CHECKING:
     from dataknobs_config.config import Config
 
 logger = logging.getLogger(__name__)
+
+# Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
+# callbacks scheduled via loop.call_soon() can drain before the event loop
+# shuts down.  Without this, asyncio.run() hangs when session close is
+# immediately followed by loop shutdown (e.g. error-path cleanup in
+# DynaBot.from_config()).  This is the standard workaround recommended by the
+# aiohttp documentation.
+_AIOHTTP_DRAIN_SECS = 0.25
 
 
 def _find_matching_models(configured_model: str, available_models: list[str]) -> list[str]:
@@ -583,6 +592,7 @@ class OllamaProvider(AsyncLLMProvider):
         """Close the aiohttp session."""
         if hasattr(self, '_session') and self._session:
             await self._session.close()
+            await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
     async def validate_model(self) -> bool:
         """Validate model availability."""

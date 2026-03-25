@@ -43,7 +43,7 @@ from dataknobs_llm.execution.parallel import (
 )
 
 # Exceptions
-from dataknobs_llm.exceptions import ToolsNotSupportedError
+from dataknobs_llm.exceptions import ResponseQueueExhaustedError, ToolsNotSupportedError
 
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
@@ -105,6 +105,7 @@ __all__ = [
     "DeterministicTask",
     "TaskResult",
     # Exceptions
+    "ResponseQueueExhaustedError",
     "ToolsNotSupportedError",
     # Testing utilities
     "CallTracker",

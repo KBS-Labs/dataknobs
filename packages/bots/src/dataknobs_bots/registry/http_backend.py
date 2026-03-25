@@ -6,6 +6,7 @@ from external services, enabling centralized configuration management.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,10 @@ from .backend import RegistryBackend
 from .models import Registration
 
 logger = logging.getLogger(__name__)
+
+# Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
+# callbacks can drain before event loop shutdown.  See dk-29 for full context.
+_AIOHTTP_DRAIN_SECS = 0.25
 
 
 class HTTPRegistryBackend(RegistryBackend):
@@ -193,6 +198,7 @@ class HTTPRegistryBackend(RegistryBackend):
         """Close the HTTP session."""
         if self._session:
             await self._session.close()
+            await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
             self._session = None
         self._initialized = False
         logger.info("HTTPRegistryBackend closed")
