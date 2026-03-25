@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -143,6 +144,12 @@ class DynaBot:
     _DEFAULT_MAX_TOOL_ITERATIONS = 5
     """Default maximum number of tool execution rounds before returning."""
 
+    _DEFAULT_TOOL_TIMEOUT: float = 30.0
+    """Default per-tool execution timeout in seconds."""
+
+    _DEFAULT_TOOL_LOOP_TIMEOUT: float = 120.0
+    """Default wall-clock timeout for the entire tool execution loop."""
+
     def __init__(
         self,
         llm: AsyncLLMProvider,
@@ -161,6 +168,8 @@ class DynaBot:
         default_max_tokens: int = 1000,
         context_transform: Callable[[str], str] | None = None,
         max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
+        tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
+        tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
     ):
         """Initialize DynaBot.
 
@@ -190,6 +199,19 @@ class DynaBot:
                 ``tool_calls``, DynaBot executes the tools and re-generates.
                 This cap prevents infinite loops when the model keeps
                 requesting the same tools.
+            tool_timeout: Per-tool execution timeout in seconds.  If a
+                single tool call exceeds this duration, it is cancelled
+                and an error observation is recorded.
+            tool_loop_timeout: Wall-clock budget in seconds for the
+                tool execution loop (across all iterations).  Checked
+                at the start of each iteration and before each LLM
+                re-call.  For ``chat()``, the LLM re-call is also
+                bounded by the remaining budget via
+                ``asyncio.wait_for()``.  For ``stream_chat()``, a
+                streaming re-call that starts within budget runs to
+                completion (streams cannot be cancelled mid-chunk in
+                Python 3.10).  Individual tool executions are always
+                bounded by ``tool_timeout``.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -207,6 +229,17 @@ class DynaBot:
         self.default_max_tokens = default_max_tokens
         self._context_transform = context_transform
         self._max_tool_iterations = max_tool_iterations
+        if tool_timeout < 0:
+            raise ValueError(
+                f"tool_timeout must be non-negative, got {tool_timeout}"
+            )
+        if tool_loop_timeout < 0:
+            raise ValueError(
+                f"tool_loop_timeout must be non-negative, got "
+                f"{tool_loop_timeout}"
+            )
+        self._tool_timeout = tool_timeout
+        self._tool_loop_timeout = tool_loop_timeout
         self._owns_llm = True  # Set False by from_config() when llm= injected
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
@@ -620,6 +653,12 @@ class DynaBot:
             max_tool_iterations=config.get(
                 "max_tool_iterations", cls._DEFAULT_MAX_TOOL_ITERATIONS
             ),
+            tool_timeout=config.get(
+                "tool_timeout", cls._DEFAULT_TOOL_TIMEOUT
+            ),
+            tool_loop_timeout=config.get(
+                "tool_loop_timeout", cls._DEFAULT_TOOL_LOOP_TIMEOUT
+            ),
         )
 
         for role, provider in subsystem_providers.items():
@@ -894,8 +933,11 @@ class DynaBot:
             else:
                 try:
                     t0 = time.monotonic()
-                    result = await tool.execute(
-                        **tool_call.parameters, _context=tool_context
+                    result = await asyncio.wait_for(
+                        tool.execute(
+                            **tool_call.parameters, _context=tool_context
+                        ),
+                        timeout=self._tool_timeout,
                     )
                     duration_ms = (time.monotonic() - t0) * 1000
                     try:
@@ -920,6 +962,31 @@ class DynaBot:
                             ),
                             "duration_ms": round(duration_ms, 1),
                             "result_length": len(str(result)),
+                        },
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    duration_ms = (time.monotonic() - t0) * 1000
+                    observation = (
+                        f"Error: tool timed out after "
+                        f"{self._tool_timeout:.1f}s"
+                    )
+                    turn.tool_executions.append(ToolExecution(
+                        tool_name=tool_name,
+                        parameters=tool_call.parameters,
+                        error=(
+                            f"Timed out after {self._tool_timeout:.1f}s"
+                        ),
+                        duration_ms=duration_ms,
+                    ))
+                    logger.warning(
+                        "Tool execution timed out: %s (%.1fs limit)",
+                        tool_name,
+                        self._tool_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                            "duration_ms": round(duration_ms, 1),
                         },
                     )
                 except Exception as exc:
@@ -1238,6 +1305,34 @@ class DynaBot:
                     "after_turn", exc, turn.context
                 )
 
+    async def _call_finally_turn_middleware(self, turn: TurnState) -> None:
+        """Dispatch finally_turn to all middleware.
+
+        Fires after every turn — on both success and error paths.
+        Called from the ``finally`` block in ``chat()``,
+        ``stream_chat()``, and ``greet()`` (normal path), and directly
+        from the no-strategy early-exit path in ``greet()`` when
+        ``plugin_data`` was provided.
+
+        Observational hook — one failing middleware must not prevent
+        others from running.  Errors are logged, then reported to all
+        middleware via ``on_hook_error``.
+
+        Args:
+            turn: Turn state at the end of the pipeline.
+        """
+        for mw in self.middleware:
+            try:
+                await mw.finally_turn(turn)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.finally_turn raised",
+                    type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "finally_turn", exc, turn.context
+                )
+
     async def _call_on_tool_executed_middleware(
         self, execution: ToolExecution, context: BotContext
     ) -> None:
@@ -1271,6 +1366,7 @@ class DynaBot:
         max_tokens: int | None = None,
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
+        plugin_data: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         """Process a chat message.
@@ -1288,6 +1384,10 @@ class DynaBot:
             llm_config_overrides: Optional dict to override LLM config fields
                       for this request only. Supported fields: model, temperature,
                       max_tokens, top_p, stop_sequences, seed, options.
+            plugin_data: Optional dict to seed ``turn.plugin_data`` before
+                      middleware runs.  Enables caller-managed lifecycle
+                      patterns (e.g., passing a DB session handle that
+                      middleware can use and ``finally_turn`` can close).
             **kwargs: Additional arguments
 
         Returns:
@@ -1325,6 +1425,7 @@ class DynaBot:
             temperature=temperature,
             max_tokens=max_tokens,
             llm_config_overrides=llm_config_overrides,
+            plugin_data=plugin_data or {},
         )
         try:
             await self._prepare_turn(turn)
@@ -1335,21 +1436,67 @@ class DynaBot:
             # DynaBot-level tool execution loop.  Strategies that handle
             # tool_calls internally (e.g. ReAct) return responses without
             # tool_calls, so this loop is a no-op for them.
+            loop_start = time.monotonic()
             for _iteration in range(self._max_tool_iterations):
                 if (
                     not self.tool_registry
                     or not getattr(response, "tool_calls", None)
                 ):
                     break
+                if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                    logger.warning(
+                        "Tool execution loop exceeded wall-clock timeout "
+                        "(%.1fs)",
+                        self._tool_loop_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+                    break
                 await self._execute_tools(turn, response.tool_calls)
                 # Accumulate usage from intermediate LLM calls
                 turn.accumulate_usage(response)
-                response = await turn.manager.complete(
-                    tools=list(self.tool_registry) or None,
-                    temperature=temperature or self.default_temperature,
-                    max_tokens=max_tokens or self.default_max_tokens,
-                    llm_config_overrides=llm_config_overrides,
+                # Enforce remaining loop budget on the LLM re-call
+                remaining = self._tool_loop_timeout - (
+                    time.monotonic() - loop_start
                 )
+                if remaining <= 0:
+                    logger.warning(
+                        "Tool loop budget exhausted before LLM re-call "
+                        "(%.1fs budget)",
+                        self._tool_loop_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+                    break
+                try:
+                    response = await asyncio.wait_for(
+                        turn.manager.complete(
+                            tools=list(self.tool_registry) or None,
+                            temperature=temperature or self.default_temperature,
+                            max_tokens=max_tokens or self.default_max_tokens,
+                            llm_config_overrides=llm_config_overrides,
+                        ),
+                        timeout=remaining,
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning(
+                        "LLM re-call exceeded remaining tool loop "
+                        "budget (%.1fs remaining of %.1fs)",
+                        remaining,
+                        self._tool_loop_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+                    break
             else:
                 # Loop completed without break — cap hit
                 if self.tool_registry and getattr(
@@ -1374,12 +1521,15 @@ class DynaBot:
         except Exception as e:
             await self._call_on_error_middleware(e, message, context)
             raise
+        finally:
+            await self._call_finally_turn_middleware(turn)
 
     async def greet(
         self,
         context: BotContext,
         *,
         initial_context: dict[str, Any] | None = None,
+        plugin_data: dict[str, Any] | None = None,
     ) -> str | None:
         """Generate a bot-initiated greeting before the user speaks.
 
@@ -1397,6 +1547,12 @@ class DynaBot:
                 greeting. For wizard strategies, these values are merged
                 into ``wizard_state.data`` so they are available to the
                 start stage's prompt template and transforms.
+            plugin_data: Optional dict to seed ``turn.plugin_data`` before
+                middleware runs.  See ``chat()`` for details.
+
+                When ``reasoning_strategy`` is ``None``, no turn is
+                initiated but ``finally_turn`` still fires if
+                ``plugin_data`` was provided, ensuring cleanup.
 
         Returns:
             Greeting string, or None if the bot does not support greetings
@@ -1405,7 +1561,10 @@ class DynaBot:
             Middleware lifecycle for greet: ``on_turn_start(turn)`` and
             ``before_message("")`` are called before greeting generation;
             ``after_turn(turn)`` and ``after_message(...)`` are called on
-            success.  If an error occurs, ``on_error`` hooks receive
+            success (only when a response is generated);
+            ``finally_turn(turn)`` fires on success, error, and when
+            the strategy returns ``None`` (no greeting).
+            If an error occurs, ``on_error`` hooks receive
             ``message=""`` since there is no user message.  If a
             middleware hook itself fails, ``on_hook_error`` is called on
             all middleware.
@@ -1419,6 +1578,14 @@ class DynaBot:
             ```
         """
         if not self.reasoning_strategy:
+            if plugin_data is not None:
+                turn = TurnState(
+                    mode=TurnMode.GREET,
+                    message="",
+                    context=context,
+                    plugin_data=plugin_data,
+                )
+                await self._call_finally_turn_middleware(turn)
             return None
 
         turn = TurnState(
@@ -1426,6 +1593,7 @@ class DynaBot:
             message="",
             context=context,
             initial_context=initial_context,
+            plugin_data=plugin_data or {},
         )
         try:
             await self._prepare_turn(turn)
@@ -1452,6 +1620,8 @@ class DynaBot:
         except Exception as e:
             await self._call_on_error_middleware(e, "", context)
             raise
+        finally:
+            await self._call_finally_turn_middleware(turn)
 
     async def stream_chat(
         self,
@@ -1461,6 +1631,7 @@ class DynaBot:
         max_tokens: int | None = None,
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
+        plugin_data: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[LLMStreamResponse, None]:
         """Stream chat response token by token.
@@ -1479,6 +1650,8 @@ class DynaBot:
             llm_config_overrides: Optional dict to override LLM config fields
                       for this request only. Supported fields: model, temperature,
                       max_tokens, top_p, stop_sequences, seed, options.
+            plugin_data: Optional dict to seed ``turn.plugin_data`` before
+                      middleware runs.  See ``chat()`` for details.
             **kwargs: Additional arguments passed to LLM
 
         Yields:
@@ -1516,6 +1689,20 @@ class DynaBot:
             Conversation history is automatically updated after streaming completes.
             When a reasoning_strategy is configured, the strategy produces the
             complete response and it is emitted as a single stream chunk.
+
+            **Cleanup guarantee:** ``finally_turn`` middleware fires via a
+            ``finally`` block inside the async generator.  In Python, async
+            generator ``finally`` blocks execute only when the generator is
+            fully consumed, explicitly closed (``await gen.aclose()``), or
+            garbage collected.  Callers that break out of the stream early
+            should use ``contextlib.aclosing`` to guarantee prompt cleanup::
+
+                from contextlib import aclosing
+
+                async with aclosing(bot.stream_chat("msg", ctx)) as stream:
+                    async for chunk in stream:
+                        if done:
+                            break  # aclose() fires finally_turn
         """
         turn = TurnState(
             mode=TurnMode.STREAM,
@@ -1525,8 +1712,10 @@ class DynaBot:
             temperature=temperature,
             max_tokens=max_tokens,
             llm_config_overrides=llm_config_overrides,
+            plugin_data=plugin_data or {},
         )
         streaming_error: Exception | None = None
+        stream_fully_consumed = False
 
         try:
             await self._prepare_turn(turn)
@@ -1612,13 +1801,43 @@ class DynaBot:
             # DynaBot-level tool execution loop for streaming.
             # Execute pending tool_calls, then re-stream until no
             # more tool_calls or max iterations reached.
+            loop_start = time.monotonic()
             for _iteration in range(self._max_tool_iterations):
                 if not pending_tool_calls or not self.tool_registry:
+                    break
+                if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                    logger.warning(
+                        "Streaming tool execution loop exceeded "
+                        "wall-clock timeout (%.1fs)",
+                        self._tool_loop_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
                     break
                 await self._execute_tools(turn, pending_tool_calls)
                 # Accumulate usage from intermediate streaming rounds
                 turn.accumulate_usage_from_stream()
                 pending_tool_calls = None
+
+                # Check remaining budget before starting LLM re-stream
+                remaining = self._tool_loop_timeout - (
+                    time.monotonic() - loop_start
+                )
+                if remaining <= 0:
+                    logger.warning(
+                        "Streaming tool loop budget exhausted before "
+                        "LLM re-stream (%.1fs budget)",
+                        self._tool_loop_timeout,
+                        extra={
+                            "conversation_id": getattr(
+                                turn.manager, "conversation_id", None
+                            ),
+                        },
+                    )
+                    break
 
                 async for chunk in turn.manager.stream_complete(
                     tools=list(self.tool_registry) or None,
@@ -1655,15 +1874,20 @@ class DynaBot:
                         },
                     )
 
+            stream_fully_consumed = True
+
         except Exception as e:
             streaming_error = e
             await self._call_on_error_middleware(e, message, context)
             raise
-
-        # Only finalize on success
-        if streaming_error is None:
-            turn.response_content = "".join(turn.stream_chunks)
-            await self._finalize_turn(turn)
+        finally:
+            # Only finalize when the stream was fully consumed (not
+            # on early exit via aclose/break, which would write
+            # partial data to conversation history).
+            if streaming_error is None and stream_fully_consumed:
+                turn.response_content = "".join(turn.stream_chunks)
+                await self._finalize_turn(turn)
+            await self._call_finally_turn_middleware(turn)
 
     async def get_conversation(self, conversation_id: str) -> Any:
         """Retrieve conversation history.

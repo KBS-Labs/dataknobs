@@ -23,6 +23,9 @@ class Middleware:
       ``plugin_data`` and optionally transform the message.
     - ``after_turn(turn)`` — after any turn completes (chat, stream,
       greet); unified successor to ``after_message`` and ``post_stream``.
+    - ``finally_turn(turn)`` — fires after every turn on both success
+      and error paths.  Use for resource cleanup.  For ``stream_chat``,
+      requires full consumption or ``aclosing()``.
     - ``on_tool_executed(execution, context)`` — after each tool call.
 
     **Legacy hooks** (kept for backward compatibility):
@@ -130,9 +133,11 @@ class Middleware:
         """Called when a middleware hook itself raises an exception.
 
         This fires when a post-generation middleware hook raises:
-        ``after_turn``, ``on_tool_executed``, ``after_message``,
-        ``post_stream``, or ``on_error``.  The response was already
-        delivered — the middleware could not complete its own
+        ``after_turn``, ``finally_turn``, ``on_tool_executed``,
+        ``after_message``, ``post_stream``, or ``on_error``.  On the
+        success path, the response was already delivered; on the error
+        path (e.g. ``finally_turn`` after a failed turn), it was not.
+        In either case, the middleware could not complete its own
         post-processing (e.g., a logging sink was unreachable, a
         metrics backend timed out).
 
@@ -142,8 +147,8 @@ class Middleware:
 
         Args:
             hook_name: Name of the hook that failed (e.g.
-                ``"after_turn"``, ``"on_tool_executed"``,
-                ``"on_error"``)
+                ``"after_turn"``, ``"finally_turn"``,
+                ``"on_tool_executed"``, ``"on_error"``)
             error: The exception raised by the middleware hook
             context: Bot context
         """
@@ -187,6 +192,38 @@ class Middleware:
 
         Args:
             turn: Complete turn state with all pipeline data.
+        """
+
+    async def finally_turn(self, turn: TurnState) -> None:
+        """Called after every turn, on both success and error paths.
+
+        Use this for resource cleanup (closing DB sessions, releasing
+        locks, flushing buffers) that must happen regardless of outcome.
+        ``after_turn`` is conditional — it does not fire on error paths
+        or when ``greet()`` returns ``None``.  Do not assume
+        ``after_turn`` has already run when writing ``finally_turn``
+        logic.
+
+        For ``chat()`` and ``greet()``, this hook fires reliably via a
+        ``finally`` block.  For ``stream_chat()`` (an async generator),
+        the ``finally`` block fires only when the generator is fully
+        consumed, explicitly closed (``aclose()``), or garbage
+        collected.  Callers that break out of the stream early should
+        use ``contextlib.aclosing`` to guarantee prompt cleanup.
+
+        ``plugin_data`` populated by ``on_turn_start`` (or seeded from
+        the call site via the ``plugin_data`` parameter on ``chat()`` /
+        ``stream_chat()`` / ``greet()``) is available here.
+
+        This is an observational hook — failures are logged and reported
+        via ``on_hook_error`` but do not prevent other middleware from
+        running.
+
+        Args:
+            turn: Turn state at the end of the pipeline.  On error paths
+                or no-strategy ``greet()`` paths, ``response_content``
+                may be empty and ``manager`` may be ``None``.
+                ``plugin_data`` is always available.
         """
 
     async def on_tool_executed(
