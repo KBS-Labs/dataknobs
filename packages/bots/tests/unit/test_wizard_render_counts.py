@@ -5,6 +5,7 @@ Covers:
 - Render count incremented after restart navigation
 - Render count incremented after back navigation
 - No spurious first-render confirmation after restart
+- Per-stage confirm_first_render control
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.testing import text_response
 
 
 # ---------------------------------------------------------------------------
@@ -229,3 +232,197 @@ class TestRestartRenderCount:
             "Back handler must increment render count so the next user "
             "message doesn't trigger first-render confirmation"
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-stage confirm_first_render control
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmFirstRender:
+    """Tests for the per-stage ``confirm_first_render`` flag.
+
+    When a stage has a ``response_template`` and new data is extracted on
+    first visit, the default behavior pauses for a confirmation turn before
+    evaluating transitions. Setting ``confirm_first_render: false`` skips
+    this pause and evaluates transitions immediately.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_pauses_for_confirmation(self) -> None:
+        """Default behavior: first render with new data pauses (no transition).
+
+        Uses a single-field schema to also verify that BotTestHarness
+        auto-sets capture_mode='extract' when extraction_results are
+        provided, preventing verbatim capture from silently bypassing
+        the scripted extractor.
+        """
+        config = (
+            WizardConfigBuilder("confirm-default")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+                response_template="Got it, {{ user_name }}!",
+            )
+            .field("user_name", field_type="string", required=True)
+            .transition("done", "data.get('user_name')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                text_response("Got it, Alice!"),
+            ],
+            extraction_results=[[{"user_name": "Alice"}]],
+        ) as harness:
+            result = await harness.chat("My name is Alice")
+
+            # Should stay at gather — confirmation pause, no transition yet
+            assert result.wizard_stage == "gather"
+            assert result.wizard_data["user_name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_confirm_first_render_false_skips_confirmation(self) -> None:
+        """confirm_first_render=false: transitions evaluate immediately."""
+        config = (
+            WizardConfigBuilder("confirm-skip")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+                response_template="Got it, {{ user_name }}!",
+                confirm_first_render=False,
+            )
+            .field("user_name", field_type="string", required=True)
+            .transition("done", "data.get('user_name')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                text_response("All done!"),
+            ],
+            extraction_results=[[{"user_name": "Alice"}]],
+        ) as harness:
+            result = await harness.chat("My name is Alice")
+
+            # Should advance to done — no confirmation pause
+            assert result.wizard_stage == "done"
+            assert result.wizard_data["user_name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_confirm_first_render_true_matches_default(self) -> None:
+        """Explicit confirm_first_render=true behaves same as default."""
+        config = (
+            WizardConfigBuilder("confirm-explicit-true")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+                response_template="Got it, {{ user_name }}!",
+                confirm_first_render=True,
+            )
+            .field("user_name", field_type="string", required=True)
+            .transition("done", "data.get('user_name')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                text_response("Got it, Alice!"),
+            ],
+            extraction_results=[[{"user_name": "Alice"}]],
+        ) as harness:
+            result = await harness.chat("My name is Alice")
+
+            # Same as default — stays at gather for confirmation
+            assert result.wizard_stage == "gather"
+
+    @pytest.mark.asyncio
+    async def test_confirm_first_render_false_no_template_no_effect(
+        self,
+    ) -> None:
+        """Without response_template, confirm_first_render has no effect."""
+        config = (
+            WizardConfigBuilder("confirm-no-template")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+                confirm_first_render=False,
+            )
+            .field("user_name", field_type="string", required=True)
+            .transition("done", "data.get('user_name')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                text_response("All done!"),
+            ],
+            extraction_results=[[{"user_name": "Alice"}]],
+        ) as harness:
+            result = await harness.chat("My name is Alice")
+
+            # No response_template → no confirmation path regardless of flag
+            assert result.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_confirm_first_render_false_preserves_confirm_on_new_data(
+        self,
+    ) -> None:
+        """confirm_first_render=false does not suppress confirm_on_new_data.
+
+        A stage can opt out of the first-render confirmation pause while
+        still re-confirming when data values change on subsequent visits.
+        """
+        config = (
+            WizardConfigBuilder("confirm-interaction")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+                response_template="Got it, {{ user_name }}!",
+                confirm_first_render=False,
+                confirm_on_new_data=True,
+            )
+            .field("user_name", field_type="string", required=True)
+            .transition("done", "not data.get('user_name')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                # Turn 1: skips first-render confirmation, evaluates
+                # transition (condition is false → stays at gather)
+                text_response("Got it, Alice!"),
+                # Turn 2: confirm_on_new_data fires because value changed
+                text_response("Got it, Bob!"),
+            ],
+            extraction_results=[
+                [{"user_name": "Alice"}],
+                [{"user_name": "Bob"}],
+            ],
+        ) as harness:
+            # Turn 1: first render — skipped confirmation, stays at
+            # gather because transition condition is unsatisfied
+            result1 = await harness.chat("My name is Alice")
+            assert result1.wizard_stage == "gather"
+            assert result1.wizard_data["user_name"] == "Alice"
+
+            # Turn 2: data changed (Alice → Bob) — confirm_on_new_data
+            # fires and pauses for confirmation
+            result2 = await harness.chat("Actually, call me Bob")
+            assert result2.wizard_stage == "gather"
+            assert result2.wizard_data["user_name"] == "Bob"

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-25T19:37:45Z",
+  "timestamp": "2026-03-25T20:44:44Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.12 (Homebrew 2026-03-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-process-hang-on-bot-creation",
-  "git_commit": "ab452c39e3c72e44d4b79409e6b683ae5aa7e259",
+  "git_branch": "sbk/first-render-confirmation-control",
+  "git_commit": "331e1221cd9b8e61f1cf724420fc1307954c6ec6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

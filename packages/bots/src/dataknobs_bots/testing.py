@@ -110,12 +110,22 @@ class WizardConfigBuilder:
         is_start: bool = False,
         is_end: bool = False,
         prompt: str = "",
+        response_template: str | None = None,
         mode: str | None = None,
         extraction_scope: str | None = None,
         auto_advance: bool | None = None,
         skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
         recovery_enabled: bool | None = None,
+        confirm_first_render: bool | None = None,
+        confirm_on_new_data: bool | None = None,
+        can_skip: bool | None = None,
+        skip_default: bool | None = None,
+        can_go_back: bool | None = None,
+        reasoning: str | None = None,
+        max_iterations: int | None = None,
+        capture_mode: str | None = None,
+        **extra_fields: Any,
     ) -> WizardConfigBuilder:
         """Add a stage to the wizard config.
 
@@ -127,6 +137,8 @@ class WizardConfigBuilder:
             is_start: Whether this is the start stage.
             is_end: Whether this is an end stage.
             prompt: Stage prompt text.
+            response_template: Jinja2 template rendered after extraction
+                to confirm captured data.
             mode: Stage mode (e.g. ``"conversation"``).
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.
@@ -135,6 +147,26 @@ class WizardConfigBuilder:
                 Set to ``False`` to suppress derivation on this stage.
             recovery_enabled: Per-stage recovery pipeline override.
                 Set to ``False`` to suppress all recovery on this stage.
+            confirm_first_render: Whether to pause for confirmation on
+                first render when new data is extracted. Default ``True``.
+                Set to ``False`` to skip confirmation and evaluate
+                transitions immediately.
+            confirm_on_new_data: Whether to re-confirm when schema
+                property values change on subsequent renders.
+            can_skip: Whether the user can skip this stage.
+            skip_default: Default value to use when the stage is skipped.
+            can_go_back: Whether the user can navigate back from this
+                stage.
+            reasoning: Reasoning strategy for this stage
+                (e.g. ``"react"``).
+            max_iterations: Maximum ReAct iterations for this stage.
+            capture_mode: Extraction capture mode — ``"auto"``
+                (default), ``"verbatim"`` (raw input), or ``"extract"``
+                (force LLM extraction).
+            **extra_fields: Additional stage config fields passed through
+                to the stage dict verbatim. Use for less common fields
+                (e.g. ``llm_assist=True``, ``navigation={...}``) without
+                needing explicit builder parameters.
 
         Returns:
             Self for method chaining.
@@ -147,6 +179,8 @@ class WizardConfigBuilder:
             stage["is_start"] = True
         if is_end:
             stage["is_end"] = True
+        if response_template is not None:
+            stage["response_template"] = response_template
         if mode is not None:
             stage["mode"] = mode
         if extraction_scope is not None:
@@ -159,6 +193,31 @@ class WizardConfigBuilder:
             stage["derivation_enabled"] = derivation_enabled
         if recovery_enabled is not None:
             stage["recovery_enabled"] = recovery_enabled
+        if confirm_first_render is not None:
+            stage["confirm_first_render"] = confirm_first_render
+        if confirm_on_new_data is not None:
+            stage["confirm_on_new_data"] = confirm_on_new_data
+        if can_skip is not None:
+            stage["can_skip"] = can_skip
+        if skip_default is not None:
+            stage["skip_default"] = skip_default
+        if can_go_back is not None:
+            stage["can_go_back"] = can_go_back
+        if reasoning is not None:
+            stage["reasoning"] = reasoning
+        if max_iterations is not None:
+            stage["max_iterations"] = max_iterations
+        if capture_mode is not None:
+            stage["capture_mode"] = capture_mode
+        if extra_fields:
+            # Prevent accidental override of structural keys set by
+            # positional/explicit parameters above.
+            reserved = {"name", "prompt", "is_start", "is_end"}
+            safe_fields = {
+                k: v for k, v in extra_fields.items()
+                if k not in reserved
+            }
+            stage.update(safe_fields)
 
         self._current_stage = stage
         return self
@@ -501,16 +560,35 @@ class BotTestHarness:
         # Build bot config if not provided
         if bot_config is None:
             assert wizard_config is not None
-            wizard_settings = wizard_config.get("settings", {})
-            if "extraction_scope" not in wizard_settings:
-                wizard_cfg = copy.deepcopy(wizard_config)
-                existing = wizard_cfg.get("settings", {})
+            wizard_cfg = copy.deepcopy(wizard_config)
+
+            existing_settings = wizard_cfg.get("settings", {})
+            if "extraction_scope" not in existing_settings:
                 wizard_cfg["settings"] = {
                     "extraction_scope": extraction_scope,
-                    **existing,
+                    **existing_settings,
                 }
-            else:
-                wizard_cfg = copy.deepcopy(wizard_config)
+
+            # When scripted extraction results are provided, force LLM
+            # extraction on stages that would otherwise use verbatim
+            # capture (single required string field).  Without this,
+            # the ConfigurableExtractor is silently bypassed and tests
+            # get the raw user message instead of scripted results.
+            #
+            # This applies to ALL schema stages uniformly.  In multi-stage
+            # wizards where a specific stage should still use verbatim
+            # capture, set ``capture_mode="verbatim"`` explicitly on that
+            # stage — the guard below respects explicit overrides at both
+            # the top-level and collection_config levels.
+            if extraction_results is not None:
+                for stage_def in wizard_cfg.get("stages", []):
+                    if (
+                        stage_def.get("schema")
+                        and stage_def.get("capture_mode") in (None, "auto")
+                    ):
+                        col = stage_def.get("collection_config") or {}
+                        if col.get("capture_mode") in (None, "auto"):
+                            stage_def["capture_mode"] = "extract"
 
             bot_config = {
                 "llm": {"provider": "echo", "model": "echo-test"},

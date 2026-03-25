@@ -45,9 +45,25 @@ This means each subflow stage that collects data via a schema adds one confirmat
 [parent] Bot renders return stage template
 ```
 
-Stages with `reasoning: react` skip this confirmation and evaluate transitions immediately. If your subflow stages don't need the confirmation step, consider using ReAct reasoning on the subflow stage, or omitting the `response_template` (let the LLM generate the response instead).
+Stages with `reasoning: react` skip this confirmation and evaluate transitions immediately. To skip the confirmation on non-ReAct stages, set `confirm_first_render: false` on the stage:
 
-> **Future:** A per-stage `confirm_first_render: false` flag is planned to allow opting out of this behavior without switching to ReAct reasoning. See implementation tracker item #44.
+```yaml
+stages:
+  - name: configure_quiz
+    confirm_first_render: false    # Skip confirmation, evaluate transitions immediately
+    response_template: |
+      Quiz settings: {{ quiz_question_count }} questions
+    schema:
+      type: object
+      properties:
+        quiz_question_count: { type: integer }
+      required: [quiz_question_count]
+    transitions:
+      - target: quiz_complete
+        condition: "data.get('quiz_question_count')"
+```
+
+Alternatively, omit the `response_template` entirely (let the LLM generate the response instead).
 
 ## Configuration
 

@@ -1870,9 +1870,16 @@ This gives users three paths:
 **Confirmation on New Data:**
 
 Stages with `response_template` automatically show a confirmation summary when new data is
-first extracted. By default, this confirmation fires only once (the first render). To
-re-confirm whenever schema property values change (e.g., the user says "change difficulty to
-hard" after the initial summary), add `confirm_on_new_data: true`:
+first extracted. By default, this confirmation fires only once (the first render). Two
+per-stage flags control this behavior:
+
+- `confirm_first_render` (default `true`): Controls whether the first-render confirmation
+  fires. Set to `false` to skip the confirmation pause and evaluate transitions immediately.
+  Useful for subflow stages where the user already provided data in the parent context and
+  expects the subflow to process it without an extra confirmation turn.
+- `confirm_on_new_data` (default `false`): Re-confirms whenever schema property values
+  change on subsequent renders (e.g., the user says "change difficulty to hard" after the
+  initial summary was shown).
 
 ```yaml
 stages:
@@ -1886,11 +1893,28 @@ stages:
       properties:
         topic: { type: string }
         difficulty: { type: string, default: medium }
+
+  - name: configure_quiz
+    confirm_first_render: false    # Skip confirmation, evaluate transitions immediately
+    response_template: |
+      Quiz settings: {{ quiz_question_count }} questions
+    schema:
+      type: object
+      properties:
+        quiz_question_count: { type: integer }
+      required: [quiz_question_count]
+    transitions:
+      - target: quiz_complete
+        condition: "data.get('quiz_question_count')"
 ```
 
 With `confirm_on_new_data`, the engine tracks a snapshot of schema property values at each
 render. When the user provides updated values, the snapshot differs and a re-render is
 triggered — letting the user verify the changes before proceeding.
+
+Both flags can be combined: a stage with `confirm_first_render: false` and
+`confirm_on_new_data: true` skips the initial confirmation but still re-confirms when
+data values change on subsequent visits.
 
 **Auto-Advance:**
 

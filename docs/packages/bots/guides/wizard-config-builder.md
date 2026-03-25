@@ -487,6 +487,7 @@ All fields available on `StageConfig`:
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
 | `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](context-aware-wizards.md#message-stages) |
+| `confirm_first_render` | `bool` | `True` | Whether to pause for confirmation on first render. Set to `false` to skip and evaluate transitions immediately |
 | `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |
 | `suggestions` | `tuple[str, ...]` | `()` | Quick-reply suggestions |

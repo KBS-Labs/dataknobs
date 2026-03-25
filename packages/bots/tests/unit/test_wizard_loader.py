@@ -177,6 +177,47 @@ class TestConfirmOnNewDataLoader:
         assert meta.get("confirm_on_new_data") is True
 
 
+class TestConfirmFirstRenderLoader:
+    """Tests for confirm_first_render flag in stage metadata loading."""
+
+    def test_confirm_first_render_defaults_true(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """confirm_first_render defaults to True when not set."""
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(simple_wizard_config)
+
+        welcome_meta = wizard_fsm.stages.get("welcome", {})
+        assert welcome_meta.get("confirm_first_render") is True
+
+    def test_confirm_first_render_loaded_when_false(self) -> None:
+        """confirm_first_render=false survives the loader."""
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Go",
+                    "confirm_first_render": False,
+                    "response_template": "Summary: {{ topic }}",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": "string"},
+                        },
+                    },
+                }
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(config)
+
+        meta = wizard_fsm.stages.get("start", {})
+        assert meta.get("confirm_first_render") is False
+
+
 class TestCollectionModeMetadataLoader:
     """Tests that collection_mode and collection_config survive the loader."""
 
