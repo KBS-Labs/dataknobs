@@ -229,6 +229,15 @@ class DynaBot:
         self.default_max_tokens = default_max_tokens
         self._context_transform = context_transform
         self._max_tool_iterations = max_tool_iterations
+        if tool_timeout < 0:
+            raise ValueError(
+                f"tool_timeout must be non-negative, got {tool_timeout}"
+            )
+        if tool_loop_timeout < 0:
+            raise ValueError(
+                f"tool_loop_timeout must be non-negative, got "
+                f"{tool_loop_timeout}"
+            )
         self._tool_timeout = tool_timeout
         self._tool_loop_timeout = tool_loop_timeout
         self._owns_llm = True  # Set False by from_config() when llm= injected
@@ -1299,9 +1308,11 @@ class DynaBot:
     async def _call_finally_turn_middleware(self, turn: TurnState) -> None:
         """Dispatch finally_turn to all middleware.
 
-        Fires unconditionally after every turn — on both success and error
-        paths.  Called from the ``finally`` block in ``chat()``,
-        ``stream_chat()``, and ``greet()``.
+        Fires after every turn — on both success and error paths.
+        Called from the ``finally`` block in ``chat()``,
+        ``stream_chat()``, and ``greet()`` (normal path), and directly
+        from the no-strategy early-exit path in ``greet()`` when
+        ``plugin_data`` was provided.
 
         Observational hook — one failing middleware must not prevent
         others from running.  Errors are logged, then reported to all
@@ -1550,7 +1561,9 @@ class DynaBot:
             Middleware lifecycle for greet: ``on_turn_start(turn)`` and
             ``before_message("")`` are called before greeting generation;
             ``after_turn(turn)`` and ``after_message(...)`` are called on
-            success; ``finally_turn(turn)`` fires unconditionally.
+            success (only when a response is generated);
+            ``finally_turn(turn)`` fires on success, error, and when
+            the strategy returns ``None`` (no greeting).
             If an error occurs, ``on_error`` hooks receive
             ``message=""`` since there is no user message.  If a
             middleware hook itself fails, ``on_hook_error`` is called on
@@ -1565,7 +1578,7 @@ class DynaBot:
             ```
         """
         if not self.reasoning_strategy:
-            if plugin_data:
+            if plugin_data is not None:
                 turn = TurnState(
                     mode=TurnMode.GREET,
                     message="",
@@ -1702,6 +1715,7 @@ class DynaBot:
             plugin_data=plugin_data or {},
         )
         streaming_error: Exception | None = None
+        stream_fully_consumed = False
 
         try:
             await self._prepare_turn(turn)
@@ -1860,13 +1874,17 @@ class DynaBot:
                         },
                     )
 
+            stream_fully_consumed = True
+
         except Exception as e:
             streaming_error = e
             await self._call_on_error_middleware(e, message, context)
             raise
         finally:
-            # Only finalize on success, but always fire finally_turn
-            if streaming_error is None:
+            # Only finalize when the stream was fully consumed (not
+            # on early exit via aclose/break, which would write
+            # partial data to conversation history).
+            if streaming_error is None and stream_fully_consumed:
                 turn.response_content = "".join(turn.stream_chunks)
                 await self._finalize_turn(turn)
             await self._call_finally_turn_middleware(turn)
