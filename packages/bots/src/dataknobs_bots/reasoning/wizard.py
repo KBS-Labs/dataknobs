@@ -2491,7 +2491,9 @@ class WizardReasoning(ReasoningStrategy):
                 should_confirm = False
                 if new_data_keys and stage.get("response_template"):
                     if wizard_state.get_render_count(stage_name) == 0:
-                        should_confirm = True  # First render — always
+                        # First render — confirm unless stage opts out
+                        if stage.get("confirm_first_render", True) is not False:
+                            should_confirm = True
                     elif stage.get("confirm_on_new_data"):
                         # Re-confirm when schema property values changed
                         schema_props = set(
