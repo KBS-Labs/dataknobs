@@ -322,11 +322,28 @@ synthesis:
 
 The effective synthesis style for each turn is resolved via a priority cascade:
 
-1. **Per-turn** — `output_style` from intent extraction (extract mode with `extraction_config` only). The LLM infers style from the user's phrasing ("show me the sources" → `structured`, "explain this" → `conversational`).
+1. **Per-turn** — `output_style` from intent extraction (extract mode with `extraction_config` only). The extraction model defaults to `conversational` and only classifies as `structured` when the user explicitly asks for raw sources or a listing (e.g., "show me the sources", "list the relevant sections"). The classification prompt can be tuned via `intent.output_style_hint` (see below).
 2. **Session-level** — `manager.metadata["synthesis_style"]`. Set during scoping or mid-conversation.
 3. **Config-level** — `synthesis.style` field.
 4. **Legacy mode** — `mode: template` maps to `structured`; `mode: llm` maps to `conversational`.
 5. **Default** — `conversational`.
+
+### Tuning Per-Turn Style Classification
+
+The built-in `output_style` schema description tells the extraction model to strongly prefer `conversational`. If the default is too aggressive or too conservative for your model or domain, override it with `output_style_hint`:
+
+```yaml
+intent:
+  mode: extract
+  extraction_config:
+    provider: ollama
+    model: phi4-mini
+  output_style_hint: >
+    Always use 'conversational' unless the user explicitly says
+    'show me the raw text' or 'list the sources'.
+```
+
+When `output_style_hint` is `null` (default), the built-in description is used.
 
 ### Custom Templates
 

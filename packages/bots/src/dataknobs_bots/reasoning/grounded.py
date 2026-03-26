@@ -82,12 +82,12 @@ INTENT_EXTRACTION_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": ["conversational", "structured", "hybrid"],
             "description": (
-                "How to present results: 'conversational' for natural "
-                "language synthesis, 'structured' for a formatted result "
-                "listing with provenance, 'hybrid' for natural language "
-                "followed by a source appendix.  Infer from the user's "
-                "phrasing — 'show me the sources' suggests 'structured', "
-                "'explain this' suggests 'conversational'."
+                "Default to 'conversational'.  Only use 'structured' "
+                "when the user explicitly asks to see raw sources, a "
+                "formatted listing, or provenance details (e.g., "
+                "'show me the sources', 'list the relevant sections', "
+                "'what does the spec actually say').  Only use 'hybrid' "
+                "when the user asks for both explanation and sources."
             ),
         },
     },
@@ -630,10 +630,14 @@ class GroundedReasoning(ReasoningStrategy):
         else:
             extraction_input = enriched
 
-        # Build the schema with dynamic num_queries constraint.
+        # Build the schema with dynamic constraints.
         # Deep copy protects the module-level constant from mutation.
         schema = copy.deepcopy(INTENT_EXTRACTION_SCHEMA)
         schema["properties"]["text_queries"]["maxItems"] = cfg.num_queries
+        if cfg.output_style_hint:
+            schema["properties"]["output_style"]["description"] = (
+                cfg.output_style_hint
+            )
 
         context = {}
         if cfg.domain_context:

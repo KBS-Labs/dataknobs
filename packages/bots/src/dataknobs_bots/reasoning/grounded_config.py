@@ -45,6 +45,13 @@ class GroundedIntentConfig:
             of raw text parsing.  Same shape as wizard ``extraction_config``
             (``provider``, ``model``, ``temperature``, etc.).  When absent,
             falls back to the ``QueryTransformer`` text-parsing path.
+        output_style_hint: (extract mode) Custom description for the
+            ``output_style`` field in the intent extraction schema.
+            Overrides the built-in description to tune how the extraction
+            model classifies synthesis style from the user's phrasing.
+            Useful when the default is too aggressive or too conservative
+            for a particular model or domain.  When ``None``, the built-in
+            default is used (strongly favors ``conversational``).
         text_queries: (static mode) Fixed text queries.
         filters: (static mode) Fixed structured filters keyed by source name.
         scope: (static/template mode) Retrieval scope.
@@ -73,6 +80,7 @@ class GroundedIntentConfig:
     domain_context: str = ""
     use_conversation_context: bool = True
     extraction_config: dict[str, Any] | None = None
+    output_style_hint: str | None = None
 
     # Extract mode — query enrichment (optional)
     expand_ambiguous_queries: bool = False

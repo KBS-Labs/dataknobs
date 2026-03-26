@@ -2273,3 +2273,32 @@ class TestIntentSchemaOutputStyle:
         from dataknobs_bots.reasoning.grounded import INTENT_EXTRACTION_SCHEMA
 
         assert "output_style" not in INTENT_EXTRACTION_SCHEMA.get("required", [])
+
+    def test_output_style_hint_overrides_description(self) -> None:
+        """Config output_style_hint overrides the schema description."""
+        import copy
+
+        from dataknobs_bots.reasoning.grounded import INTENT_EXTRACTION_SCHEMA
+
+        custom_hint = "Always use conversational unless the user says 'raw'."
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                output_style_hint=custom_hint,
+            ),
+        )
+
+        # Simulate what _extract_intent does: deepcopy + override
+        schema = copy.deepcopy(INTENT_EXTRACTION_SCHEMA)
+        if config.intent.output_style_hint:
+            schema["properties"]["output_style"]["description"] = (
+                config.intent.output_style_hint
+            )
+
+        assert schema["properties"]["output_style"]["description"] == custom_hint
+        # Original is unchanged
+        assert INTENT_EXTRACTION_SCHEMA["properties"]["output_style"]["description"] != custom_hint
+
+    def test_output_style_hint_default_is_none(self) -> None:
+        """output_style_hint defaults to None (use built-in description)."""
+        config = GroundedIntentConfig()
+        assert config.output_style_hint is None
