@@ -8,6 +8,7 @@ from .grounded import GroundedReasoning
 from .grounded_config import (
     GroundedIntentConfig,
     GroundedReasoningConfig,
+    GroundedRetrievalConfig,
     GroundedSourceConfig,
     GroundedSynthesisConfig,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "GroundedReasoning",
     "GroundedReasoningConfig",
     "GroundedIntentConfig",
+    "GroundedRetrievalConfig",
     "GroundedSynthesisConfig",
     "GroundedSourceConfig",
     "WizardAdvanceResult",
@@ -198,8 +200,14 @@ def create_reasoning_from_config(
     elif strategy_type == "grounded":
         grounded_config = GroundedReasoningConfig.from_dict(config)
         strategy = GroundedReasoning(config=grounded_config)
-        # Auto-wrap knowledge_base as a VectorKnowledgeSource
-        if knowledge_base is not None:
+        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but only
+        # when the config doesn't already declare a vector_kb source
+        # (otherwise the same KB gets wrapped twice: once here, once by
+        # the source construction loop in base.py).
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb" for s in grounded_config.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
             strategy.set_knowledge_base(knowledge_base)
         return strategy
 

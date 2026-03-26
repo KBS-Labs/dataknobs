@@ -79,12 +79,14 @@ class ReasoningManagerProtocol(Protocol):
     def stream_complete(
         self,
         *,
+        system_prompt_override: str | None = None,
         tools: list[Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[Any]:
         """Stream an LLM completion.
 
         Args:
+            system_prompt_override: Override system prompt for this call only
             tools: Optional list of tools available for this completion
             **kwargs: Additional parameters (branch_name, metadata, etc.)
         """

@@ -150,6 +150,11 @@ class GroundedSourceConfig:
     Attributes:
         source_type: Source type key — ``"vector_kb"``, ``"database"``.
         name: Unique source name for provenance tracking.
+        weight: Relative weight for round-robin result merging.
+            A source with ``weight: 3`` contributes 3 results per
+            round-robin cycle vs 1 for ``weight: 1`` (default).
+            Higher weights give a source proportionally more
+            representation in the merged result set.
         options: Source-specific options passed to the constructor.
             For ``"database"``: ``backend``, ``connection``,
             ``content_field``, ``text_search_fields``, ``schema``.
@@ -157,6 +162,7 @@ class GroundedSourceConfig:
 
     source_type: str = "vector_kb"
     name: str = "knowledge_base"
+    weight: int = 1
     options: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -165,9 +171,10 @@ class GroundedSourceConfig:
         return cls(
             source_type=data.get("type", "vector_kb"),
             name=data.get("name", "knowledge_base"),
+            weight=int(data.get("weight", 1)),
             options={
                 k: v for k, v in data.items()
-                if k not in ("type", "name")
+                if k not in ("type", "name", "weight")
             },
         )
 

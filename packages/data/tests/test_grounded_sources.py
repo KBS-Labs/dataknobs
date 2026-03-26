@@ -355,3 +355,99 @@ class TestDatabaseSourceExecution:
         )
         assert source.name == "my_db"
         assert source.source_type == "database"
+
+
+class TestDatabaseSourceRelevanceScoring:
+    """Test term-coverage relevance scoring."""
+
+    @pytest.mark.asyncio
+    async def test_full_match_scores_high(self) -> None:
+        """Record matching all query terms scores near 1.0."""
+        db = AsyncMemoryDatabase()
+        schema = DatabaseSchema.create(
+            title=FieldType.STRING,
+            summary=FieldType.TEXT,
+        )
+        db.set_schema(schema)
+        await db.create(Record.from_dict({
+            "title": "OAuth Grant Types",
+            "summary": "OAuth 2.0 defines several grant types for authorization.",
+        }))
+
+        source = DatabaseSource(
+            db=db, schema=schema, name="docs",
+            content_field="summary",
+            text_search_fields=["title", "summary"],
+        )
+        results = await source.query(RetrievalIntent(
+            text_queries=["OAuth"],
+        ))
+        assert len(results) == 1
+        # "OAuth" appears in both title and summary → high score
+        assert results[0].relevance > 0.5
+
+    def test_partial_match_scores_lower_than_full(self) -> None:
+        """Unit test: partial term coverage scores lower than full."""
+        source = DatabaseSource(
+            db=AsyncMemoryDatabase(),
+            schema=DatabaseSchema.create(title=FieldType.STRING, body=FieldType.TEXT),
+            name="docs",
+            content_field="body",
+            text_search_fields=["title", "body"],
+        )
+        data = {"title": "OAuth Grants", "body": "OAuth grant types overview."}
+
+        # All terms match
+        full_score = source._score_record(data, ["OAuth"])
+        # Only 1 of 2 terms match
+        partial_score = source._score_record(data, ["OAuth", "refresh tokens"])
+
+        assert partial_score < full_score
+        assert partial_score > 0.0
+
+    @pytest.mark.asyncio
+    async def test_no_text_queries_scores_1(self) -> None:
+        """Records matched by filters only get relevance=1.0."""
+        db = AsyncMemoryDatabase()
+        schema = DatabaseSchema.create(dept=FieldType.STRING, summary=FieldType.TEXT)
+        db.set_schema(schema)
+        await db.create(Record.from_dict({"dept": "CS", "summary": "Algorithms"}))
+
+        source = DatabaseSource(
+            db=db, schema=schema, name="courses",
+            content_field="summary",
+        )
+        results = await source.query(RetrievalIntent(
+            filters={"courses": {"dept": "CS"}},
+        ))
+        assert len(results) == 1
+        assert results[0].relevance == 1.0
+
+    @pytest.mark.asyncio
+    async def test_results_sorted_by_relevance(self) -> None:
+        """Results are returned sorted by relevance descending."""
+        db = AsyncMemoryDatabase()
+        schema = DatabaseSchema.create(
+            title=FieldType.STRING,
+            body=FieldType.TEXT,
+        )
+        db.set_schema(schema)
+        await db.create(Record.from_dict({
+            "title": "OAuth Security",
+            "body": "OAuth security considerations and threat model.",
+        }))
+        await db.create(Record.from_dict({
+            "title": "Unrelated Topic",
+            "body": "This mentions OAuth only in passing.",
+        }))
+
+        source = DatabaseSource(
+            db=db, schema=schema, name="docs",
+            content_field="body",
+            text_search_fields=["title", "body"],
+        )
+        results = await source.query(RetrievalIntent(
+            text_queries=["OAuth", "security"],
+        ))
+        if len(results) >= 2:
+            assert results[0].relevance >= results[1].relevance

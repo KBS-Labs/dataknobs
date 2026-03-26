@@ -7,6 +7,7 @@ for database backends and ``dataknobs-bots`` for vector KB sources.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -155,19 +156,16 @@ async def _create_database_source(
     )
 
 
-# FieldType name → FieldType mapping for config parsing
-_FIELD_TYPE_NAMES: dict[str, FieldType] = {}
-
-
+@functools.cache
 def _get_field_type_names() -> dict[str, FieldType]:
-    """Lazily build the field type name mapping."""
-    if not _FIELD_TYPE_NAMES:
-        from dataknobs_data.fields import FieldType
+    """Build the field type name mapping (cached after first call)."""
+    from dataknobs_data.fields import FieldType
 
-        for ft in FieldType:
-            _FIELD_TYPE_NAMES[ft.name.lower()] = ft
-            _FIELD_TYPE_NAMES[ft.value.lower()] = ft
-    return _FIELD_TYPE_NAMES
+    result: dict[str, FieldType] = {}
+    for ft in FieldType:
+        result[ft.name.lower()] = ft
+        result[ft.value.lower()] = ft
+    return result
 
 
 def _build_database_schema(

@@ -4,6 +4,16 @@ Bridges :class:`GroundedSource` schema declarations (from ``dataknobs-data``)
 with :class:`SchemaExtractor` (from ``dataknobs-llm``).  Composes per-source
 schema fragments into a single JSON schema for intent extraction, and
 parses the extraction result back into a :class:`RetrievalIntent`.
+
+.. note::
+
+    This module provides infrastructure for a planned **schema-based intent
+    mode** (``mode: "schema"``) in :class:`GroundedReasoning`.  The current
+    strategy uses ``QueryTransformer`` for free-form query generation
+    (``mode: "extract"``).  Schema-based extraction will be wired in as
+    a future enhancement, enabling ``SchemaExtractor``-driven structured
+    intent with enum normalization, grounding verification, and recovery
+    — the same resilience pipeline that powers wizard field extraction.
 """
 
 from __future__ import annotations

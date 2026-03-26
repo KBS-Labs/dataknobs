@@ -109,6 +109,9 @@ class GroundedReasoning(ReasoningStrategy):
         super().__init__(greeting_template=config.greeting_template)
         self._config = config
         self._sources: list[GroundedSource] = list(sources) if sources else []
+        self._source_weights: dict[str, int] = {
+            sc.name: sc.weight for sc in config.sources
+        }
         self._query_provider = query_provider
         self._merger = ChunkMerger(MergerConfig()) if config.retrieval.merge_adjacent else None
         self._formatter = ContextFormatter(FormatterConfig(
@@ -134,6 +137,20 @@ class GroundedReasoning(ReasoningStrategy):
                     max_context_turns=config.intent.max_context_turns,
                     include_assistant=config.intent.include_assistant_context,
                 )
+
+        # Pre-compile Jinja2 environments for template modes (avoids
+        # recreating per render call)
+        self._jinja_env = jinja2.Environment(undefined=jinja2.Undefined)
+        self._intent_template = (
+            self._jinja_env.from_string(config.intent.template)
+            if config.intent.template
+            else None
+        )
+        self._synthesis_template = (
+            self._jinja_env.from_string(config.synthesis.template)
+            if config.synthesis.template
+            else None
+        )
 
     # ------------------------------------------------------------------
     # Source management
@@ -218,12 +235,7 @@ class GroundedReasoning(ReasoningStrategy):
         """
         context, provenance = await self.retrieve_context(manager, llm)
 
-        response = self._synthesize(context, manager, provenance, **kwargs)
-        if isinstance(response, AsyncIterator):
-            # Should not happen in non-streaming, but guard
-            raise TypeError("_synthesize returned async iterator in non-streaming mode")
-
-        result = await response
+        result = await self._synthesize(context, manager, provenance, **kwargs)
 
         if self._config.store_provenance:
             self._store_provenance(manager, provenance)
@@ -403,8 +415,12 @@ class GroundedReasoning(ReasoningStrategy):
             logger.warning("Intent mode is 'template' but no template configured; falling back to message")
             return RetrievalIntent(text_queries=[user_message])
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
-        rendered = env.from_string(cfg.template).render(
+        template = self._intent_template
+        if template is None:
+            logger.warning("Intent template was not compiled; falling back to message")
+            return RetrievalIntent(text_queries=[user_message])
+
+        rendered = template.render(
             message=user_message,
             metadata=metadata,
         )
@@ -492,9 +508,13 @@ class GroundedReasoning(ReasoningStrategy):
     ) -> str:
         """Build a conversation context string for the transformer.
 
+        Uses ``cfg.max_context_turns`` to determine the message window
+        (each turn is roughly 2 messages — user + assistant).
+
         Args:
             messages: Full conversation message list.
-            cfg: Intent config with ``use_conversation_context`` flag.
+            cfg: Intent config with ``use_conversation_context`` and
+                ``max_context_turns`` fields.
 
         Returns:
             Formatted context string, or empty string if disabled.
@@ -502,7 +522,11 @@ class GroundedReasoning(ReasoningStrategy):
         if not cfg.use_conversation_context or len(messages) <= 1:
             return ""
 
-        recent = messages[-5:-1] if len(messages) > 5 else messages[:-1]
+        # max_context_turns counts conversation turns; each turn is
+        # roughly 2 messages (user + assistant), so double it for the
+        # message window.  Exclude the current (last) message.
+        window = cfg.max_context_turns * 2
+        recent = messages[-window - 1:-1] if len(messages) > window + 1 else messages[:-1]
         return "\n".join(
             f"{m.get('role', 'user')}: {m.get('content', '')}"
             for m in recent
@@ -545,9 +569,11 @@ class GroundedReasoning(ReasoningStrategy):
         self,
         results_by_source: dict[str, list[SourceResult]],
     ) -> list[SourceResult]:
-        """Merge results from multiple sources via round-robin interleaving.
+        """Merge results from multiple sources via weighted round-robin.
 
-        Round-robin prevents one prolific source from dominating.
+        Each source contributes ``weight`` results per round-robin cycle
+        (default 1).  A source with weight 3 gets 3 results per round
+        vs 1 for weight 1, giving it proportionally more representation.
         Within each source, results are already sorted by relevance.
         """
         if not results_by_source:
@@ -556,7 +582,7 @@ class GroundedReasoning(ReasoningStrategy):
         if len(results_by_source) == 1:
             return next(iter(results_by_source.values()))
 
-        # Round-robin interleave
+        # Weighted round-robin interleave
         merged: list[SourceResult] = []
         iterators = {name: iter(results) for name, results in results_by_source.items()}
         exhausted: set[str] = set()
@@ -565,10 +591,16 @@ class GroundedReasoning(ReasoningStrategy):
             for name, it in iterators.items():
                 if name in exhausted:
                     continue
-                try:
-                    merged.append(next(it))
-                except StopIteration:
-                    exhausted.add(name)
+                weight = self._source_weights.get(name, 1)
+                for _ in range(weight):
+                    try:
+                        merged.append(next(it))
+                    except StopIteration:
+                        exhausted.add(name)
+                        break
+
+        if not self._config.retrieval.deduplicate:
+            return merged
 
         # Deduplicate by (source_name, source_id)
         seen: set[tuple[str, str]] = set()
@@ -655,12 +687,11 @@ class GroundedReasoning(ReasoningStrategy):
             ``metadata``: Conversation metadata.
             ``intent``: The resolved intent dict.
         """
-        template_str = self._config.synthesis.template
-        if not template_str:
+        template = self._synthesis_template
+        if template is None:
             return context  # Fallback: return raw formatted context
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
-        return env.from_string(template_str).render(
+        return template.render(
             results=provenance.get("results", []),
             results_by_source=provenance.get("results_by_source", {}),
             context=context,

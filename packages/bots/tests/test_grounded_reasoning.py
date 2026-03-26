@@ -12,6 +12,7 @@ import pytest
 
 from dataknobs_bots.knowledge.base import KnowledgeBase
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
+from dataknobs_data.sources.base import SourceResult
 from dataknobs_bots.reasoning.grounded_config import (
     GroundedIntentConfig,
     GroundedReasoningConfig,
@@ -796,6 +797,26 @@ class TestDefaultFilters:
             # Static level preserved
             assert filters["level"] == 100
 
+    def test_default_filters_override_existing_keys(self) -> None:
+        """Unit test: default_filters always win over mode-produced filters."""
+        cfg = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="static",
+                text_queries=["q"],
+                filters={"src": {"status": "draft", "category": "auth"}},
+                default_filters={"src": {"status": "published"}},
+            ),
+        )
+        strategy = GroundedReasoning(config=cfg)
+
+        import asyncio
+        intent = asyncio.run(strategy._resolve_intent(
+            "test", [], None, {},
+        ))
+        # default_filters overrides 'status' but preserves 'category'
+        assert intent.filters["src"]["status"] == "published"
+        assert intent.filters["src"]["category"] == "auth"
+
 
 # ------------------------------------------------------------------
 # Synthesis bypass tests — template mode
@@ -888,6 +909,103 @@ class TestSynthesisTemplateMode:
 
 
 # ------------------------------------------------------------------
+# Result merge tests
+# ------------------------------------------------------------------
+
+
+class TestResultMerge:
+    """Test multi-source result merging with weighted round-robin."""
+
+    def _make_results(self, source_name: str, count: int) -> list[SourceResult]:
+        return [
+            SourceResult(
+                content=f"{source_name} result {i}",
+                source_id=f"{source_name}_{i}",
+                source_name=source_name,
+                source_type="test",
+                relevance=1.0 - i * 0.1,
+            )
+            for i in range(count)
+        ]
+
+    def test_equal_weight_round_robin(self) -> None:
+        """Default weight=1: sources alternate 1-for-1."""
+        cfg = GroundedReasoningConfig()
+        strategy = GroundedReasoning(config=cfg)
+
+        results = strategy._merge_source_results({
+            "a": self._make_results("a", 3),
+            "b": self._make_results("b", 3),
+        })
+        names = [r.source_name for r in results]
+        # Round-robin: a, b, a, b, a, b
+        assert names == ["a", "b", "a", "b", "a", "b"]
+
+    def test_weighted_round_robin(self) -> None:
+        """Source with weight=3 gets 3 results per round vs 1."""
+        cfg = GroundedReasoningConfig(
+            sources=[
+                GroundedSourceConfig(name="primary", weight=3),
+                GroundedSourceConfig(name="secondary", weight=1),
+            ],
+        )
+        strategy = GroundedReasoning(config=cfg)
+
+        results = strategy._merge_source_results({
+            "primary": self._make_results("primary", 6),
+            "secondary": self._make_results("secondary", 2),
+        })
+        names = [r.source_name for r in results]
+        # Round 1: primary x3, secondary x1
+        # Round 2: primary x3, secondary x1
+        assert names == [
+            "primary", "primary", "primary", "secondary",
+            "primary", "primary", "primary", "secondary",
+        ]
+
+    def test_weighted_exhaustion(self) -> None:
+        """When a weighted source runs out mid-round, others continue."""
+        cfg = GroundedReasoningConfig(
+            sources=[
+                GroundedSourceConfig(name="big", weight=3),
+                GroundedSourceConfig(name="small", weight=1),
+            ],
+        )
+        strategy = GroundedReasoning(config=cfg)
+
+        results = strategy._merge_source_results({
+            "big": self._make_results("big", 2),    # Runs out mid-round
+            "small": self._make_results("small", 3),
+        })
+        # Round 1: big x2 (exhausted at 3rd), small x1
+        # Round 2: small x1
+        # Round 3: small x1
+        names = [r.source_name for r in results]
+        assert names.count("big") == 2
+        assert names.count("small") == 3
+
+    def test_deduplicate_respects_config(self) -> None:
+        """deduplicate=False skips dedup step."""
+        cfg = GroundedReasoningConfig(
+            retrieval=GroundedRetrievalConfig(deduplicate=False),
+        )
+        strategy = GroundedReasoning(config=cfg)
+
+        # Same source_id from two sources
+        results_a = [SourceResult(
+            content="same", source_id="dup", source_name="a",
+            source_type="test", relevance=0.9,
+        )]
+        results_b = [SourceResult(
+            content="same", source_id="dup", source_name="b",
+            source_type="test", relevance=0.8,
+        )]
+        merged = strategy._merge_source_results({"a": results_a, "b": results_b})
+        # Without dedup, both appear
+        assert len(merged) == 2
+
+
+# ------------------------------------------------------------------
 # Factory registration tests
 # ------------------------------------------------------------------
 
@@ -927,6 +1045,25 @@ class TestGroundedFactory:
         assert isinstance(strategy, GroundedReasoning)
         assert len(strategy._sources) == 1
         assert isinstance(strategy._sources[0], VectorKnowledgeSource)
+
+    def test_create_with_kb_and_vector_source_no_double(self) -> None:
+        """KB + vector_kb source in config should NOT create duplicate sources."""
+        from dataknobs_bots.reasoning import create_reasoning_from_config
+
+        kb = InMemoryKnowledgeBase()
+        strategy = create_reasoning_from_config(
+            {
+                "strategy": "grounded",
+                "sources": [{"type": "vector_kb", "name": "docs"}],
+            },
+            knowledge_base=kb,
+        )
+        assert isinstance(strategy, GroundedReasoning)
+        # set_knowledge_base should NOT have been called because the config
+        # already declares a vector_kb source — the base.py loop handles it.
+        # At this point, sources list should be empty (base.py loop hasn't
+        # run yet since that's async from_config territory).
+        assert len(strategy._sources) == 0
 
     def test_factory_error_message_includes_grounded(self) -> None:
         from dataknobs_bots.reasoning import create_reasoning_from_config

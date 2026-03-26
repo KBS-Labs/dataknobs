@@ -157,6 +157,16 @@ class GroundedSource(ABC):
         return ``None``.  The orchestrator still passes ``text_queries``
         to them.
 
+        .. note::
+
+            Schema declarations are consumed by
+            ``compose_intent_schema()`` in ``dataknobs-llm`` to build
+            a single JSON schema for ``SchemaExtractor``-based structured
+            intent extraction.  This pipeline is planned infrastructure
+            for a future ``mode: "schema"`` intent mode in
+            ``GroundedReasoning``.  The current ``mode: "extract"`` uses
+            ``QueryTransformer`` and does not call ``get_schema()``.
+
         Returns:
             Schema fragment, or ``None`` for text-only sources.
         """

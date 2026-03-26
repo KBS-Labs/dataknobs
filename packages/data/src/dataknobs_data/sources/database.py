@@ -183,6 +183,11 @@ class DatabaseSource(GroundedSource):
     ) -> list[SourceResult]:
         """Build a :class:`Query` from intent and execute it.
 
+        Relevance scoring is based on term coverage: what fraction
+        of the ``text_queries`` appear in the record's searchable
+        fields, with 2x weight for the content field.  Records matched
+        by structured filters alone receive ``relevance=1.0``.
+
         Translation rules (deterministic):
 
         - String field + single value → ``Filter(field, EQ, value)``
@@ -211,15 +216,17 @@ class DatabaseSource(GroundedSource):
             data = record.to_dict() if hasattr(record, "to_dict") else {}
             content = str(data.get(self._content_field, ""))
             record_id = str(record.id) if hasattr(record, "id") and record.id else ""
+            relevance = self._score_record(data, intent.text_queries)
             results.append(SourceResult(
                 content=content,
                 source_id=record_id,
                 source_name=self._name,
                 source_type="database",
-                relevance=1.0,
+                relevance=relevance,
                 metadata=data,
             ))
 
+        results.sort(key=lambda r: r.relevance, reverse=True)
         return results
 
     async def close(self) -> None:
@@ -284,3 +291,54 @@ class DatabaseSource(GroundedSource):
 
         # Scalar → EQ
         return [Filter(field=field_name, operator=Operator.EQ, value=value)]
+
+    # ------------------------------------------------------------------
+    # Relevance scoring
+    # ------------------------------------------------------------------
+
+    def _score_record(
+        self,
+        data: dict[str, Any],
+        text_queries: list[str],
+    ) -> float:
+        """Compute a term-coverage relevance score for a database record.
+
+        Scoring is based on how many query terms appear in the record's
+        searchable fields.  The content field receives a 2x weight
+        relative to secondary text search fields.
+
+        Returns a score in the range (0.0, 1.0].  Records with no text
+        queries to score against receive 1.0 (all-match, since they
+        were selected by structured filters alone).
+        """
+        if not text_queries:
+            return 1.0
+
+        total_weight = 0.0
+        matched_weight = 0.0
+
+        for query in text_queries:
+            query_lower = query.lower()
+
+            # Content field gets double weight
+            content_val = str(data.get(self._content_field, "")).lower()
+            total_weight += 2.0
+            if query_lower in content_val:
+                matched_weight += 2.0
+
+            # Secondary text search fields get weight 1.0 each
+            for field_name in self._text_search_fields:
+                if field_name == self._content_field:
+                    continue  # Already scored above
+                field_val = str(data.get(field_name, "")).lower()
+                total_weight += 1.0
+                if query_lower in field_val:
+                    matched_weight += 1.0
+
+        if total_weight == 0.0:
+            return 1.0
+
+        # Scale to (0.0, 1.0] — a small floor ensures filter-matched
+        # records never get 0.0 (they passed the DB query for a reason).
+        raw = matched_weight / total_weight
+        return max(raw, 0.05)
