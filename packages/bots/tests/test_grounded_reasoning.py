@@ -1487,7 +1487,7 @@ class TestSchemaExtractorIntentExtraction:
         strategy.set_extractor(extractor)
 
         intent = await strategy._extract_intent(
-            "Tell me everything about OAuth",
+            "Give me a broad overview of OAuth",
             [],
         )
         assert intent.scope == "broad"
@@ -2302,3 +2302,138 @@ class TestIntentSchemaOutputStyle:
         """output_style_hint defaults to None (use built-in description)."""
         config = GroundedIntentConfig()
         assert config.output_style_hint is None
+
+
+class TestIntentGrounding:
+    """Tests for extraction grounding in _extract_intent().
+
+    The grounding utility checks whether optional extracted fields
+    are grounded in the user's message.  Ungrounded optional fields
+    are dropped so the resolution cascade falls through to defaults.
+    """
+
+    @pytest.mark.asyncio
+    async def test_output_style_ungrounded_dropped(self) -> None:
+        """output_style: 'structured' for ambiguous query gets dropped.
+
+        The enum grounding check looks for the literal word 'structured'
+        in the user message.  When absent, the field is dropped and
+        synthesis defaults to 'conversational'.
+        """
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("Synthesized answer.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            strategy = harness.bot.reasoning_strategy
+
+            # Extractor returns output_style: structured, but the user
+            # message has no grounding for "structured"
+            extractor, _provider = scripted_schema_extractor([
+                '{"text_queries": ["security risks"], "output_style": "structured"}',
+            ])
+            strategy.set_extractor(extractor)
+
+            result = await harness.chat(
+                "What security risks should I be aware of?",
+            )
+            # The bot should use conversational synthesis (LLM), not
+            # structured (template), because output_style was dropped
+            assert result.response == "Synthesized answer."
+
+    @pytest.mark.asyncio
+    async def test_output_style_grounded_kept(self) -> None:
+        """output_style: 'structured' kept when user says 'structured'."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("Synthesized answer.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            strategy = harness.bot.reasoning_strategy
+
+            # User explicitly says "structured" — grounding passes
+            extractor, _provider = scripted_schema_extractor([
+                '{"text_queries": ["security risks"], "output_style": "structured"}',
+            ])
+            strategy.set_extractor(extractor)
+
+            result = await harness.chat(
+                "Show me a structured view of security risks",
+            )
+            # Structured mode uses template, not LLM synthesis
+            assert "Synthesized answer." not in result.response
+
+    @pytest.mark.asyncio
+    async def test_text_queries_required_never_dropped(self) -> None:
+        """text_queries is required — never dropped by grounding."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("Answer.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            strategy = harness.bot.reasoning_strategy
+
+            # Queries about topic X — the query words may not literally
+            # appear in the user message (LLM can reformulate)
+            extractor, _provider = scripted_schema_extractor([
+                '{"text_queries": ["OAuth2 grant types", "authorization code"], "scope": "focused"}',
+            ])
+            strategy.set_extractor(extractor)
+
+            result = await harness.chat("Tell me about auth patterns")
+            # Queries should still reach the KB despite not being
+            # literally in the user message — they're required fields
+            assert len(kb.queries) >= 1
+
+    @pytest.mark.asyncio
+    async def test_scope_ungrounded_dropped(self) -> None:
+        """scope is optional enum — dropped if not in user message."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("Answer.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            strategy = harness.bot.reasoning_strategy
+
+            # scope: "exact" but user didn't say "exact"
+            extractor, _provider = scripted_schema_extractor([
+                '{"text_queries": ["test query"], "scope": "exact"}',
+            ])
+            strategy.set_extractor(extractor)
+
+            result = await harness.chat("Tell me about testing")
+            # The query should still work — scope falls back to
+            # default "focused" when dropped
+            assert result.response == "Answer."

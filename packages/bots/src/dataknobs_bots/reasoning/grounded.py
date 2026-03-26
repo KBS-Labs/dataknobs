@@ -40,6 +40,8 @@ from dataknobs_data.sources.base import (
     SourceResult,
 )
 
+from dataknobs_llm.extraction.grounding import ground_extraction
+
 from dataknobs_bots.knowledge.query.expander import ContextualExpander, is_ambiguous_query
 from dataknobs_bots.knowledge.query.transformer import QueryTransformer, TransformerConfig
 from dataknobs_bots.knowledge.retrieval.formatter import (
@@ -649,6 +651,23 @@ class GroundedReasoning(ReasoningStrategy):
                 schema=schema,
                 context=context,
             )
+
+            # Ground-check optional extracted fields against the user
+            # message.  Ungrounded optional fields (e.g. output_style
+            # inferred without explicit user language) are dropped so
+            # the resolution cascade falls through to config/session
+            # defaults.
+            grounding_results = ground_extraction(
+                result.data, user_message, schema,
+            )
+            required_fields = set(schema.get("required", []))
+            for fname, gresult in grounding_results.items():
+                if not gresult.grounded and fname not in required_fields:
+                    logger.debug(
+                        "Dropping ungrounded optional field %r: %s",
+                        fname, gresult.reason,
+                    )
+                    result.data.pop(fname, None)
 
             queries = result.data.get("text_queries", [])
             scope = result.data.get("scope", "focused")

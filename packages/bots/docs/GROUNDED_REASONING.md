@@ -123,6 +123,14 @@ intent:
 
 When `extraction_config` is absent, the `QueryTransformer` text-parsing path is used (backward compatible). The `extraction_config` dict follows the same shape as wizard `extraction_config` (`provider`, `model`, `temperature`, etc.) and creates a dedicated `SchemaExtractor` via `SchemaExtractor.from_env_config()`.
 
+**Extraction grounding**
+
+When using `extraction_config`, optional extracted fields (`output_style`, `scope`) are automatically grounded against the user's message before being accepted. Grounding uses the standalone utility from `dataknobs_llm.extraction.grounding` — the same type-dispatched checks used by wizard extraction grounding (enum word-boundary match, string word overlap, etc.).
+
+If an optional field is not grounded (the literal enum value does not appear in the user's message), it is dropped from the extraction result and the resolution cascade falls through to config/session/default values. This prevents extraction models from over-classifying — for example, phi4-mini classifying ambiguous queries as `output_style: "structured"` when the user never asked for structured output.
+
+Required fields (`text_queries`) are never dropped by grounding. Per-field behavior can be tuned via `x-extraction` annotations on the schema (e.g., `grounding: "skip"` to bypass grounding for a specific field).
+
 **Optional: Ambiguous query enrichment**
 
 When users ask vague follow-up questions ("Show me an example", "Tell me more about this"), the `ContextualExpander` can enrich the query with keywords from conversation history before passing it to the LLM:
