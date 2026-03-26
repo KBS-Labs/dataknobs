@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-03-25T20:44:44Z",
+  "timestamp": "2026-03-26T04:21:28Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "bots data fsm llm",
+  "tested_packages": ["bots", "data", "fsm", "llm"],
   "checks": {
     "documentation": {
       "status": "pass",
