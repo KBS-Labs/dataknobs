@@ -733,3 +733,68 @@ class TestConversationIdParameter:
         assert history[1].role == "user"
         assert history[1].content == "Hello"
 
+
+class TestMessagesMetadataPreservation:
+    """Test that manager.messages includes node metadata."""
+
+    @pytest.mark.asyncio
+    async def test_messages_include_metadata(self, test_components):
+        """Node metadata (e.g. raw_content) is present in messages dicts."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+
+        # Add message with raw_content metadata (simulates DynaBot KB augmentation)
+        await manager.add_message(
+            role="user",
+            content="<kb>chunks</kb>\nWhat is OAuth?",
+            metadata={"raw_content": "What is OAuth?"},
+        )
+
+        msgs = manager.messages
+        user_msgs = [m for m in msgs if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["metadata"]["raw_content"] == "What is OAuth?"
+        # Augmented content is still in content field
+        assert "<kb>" in user_msgs[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_messages_empty_metadata_when_none(self, test_components):
+        """Messages without metadata get an empty dict, not None."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+
+        await manager.add_message(role="user", content="Hello")
+
+        msgs = manager.messages
+        user_msgs = [m for m in msgs if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        assert user_msgs[0]["metadata"] == {}
+
+    @pytest.mark.asyncio
+    async def test_get_messages_includes_metadata(self, test_components):
+        """get_messages() also includes metadata (it delegates to messages)."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+
+        await manager.add_message(
+            role="user",
+            content="augmented content",
+            metadata={"raw_content": "original"},
+        )
+
+        msgs = manager.get_messages()
+        user_msgs = [m for m in msgs if m["role"] == "user"]
+        assert user_msgs[0]["metadata"]["raw_content"] == "original"
+

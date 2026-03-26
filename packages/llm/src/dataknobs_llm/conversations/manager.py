@@ -1416,19 +1416,35 @@ class ConversationManager:
         """Get conversation messages as a list of dicts.
 
         Provides sync access to messages in a simple dict format,
-        compatible with reasoning strategies like WizardReasoning.
+        compatible with reasoning strategies like WizardReasoning
+        and GroundedReasoning.
+
+        Each dict includes ``role``, ``content``, and ``metadata``
+        (from the conversation node, not the LLMMessage).  Node
+        metadata carries ``raw_content`` (the user's original message
+        before KB/memory augmentation) which reasoning strategies use
+        to scope query generation input.
 
         Returns:
-            List of message dicts with 'role' and 'content' keys.
+            List of message dicts with 'role', 'content', and
+            'metadata' keys.
 
         Example:
             >>> for msg in manager.messages:
-            ...     print(f"{msg['role']}: {msg['content']}")
+            ...     raw = msg.get("metadata", {}).get("raw_content")
+            ...     print(f"{msg['role']}: {raw or msg['content']}")
         """
         if not self.state:
             return []
-        llm_messages = self.state.get_current_messages()
-        return [{"role": m.role, "content": m.content} for m in llm_messages]
+        nodes = self.state.get_current_nodes()
+        return [
+            {
+                "role": n.message.role,
+                "content": n.message.content,
+                "metadata": n.metadata or {},
+            }
+            for n in nodes
+        ]
 
     def get_messages(self) -> List[Dict[str, Any]]:
         """Get conversation messages as a list of dicts.
