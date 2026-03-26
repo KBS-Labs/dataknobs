@@ -168,6 +168,7 @@ class GroundedReasoning(ReasoningStrategy):
                         enabled=True,
                         num_queries=config.intent.num_queries,
                         domain_context=config.intent.domain_context,
+                        suppress_thinking=True,
                     ),
                     provider=query_provider,
                 )

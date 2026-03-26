@@ -393,7 +393,7 @@ This creates a dedicated `SchemaExtractor` with its own provider. Avoids using a
 bot.reasoning_strategy.set_provider("grounded_query", fast_provider)
 ```
 
-When neither `extraction_config` nor a separate query provider is set, the bot's main LLM is used for both query generation and synthesis.
+When neither `extraction_config` nor a separate query provider is set, the bot's main LLM is used for both query generation and synthesis. In this fallback path, `suppress_thinking` is automatically enabled on the `QueryTransformer`, which passes `options: {think: false}` to the LLM provider — preventing thinking models from spending their full token budget on reasoning before producing short query strings.
 
 ## Auto-Context Behavior
 

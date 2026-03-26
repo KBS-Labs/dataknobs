@@ -23,6 +23,12 @@ class TransformerConfig:
         llm_model: Model to use for transformation
         num_queries: Number of alternative queries to generate
         domain_context: Domain-specific context for better queries
+        suppress_thinking: Whether to pass ``think: false`` to the LLM
+            provider via ``config_overrides``.  Prevents thinking models
+            from spending their full token budget on reasoning before
+            producing short query strings.  Recommended when query
+            generation is a utility call (e.g., grounded strategy),
+            not a reasoning task.
     """
 
     enabled: bool = False
@@ -30,6 +36,7 @@ class TransformerConfig:
     llm_model: str = "llama3.2"
     num_queries: int = 3
     domain_context: str = ""
+    suppress_thinking: bool = False
 
 
 def parse_query_response(response_text: str, fallback: str) -> list[str]:
@@ -308,10 +315,19 @@ class QueryTransformer:
     async def _call_llm(self, prompt: str) -> str:
         """Call the LLM provider and return the response text.
 
-        Handles both ``complete()`` (returns LLMResponse) and legacy
-        ``generate()`` (returns str) provider interfaces.
+        When ``suppress_thinking`` is enabled, passes
+        ``options: {"think": false}`` via ``config_overrides`` to prevent
+        thinking models from spending their token budget on reasoning for
+        a utility extraction call.  The ``think`` key is provider-specific
+        (Ollama/qwen3) and goes through the ``options`` override path.
         """
-        response = await self._llm.complete(prompt)
+        config_overrides: dict[str, Any] | None = None
+        if self.config.suppress_thinking:
+            config_overrides = {"options": {"think": False}}
+
+        response = await self._llm.complete(
+            prompt, config_overrides=config_overrides,
+        )
         if hasattr(response, "content"):
             return response.content
         return str(response)

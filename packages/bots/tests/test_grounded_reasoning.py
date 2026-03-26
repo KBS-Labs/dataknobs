@@ -1320,9 +1320,10 @@ class TestQueryTransformerIntegration:
         ) as harness:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             strategy = harness.bot.reasoning_strategy
-            # Verify transformer was created
+            # Verify transformer was created with suppress_thinking
             assert strategy._transformer is not None
             assert strategy._transformer.config.enabled is True
+            assert strategy._transformer.config.suppress_thinking is True
 
             result = await harness.chat("What are authorization grants?")
             assert result.response == "Here is the answer."

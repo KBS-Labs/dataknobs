@@ -235,6 +235,52 @@ class TestQueryTransformerExternalProvider:
         assert "OAuth 2.0" in prompt
 
 
+class TestSuppressThinking:
+    """Tests for suppress_thinking config option."""
+
+    @pytest.mark.asyncio
+    async def test_suppress_thinking_passes_config_override(self) -> None:
+        """When suppress_thinking=True, think: False is in config_overrides."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("query one\nquery two")])
+
+        config = TransformerConfig(enabled=True, num_queries=2, suppress_thinking=True)
+        transformer = QueryTransformer(config, provider=provider)
+
+        await transformer.transform("test question")
+        last_call = provider.get_last_call()
+        assert last_call is not None
+        overrides = last_call.get("config_overrides", {})
+        assert overrides.get("options", {}).get("think") is False
+
+    @pytest.mark.asyncio
+    async def test_no_suppress_thinking_no_override(self) -> None:
+        """When suppress_thinking=False (default), no config_overrides."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("query one")])
+
+        config = TransformerConfig(enabled=True, num_queries=1, suppress_thinking=False)
+        transformer = QueryTransformer(config, provider=provider)
+
+        await transformer.transform("test question")
+        last_call = provider.get_last_call()
+        assert last_call is not None
+        # Should have no config_overrides or None
+        overrides = last_call.get("config_overrides")
+        assert overrides is None
+
+    def test_suppress_thinking_default_false(self) -> None:
+        """suppress_thinking defaults to False."""
+        config = TransformerConfig()
+        assert config.suppress_thinking is False
+
+
 class TestContextualExpander:
     """Tests for ContextualExpander."""
 
