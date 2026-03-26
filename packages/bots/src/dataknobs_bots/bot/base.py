@@ -557,7 +557,38 @@ class DynaBot:
                         reasoning_config["config_base_path"],
                         config["config_base_path"],
                     )
-            reasoning_strategy = create_reasoning_from_config(reasoning_config)
+            reasoning_strategy = create_reasoning_from_config(
+                reasoning_config,
+                knowledge_base=knowledge_base,
+            )
+
+            # Config-driven source construction for grounded strategy
+            if (
+                reasoning_config.get("strategy", "").lower() == "grounded"
+                and reasoning_config.get("sources")
+            ):
+                from ..knowledge.sources.factory import create_source_from_config
+                from ..reasoning.grounded_config import GroundedSourceConfig
+
+                for source_dict in reasoning_config["sources"]:
+                    source_cfg = GroundedSourceConfig.from_dict(source_dict)
+                    source = await create_source_from_config(
+                        source_cfg,
+                        knowledge_base=knowledge_base,
+                    )
+                    reasoning_strategy.add_source(source)
+
+            # Warn if grounded strategy + auto_context are both active
+            if (
+                reasoning_config.get("strategy", "").lower() == "grounded"
+                and knowledge_base is not None
+                and kb_auto_context
+            ):
+                logger.warning(
+                    "Grounded reasoning strategy handles its own KB retrieval. "
+                    "Consider setting knowledge_base.auto_context: false to "
+                    "avoid double retrieval.",
+                )
 
         # Create middleware
         if middleware_override is not None:
