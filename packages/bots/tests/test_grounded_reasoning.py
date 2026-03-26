@@ -11,8 +11,12 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.knowledge.base import KnowledgeBase
-from dataknobs_bots.reasoning.grounded import GroundedReasoning
-from dataknobs_data.sources.base import SourceResult
+from dataknobs_bots.reasoning.grounded import (
+    DEFAULT_PROVENANCE_TEMPLATE,
+    GroundedReasoning,
+    _VALID_STYLES,
+)
+from dataknobs_data.sources.base import RetrievalIntent, SourceResult
 from dataknobs_bots.reasoning.grounded_config import (
     GroundedIntentConfig,
     GroundedReasoningConfig,
@@ -20,7 +24,7 @@ from dataknobs_bots.reasoning.grounded_config import (
     GroundedSourceConfig,
     GroundedSynthesisConfig,
 )
-from dataknobs_bots.testing import BotTestHarness
+from dataknobs_bots.testing import BotTestHarness, GroundedConfigBuilder
 from dataknobs_llm.testing import text_response
 
 
@@ -99,20 +103,21 @@ def _grounded_bot_config(
     synthesis_mode: str = "llm",
     **extra_reasoning: Any,
 ) -> dict[str, Any]:
-    """Build a minimal bot_config with grounded strategy."""
-    reasoning: dict[str, Any] = {
-        "strategy": "grounded",
-        "intent": {"mode": intent_mode, "num_queries": num_queries},
-        "retrieval": {"top_k": 5, "score_threshold": 0.0},
-        "synthesis": {"mode": synthesis_mode, "require_citations": True},
-        "store_provenance": store_provenance,
-    }
-    reasoning.update(extra_reasoning)
-    return {
-        "llm": {"provider": "echo", "model": "echo-test"},
-        "conversation_storage": {"backend": "memory"},
-        "reasoning": reasoning,
-    }
+    """Build a minimal bot_config with grounded strategy.
+
+    Thin wrapper over :class:`GroundedConfigBuilder` for backward
+    compatibility with existing tests.  New tests should use
+    ``GroundedConfigBuilder`` directly.
+    """
+    config = (
+        GroundedConfigBuilder()
+        .intent(mode=intent_mode, num_queries=num_queries)
+        .synthesis(mode=synthesis_mode)
+        .provenance(store_provenance)
+        .build()
+    )
+    config["reasoning"].update(extra_reasoning)
+    return config
 
 
 # ------------------------------------------------------------------
@@ -362,7 +367,7 @@ class TestGroundedReasoningUnit:
 
         assert intent.text_queries == ["fallback message"]
 
-    def test_render_synthesis_template(self) -> None:
+    def test_render_provenance_output(self) -> None:
         cfg = GroundedReasoningConfig(
             synthesis=GroundedSynthesisConfig(
                 mode="template",
@@ -383,21 +388,22 @@ class TestGroundedReasoningUnit:
             "results_by_source": {},
             "intent": {},
         }
-        text = strategy._render_synthesis_template(
+        text = strategy._render_provenance_output(
             "formatted context", provenance, "user msg", {},
         )
         assert "Found 2 results:" in text
         assert "Auth code grant" in text
 
-    def test_render_synthesis_template_no_template_fallback(self) -> None:
+    def test_render_provenance_output_no_custom_template_uses_builtin(self) -> None:
+        """Without a custom template, the built-in provenance template is used."""
         cfg = GroundedReasoningConfig(
             synthesis=GroundedSynthesisConfig(mode="template"),
         )
         strategy = GroundedReasoning(config=cfg)
-        text = strategy._render_synthesis_template(
-            "raw context", {}, "msg", {},
+        text = strategy._render_provenance_output(
+            "raw context", {"results": [], "results_by_source": {}}, "msg", {},
         )
-        assert text == "raw context"
+        assert "No relevant results found." in text
 
 
 # ------------------------------------------------------------------
@@ -1708,3 +1714,562 @@ class TestRawContentPreference:
         ]
         context = GroundedReasoning._build_conversation_context(messages, cfg)
         assert "What is OAuth?" in context
+
+
+# ------------------------------------------------------------------
+# Synthesis style resolution tests
+# ------------------------------------------------------------------
+
+
+class TestStyleResolution:
+    """Test the synthesis style resolution cascade."""
+
+    def _make_strategy(
+        self,
+        *,
+        mode: str = "llm",
+        style: str | None = None,
+    ) -> GroundedReasoning:
+        """Create a strategy with specified synthesis config."""
+        config = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(mode=mode, style=style),
+        )
+        return GroundedReasoning(config)
+
+    def _make_provenance(
+        self,
+        *,
+        raw_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a minimal provenance dict."""
+        intent: dict[str, Any] = {
+            "mode": "resolved",
+            "text_queries": ["test"],
+            "filters": {},
+            "scope": "focused",
+            "raw_data": raw_data,
+        }
+        return {"intent": intent, "results": [], "results_by_source": {}}
+
+    class _FakeManager:
+        """Minimal manager stub for style resolution tests."""
+
+        def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+            self.metadata = metadata or {}
+            self.system_prompt = "You are a test bot."
+
+        def get_messages(self) -> list[dict[str, Any]]:
+            return [{"role": "user", "content": "test"}]
+
+    def test_default_is_conversational(self) -> None:
+        """No style or mode set → defaults to conversational."""
+        strategy = self._make_strategy()
+        manager = self._FakeManager()
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "conversational"
+
+    def test_config_style(self) -> None:
+        """Config-level style is returned when set."""
+        strategy = self._make_strategy(style="hybrid")
+        manager = self._FakeManager()
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "hybrid"
+
+    def test_legacy_mode_template(self) -> None:
+        """mode=template maps to structured when no style set."""
+        strategy = self._make_strategy(mode="template")
+        manager = self._FakeManager()
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "structured"
+
+    def test_legacy_mode_llm(self) -> None:
+        """mode=llm maps to conversational when no style set."""
+        strategy = self._make_strategy(mode="llm")
+        manager = self._FakeManager()
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "conversational"
+
+    def test_session_overrides_config(self) -> None:
+        """Session-level metadata overrides config-level style."""
+        strategy = self._make_strategy(style="conversational")
+        manager = self._FakeManager(metadata={"synthesis_style": "structured"})
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "structured"
+
+    def test_per_turn_overrides_session(self) -> None:
+        """Per-turn output_style from raw_data overrides session."""
+        strategy = self._make_strategy(style="conversational")
+        manager = self._FakeManager(metadata={"synthesis_style": "structured"})
+        prov = self._make_provenance(raw_data={"output_style": "hybrid"})
+        assert strategy._resolve_effective_style(manager, prov) == "hybrid"
+
+    def test_invalid_per_turn_ignored(self) -> None:
+        """Invalid per-turn output_style falls through to session."""
+        strategy = self._make_strategy()
+        manager = self._FakeManager(metadata={"synthesis_style": "hybrid"})
+        prov = self._make_provenance(raw_data={"output_style": "invalid"})
+        assert strategy._resolve_effective_style(manager, prov) == "hybrid"
+
+    def test_invalid_session_ignored(self) -> None:
+        """Invalid session synthesis_style falls through to config."""
+        strategy = self._make_strategy(style="structured")
+        manager = self._FakeManager(metadata={"synthesis_style": "bogus"})
+        prov = self._make_provenance()
+        assert strategy._resolve_effective_style(manager, prov) == "structured"
+
+    def test_valid_styles_constant(self) -> None:
+        """Verify the valid styles set matches expectations."""
+        assert _VALID_STYLES == {"conversational", "structured", "hybrid"}
+
+
+# ------------------------------------------------------------------
+# Synthesis plan tests
+# ------------------------------------------------------------------
+
+
+class TestSynthesisPlan:
+    """Test _resolve_synthesis produces correct plan artifacts."""
+
+    def _make_strategy(
+        self,
+        *,
+        style: str | None = None,
+    ) -> GroundedReasoning:
+        config = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(style=style),
+        )
+        return GroundedReasoning(config)
+
+    class _FakeManager:
+        def __init__(self) -> None:
+            self.metadata: dict[str, Any] = {}
+            self.system_prompt = "You are a bot."
+
+        def get_messages(self) -> list[dict[str, Any]]:
+            return [{"role": "user", "content": "test message"}]
+
+    def _make_provenance(self) -> dict[str, Any]:
+        return {
+            "intent": {
+                "mode": "resolved",
+                "text_queries": ["test"],
+                "filters": {},
+                "scope": "focused",
+                "raw_data": None,
+            },
+            "results": [],
+            "results_by_source": {},
+        }
+
+    def test_conversational_has_prompt_only(self) -> None:
+        """Conversational plan has system_prompt, no template_text."""
+        strategy = self._make_strategy(style="conversational")
+        plan = strategy._resolve_synthesis(
+            "kb context", self._FakeManager(), self._make_provenance(),
+        )
+        assert plan.effective_style == "conversational"
+        assert plan.system_prompt is not None
+        assert plan.template_text is None
+
+    def test_structured_has_template_only(self) -> None:
+        """Structured plan has template_text, no system_prompt."""
+        strategy = self._make_strategy(style="structured")
+        plan = strategy._resolve_synthesis(
+            "kb context", self._FakeManager(), self._make_provenance(),
+        )
+        assert plan.effective_style == "structured"
+        assert plan.template_text is not None
+        assert plan.system_prompt is None
+
+    def test_hybrid_has_both(self) -> None:
+        """Hybrid plan has both system_prompt and template_text."""
+        strategy = self._make_strategy(style="hybrid")
+        plan = strategy._resolve_synthesis(
+            "kb context", self._FakeManager(), self._make_provenance(),
+        )
+        assert plan.effective_style == "hybrid"
+        assert plan.system_prompt is not None
+        assert plan.template_text is not None
+
+
+# ------------------------------------------------------------------
+# Default provenance template tests
+# ------------------------------------------------------------------
+
+
+class TestDefaultProvenanceTemplate:
+    """Test the built-in DEFAULT_PROVENANCE_TEMPLATE rendering."""
+
+    def test_renders_with_results(self) -> None:
+        """Template renders results grouped by source."""
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        tmpl = env.from_string(DEFAULT_PROVENANCE_TEMPLATE)
+
+        result = tmpl.render(
+            results=[
+                {
+                    "source_id": "chunk_1",
+                    "source_name": "rfc6749",
+                    "relevance": 0.85,
+                    "text_preview": "Authorization code grant...",
+                },
+            ],
+            results_by_source={
+                "rfc6749": [
+                    {
+                        "source_id": "chunk_1",
+                        "relevance": 0.85,
+                        "text_preview": "Authorization code grant...",
+                        "metadata": {"headings": ["4.1", "Authorization Code"]},
+                    },
+                ],
+            },
+            context="",
+            message="",
+            metadata={},
+            intent={},
+        )
+        assert "rfc6749" in result
+        assert "4.1 > Authorization Code" in result
+        assert "85%" in result
+        assert "1 result from 1 source" in result
+
+    def test_renders_empty(self) -> None:
+        """Template shows 'no results' when empty."""
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        tmpl = env.from_string(DEFAULT_PROVENANCE_TEMPLATE)
+
+        result = tmpl.render(
+            results=[],
+            results_by_source={},
+            context="",
+            message="",
+            metadata={},
+            intent={},
+        )
+        assert "No relevant results found." in result
+
+    def test_custom_provenance_overrides_default(self) -> None:
+        """Custom provenance_template overrides the built-in default."""
+        config = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(
+                style="structured",
+                provenance_template="Custom: {{ results|length }} hits",
+            ),
+        )
+        strategy = GroundedReasoning(config)
+
+        class _Mgr:
+            metadata: dict[str, Any] = {}
+            system_prompt = "Bot."
+
+            def get_messages(self) -> list[dict[str, Any]]:
+                return [{"role": "user", "content": "test"}]
+
+        prov: dict[str, Any] = {
+            "intent": {
+                "mode": "resolved",
+                "text_queries": ["q"],
+                "filters": {},
+                "scope": "focused",
+                "raw_data": None,
+            },
+            "results": [{"source_id": "a", "relevance": 0.9}],
+            "results_by_source": {},
+        }
+        plan = strategy._resolve_synthesis("context", _Mgr(), prov)
+        assert plan.template_text == "Custom: 1 hits"
+
+
+# ------------------------------------------------------------------
+# Synthesis style integration tests (BotTestHarness)
+# ------------------------------------------------------------------
+
+
+class TestSynthesisStyleIntegration:
+    """Integration tests for synthesis style with full bot pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_conversational_uses_llm(self) -> None:
+        """style=conversational uses LLM synthesis (same as mode=llm)."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="conversational")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("LLM synthesis result")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("How do grants work?")
+            assert "LLM synthesis result" in result.response
+
+    @pytest.mark.asyncio
+    async def test_structured_no_llm_static_intent(self) -> None:
+        """style=structured + static intent → zero LLM calls."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="structured")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Show me grants")
+            # Should use the built-in provenance template
+            assert "result" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_structured_uses_builtin_template(self) -> None:
+        """style=structured with no custom template uses DEFAULT_PROVENANCE_TEMPLATE."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="structured")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Show grants")
+            # Built-in template includes relevance percentages and source count
+            assert "%" in result.response
+            assert "source" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_structured_uses_custom_template(self) -> None:
+        """style=structured with custom template uses that template."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(
+                style="structured",
+                template="Custom: {{ results|length }} results for {{ message }}",
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Show grants")
+            assert result.response.startswith("Custom: 3 results for")
+
+    @pytest.mark.asyncio
+    async def test_hybrid_appends_provenance(self) -> None:
+        """style=hybrid produces LLM response + provenance appendix."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="hybrid")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("Here is my analysis.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Explain grants")
+            # Response should contain LLM output AND provenance
+            assert "Here is my analysis." in result.response
+            # Provenance appendix from default template includes source counts
+            assert "source" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_session_style_override(self) -> None:
+        """Session metadata synthesis_style overrides config."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="conversational")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                text_response("First turn LLM"),  # conversational (turn 1)
+                # Turn 2 uses structured — no LLM response needed
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            # First turn to create the conversation manager
+            result1 = await harness.chat("First question")
+            assert "First turn LLM" in result1.response
+
+            # Now override at session level to structured
+            manager = list(harness.bot._conversation_managers.values())[0]
+            manager.metadata["synthesis_style"] = "structured"
+            result2 = await harness.chat("Show me sources")
+            # Should use structured (template) despite config saying conversational
+            assert "%" in result2.response  # Built-in template has percentages
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_mode_llm(self) -> None:
+        """mode=llm without style works as before."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(mode="llm")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("LLM output")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("query")
+            assert "LLM output" in result.response
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_mode_template(self) -> None:
+        """mode=template without style works as before."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(
+                mode="template",
+                template="Found {{ results|length }} results.",
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("query")
+            assert "Found 3 results." in result.response
+
+    @pytest.mark.asyncio
+    async def test_provenance_includes_raw_data(self) -> None:
+        """Provenance intent dict includes raw_data for per-turn style."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["test"])
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("result")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("query")
+            manager = list(harness.bot._conversation_managers.values())[0]
+            prov = manager.metadata.get("retrieval_provenance", {})
+            assert "raw_data" in prov.get("intent", {})
+
+
+# ------------------------------------------------------------------
+# Synthesis style streaming tests
+# ------------------------------------------------------------------
+
+
+class TestSynthesisStyleStreaming:
+    """Streaming tests verify parity with buffered synthesis paths."""
+
+    @pytest.mark.asyncio
+    async def test_stream_structured_single_chunk(self) -> None:
+        """Streaming structured yields a single template chunk."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="structured")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "Show grants", harness.context,
+            ):
+                chunks.append(chunk)
+            # stream_chat wraps LLMResponse into LLMStreamResponse with .delta
+            full_text = "".join(c.delta for c in chunks if c.delta)
+            assert "source" in full_text.lower()
+            assert "%" in full_text
+
+    @pytest.mark.asyncio
+    async def test_stream_hybrid_appends_provenance(self) -> None:
+        """Streaming hybrid yields LLM chunks then provenance chunk."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["auth grants"])
+            .synthesis(style="hybrid")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("LLM analysis.")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "Explain grants", harness.context,
+            ):
+                chunks.append(chunk)
+            full_text = "".join(c.delta for c in chunks if c.delta)
+            # Should contain both LLM output and provenance
+            assert "LLM analysis." in full_text
+            assert "source" in full_text.lower()
+
+
+# ------------------------------------------------------------------
+# Intent schema output_style tests
+# ------------------------------------------------------------------
+
+
+class TestIntentSchemaOutputStyle:
+    """Test that output_style field exists in the intent schema."""
+
+    def test_output_style_in_schema(self) -> None:
+        """INTENT_EXTRACTION_SCHEMA includes output_style property."""
+        from dataknobs_bots.reasoning.grounded import INTENT_EXTRACTION_SCHEMA
+
+        props = INTENT_EXTRACTION_SCHEMA["properties"]
+        assert "output_style" in props
+        assert set(props["output_style"]["enum"]) == {
+            "conversational", "structured", "hybrid",
+        }
+
+    def test_output_style_not_required(self) -> None:
+        """output_style is optional — not in required list."""
+        from dataknobs_bots.reasoning.grounded import INTENT_EXTRACTION_SCHEMA
+
+        assert "output_style" not in INTENT_EXTRACTION_SCHEMA.get("required", [])

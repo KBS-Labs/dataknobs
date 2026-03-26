@@ -119,7 +119,7 @@ class GroundedRetrievalConfig:
 class GroundedSynthesisConfig:
     """Configuration for the synthesis phase.
 
-    Two modes:
+    **Legacy modes** (``mode`` field):
 
     ``llm`` (default)
         The LLM synthesizes a natural-language response grounded in the
@@ -131,21 +131,58 @@ class GroundedSynthesisConfig:
         ``results_by_source`` (dict), ``message`` (user message),
         ``metadata`` (conversation metadata), ``intent`` (resolved intent).
 
+    **Synthesis styles** (``style`` field — runtime-switchable):
+
+    When ``style`` is set, it takes precedence over ``mode``.  Three styles:
+
+    ``conversational``
+        Same as ``mode: llm`` — LLM synthesis grounded in retrieved
+        results.
+
+    ``structured``
+        Same as ``mode: template`` — provenance-rich formatted output.
+        When no custom ``template`` is configured, a built-in default
+        template is used (shows results grouped by source with headings
+        and relevance scores).
+
+    ``hybrid``
+        LLM synthesis followed by a provenance appendix.  The appendix
+        uses ``provenance_template`` (or the built-in default).
+
+    **Runtime resolution cascade** (highest to lowest priority):
+
+    1. Per-turn ``output_style`` from intent extraction (extract mode).
+    2. Session-level ``metadata["synthesis_style"]``.
+    3. Config-level ``style`` field.
+    4. Legacy ``mode`` mapping (``llm`` → conversational,
+       ``template`` → structured).
+    5. Default: ``conversational``.
+
     Attributes:
-        mode: Synthesis mode — ``"llm"`` or ``"template"``.
-        require_citations: (llm mode) Instruct the LLM to cite sources.
-        allow_parametric: (llm mode) Allow the LLM to supplement with
-            its own parametric knowledge.
-        citation_format: (llm mode) ``"section"`` (heading paths) or
-            ``"source"`` (file paths).
-        template: (template mode) Jinja2 template string.
+        mode: Legacy synthesis mode — ``"llm"`` or ``"template"``.
+            Superseded by ``style`` when set.
+        style: Runtime-switchable synthesis style —
+            ``"conversational"``, ``"structured"``, or ``"hybrid"``.
+            When ``None``, falls back to ``mode``.
+        require_citations: (conversational/hybrid) Instruct the LLM to
+            cite sources.
+        allow_parametric: (conversational/hybrid) Allow the LLM to
+            supplement with its own parametric knowledge.
+        citation_format: (conversational/hybrid) ``"section"`` (heading
+            paths) or ``"source"`` (file paths).
+        template: Custom Jinja2 template for structured output.
+        provenance_template: Custom Jinja2 template for the provenance
+            appendix (hybrid mode) or structured output.  When ``None``,
+            a built-in default is used.
     """
 
     mode: str = "llm"
+    style: str | None = None
     require_citations: bool = True
     allow_parametric: bool = False
     citation_format: str = "section"
     template: str | None = None
+    provenance_template: str | None = None
 
 
 @dataclass

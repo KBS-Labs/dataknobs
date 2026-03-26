@@ -108,7 +108,7 @@ The LLM receives a structured prompt emphasizing "underlying intent, not literal
 
 **Optional: Structured intent extraction via SchemaExtractor**
 
-When `extraction_config` is provided, extract mode uses a `SchemaExtractor` instead of the `QueryTransformer`. This provides JSON Schema validation, confidence scoring, and access to the extraction resilience pipeline (grounding, recovery, enum normalization). The extractor produces structured intent with `text_queries` and an optional `scope` field.
+When `extraction_config` is provided, extract mode uses a `SchemaExtractor` instead of the `QueryTransformer`. This provides JSON Schema validation, confidence scoring, and access to the extraction resilience pipeline (grounding, recovery, enum normalization). The extractor produces structured intent with `text_queries`, an optional `scope` field (`focused`/`broad`/`exact`), and an optional `output_style` field (`conversational`/`structured`/`hybrid`) that feeds into the synthesis style resolution cascade.
 
 ```yaml
 intent:
@@ -292,27 +292,49 @@ class ElasticsearchSource(GroundedSource):
 
 Synthesis generates the response from retrieved context.
 
-### LLM Mode (Default)
+### Synthesis Styles
 
-The LLM receives the user's question, conversation history, and retrieved KB content as a structured prompt:
+Three runtime-switchable synthesis styles control how results are presented:
+
+| Style | Method | Best For |
+|-------|--------|----------|
+| `conversational` | LLM synthesis (default) | Cross-section reasoning, audience adaptation, follow-up interpretation |
+| `structured` | Template with provenance | Research/verification, speed-sensitive, high-trust source content, audit |
+| `hybrid` | LLM synthesis + provenance appendix | Both interpretation and source verification |
 
 ```yaml
 synthesis:
-  mode: llm
-  require_citations: true       # Instruct LLM to cite sources
-  allow_parametric: false       # Don't supplement with general knowledge
-  citation_format: section      # "section" (heading paths) or "source" (file paths)
+  style: conversational          # or "structured" or "hybrid"
+  require_citations: true        # (conversational/hybrid) Cite sources
+  allow_parametric: false        # (conversational/hybrid) Supplement with general knowledge
+  citation_format: section       # "section" (heading paths) or "source" (file paths)
+  provenance_template: |         # Optional custom template for structured/hybrid output
+    {% for r in results %}...{% endfor %}
 ```
 
-When `allow_parametric: false`, the synthesis prompt instructs the LLM to explicitly state when KB content is insufficient rather than filling gaps with its own knowledge. When `true`, the LLM may supplement but must clearly distinguish KB-grounded claims from general knowledge.
+**Conversational** (default) — LLM synthesizes a natural-language response grounded in retrieved results. When `allow_parametric: false`, the LLM explicitly states when KB content is insufficient rather than filling gaps. When `true`, it may supplement but must distinguish KB-grounded claims from general knowledge.
 
-### Template Mode
+**Structured** — A Jinja2 template formats results deterministically. No LLM call. When no custom `template` or `provenance_template` is configured, a built-in default template is used that shows results grouped by source with headings and relevance scores.
 
-A Jinja2 template formats results deterministically. No LLM call for synthesis.
+**Hybrid** — Runs LLM synthesis, then appends the provenance template output as a source appendix. The appendix uses `provenance_template` (or the built-in default).
+
+### Style Resolution Cascade
+
+The effective synthesis style for each turn is resolved via a priority cascade:
+
+1. **Per-turn** — `output_style` from intent extraction (extract mode with `extraction_config` only). The LLM infers style from the user's phrasing ("show me the sources" → `structured`, "explain this" → `conversational`).
+2. **Session-level** — `manager.metadata["synthesis_style"]`. Set during scoping or mid-conversation.
+3. **Config-level** — `synthesis.style` field.
+4. **Legacy mode** — `mode: template` maps to `structured`; `mode: llm` maps to `conversational`.
+5. **Default** — `conversational`.
+
+### Custom Templates
+
+Both `structured` and `hybrid` styles accept custom Jinja2 templates:
 
 ```yaml
 synthesis:
-  mode: template
+  style: structured
   template: |
     ## Results for: {{ message }}
 
@@ -327,6 +349,26 @@ synthesis:
 ```
 
 Template variables: `results` (list of result dicts), `results_by_source` (dict), `context` (formatted context string), `message` (user message), `metadata` (conversation metadata), `intent` (resolved intent dict).
+
+Use `template` for full custom output (overrides the built-in default entirely) or `provenance_template` for just the provenance section (used by hybrid's appendix and as the structured default).
+
+### Legacy Mode Configuration
+
+The `mode` field (`llm` / `template`) continues to work for backward compatibility:
+
+```yaml
+# Legacy — equivalent to style: conversational
+synthesis:
+  mode: llm
+
+# Legacy — equivalent to style: structured
+# (uses built-in provenance template if no custom template set)
+synthesis:
+  mode: template
+  template: "..."   # Optional — built-in default used if absent
+```
+
+When `style` is set, it takes precedence over `mode`.
 
 ## Provenance
 
@@ -343,6 +385,7 @@ provenance = manager.metadata["retrieval_provenance"]
         "text_queries": ["OAuth grant types", "authorization code"],
         "filters": {},
         "scope": "focused",
+        "raw_data": {...},  # Full extraction dict (extract mode)
     },
     "results_by_source": {
         "knowledge_base": [

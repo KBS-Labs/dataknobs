@@ -29,6 +29,7 @@ import copy
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 import jinja2
@@ -77,9 +78,66 @@ INTENT_EXTRACTION_SCHEMA: dict[str, Any] = {
                 "'exact' for precise lookups."
             ),
         },
+        "output_style": {
+            "type": "string",
+            "enum": ["conversational", "structured", "hybrid"],
+            "description": (
+                "How to present results: 'conversational' for natural "
+                "language synthesis, 'structured' for a formatted result "
+                "listing with provenance, 'hybrid' for natural language "
+                "followed by a source appendix.  Infer from the user's "
+                "phrasing — 'show me the sources' suggests 'structured', "
+                "'explain this' suggests 'conversational'."
+            ),
+        },
     },
     "required": ["text_queries"],
 }
+
+
+# Built-in provenance template used for structured output and hybrid
+# appendix when no custom template is configured.
+DEFAULT_PROVENANCE_TEMPLATE = """\
+{% if results %}
+{% for source_name, source_results in results_by_source.items() %}
+### {{ source_name }}
+
+{% for r in source_results %}
+- **{{ r.metadata.get('headings', [''])|join(' > ') or r.source_id }}** \
+(relevance: {{ "%.0f"|format(r.relevance * 100) }}%)
+  {{ r.text_preview }}
+{% endfor %}
+{% endfor %}
+---
+*{{ results|length }} result{{ 's' if results|length != 1 }} \
+from {{ results_by_source|length }} source{{ 's' if results_by_source|length != 1 }}*
+{% else %}
+No relevant results found.
+{% endif %}\
+"""
+
+# Valid synthesis styles for runtime resolution.
+_VALID_STYLES = frozenset({"conversational", "structured", "hybrid"})
+
+
+@dataclass
+class _SynthesisPlan:
+    """Resolved synthesis strategy for a single turn.
+
+    Computed once by :meth:`GroundedReasoning._resolve_synthesis` and
+    consumed by both the buffered and streaming delivery paths — ensuring
+    style resolution, template rendering, and prompt construction happen
+    in a single shared code path.
+    """
+
+    effective_style: str
+    """One of ``"conversational"``, ``"structured"``, ``"hybrid"``."""
+
+    template_text: str | None
+    """Pre-rendered provenance output (structured full / hybrid appendix)."""
+
+    system_prompt: str | None
+    """LLM synthesis prompt (conversational / hybrid)."""
 
 
 class GroundedReasoning(ReasoningStrategy):
@@ -190,6 +248,10 @@ class GroundedReasoning(ReasoningStrategy):
             self._jinja_env.from_string(config.synthesis.template)
             if config.synthesis.template
             else None
+        )
+        self._provenance_template = self._jinja_env.from_string(
+            config.synthesis.provenance_template
+            or DEFAULT_PROVENANCE_TEMPLATE,
         )
 
     # ------------------------------------------------------------------
@@ -335,32 +397,40 @@ class GroundedReasoning(ReasoningStrategy):
         """Stream the grounded retrieval pipeline.
 
         Intent resolution and retrieval run synchronously (fast).
-        Only LLM synthesis streams; template synthesis yields one chunk.
+        Only LLM synthesis streams; structured/hybrid template output
+        is yielded as discrete chunks.
+
+        Uses :meth:`_resolve_synthesis` for style resolution — the same
+        shared code path as the buffered :meth:`_synthesize`.
 
         Yields:
             LLM stream chunks from the synthesis phase.
         """
+        from dataknobs_llm import LLMResponse
+
         context, provenance = await self.retrieve_context(manager, llm)
+        plan = self._resolve_synthesis(context, manager, provenance)
 
-        if self._config.synthesis.mode == "template":
-            # Template synthesis — yield single response
-            from dataknobs_llm import LLMResponse
-
-            messages = manager.get_messages()
-            user_message = self._extract_user_message(messages)
-            text = self._render_synthesis_template(
-                context, provenance, user_message, manager.metadata,
+        if plan.effective_style == "structured":
+            yield LLMResponse(
+                content=plan.template_text,
+                model="template",
+                finish_reason="stop",
             )
-            yield LLMResponse(content=text, model="template", finish_reason="stop")
         else:
-            synthesis_prompt = self._build_synthesis_system_prompt(
-                context, manager.system_prompt,
-            )
+            # conversational or hybrid — stream LLM synthesis
             async for chunk in manager.stream_complete(
-                system_prompt_override=synthesis_prompt,
+                system_prompt_override=plan.system_prompt,
                 **kwargs,
             ):
                 yield chunk
+
+            if plan.effective_style == "hybrid":
+                yield LLMResponse(
+                    content="\n\n" + plan.template_text,
+                    model="template",
+                    finish_reason="stop",
+                )
 
         if self._config.store_provenance:
             self._store_provenance(manager, provenance)
@@ -820,34 +890,138 @@ class GroundedReasoning(ReasoningStrategy):
         provenance: dict[str, Any],
         **kwargs: Any,
     ) -> Any:
-        """Synthesize a response — LLM or template mode."""
-        if self._config.synthesis.mode == "template":
-            from dataknobs_llm import LLMResponse
+        """Synthesize a response using the resolved synthesis style.
 
-            messages = manager.get_messages()
-            user_message = self._extract_user_message(messages)
-            text = self._render_synthesis_template(
-                context, provenance, user_message, manager.metadata,
+        Delegates style resolution and artifact preparation to
+        :meth:`_resolve_synthesis`, then handles buffered delivery only.
+        """
+        from dataknobs_llm import LLMResponse
+
+        plan = self._resolve_synthesis(context, manager, provenance)
+
+        if plan.effective_style == "structured":
+            return LLMResponse(
+                content=plan.template_text,
+                model="template",
+                finish_reason="stop",
             )
-            return LLMResponse(content=text, model="template", finish_reason="stop")
 
-        # LLM synthesis (default)
-        synthesis_prompt = self._build_synthesis_system_prompt(
-            context, manager.system_prompt,
-        )
-        return await manager.complete(
-            system_prompt_override=synthesis_prompt,
+        # conversational or hybrid — LLM synthesis
+        response = await manager.complete(
+            system_prompt_override=plan.system_prompt,
             **kwargs,
         )
 
-    def _render_synthesis_template(
+        if plan.effective_style == "hybrid":
+            combined = response.content + "\n\n" + plan.template_text
+            return LLMResponse(
+                content=combined,
+                model=response.model,
+                finish_reason=response.finish_reason,
+            )
+
+        return response
+
+    # ------------------------------------------------------------------
+    # Shared synthesis resolution (used by both buffered and streaming)
+    # ------------------------------------------------------------------
+
+    def _resolve_synthesis(
+        self,
+        context: str,
+        manager: Any,
+        provenance: dict[str, Any],
+    ) -> _SynthesisPlan:
+        """Resolve the effective synthesis style and pre-compute artifacts.
+
+        This is the single shared code path consumed by both
+        :meth:`_synthesize` (buffered) and :meth:`stream_generate`
+        (streaming).  Only the delivery mechanism differs.
+        """
+        style = self._resolve_effective_style(manager, provenance)
+
+        template_text: str | None = None
+        system_prompt: str | None = None
+
+        if style in ("structured", "hybrid"):
+            messages = manager.get_messages()
+            user_message = self._extract_user_message(messages)
+            template_text = self._render_provenance_output(
+                context, provenance, user_message, manager.metadata,
+            )
+
+        if style in ("conversational", "hybrid"):
+            system_prompt = self._build_synthesis_system_prompt(
+                context, manager.system_prompt,
+            )
+
+        return _SynthesisPlan(
+            effective_style=style,
+            template_text=template_text,
+            system_prompt=system_prompt,
+        )
+
+    def _resolve_effective_style(
+        self,
+        manager: Any,
+        provenance: dict[str, Any],
+    ) -> str:
+        """Resolve the effective synthesis style for this turn.
+
+        Resolution cascade (highest to lowest priority):
+
+        1. Per-turn ``output_style`` from intent extraction ``raw_data``.
+        2. Session-level ``manager.metadata["synthesis_style"]``.
+        3. Config-level ``synthesis.style``.
+        4. Legacy ``mode`` mapping (``llm`` → conversational,
+           ``template`` → structured).
+        5. Default: ``"conversational"``.
+        """
+        # 1. Per-turn from intent extraction
+        intent_data = provenance.get("intent", {})
+        raw_data = intent_data.get("raw_data")
+        if isinstance(raw_data, dict):
+            per_turn = raw_data.get("output_style")
+            if per_turn in _VALID_STYLES:
+                logger.debug("Using per-turn synthesis style: %s", per_turn)
+                return per_turn
+
+        # 2. Session-level
+        session_style = manager.metadata.get("synthesis_style")
+        if session_style in _VALID_STYLES:
+            logger.debug(
+                "Using session-level synthesis style: %s", session_style,
+            )
+            return session_style
+
+        # 3. Config-level style
+        config_style = self._config.synthesis.style
+        if config_style in _VALID_STYLES:
+            return config_style
+
+        # 4. Legacy mode mapping
+        if self._config.synthesis.mode == "template":
+            return "structured"
+
+        # 5. Default
+        return "conversational"
+
+    def _render_provenance_output(
         self,
         context: str,
         provenance: dict[str, Any],
         user_message: str,
         metadata: dict[str, Any],
     ) -> str:
-        """Render the synthesis Jinja2 template.
+        """Render provenance-based output for structured or hybrid styles.
+
+        Template resolution order:
+
+        1. Custom ``synthesis.template`` from config (backward compat with
+           legacy ``mode: template``).
+        2. ``self._provenance_template`` — pre-compiled from
+           ``synthesis.provenance_template`` config or the built-in
+           ``DEFAULT_PROVENANCE_TEMPLATE``.
 
         Template variables:
             ``results``: List of result dicts from provenance.
@@ -857,9 +1031,8 @@ class GroundedReasoning(ReasoningStrategy):
             ``metadata``: Conversation metadata.
             ``intent``: The resolved intent dict.
         """
-        template = self._synthesis_template
-        if template is None:
-            return context  # Fallback: return raw formatted context
+        # Custom synthesis template takes precedence (backward compat)
+        template = self._synthesis_template or self._provenance_template
 
         return template.render(
             results=provenance.get("results", []),
@@ -956,6 +1129,7 @@ class GroundedReasoning(ReasoningStrategy):
                 "text_queries": intent.text_queries,
                 "filters": intent.filters,
                 "scope": intent.scope,
+                "raw_data": intent.raw_data,
             },
             "results_by_source": prov_by_source,
             "results": [
