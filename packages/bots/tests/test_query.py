@@ -358,6 +358,34 @@ class TestContextualExpander:
         assert "reinforcement" in keywords
         assert "learning" in keywords
 
+    def test_prefers_raw_content_over_augmented(self):
+        """Messages with metadata.raw_content use that instead of content."""
+        expander = ContextualExpander()
+        history = [
+            {
+                "role": "user",
+                "content": "<knowledge_base>kb chunks here</knowledge_base>\nTell me about neural networks",
+                "metadata": {"raw_content": "Tell me about neural networks"},
+            },
+        ]
+
+        result = expander.expand("More details", history)
+
+        # Should extract keywords from raw_content, not augmented content
+        assert "neural" in result.lower() or "networks" in result.lower()
+        assert "knowledge_base" not in result.lower()
+
+    def test_falls_back_to_content_without_raw_content(self):
+        """Without metadata.raw_content, uses content as before."""
+        expander = ContextualExpander()
+        history = [
+            {"role": "user", "content": "Tell me about quantum computing"},
+        ]
+
+        result = expander.expand("More details", history)
+
+        assert "quantum" in result.lower()
+
 
 class TestIsAmbiguousQuery:
     """Tests for is_ambiguous_query function."""

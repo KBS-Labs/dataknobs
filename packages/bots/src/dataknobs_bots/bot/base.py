@@ -578,16 +578,20 @@ class DynaBot:
                     )
                     reasoning_strategy.add_source(source)
 
-            # Warn if grounded strategy + auto_context are both active
+            # Auto-disable auto_context for grounded strategy — retrieval
+            # is structural and auto_context is completely redundant.  Leaving
+            # it on causes the grounded strategy to receive KB-augmented
+            # messages as query-generation input, wasting tokens and risking
+            # timeouts with thinking models.
             if (
                 reasoning_config.get("strategy", "").lower() == "grounded"
                 and knowledge_base is not None
                 and kb_auto_context
             ):
-                logger.warning(
-                    "Grounded reasoning strategy handles its own KB retrieval. "
-                    "Consider setting knowledge_base.auto_context: false to "
-                    "avoid double retrieval.",
+                kb_auto_context = False
+                logger.info(
+                    "Grounded strategy: auto_context disabled "
+                    "(retrieval is structural).",
                 )
 
         # Create middleware

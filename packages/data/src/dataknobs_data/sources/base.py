@@ -162,10 +162,12 @@ class GroundedSource(ABC):
             Schema declarations are consumed by
             ``compose_intent_schema()`` in ``dataknobs-llm`` to build
             a single JSON schema for ``SchemaExtractor``-based structured
-            intent extraction.  This pipeline is planned infrastructure
-            for a future ``mode: "schema"`` intent mode in
-            ``GroundedReasoning``.  The current ``mode: "extract"`` uses
-            ``QueryTransformer`` and does not call ``get_schema()``.
+            intent extraction.  The current ``extraction_config`` path
+            in ``GroundedReasoning`` uses ``SchemaExtractor`` with a
+            built-in intent schema (``INTENT_EXTRACTION_SCHEMA``) but
+            does not yet compose per-source schemas via ``get_schema()``.
+            A future ``mode: "schema"`` intent mode would compose
+            source schemas into the extraction schema dynamically.
 
         Returns:
             Schema fragment, or ``None`` for text-only sources.

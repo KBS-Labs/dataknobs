@@ -7,13 +7,16 @@ parses the extraction result back into a :class:`RetrievalIntent`.
 
 .. note::
 
-    This module provides infrastructure for a planned **schema-based intent
-    mode** (``mode: "schema"``) in :class:`GroundedReasoning`.  The current
-    strategy uses ``QueryTransformer`` for free-form query generation
-    (``mode: "extract"``).  Schema-based extraction will be wired in as
-    a future enhancement, enabling ``SchemaExtractor``-driven structured
-    intent with enum normalization, grounding verification, and recovery
-    — the same resilience pipeline that powers wizard field extraction.
+    :class:`GroundedReasoning` currently supports ``SchemaExtractor``-based
+    intent extraction via ``extraction_config`` (using a built-in
+    ``INTENT_EXTRACTION_SCHEMA``).  This module provides infrastructure for
+    a future **schema-based intent mode** (``mode: "schema"``) that would
+    dynamically compose per-source schema fragments (via
+    ``GroundedSource.get_schema()``) into the extraction schema.  That
+    composition step would use ``compose_intent_schema()`` below, adding
+    source-specific filter fields to the base ``text_queries`` + ``scope``
+    schema and enabling the full extraction resilience pipeline (enum
+    normalization, grounding, recovery).
 """
 
 from __future__ import annotations

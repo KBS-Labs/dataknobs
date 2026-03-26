@@ -126,9 +126,15 @@ class ContextualExpander:
             if isinstance(item, Message):
                 messages.append(item)
             elif isinstance(item, dict):
+                # Prefer raw_content (unaugmented by KB/memory injection)
+                # so keyword extraction operates on the user's actual words.
+                content = (
+                    item.get("metadata", {}).get("raw_content")
+                    or item.get("content", "")
+                )
                 messages.append(Message(
                     role=item.get("role", "user"),
-                    content=item.get("content", ""),
+                    content=content,
                 ))
         return messages
 

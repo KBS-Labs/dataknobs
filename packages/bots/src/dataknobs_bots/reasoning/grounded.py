@@ -25,6 +25,7 @@ SQL databases, Elasticsearch, or any custom source.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -49,6 +50,36 @@ from dataknobs_bots.reasoning.base import ReasoningStrategy
 from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
 
 logger = logging.getLogger(__name__)
+
+# JSON Schema for structured intent extraction via SchemaExtractor.
+# Used when extraction_config is present — replaces raw text parsing
+# with validated JSON output, confidence scoring, and extraction
+# resilience from the SchemaExtractor framework.
+INTENT_EXTRACTION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text_queries": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Concise search queries (2-6 words each) targeting "
+                "the user's information need.  Focus on underlying "
+                "intent, key concepts, and related topics — not the "
+                "literal text."
+            ),
+        },
+        "scope": {
+            "type": "string",
+            "enum": ["focused", "broad", "exact"],
+            "description": (
+                "Retrieval breadth: 'focused' for specific topics, "
+                "'broad' for exploratory or multi-faceted questions, "
+                "'exact' for precise lookups."
+            ),
+        },
+    },
+    "required": ["text_queries"],
+}
 
 
 class GroundedReasoning(ReasoningStrategy):
@@ -120,18 +151,26 @@ class GroundedReasoning(ReasoningStrategy):
             group_by_source=True,
         ))
 
-        # Query generation components (extract mode only)
+        # Query generation components (extract mode only).
+        # Two paths: SchemaExtractor (preferred, when extraction_config
+        # is present) or QueryTransformer (legacy fallback).
         self._transformer: QueryTransformer | None = None
+        self._extractor: Any | None = None
         self._expander: ContextualExpander | None = None
         if config.intent.mode == "extract":
-            self._transformer = QueryTransformer(
-                TransformerConfig(
-                    enabled=True,
-                    num_queries=config.intent.num_queries,
-                    domain_context=config.intent.domain_context,
-                ),
-                provider=query_provider,
-            )
+            if config.intent.extraction_config:
+                self._extractor = self._create_intent_extractor(
+                    config.intent.extraction_config,
+                )
+            else:
+                self._transformer = QueryTransformer(
+                    TransformerConfig(
+                        enabled=True,
+                        num_queries=config.intent.num_queries,
+                        domain_context=config.intent.domain_context,
+                    ),
+                    provider=query_provider,
+                )
             if config.intent.expand_ambiguous_queries:
                 self._expander = ContextualExpander(
                     max_context_turns=config.intent.max_context_turns,
@@ -165,6 +204,14 @@ class GroundedReasoning(ReasoningStrategy):
 
         Backward-compatible method called by ``DynaBot.from_config()``
         when the bot has a KB and the strategy is grounded.
+
+        .. note::
+
+            When called from ``from_config()``, ``auto_context`` is
+            auto-disabled.  When called post-construction (programmatic
+            KB injection), callers should also set
+            ``bot._kb_auto_context = False`` to prevent the bot from
+            double-retrieving KB content via auto-injection.
         """
         from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
 
@@ -189,6 +236,35 @@ class GroundedReasoning(ReasoningStrategy):
                 result.update(source.providers())
         return result
 
+    @staticmethod
+    def _create_intent_extractor(
+        extraction_config: dict[str, Any],
+    ) -> Any:
+        """Create a SchemaExtractor for structured intent extraction.
+
+        Uses the same ``SchemaExtractor.from_env_config()`` pattern as
+        wizard extraction — the config dict has ``provider``, ``model``,
+        ``temperature``, etc.
+
+        Args:
+            extraction_config: Provider/model config dict.
+
+        Returns:
+            A :class:`~dataknobs_llm.extraction.SchemaExtractor` instance.
+        """
+        from dataknobs_llm.extraction import SchemaExtractor
+
+        return SchemaExtractor.from_env_config(extraction_config)
+
+    def set_extractor(self, extractor: Any) -> None:
+        """Set or replace the intent extractor (test injection).
+
+        Args:
+            extractor: A :class:`~dataknobs_llm.extraction.SchemaExtractor`
+                (or compatible duck-typed object with an ``extract()`` method).
+        """
+        self._extractor = extractor
+
     def set_provider(self, role: str, provider: Any) -> bool:
         """Replace a managed provider (test injection)."""
         if role == "grounded_query":
@@ -205,6 +281,8 @@ class GroundedReasoning(ReasoningStrategy):
         """Release resources held by the query provider and sources."""
         if self._query_provider is not None and hasattr(self._query_provider, "close"):
             await self._query_provider.close()
+        if self._extractor is not None and hasattr(self._extractor, "close"):
+            await self._extractor.close()
         for source in self._sources:
             await source.close()
 
@@ -356,8 +434,11 @@ class GroundedReasoning(ReasoningStrategy):
             intent = self._build_static_intent(user_message)
         elif mode == "template":
             intent = self._build_template_intent(user_message, metadata)
+        elif self._extractor is not None:
+            # Extract mode with SchemaExtractor (preferred path)
+            intent = await self._extract_intent(user_message, messages)
         else:
-            # Default: extract mode (LLM query generation)
+            # Extract mode with QueryTransformer (legacy fallback)
             queries = await self._generate_queries(user_message, messages, llm)
             intent = RetrievalIntent(
                 text_queries=queries,
@@ -445,6 +526,86 @@ class GroundedReasoning(ReasoningStrategy):
             scope=data.get("scope", "focused"),
         )
 
+    async def _extract_intent(
+        self,
+        user_message: str,
+        messages: list[dict[str, Any]],
+    ) -> RetrievalIntent:
+        """Extract structured intent via :class:`SchemaExtractor`.
+
+        Uses the ``INTENT_EXTRACTION_SCHEMA`` to produce validated JSON
+        with ``text_queries`` and optional ``scope``.  Falls back to
+        ``[user_message]`` when extraction returns empty queries or
+        raises an exception.
+        """
+        cfg = self._config.intent
+
+        # Optional: enrich ambiguous queries with context keywords
+        enriched = user_message
+        if self._expander is not None and is_ambiguous_query(user_message):
+            enriched = self._expander.expand(user_message, messages)
+            logger.debug(
+                "Expanded ambiguous query: %r → %r",
+                user_message, enriched,
+            )
+
+        # Build extraction input — include conversation context if enabled
+        conversation_context = self._build_conversation_context(messages, cfg)
+        if conversation_context:
+            extraction_input = (
+                f"Conversation context:\n{conversation_context}\n\n"
+                f"Current user message: {enriched}"
+            )
+        else:
+            extraction_input = enriched
+
+        # Build the schema with dynamic num_queries constraint.
+        # Deep copy protects the module-level constant from mutation.
+        schema = copy.deepcopy(INTENT_EXTRACTION_SCHEMA)
+        schema["properties"]["text_queries"]["maxItems"] = cfg.num_queries
+
+        context = {}
+        if cfg.domain_context:
+            context["domain"] = cfg.domain_context
+
+        try:
+            result = await self._extractor.extract(
+                text=extraction_input,
+                schema=schema,
+                context=context,
+            )
+
+            queries = result.data.get("text_queries", [])
+            scope = result.data.get("scope", "focused")
+
+            if not queries:
+                logger.warning(
+                    "Intent extraction produced no queries "
+                    "(confidence=%.2f), falling back to user message",
+                    result.confidence,
+                )
+                return RetrievalIntent(
+                    text_queries=[user_message],
+                    scope="focused",
+                    raw_data=result.data,
+                )
+
+            logger.debug(
+                "Extracted %d queries (confidence=%.2f, scope=%s): %s",
+                len(queries), result.confidence, scope, queries,
+            )
+            return RetrievalIntent(
+                text_queries=queries[:cfg.num_queries],
+                scope=scope,
+                raw_data=result.data,
+            )
+        except Exception:
+            logger.warning(
+                "Intent extraction failed, falling back to raw user message",
+                exc_info=True,
+            )
+            return RetrievalIntent(text_queries=[user_message], scope="focused")
+
     async def _generate_queries(
         self,
         user_message: str,
@@ -453,6 +614,7 @@ class GroundedReasoning(ReasoningStrategy):
     ) -> list[str]:
         """Generate search queries via :class:`QueryTransformer`.
 
+        Legacy path used when no ``extraction_config`` is present.
         Delegates query generation to the transformer, which builds
         structured prompts emphasizing intent, key concepts, and related
         topics.  When ``expand_ambiguous_queries`` is enabled, ambiguous
@@ -527,11 +689,18 @@ class GroundedReasoning(ReasoningStrategy):
         # message window.  Exclude the current (last) message.
         window = cfg.max_context_turns * 2
         recent = messages[-window - 1:-1] if len(messages) > window + 1 else messages[:-1]
-        return "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}"
-            for m in recent
-            if m.get("content")
-        )
+        parts: list[str] = []
+        for m in recent:
+            # Prefer raw_content (unaugmented by KB/memory injection)
+            # so query generation sees the user's actual words, not
+            # middleware-prepended context chunks.
+            content = (
+                m.get("metadata", {}).get("raw_content")
+                or m.get("content", "")
+            )
+            if content:
+                parts.append(f"{m.get('role', 'user')}: {content}")
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Retrieval (private)

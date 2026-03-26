@@ -38,6 +38,13 @@ class GroundedIntentConfig:
         num_queries: (extract mode) Number of queries to generate.
         domain_context: (extract mode) Domain hint for the query gen prompt.
         use_conversation_context: (extract mode) Include conversation history.
+        extraction_config: (extract mode) Optional dict for creating a
+            dedicated :class:`~dataknobs_llm.extraction.SchemaExtractor`
+            for intent extraction.  When present, query generation uses
+            structured JSON extraction with confidence scoring instead
+            of raw text parsing.  Same shape as wizard ``extraction_config``
+            (``provider``, ``model``, ``temperature``, etc.).  When absent,
+            falls back to the ``QueryTransformer`` text-parsing path.
         text_queries: (static mode) Fixed text queries.
         filters: (static mode) Fixed structured filters keyed by source name.
         scope: (static/template mode) Retrieval scope.
@@ -65,6 +72,7 @@ class GroundedIntentConfig:
     num_queries: int = 3
     domain_context: str = ""
     use_conversation_context: bool = True
+    extraction_config: dict[str, Any] | None = None
 
     # Extract mode — query enrichment (optional)
     expand_ambiguous_queries: bool = False

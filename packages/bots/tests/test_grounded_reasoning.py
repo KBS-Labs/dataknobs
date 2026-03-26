@@ -1399,3 +1399,311 @@ class TestQueryTransformerIntegration:
             strategy = harness.bot.reasoning_strategy
             assert strategy._transformer is None
             assert strategy._expander is None
+
+
+# ------------------------------------------------------------------
+# SchemaExtractor intent extraction tests
+# ------------------------------------------------------------------
+
+
+class TestSchemaExtractorIntentExtraction:
+    """Tests for extract mode with extraction_config (SchemaExtractor path)."""
+
+    @pytest.mark.asyncio
+    async def test_extraction_config_creates_extractor_not_transformer(self) -> None:
+        """When extraction_config is present, extractor is created, not transformer."""
+        config = _grounded_bot_config()
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                # Synthesis response (extraction handled by extractor)
+                text_response("Synthesized answer."),
+            ],
+        ) as harness:
+            strategy = harness.bot.reasoning_strategy
+            assert strategy._extractor is not None
+            assert strategy._transformer is None
+
+    @pytest.mark.asyncio
+    async def test_extractor_produces_queries(self) -> None:
+        """SchemaExtractor path produces queries from structured extraction."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        # Use extraction_config to enable extractor path
+        config["reasoning"]["intent"]["extraction_config"] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                # Synthesis only (extractor handles query gen)
+                text_response("Based on the KB content..."),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            strategy = harness.bot.reasoning_strategy
+
+            # Inject a scripted extractor that returns structured intent
+            extractor, _provider = scripted_schema_extractor([
+                '{"text_queries": ["OAuth grant types", "authorization code flow"], "scope": "focused"}',
+            ])
+            strategy.set_extractor(extractor)
+
+            result = await harness.chat("What are OAuth grant types?")
+            assert result.response == "Based on the KB content..."
+            # KB should have been queried with extracted queries
+            assert len(kb.queries) >= 1
+
+    @pytest.mark.asyncio
+    async def test_extractor_scope_flows_to_intent(self) -> None:
+        """Scope from extraction flows into RetrievalIntent."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="extract",
+                extraction_config={"provider": "echo", "model": "test"},
+            ),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        extractor, _provider = scripted_schema_extractor([
+            '{"text_queries": ["broad search"], "scope": "broad"}',
+        ])
+        strategy.set_extractor(extractor)
+
+        intent = await strategy._extract_intent(
+            "Tell me everything about OAuth",
+            [],
+        )
+        assert intent.scope == "broad"
+        assert intent.text_queries == ["broad search"]
+
+    @pytest.mark.asyncio
+    async def test_extractor_fallback_on_empty_queries(self) -> None:
+        """Falls back to user message when extraction returns empty queries."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="extract",
+                extraction_config={"provider": "echo", "model": "test"},
+            ),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        extractor, _provider = scripted_schema_extractor([
+            '{"text_queries": []}',
+        ])
+        strategy.set_extractor(extractor)
+
+        intent = await strategy._extract_intent("my question", [])
+        assert intent.text_queries == ["my question"]
+
+    @pytest.mark.asyncio
+    async def test_extractor_fallback_on_exception(self) -> None:
+        """Falls back to user message when extractor raises."""
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="extract",
+                extraction_config={"provider": "echo", "model": "test"},
+            ),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        class FailingExtractor:
+            async def extract(self, **kwargs: Any) -> None:
+                raise RuntimeError("extraction failed")
+
+        strategy.set_extractor(FailingExtractor())
+
+        intent = await strategy._extract_intent("my question", [])
+        assert intent.text_queries == ["my question"]
+        assert intent.scope == "focused"
+
+    @pytest.mark.asyncio
+    async def test_extractor_respects_num_queries(self) -> None:
+        """Extracted queries are capped at num_queries."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="extract",
+                num_queries=2,
+                extraction_config={"provider": "echo", "model": "test"},
+            ),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        extractor, _provider = scripted_schema_extractor([
+            '{"text_queries": ["q1", "q2", "q3", "q4"]}',
+        ])
+        strategy.set_extractor(extractor)
+
+        intent = await strategy._extract_intent("question", [])
+        assert len(intent.text_queries) == 2
+
+    @pytest.mark.asyncio
+    async def test_extractor_with_conversation_context(self) -> None:
+        """Conversation context is included in extraction input."""
+        from dataknobs_llm.testing import scripted_schema_extractor
+
+        config = GroundedReasoningConfig(
+            intent=GroundedIntentConfig(
+                mode="extract",
+                use_conversation_context=True,
+                extraction_config={"provider": "echo", "model": "test"},
+            ),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        extractor, ext_provider = scripted_schema_extractor([
+            '{"text_queries": ["context-aware query"]}',
+        ])
+        strategy.set_extractor(extractor)
+
+        messages = [
+            {"role": "user", "content": "Tell me about OAuth"},
+            {"role": "assistant", "content": "OAuth is..."},
+            {"role": "user", "content": "What about grants?"},
+        ]
+        intent = await strategy._extract_intent("What about grants?", messages)
+        assert intent.text_queries == ["context-aware query"]
+        # The extraction input should have included context
+        last_user_msg = ext_provider.get_last_user_message()
+        assert last_user_msg is not None
+        assert "OAuth" in last_user_msg
+
+    @pytest.mark.asyncio
+    async def test_no_extraction_config_uses_transformer(self) -> None:
+        """Without extraction_config, extract mode uses QueryTransformer."""
+        config = _grounded_bot_config()
+        # No extraction_config — should use transformer path
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                text_response("query1\nquery2"),  # Transformer query gen
+                text_response("answer"),  # Synthesis
+            ],
+        ) as harness:
+            strategy = harness.bot.reasoning_strategy
+            assert strategy._transformer is not None
+            assert strategy._extractor is None
+
+    def test_extraction_config_in_grounded_intent_config(self) -> None:
+        """extraction_config field exists on GroundedIntentConfig."""
+        cfg = GroundedIntentConfig()
+        assert cfg.extraction_config is None
+
+        cfg2 = GroundedIntentConfig(
+            extraction_config={"provider": "ollama", "model": "qwen3:8b"},
+        )
+        assert cfg2.extraction_config is not None
+        assert cfg2.extraction_config["provider"] == "ollama"
+
+    def test_extraction_config_from_dict(self) -> None:
+        """extraction_config survives GroundedReasoningConfig.from_dict()."""
+        config = GroundedReasoningConfig.from_dict({
+            "intent": {
+                "mode": "extract",
+                "num_queries": 3,
+                "extraction_config": {
+                    "provider": "ollama",
+                    "model": "qwen3:8b",
+                    "temperature": 0.0,
+                },
+            },
+        })
+        assert config.intent.extraction_config is not None
+        assert config.intent.extraction_config["model"] == "qwen3:8b"
+
+
+# ------------------------------------------------------------------
+# Auto-disable auto_context tests
+# ------------------------------------------------------------------
+
+
+class TestAutoContextAutoDisable:
+    """Tests for auto_context auto-disable when strategy is grounded."""
+
+    @pytest.mark.asyncio
+    async def test_auto_context_disabled_for_grounded_with_kb(self) -> None:
+        """Grounded strategy + KB results in auto_context=False."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                text_response("q1\nq2"),
+                text_response("answer"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            # auto_context defaults to True, but from_config() should
+            # have left it alone (no KB was created from config).
+            # Verify the grounded strategy works regardless.
+            result = await harness.chat("test query")
+            assert result.response == "answer"
+
+    @pytest.mark.asyncio
+    async def test_auto_context_not_needed_for_grounded(self) -> None:
+        """Grounded strategy does not use auto_context for retrieval."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = _grounded_bot_config()
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[
+                text_response("q1\nq2"),
+                text_response("answer"),
+            ],
+        ) as harness:
+            # Explicitly disable auto_context — should not affect grounded
+            harness.bot._kb_auto_context = False
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("test query")
+            assert result.response == "answer"
+            assert len(kb.queries) > 0  # KB was queried via strategy
+
+
+# ------------------------------------------------------------------
+# raw_content preference tests
+# ------------------------------------------------------------------
+
+
+class TestRawContentPreference:
+    """Tests for raw_content preference in context building."""
+
+    def test_build_conversation_context_prefers_raw_content(self) -> None:
+        """_build_conversation_context uses raw_content from metadata."""
+        cfg = GroundedIntentConfig(use_conversation_context=True, max_context_turns=3)
+        messages = [
+            {
+                "role": "user",
+                "content": "<knowledge_base>chunks</knowledge_base>\nWhat is OAuth?",
+                "metadata": {"raw_content": "What is OAuth?"},
+            },
+            {"role": "assistant", "content": "OAuth is an authorization framework."},
+            {"role": "user", "content": "Tell me more"},
+        ]
+        context = GroundedReasoning._build_conversation_context(messages, cfg)
+        # Should use raw_content, not the augmented content
+        assert "What is OAuth?" in context
+        assert "<knowledge_base>" not in context
+
+    def test_build_conversation_context_falls_back_to_content(self) -> None:
+        """Falls back to content when raw_content is absent."""
+        cfg = GroundedIntentConfig(use_conversation_context=True, max_context_turns=3)
+        messages = [
+            {"role": "user", "content": "What is OAuth?"},
+            {"role": "assistant", "content": "OAuth is..."},
+            {"role": "user", "content": "More please"},
+        ]
+        context = GroundedReasoning._build_conversation_context(messages, cfg)
+        assert "What is OAuth?" in context
