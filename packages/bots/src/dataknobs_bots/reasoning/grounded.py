@@ -29,7 +29,7 @@ import copy
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import jinja2
@@ -260,7 +260,6 @@ class GroundedReasoning(ReasoningStrategy):
         # Result processing pipeline (Phase 2: post-retrieval processing)
         self._result_pipeline: ResultPipeline | None = None
         if config.result_processing is not None:
-            from dataclasses import asdict
             rp_dict = asdict(config.result_processing)
             self._result_pipeline = build_pipeline(rp_dict)
 
@@ -492,6 +491,10 @@ class GroundedReasoning(ReasoningStrategy):
         # Format for synthesis
         formatted_context = self._format_source_results(all_results)
 
+        # Note: results_by_source reflects pre-processing (raw per-source
+        # results), while all_results reflects post-processing (normalized,
+        # filtered, clustered).  Provenance templates using results_by_source
+        # show original scores; templates using results show processed scores.
         provenance = self._build_provenance(
             intent=intent,
             results_by_source=results_by_source,
@@ -946,7 +949,10 @@ class GroundedReasoning(ReasoningStrategy):
             else:
                 unclustered.append(r)
 
-        # Sort clusters by query_score (highest first)
+        # Sort clusters by query_score (highest first).  QueryClusterScorer
+        # sets cluster_query_score uniformly for all members of a cluster,
+        # so reading members[0] is correct.  When no scorer has run, all
+        # clusters default to 0.0 and retain their original order.
         sorted_clusters = sorted(
             clusters.items(),
             key=lambda item: item[1][0].metadata.get("cluster_query_score", 0.0),

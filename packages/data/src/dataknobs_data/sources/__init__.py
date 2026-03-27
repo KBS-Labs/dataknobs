@@ -21,6 +21,7 @@ from .processing import (
     TermOverlapClusterer,
     TfidfClusterer,
     build_pipeline,
+    inject_embed_fn,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "TermOverlapClusterer",
     "TfidfClusterer",
     "build_pipeline",
+    "inject_embed_fn",
 ]

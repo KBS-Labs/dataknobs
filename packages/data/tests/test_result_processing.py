@@ -432,7 +432,7 @@ class TestBuildPipeline:
 
     def test_empty_config_returns_none(self) -> None:
         assert build_pipeline({}) is None
-        assert build_pipeline(None) is None  # type: ignore[arg-type]
+        assert build_pipeline(None) is None
 
     def test_normalize_shorthand(self) -> None:
         pipeline = build_pipeline({"normalize_strategy": "min_max"})

@@ -127,14 +127,17 @@ class StrategyChain:
             try:
                 return await strategy.process(results, intent, user_message)
             except StrategyUnavailable as e:
-                logger.debug(
+                logger.info(
                     "%s strategy %s unavailable: %s",
                     self.name,
                     type(strategy).__name__,
                     e,
                 )
                 continue
-        logger.debug("%s: all strategies exhausted, passing through", self.name)
+        logger.warning(
+            "%s: all strategies exhausted, results pass through unprocessed",
+            self.name,
+        )
         return results
 
 
@@ -858,7 +861,26 @@ class QueryClusterScorer:
 # ------------------------------------------------------------------
 
 
-def build_pipeline(config: dict[str, Any]) -> ResultPipeline | None:
+def inject_embed_fn(pipeline: ResultPipeline, embed_fn: EmbedFn) -> None:
+    """Inject an embedding function into all embedding-aware processors.
+
+    Walks the pipeline stages (and strategy chains within them) and
+    sets ``embed_fn`` on any :class:`EmbeddingClusterer` or
+    :class:`QueryClusterScorer` that has ``embed_fn`` as an attribute.
+
+    Call this after :func:`build_pipeline` when an embedding provider
+    becomes available (e.g. from a ``VectorKnowledgeSource``).
+    """
+    for stage in pipeline.stages:
+        if isinstance(stage, StrategyChain):
+            for strategy in stage.strategies:
+                if hasattr(strategy, "embed_fn"):
+                    strategy.embed_fn = embed_fn  # type: ignore[union-attr]
+        elif hasattr(stage, "embed_fn"):
+            stage.embed_fn = embed_fn  # type: ignore[union-attr]
+
+
+def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
     """Build a :class:`ResultPipeline` from a config dict.
 
     Returns ``None`` if the config is empty or has no active stages.

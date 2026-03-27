@@ -247,6 +247,15 @@ class GroundedResultProcessingConfig:
     cluster_min_size: int = 2
     cluster_threshold: float = 0.7
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GroundedResultProcessingConfig:
+        """Build from a config dict, ignoring unknown keys."""
+        import dataclasses
+
+        known_names = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in known_names}
+        return cls(**filtered)
+
 
 @dataclass
 class GroundedSourceConfig:
@@ -366,7 +375,7 @@ class GroundedReasoningConfig:
         # Result processing config
         rp_data = data.get("result_processing")
         rp_config = (
-            GroundedResultProcessingConfig(**rp_data)
+            GroundedResultProcessingConfig.from_dict(rp_data)
             if rp_data
             else None
         )

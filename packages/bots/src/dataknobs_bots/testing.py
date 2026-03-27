@@ -428,6 +428,7 @@ class GroundedConfigBuilder:
         self._sources: list[dict[str, Any]] = []
         self._store_provenance: bool = True
         self._greeting_template: str | None = None
+        self._result_processing: dict[str, Any] = {}
         self._extra_reasoning: dict[str, Any] = {}
         self._llm: dict[str, Any] = {
             "provider": "echo",
@@ -493,8 +494,6 @@ class GroundedConfigBuilder:
         Returns:
             Self for method chaining.
         """
-        if not hasattr(self, "_result_processing"):
-            self._result_processing: dict[str, Any] = {}
         self._result_processing.update(kwargs)
         return self
 
@@ -542,7 +541,7 @@ class GroundedConfigBuilder:
             "synthesis": dict(self._synthesis),
             "store_provenance": self._store_provenance,
         }
-        if hasattr(self, "_result_processing") and self._result_processing:
+        if self._result_processing:
             reasoning["result_processing"] = dict(self._result_processing)
         if self._sources:
             reasoning["sources"] = list(self._sources)
