@@ -12,7 +12,10 @@ from dataknobs_data.sources.topic_index import DEFAULT_HEADING_STOPWORDS, Headin
 from dataknobs_bots.knowledge.sources.heading_tree import (
     HeadingTreeConfig,
     HeadingTreeIndex,
+    _index_to_letter,
+    _letter_to_index,
     _parse_bracket_indices,
+    _parse_letter_indices,
 )
 
 from dataknobs_llm import EchoProvider
@@ -502,17 +505,84 @@ class TestScopeProfiles:
 # ------------------------------------------------------------------
 
 
-class TestLLMHeadingSelection:
-    """Tests for optional LLM-based heading selection."""
+class TestScoreBasedSelection:
+    """Tests for default score-based heading region selection."""
 
     @pytest.mark.asyncio
-    async def test_llm_narrows_heading_candidates(self) -> None:
+    async def test_default_uses_score_selection(self) -> None:
+        """Default heading_selection='score' — no LLM called."""
         chunks = _rfc_chunks()
         config = HeadingTreeConfig(entry_strategy="heading_match")
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         llm = EchoProvider(_ECHO_CONFIG)
-        llm.set_responses([text_response("[0]")])
+        results = await index.resolve("CSRF security", llm=llm)
+        assert llm.call_count == 0  # Score-based, no LLM needed
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_top_regions_limits_selection(self) -> None:
+        """top_regions caps the number of selected heading regions."""
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            top_regions=1,
+        )
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        # "security" matches multiple headings; top_regions=1 keeps best
+        results = await index.resolve("security considerations")
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_higher_scoring_region_preferred(self) -> None:
+        """Regions with higher-scoring seed chunks are preferred."""
+        chunks = [
+            SourceResult(
+                content="High-relevance security",
+                source_id="sec_high",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.9,
+                metadata={"headings": ["Security"], "heading_levels": [1]},
+            ),
+            SourceResult(
+                content="Low-relevance intro",
+                source_id="intro_low",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.3,
+                metadata={"headings": ["Introduction"], "heading_levels": [1]},
+            ),
+        ]
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            top_regions=1,
+            min_heading_depth=0,
+        )
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        # Both "security" and "introduction" match, but top_regions=1
+        # should prefer "Security" (0.9) over "Introduction" (0.3)
+        results = await index.resolve("security introduction")
+        ids = {r.source_id for r in results}
+        assert "sec_high" in ids
+
+
+class TestLLMHeadingSelection:
+    """Tests for optional LLM-based heading selection (heading_selection='llm')."""
+
+    @pytest.mark.asyncio
+    async def test_llm_narrows_heading_candidates(self) -> None:
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        llm = EchoProvider(_ECHO_CONFIG)
+        llm.set_responses([text_response("(A)")])
 
         results = await index.resolve("CSRF security", llm=llm)
         ids = {r.source_id for r in results}
@@ -522,7 +592,10 @@ class TestLLMHeadingSelection:
     @pytest.mark.asyncio
     async def test_llm_failure_falls_back_to_all_candidates(self) -> None:
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         llm = EchoProvider(_ECHO_CONFIG)
@@ -535,7 +608,10 @@ class TestLLMHeadingSelection:
     async def test_single_candidate_skips_llm(self) -> None:
         """When only one heading matches, LLM selection is skipped."""
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         llm = EchoProvider(_ECHO_CONFIG)
@@ -549,11 +625,14 @@ class TestLLMHeadingSelection:
         from dataknobs_llm.llm.base import LLMMessage
 
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         llm = EchoProvider(_ECHO_CONFIG)
-        llm.set_responses([text_response("[0]")])
+        llm.set_responses([text_response("(A)")])
 
         await index.resolve("CSRF security", llm=llm)
         assert llm.call_count == 1
@@ -568,11 +647,14 @@ class TestLLMHeadingSelection:
     async def test_dedicated_heading_selection_llm(self) -> None:
         """Dedicated heading_selection_llm is used instead of the main LLM."""
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
 
         # Dedicated LLM for heading selection
         dedicated_llm = EchoProvider(_ECHO_CONFIG)
-        dedicated_llm.set_responses([text_response("[0]")])
+        dedicated_llm.set_responses([text_response("(A)")])
 
         index = HeadingTreeIndex.from_chunks(
             chunks, config=config,
@@ -591,26 +673,32 @@ class TestLLMHeadingSelection:
     async def test_dedicated_llm_fallback_to_main(self) -> None:
         """Without dedicated LLM, falls back to main LLM parameter."""
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
 
         # No dedicated LLM
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
         main_llm = EchoProvider(_ECHO_CONFIG)
-        main_llm.set_responses([text_response("[0]")])
+        main_llm.set_responses([text_response("(A)")])
 
         results = await index.resolve("CSRF security", llm=main_llm)
         assert main_llm.call_count == 1
         assert len(results) > 0
 
     @pytest.mark.asyncio
-    async def test_no_llm_at_all_returns_all_candidates(self) -> None:
-        """Without any LLM, all heading candidates are returned."""
+    async def test_llm_mode_no_llm_falls_back_to_score(self) -> None:
+        """heading_selection='llm' without any LLM falls back to score-based."""
         chunks = _rfc_chunks()
-        config = HeadingTreeConfig(entry_strategy="heading_match")
+        config = HeadingTreeConfig(
+            entry_strategy="heading_match",
+            heading_selection="llm",
+        )
         index = HeadingTreeIndex.from_chunks(chunks, config=config)
 
-        # No LLM at all
+        # No LLM provided at all — should fall back to score-based
         results = await index.resolve("CSRF security")
         assert len(results) > 0
 
@@ -740,3 +828,49 @@ class TestParseBracketIndices:
     def test_mixed_text(self) -> None:
         text = "I think sections [2] and [4] are most relevant."
         assert _parse_bracket_indices(text, 5) == [2, 4]
+
+
+class TestParseLetterIndices:
+    """Tests for letter-based LLM output parsing."""
+
+    def test_basic(self) -> None:
+        assert _parse_letter_indices("(A), (C), (F)", 10) == [0, 2, 5]
+
+    def test_multiline(self) -> None:
+        text = "(A)\n(D)\n(H)"
+        assert _parse_letter_indices(text, 10) == [0, 3, 7]
+
+    def test_out_of_range_filtered(self) -> None:
+        # Only 5 candidates (A-E), (Z) is out of range
+        assert _parse_letter_indices("(A), (Z)", 5) == [0]
+
+    def test_deduplicates(self) -> None:
+        assert _parse_letter_indices("(B), (B), (C)", 5) == [1, 2]
+
+    def test_no_letters(self) -> None:
+        assert _parse_letter_indices("no IDs here", 5) == []
+
+    def test_mixed_text(self) -> None:
+        text = "I think sections (B) and (D) are most relevant."
+        assert _parse_letter_indices(text, 5) == [1, 3]
+
+    def test_does_not_confuse_section_numbers(self) -> None:
+        """Letter IDs avoid collision with section numbers like '10.'."""
+        text = "Section 10 is relevant, selecting (A)"
+        assert _parse_letter_indices(text, 5) == [0]
+
+
+class TestIndexToLetter:
+    """Tests for letter ID conversion."""
+
+    def test_basic(self) -> None:
+        assert _index_to_letter(0) == "A"
+        assert _index_to_letter(25) == "Z"
+
+    def test_double_letter(self) -> None:
+        assert _index_to_letter(26) == "AA"
+        assert _index_to_letter(27) == "AB"
+
+    def test_roundtrip(self) -> None:
+        for i in range(52):
+            assert _letter_to_index(_index_to_letter(i)) == i

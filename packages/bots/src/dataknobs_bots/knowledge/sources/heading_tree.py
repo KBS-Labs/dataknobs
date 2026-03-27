@@ -71,6 +71,13 @@ class HeadingTreeConfig:
         max_expansion_depth: Levels below matched heading to traverse.
             ``None`` means unlimited.
         max_expanded_results: Final cap after all expansions.
+        heading_selection: How to select among candidate headings —
+            ``"score"`` (default, deterministic score-based ranking) or
+            ``"llm"`` (LLM classification).  Score-based selection groups
+            candidates by their ancestor at ``min_heading_depth``, ranks
+            regions by max seed chunk relevance, and takes ``top_regions``.
+        top_regions: Max heading regions to select (score-based mode).
+            Analogous to ClusterTopicIndex's ``top_clusters``.
         resolution_prompt: Custom LLM prompt for heading selection.
             When ``None``, a built-in default is used if LLM is provided.
         max_headings_for_llm: Truncate heading list for LLM selection.
@@ -91,6 +98,8 @@ class HeadingTreeConfig:
     expansion_mode: str = "subtree"
     max_expansion_depth: int | None = None
     max_expanded_results: int = 50
+    heading_selection: str = "score"
+    top_regions: int = 3
     resolution_prompt: str | None = None
     max_headings_for_llm: int = 100
     heading_match: HeadingMatchConfig = field(default_factory=HeadingMatchConfig)
@@ -138,6 +147,8 @@ class _EffectiveParams:
     expansion_mode: str
     max_expansion_depth: int | None
     max_expanded_results: int
+    heading_selection: str
+    top_regions: int
 
 
 def _resolve_params(
@@ -159,6 +170,8 @@ def _resolve_params(
         "expansion_mode": config.expansion_mode,
         "max_expansion_depth": config.max_expansion_depth,
         "max_expanded_results": config.max_expanded_results,
+        "heading_selection": config.heading_selection,
+        "top_regions": config.top_regions,
     }
 
     if intent is not None:
@@ -351,13 +364,25 @@ class HeadingTreeIndex:
             len(seed_nodes), self._source_name, matched_labels,
         )
 
-        # Step 6: Optional LLM heading selection
-        # Prefer dedicated heading_selection_llm over the main provider
-        selection_llm = self._heading_selection_llm or llm
-        if selection_llm is not None and len(seed_nodes) > 1:
-            seed_nodes = await self._llm_select_headings(
-                query, seed_nodes, selection_llm,
-            )
+        # Step 6: Region selection — narrow candidates to top regions
+        if len(seed_nodes) > 1:
+            if params.heading_selection == "llm":
+                # LLM-based selection (optional, explicit opt-in)
+                selection_llm = self._heading_selection_llm or llm
+                if selection_llm is not None:
+                    seed_nodes = await self._llm_select_headings(
+                        query, seed_nodes, selection_llm,
+                    )
+                else:
+                    # No LLM available — fall through to score-based
+                    seed_nodes = self._score_based_region_selection(
+                        seed_nodes, chunks_by_id, params,
+                    )
+            else:
+                # Score-based selection (default, deterministic)
+                seed_nodes = self._score_based_region_selection(
+                    seed_nodes, chunks_by_id, params,
+                )
 
         # Step 7: Expand matched regions and collect chunks
         all_results: list[SourceResult] = []
@@ -545,6 +570,54 @@ class HeadingTreeIndex:
         return nodes
 
     # ------------------------------------------------------------------
+    # Private: score-based region selection
+    # ------------------------------------------------------------------
+
+    def _score_based_region_selection(
+        self,
+        candidates: list[TopicNode],
+        chunks_by_id: dict[str, SourceResult],
+        params: _EffectiveParams,
+    ) -> list[TopicNode]:
+        """Select top heading regions by seed chunk relevance score.
+
+        Scores each candidate node by the max relevance of seed chunks
+        it owns (directly or via descendants), ranks by score, and
+        returns the top ``top_regions`` nodes.
+
+        For nodes at ``min_heading_depth`` this naturally groups by
+        top-level section.  For deeper nodes, each is scored
+        independently — the expansion step handles subtree traversal.
+
+        This is the default selection strategy — deterministic,
+        zero-LLM-cost, and consistent with the principle of using
+        deterministic algorithms for search ranking.
+        """
+        # Score each candidate by max relevance of chunks it contains
+        scored: list[tuple[TopicNode, float]] = []
+        for node in candidates:
+            max_score = 0.0
+            for chunk_id in node.descendant_chunk_ids():
+                chunk = chunks_by_id.get(chunk_id)
+                if chunk is not None:
+                    max_score = max(max_score, chunk.relevance)
+            # Also check direct chunk_ids (descendant_chunk_ids includes them)
+            scored.append((node, max_score))
+
+        # Rank by score descending, take top N
+        scored.sort(key=lambda x: x[1], reverse=True)
+        selected = scored[:params.top_regions]
+
+        logger.info(
+            "HeadingTreeIndex: score-based selection for source '%s': "
+            "%d candidates -> top %d: %s",
+            self._source_name, len(scored), len(selected),
+            [(n.label, f"{s:.3f}") for n, s in selected],
+        )
+
+        return [node for node, _ in selected]
+
+    # ------------------------------------------------------------------
     # Private: LLM heading selection
     # ------------------------------------------------------------------
 
@@ -562,14 +635,17 @@ class HeadingTreeIndex:
         max_headings = self._config.max_headings_for_llm
         truncated = candidates[:max_headings]
 
+        # Use letter-based IDs to avoid collision with section numbers
+        # in heading labels (e.g. "10. Security Considerations").
         heading_list = "\n".join(
-            f"  [{i}] {n.label}" for i, n in enumerate(truncated)
+            f"  ({_index_to_letter(i)}) {n.label}"
+            for i, n in enumerate(truncated)
         )
 
         prompt = self._config.resolution_prompt or (
             "Given these document sections, select the ones most relevant "
-            "to the user's question. Return ONLY the bracket numbers of "
-            "selected sections, one per line (e.g. [0], [2], [5])."
+            "to the user's question. Return ONLY the letter IDs of "
+            "selected sections, one per line (e.g. (A), (C), (F))."
         )
 
         system_msg = f"{prompt}\n\nSections:\n{heading_list}"
@@ -583,7 +659,7 @@ class HeadingTreeIndex:
                 ],
             )
             content = response.content if hasattr(response, "content") else str(response)
-            selected_indices = _parse_bracket_indices(content, len(truncated))
+            selected_indices = _parse_letter_indices(content, len(truncated))
             if selected_indices:
                 return [truncated[i] for i in selected_indices]
         except Exception:
@@ -601,13 +677,64 @@ class HeadingTreeIndex:
 # ------------------------------------------------------------------
 
 
-def _parse_bracket_indices(text: str, max_index: int) -> list[int]:
-    """Parse ``[0], [2], [5]`` style indices from LLM output."""
+def _index_to_letter(i: int) -> str:
+    """Convert 0-based index to letter ID: 0→A, 1→B, …, 25→Z, 26→AA."""
+    if i < 26:
+        return chr(ord("A") + i)
+    return chr(ord("A") + i // 26 - 1) + chr(ord("A") + i % 26)
+
+
+def _parse_letter_indices(text: str, max_index: int) -> list[int]:
+    """Parse ``(A), (C), (F)`` style letter IDs from LLM output."""
     import re
 
     indices: list[int] = []
+    dropped: list[str] = []
+    for match in re.finditer(r"\(([A-Z]{1,2})\)", text):
+        letter = match.group(1)
+        idx = _letter_to_index(letter)
+        if 0 <= idx < max_index:
+            if idx not in indices:
+                indices.append(idx)
+        else:
+            dropped.append(letter)
+    if dropped:
+        logger.warning(
+            "LLM heading selection: dropped out-of-range IDs %s "
+            "(max valid: %s)",
+            dropped, _index_to_letter(max_index - 1),
+        )
+    return indices
+
+
+def _letter_to_index(letter: str) -> int:
+    """Convert letter ID back to 0-based index: A→0, B→1, AA→26."""
+    if len(letter) == 1:
+        return ord(letter) - ord("A")
+    return (ord(letter[0]) - ord("A") + 1) * 26 + ord(letter[1]) - ord("A")
+
+
+def _parse_bracket_indices(text: str, max_index: int) -> list[int]:
+    """Parse ``[0], [2], [5]`` style indices from LLM output.
+
+    Kept for backward compatibility with custom resolution prompts
+    that use bracket-number format.
+    """
+    import re
+
+    indices: list[int] = []
+    dropped: list[int] = []
     for match in re.finditer(r"\[(\d+)\]", text):
         idx = int(match.group(1))
-        if 0 <= idx < max_index and idx not in indices:
-            indices.append(idx)
+        if 0 <= idx < max_index:
+            if idx not in indices:
+                indices.append(idx)
+        else:
+            dropped.append(idx)
+    if dropped:
+        logger.warning(
+            "LLM heading selection: dropped out-of-range indices %s "
+            "(max valid: %d)",
+            dropped, max_index - 1,
+        )
     return indices
