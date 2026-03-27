@@ -2723,3 +2723,166 @@ class TestClusteredFormatting:
         formatted = strategy._format_source_results(results)
         assert '<cluster id="0"' in formatted
         assert "Unclustered item" in formatted
+
+
+# ------------------------------------------------------------------
+# Topic-index integration tests
+# ------------------------------------------------------------------
+
+
+class TestTopicIndexIntegration:
+    """Tests for topic-index retrieval through the grounded strategy."""
+
+    @pytest.mark.asyncio
+    async def test_source_config_with_topic_index(self) -> None:
+        """GroundedSourceConfig.from_dict() preserves topic_index config."""
+        sc = GroundedSourceConfig.from_dict({
+            "type": "vector_kb",
+            "name": "docs",
+            "topic_index": {
+                "type": "heading_tree",
+                "entry_strategy": "both",
+                "expansion_mode": "subtree",
+            },
+        })
+        assert sc.topic_index is not None
+        assert sc.topic_index["type"] == "heading_tree"
+        assert sc.topic_index["entry_strategy"] == "both"
+        assert "topic_index" not in sc.options
+
+    @pytest.mark.asyncio
+    async def test_source_config_without_topic_index(self) -> None:
+        """GroundedSourceConfig.from_dict() without topic_index keeps None."""
+        sc = GroundedSourceConfig.from_dict({
+            "type": "vector_kb",
+            "name": "docs",
+        })
+        assert sc.topic_index is None
+
+    @pytest.mark.asyncio
+    async def test_retrieve_uses_topic_index_when_present(self) -> None:
+        """_retrieve_from_sources uses topic_index.resolve when source has one."""
+        from dataknobs_bots.knowledge.sources.heading_tree import (
+            HeadingTreeConfig,
+            HeadingTreeIndex,
+        )
+        from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
+
+        # Build chunks with heading metadata
+        chunks = [
+            SourceResult(
+                content="Security overview",
+                source_id="sec",
+                source_name="kb",
+                source_type="vector_kb",
+                metadata={"headings": ["Security"], "heading_levels": [1]},
+            ),
+            SourceResult(
+                content="CSRF details",
+                source_id="csrf",
+                source_name="kb",
+                source_type="vector_kb",
+                metadata={"headings": ["Security", "CSRF"], "heading_levels": [1, 2]},
+            ),
+            SourceResult(
+                content="Introduction content",
+                source_id="intro",
+                source_name="kb",
+                source_type="vector_kb",
+                metadata={"headings": ["Introduction"], "heading_levels": [1]},
+            ),
+        ]
+
+        # Create a topic index from the chunks
+        config = HeadingTreeConfig(entry_strategy="heading_match")
+        topic_index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        # Create a KB source with the topic index attached
+        kb = InMemoryKnowledgeBase()
+        source = VectorKnowledgeSource(kb, name="docs", topic_index=topic_index)
+
+        # Wire into a grounded strategy
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        strategy.add_source(source)
+
+        intent = RetrievalIntent(text_queries=["security"])
+        results_by_source = await strategy._retrieve_from_sources(
+            intent, user_message="security considerations",
+        )
+
+        assert "docs" in results_by_source
+        result_ids = {r.source_id for r in results_by_source["docs"]}
+        # Topic index should expand "Security" heading to include CSRF
+        assert "sec" in result_ids
+        assert "csrf" in result_ids
+        # Introduction should NOT be returned
+        assert "intro" not in result_ids
+        # KB.query() should NOT have been called (topic index used instead)
+        assert len(kb.queries) == 0
+
+    @pytest.mark.asyncio
+    async def test_retrieve_falls_back_to_standard_when_no_topic_index(self) -> None:
+        """Sources without topic_index use standard text_queries retrieval."""
+        from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        source = VectorKnowledgeSource(kb, name="docs")  # No topic_index
+        assert source.topic_index is None
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        strategy.add_source(source)
+
+        intent = RetrievalIntent(text_queries=["authorization"])
+        results_by_source = await strategy._retrieve_from_sources(
+            intent, user_message="authorization grants",
+        )
+
+        assert "docs" in results_by_source
+        assert len(results_by_source["docs"]) > 0
+        # KB.query() should have been called (standard path)
+        assert len(kb.queries) > 0
+
+    @pytest.mark.asyncio
+    async def test_mixed_sources_topic_index_and_standard(self) -> None:
+        """Topic-index source alongside standard source — both produce results."""
+        from dataknobs_bots.knowledge.sources.heading_tree import (
+            HeadingTreeConfig,
+            HeadingTreeIndex,
+        )
+        from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
+
+        # Source 1: with topic index
+        chunks = [
+            SourceResult(
+                content="Security details",
+                source_id="sec",
+                source_name="indexed",
+                source_type="vector_kb",
+                metadata={"headings": ["Security"], "heading_levels": [1]},
+            ),
+        ]
+        topic_index = HeadingTreeIndex.from_chunks(
+            chunks,
+            config=HeadingTreeConfig(entry_strategy="heading_match"),
+        )
+        kb1 = InMemoryKnowledgeBase()
+        source1 = VectorKnowledgeSource(kb1, name="indexed", topic_index=topic_index)
+
+        # Source 2: standard (no topic index)
+        kb2 = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        source2 = VectorKnowledgeSource(kb2, name="standard")
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        strategy.add_source(source1)
+        strategy.add_source(source2)
+
+        intent = RetrievalIntent(text_queries=["security"])
+        results = await strategy._retrieve_from_sources(
+            intent, user_message="security",
+        )
+
+        # Both sources produced results
+        assert "indexed" in results
+        assert "standard" in results
+        assert len(results["indexed"]) > 0
+        assert len(results["standard"]) > 0

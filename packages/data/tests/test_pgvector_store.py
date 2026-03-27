@@ -993,3 +993,46 @@ class TestPgVectorStoreIndexOperations:
                 async with store._pool.acquire() as conn:
                     await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
                 await store.close()
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+@pytest.mark.asyncio
+class TestPgVectorStoreMetadataFields:
+    """Test metadata field introspection."""
+
+    async def test_metadata_fields_empty(self, pgvector_store):
+        """Test metadata_fields returns empty set for empty store."""
+        fields = await pgvector_store.metadata_fields()
+        assert fields == set()
+
+    async def test_metadata_fields_with_data(self, pgvector_store):
+        """Test metadata_fields returns union of all JSONB keys."""
+        vectors = np.random.rand(3, 128).astype(np.float32)
+        ids = [str(uuid.uuid4()) for _ in range(3)]
+        metadata = [
+            {"headings": ["A"], "heading_levels": [1], "source": "doc.md"},
+            {"headings": ["B"], "category": "test"},
+            {"heading_levels": [2], "author": "alice"},
+        ]
+        await pgvector_store.add_vectors(vectors, ids=ids, metadata=metadata)
+
+        fields = await pgvector_store.metadata_fields()
+        # JSONB stores the caller's original metadata dict as-is.
+        # Keys extracted into dedicated columns (document_id, etc.)
+        # are read FROM the dict but not added to it.
+        assert fields == {"headings", "heading_levels", "source", "category", "author"}
+
+    async def test_metadata_fields_after_delete(self, pgvector_store):
+        """Test metadata_fields reflects current state after deletion."""
+        vectors = np.random.rand(2, 128).astype(np.float32)
+        ids = [str(uuid.uuid4()) for _ in range(2)]
+        metadata = [
+            {"field_a": 1},
+            {"field_b": 2},
+        ]
+        await pgvector_store.add_vectors(vectors, ids=ids, metadata=metadata)
+        await pgvector_store.delete_vectors([ids[0]])
+
+        fields = await pgvector_store.metadata_fields()
+        assert "field_b" in fields
+        assert "field_a" not in fields

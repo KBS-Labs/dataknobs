@@ -744,6 +744,28 @@ class PgVectorStore(VectorStore):
 
         return int(count or 0)
 
+    async def metadata_fields(self) -> set[str]:
+        """Discover metadata field names across all stored vectors.
+
+        Uses PostgreSQL's ``jsonb_object_keys`` to extract the union of
+        all top-level keys from the JSONB metadata column.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        col_metadata = self._col("metadata")
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT DISTINCT key
+                FROM {self.schema}.{self.table_name},
+                     jsonb_object_keys({col_metadata}) AS key
+                """,
+            )
+
+        return {row["key"] for row in rows}
+
     async def clear(self) -> None:
         """Clear all vectors from the store."""
         if not self._initialized:

@@ -275,24 +275,32 @@ class GroundedSourceConfig:
         options: Source-specific options passed to the constructor.
             For ``"database"``: ``backend``, ``connection``,
             ``content_field``, ``text_search_fields``, ``schema``.
+        topic_index: Optional topic index configuration for this source.
+            When present, the source uses heading-tree or cluster-based
+            retrieval instead of (or in addition to) text_queries.
+            Keys: ``type`` (``"heading_tree"``, ``"cluster"``), plus
+            type-specific parameters.
     """
 
     source_type: str = "vector_kb"
     name: str = "knowledge_base"
     weight: int = 1
     options: dict[str, Any] = field(default_factory=dict)
+    topic_index: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GroundedSourceConfig:
         """Build from a config dict."""
+        topic_index = data.get("topic_index")
         return cls(
             source_type=data.get("type", "vector_kb"),
             name=data.get("name", "knowledge_base"),
             weight=int(data.get("weight", 1)),
             options={
                 k: v for k, v in data.items()
-                if k not in ("type", "name", "weight")
+                if k not in ("type", "name", "weight", "topic_index")
             },
+            topic_index=topic_index,
         )
 
 

@@ -137,6 +137,32 @@ class VectorStore(ABC, VectorStoreBase):
         """Clear all vectors from the store."""
         pass
 
+    async def metadata_fields(self) -> set[str]:
+        """Discover metadata field names present across stored vectors.
+
+        Scans metadata for all stored vectors and returns the union of
+        all field names.  Useful for introspection — e.g. detecting
+        whether heading metadata (``headings``, ``heading_levels``) is
+        available for topic-index construction.
+
+        Returns:
+            Set of metadata field names found across all vectors.
+
+        Note:
+            The default raises ``NotImplementedError`` rather than
+            returning an empty set.  This is intentional: an empty set
+            means "no metadata exists," while ``NotImplementedError``
+            means "this backend cannot answer the question."  Returning
+            ``set()`` would silently mislead consumers into concluding
+            that heading metadata is absent when the backend simply
+            doesn't support introspection.  Callers should catch
+            ``NotImplementedError`` and decide what "unknown" means
+            for their use case.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support metadata_fields()"
+        )
+
     async def update_vectors(
         self,
         vectors: np.ndarray | list[np.ndarray],

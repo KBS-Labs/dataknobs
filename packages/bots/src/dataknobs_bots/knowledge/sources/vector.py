@@ -29,9 +29,14 @@ class VectorKnowledgeSource(GroundedSource):
     adapter that makes existing ``RAGKnowledgeBase`` instances usable
     in the grounded source pipeline.
 
+    Optionally carries a :attr:`topic_index` for heading-tree or
+    cluster-based retrieval.  When present, the grounded strategy
+    uses the topic index instead of standard text_queries.
+
     Args:
         kb: The knowledge base to query.
         name: Unique source name for provenance tracking.
+        topic_index: Optional topic index for structured retrieval.
     """
 
     def __init__(
@@ -39,9 +44,11 @@ class VectorKnowledgeSource(GroundedSource):
         kb: KnowledgeBase,
         *,
         name: str = "knowledge_base",
+        topic_index: Any | None = None,
     ) -> None:
         self._kb = kb
         self._name = name
+        self.topic_index = topic_index
 
     @property
     def name(self) -> str:

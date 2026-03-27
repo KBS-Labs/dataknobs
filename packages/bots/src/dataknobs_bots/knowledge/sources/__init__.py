@@ -17,6 +17,7 @@ from dataknobs_llm.sources import compose_intent_schema, parse_intent
 
 # Bot-specific sources
 from .factory import create_source_from_config
+from .heading_tree import HeadingTreeConfig, HeadingTreeIndex
 from .vector import VectorKnowledgeSource
 
 __all__ = [
@@ -29,6 +30,8 @@ __all__ = [
     "compose_intent_schema",
     "parse_intent",
     # Bot-specific
+    "HeadingTreeConfig",
+    "HeadingTreeIndex",
     "VectorKnowledgeSource",
     "create_source_from_config",
 ]

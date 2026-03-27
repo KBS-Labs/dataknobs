@@ -102,6 +102,8 @@ def _create_vector_kb_source(
             f"source type."
         )
 
+    # Topic index is constructed lazily by the source or externally
+    # after all chunks are available — the factory stores the config.
     return VectorKnowledgeSource(knowledge_base, name=config.name)
 
 

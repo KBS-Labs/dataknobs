@@ -452,7 +452,7 @@ def _auto_label(tokens_per_result: list[set[str]], member_indices: list[int]) ->
     return " ".join(top) if top else "misc"
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
+def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -462,7 +462,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _agglomerative_cluster(
+def agglomerative_cluster(
     similarity_matrix: list[list[float]],
     threshold: float,
     min_cluster_size: int,
@@ -599,7 +599,7 @@ class TermOverlapClusterer:
                 sim[i][j] = jaccard
                 sim[j][i] = jaccard
 
-        assignments = _agglomerative_cluster(
+        assignments = agglomerative_cluster(
             sim, self.similarity_threshold, self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, tokens)
@@ -673,11 +673,11 @@ class TfidfClusterer:
         for i in range(n_docs):
             sim[i][i] = 1.0
             for j in range(i + 1, n_docs):
-                cs = _cosine_similarity(vectors[i], vectors[j])
+                cs = cosine_similarity(vectors[i], vectors[j])
                 sim[i][j] = cs
                 sim[j][i] = cs
 
-        assignments = _agglomerative_cluster(
+        assignments = agglomerative_cluster(
             sim, self.similarity_threshold, self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, sig_tokens)
@@ -729,11 +729,11 @@ class EmbeddingClusterer:
         for i in range(n):
             sim[i][i] = 1.0
             for j in range(i + 1, n):
-                cs = _cosine_similarity(embeddings[i], embeddings[j])
+                cs = cosine_similarity(embeddings[i], embeddings[j])
                 sim[i][j] = cs
                 sim[j][i] = cs
 
-        assignments = _agglomerative_cluster(
+        assignments = agglomerative_cluster(
             sim, self.similarity_threshold, self.min_cluster_size,
         )
         return _annotate_clusters(results, assignments, sig_tokens)
@@ -829,7 +829,7 @@ class QueryClusterScorer:
         query_emb = embeddings[0]
         scores: dict[int, float] = {}
         for i, cid in enumerate(cluster_texts.keys()):
-            scores[cid] = _cosine_similarity(query_emb, embeddings[i + 1])
+            scores[cid] = cosine_similarity(query_emb, embeddings[i + 1])
 
         return scores
 

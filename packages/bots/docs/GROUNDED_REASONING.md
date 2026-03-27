@@ -296,6 +296,137 @@ class ElasticsearchSource(GroundedSource):
         return sorted(results, key=lambda r: r.relevance, reverse=True)[:top_k]
 ```
 
+## Topic Index Retrieval
+
+For structured documents, navigating the heading hierarchy or embedding clusters is more reliable than generating search queries via LLM. Topic indices attach to individual sources and provide structure-aware retrieval that replaces or supplements standard vector search.
+
+When a source has a topic index, the grounded strategy uses it instead of standard `text_queries`:
+
+```
+for each source:
+    if source.topic_index exists:
+        results = topic_index.resolve(user_message, llm=..., intent=...)
+    else:
+        results = source.query(intent, top_k=...)
+```
+
+Sources without topic indices continue using standard retrieval. Both approaches coexist in the same pipeline.
+
+### Topic Index Types
+
+| Type | Package | LLM Required | Best For |
+|------|---------|-------------|----------|
+| `heading_tree` | `dataknobs-bots` | Optional (disambiguation) | Structured documents with heading hierarchy (markdown, RFCs, specs) |
+| `cluster` | `dataknobs-data` | No (deterministic) | Any vectorized content — groups by embedding similarity |
+
+### HeadingTreeIndex
+
+Uses heading metadata on chunks (`headings`, `heading_levels`) to identify and expand topic regions. Three entry strategies seed the heading identification:
+
+- **`both`** (default): Merge seeds from heading-text matching AND vector search. Covers both vocabulary-aligned and semantic-gap queries.
+- **`heading_match`**: Text-match query terms against heading labels. Avoids the "vector search prefers generic content" problem.
+- **`vector`**: Vector search as seed, expand from hit metadata. Bridges vocabulary gaps (e.g. "safety" -> security sections).
+
+All strategies expand matched headings to include descendant chunks — "10. Security Considerations" expands to 10.1 through 10.16.
+
+```yaml
+reasoning:
+  strategy: grounded
+  sources:
+    - type: vector_kb
+      name: rfc_docs
+      topic_index:
+        type: heading_tree
+        entry_strategy: both          # both, heading_match, vector
+        seed_score_threshold: 0.3     # Drop weak vector seeds
+        seed_max_results: 10          # Cap seeds before expansion
+        min_heading_depth: 1          # Skip title heading (depth 0)
+        expansion_mode: subtree       # subtree, children, leaves
+        max_expansion_depth: ~        # null = unlimited
+        max_expanded_results: 50      # Final cap after expansion
+        # Optional LLM heading selection
+        resolution_prompt: >
+          Given these document sections, select the ones most relevant
+          to the user's question. Return only section numbers.
+        max_headings_for_llm: 100
+        # Heading-text matching configuration
+        heading_match:
+          min_word_length: 2          # Minimum word length for matching
+          min_heading_depth: 1        # Exclude shallow headings
+          # stopwords: [custom, list]  # Override default stopwords
+        # Per-scope parameter overrides
+        scope_profiles:
+          focused:
+            expansion_mode: children
+            max_expansion_depth: 1
+          broad:
+            expansion_mode: subtree
+```
+
+**Expansion modes** control which descendants to include when a heading is matched:
+
+| Mode | Includes | Best For |
+|------|----------|----------|
+| `subtree` (default) | All descendants at every level | Comprehensive — nothing missed |
+| `children` | Immediate children only | Survey — one chunk per subtopic |
+| `leaves` | Deepest nodes only | Maximum detail, no structural overhead |
+
+`max_expansion_depth` limits how many levels below the matched heading to traverse. Interacts with `expansion_mode`: `subtree` + `max_expansion_depth: 2` means "all descendants, but only 2 levels deep."
+
+### ClusterTopicIndex
+
+Clusters chunks by embedding similarity at construction time. At query time, embeds the user query and matches to cluster centroids — purely deterministic, no LLM needed.
+
+```yaml
+reasoning:
+  strategy: grounded
+  sources:
+    - type: vector_kb
+      name: faq_docs
+      topic_index:
+        type: cluster
+        cluster_threshold: 0.7       # Similarity threshold for merging
+        min_cluster_size: 2           # Minimum chunks per cluster
+        top_clusters: 3               # Max clusters to expand per query
+        max_results_per_cluster: 20   # Max chunks per matched cluster
+        max_total_results: 50         # Final cap
+        centroid_score_threshold: 0.2 # Min centroid similarity
+        # Auto-label configuration
+        label_min_word_length: 3      # Min word length for labels
+        label_top_terms: 3            # Terms per auto-label
+        # label_stopwords: [custom]   # Override default stopwords
+        scope_profiles:
+          focused:
+            top_clusters: 1
+          broad:
+            top_clusters: 5
+```
+
+`ClusterTopicIndex` requires an embedding function at query time to embed the user's query for centroid matching. When used via the grounded strategy, the source's existing embedding pipeline provides this automatically.
+
+### Scope Profiles
+
+Both topic index types support **scope profiles** — config-defined parameter sets keyed by the resolved `scope` value from intent extraction. The `scope` field on `RetrievalIntent` captures query intent (`focused`, `broad`, `exact`) via LLM extraction.
+
+Resolution cascade (highest to lowest priority):
+
+1. **Explicit overrides** in `intent.raw_data["topic_index"]` — for template intent mode or custom code paths.
+2. **Scope profile** matching `intent.scope` — profile values override config defaults.
+3. **Config defaults** — static per-source values.
+
+### Metadata Introspection
+
+`VectorStore.metadata_fields()` returns the set of metadata field names present across stored vectors. This enables auto-detection of whether heading metadata is available for topic-index construction:
+
+```python
+fields = await vector_store.metadata_fields()
+if {"headings", "heading_levels"} <= fields:
+    # Heading metadata available — HeadingTreeIndex viable
+    ...
+```
+
+Currently implemented by `MemoryVectorStore`. Other backends raise `NotImplementedError` by default.
+
 ## Synthesis
 
 Synthesis generates the response from retrieved context.
@@ -617,6 +748,27 @@ reasoning:
     - type: vector_kb          # "vector_kb" or "database"
       name: knowledge_base
       weight: 1                # Round-robin weight (default: 1)
+      topic_index:             # Optional — per-source topic index
+        type: heading_tree     # "heading_tree" or "cluster"
+        # HeadingTreeIndex options:
+        entry_strategy: both   # "both", "heading_match", "vector"
+        seed_score_threshold: 0.3
+        seed_max_results: 10
+        min_heading_depth: 1
+        expansion_mode: subtree  # "subtree", "children", "leaves"
+        max_expansion_depth: ~   # null = unlimited
+        max_expanded_results: 50
+        heading_match:           # Heading-text matching config
+          min_word_length: 2
+          min_heading_depth: 1
+        scope_profiles: {}
+        # ClusterTopicIndex options (when type: cluster):
+        # cluster_threshold: 0.7
+        # min_cluster_size: 2
+        # top_clusters: 3
+        # max_results_per_cluster: 20
+        # max_total_results: 50
+        # centroid_score_threshold: 0.2
     - type: database
       name: case_db
       weight: 1                # Higher = more results per cycle
