@@ -543,6 +543,27 @@ class TestLLMHeadingSelection:
         assert llm.call_count == 0
         assert len(results) > 0
 
+    @pytest.mark.asyncio
+    async def test_llm_receives_llm_message_objects(self) -> None:
+        """LLM heading selection sends LLMMessage objects, not dicts."""
+        from dataknobs_llm.llm.base import LLMMessage
+
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(entry_strategy="heading_match")
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        llm = EchoProvider(_ECHO_CONFIG)
+        llm.set_responses([text_response("[0]")])
+
+        await index.resolve("CSRF security", llm=llm)
+        assert llm.call_count == 1
+        last_call = llm.get_last_call()
+        assert last_call is not None
+        messages = last_call["messages"]
+        assert all(isinstance(m, LLMMessage) for m in messages)
+        assert messages[0].role == "system"
+        assert messages[1].role == "user"
+
 
 # ------------------------------------------------------------------
 # Result limits

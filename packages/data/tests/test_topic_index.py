@@ -313,6 +313,77 @@ class TestFindHeadingRegions:
         matches = find_heading_regions("the is a", tree)
         assert matches == []
 
+    def test_default_exclude_patterns_filter_references(self) -> None:
+        """Default exclude_patterns filter out References, Appendix, etc."""
+        chunks = [
+            _chunk("c1", ["10. Security Considerations"], [1]),
+            _chunk("c2", ["12. References"], [1]),
+            _chunk("c3", ["12. References", "12.2. Informative References"], [1, 2]),
+            _chunk("c4", ["Appendix C. Acknowledgements"], [1]),
+        ]
+        tree = build_heading_tree(chunks)
+
+        # "references" would normally match "12. References" and
+        # "12.2. Informative References", but they're excluded
+        matches = find_heading_regions("security references", tree)
+        labels = [n.label for n in matches]
+        assert "10. Security Considerations" in labels
+        assert "12. References" not in labels
+        assert "12.2. Informative References" not in labels
+
+    def test_default_exclude_patterns_filter_appendix(self) -> None:
+        chunks = [
+            _chunk("c1", ["10. Security Considerations"], [1]),
+            _chunk("c2", ["Appendix C. Acknowledgements"], [1]),
+            _chunk("c3", ["Appendix A. Examples"], [1]),
+        ]
+        tree = build_heading_tree(chunks)
+        # "appendix" as a query word would match, but the headings are excluded
+        matches = find_heading_regions("appendix security", tree)
+        labels = [n.label for n in matches]
+        assert "10. Security Considerations" in labels
+        assert "Appendix C. Acknowledgements" not in labels
+        assert "Appendix A. Examples" not in labels
+
+    def test_exclude_patterns_disabled(self) -> None:
+        """Setting exclude_patterns=() disables exclusion."""
+        chunks = [
+            _chunk("c1", ["12. References"], [1]),
+        ]
+        tree = build_heading_tree(chunks)
+        config = HeadingMatchConfig(exclude_patterns=())
+        matches = find_heading_regions("references", tree, config=config)
+        assert len(matches) == 1
+        assert matches[0].label == "12. References"
+
+    def test_custom_exclude_patterns(self) -> None:
+        """Custom patterns replace the defaults."""
+        chunks = [
+            _chunk("c1", ["10. Security Considerations"], [1]),
+            _chunk("c2", ["1. Introduction"], [1]),
+        ]
+        tree = build_heading_tree(chunks)
+        # Exclude "Introduction" but not "References" (overriding defaults)
+        config = HeadingMatchConfig(exclude_patterns=(r"(?i)^introduction$",))
+        matches = find_heading_regions("introduction security", tree, config=config)
+        labels = [n.label for n in matches]
+        assert "10. Security Considerations" in labels
+        assert "1. Introduction" not in labels
+
+    def test_section_number_stripping_for_exclusion(self) -> None:
+        """Section numbers are stripped before matching exclude patterns."""
+        chunks = [
+            _chunk("c1", ["12.2. Informative References"], [2]),
+        ]
+        tree = build_heading_tree(chunks)
+        # "12.2." is stripped, "Informative References" matches the pattern
+        matches = find_heading_regions(
+            "informative references",
+            tree,
+            config=HeadingMatchConfig(min_heading_depth=0),
+        )
+        assert matches == []
+
 
 # ------------------------------------------------------------------
 # expand_region
@@ -472,6 +543,7 @@ class TestHeadingMatchConfig:
         assert cfg.stopwords is DEFAULT_HEADING_STOPWORDS
         assert cfg.min_word_length == 2
         assert cfg.min_heading_depth == 1
+        assert len(cfg.exclude_patterns) > 0
 
     def test_custom_config(self) -> None:
         custom_sw = frozenset({"security", "the"})
@@ -479,10 +551,12 @@ class TestHeadingMatchConfig:
             stopwords=custom_sw,
             min_word_length=4,
             min_heading_depth=2,
+            exclude_patterns=(r"^test$",),
         )
         assert cfg.stopwords == custom_sw
         assert cfg.min_word_length == 4
         assert cfg.min_heading_depth == 2
+        assert cfg.exclude_patterns == (r"^test$",)
 
     def test_frozen(self) -> None:
         cfg = HeadingMatchConfig()

@@ -17,6 +17,7 @@ from .cluster_index import EmbedFn as ClusterEmbedFn
 from .cluster_index import VectorQueryFn as ClusterVectorQueryFn
 from .database import DatabaseSource
 from .topic_index import (
+    DEFAULT_HEADING_EXCLUDE_PATTERNS,
     DEFAULT_HEADING_STOPWORDS,
     DEFAULT_MIN_WORD_LENGTH,
     HeadingMatchConfig,
@@ -53,6 +54,7 @@ __all__ = [
     "ClusterTopicIndex",
     "ClusterVectorQueryFn",
     "CrossSourceNormalizer",
+    "DEFAULT_HEADING_EXCLUDE_PATTERNS",
     "DEFAULT_HEADING_STOPWORDS",
     "DEFAULT_LABEL_MIN_WORD_LENGTH",
     "DEFAULT_LABEL_TOP_TERMS",

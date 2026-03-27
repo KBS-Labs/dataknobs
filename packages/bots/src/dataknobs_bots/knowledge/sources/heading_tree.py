@@ -37,6 +37,7 @@ from dataknobs_data.sources.topic_index import (
     expand_region,
     find_heading_regions,
 )
+from dataknobs_llm.llm.base import LLMMessage
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ class HeadingTreeConfig:
             sw = hm_data.get("stopwords")
             if isinstance(sw, list):
                 hm_data["stopwords"] = frozenset(sw)
+            ep = hm_data.get("exclude_patterns")
+            if isinstance(ep, list):
+                hm_data["exclude_patterns"] = tuple(ep)
             filtered["heading_match"] = HeadingMatchConfig(**hm_data)
 
         return cls(**filtered)
@@ -559,8 +563,8 @@ class HeadingTreeIndex:
         try:
             response = await llm.complete(
                 messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
+                    LLMMessage(role="system", content=system_msg),
+                    LLMMessage(role="user", content=user_msg),
                 ],
             )
             content = response.content if hasattr(response, "content") else str(response)

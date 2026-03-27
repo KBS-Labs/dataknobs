@@ -53,6 +53,25 @@ DEFAULT_HEADING_STOPWORDS: frozenset[str] = frozenset({
 DEFAULT_MIN_WORD_LENGTH: int = 2
 """Default minimum word length for heading matching (inclusive)."""
 
+DEFAULT_HEADING_EXCLUDE_PATTERNS: tuple[str, ...] = (
+    r"(?i)^references$",
+    r"(?i)^informative\s+references$",
+    r"(?i)^normative\s+references$",
+    r"(?i)^appendix\b",
+    r"(?i)^acknowledgements?$",
+    r"(?i)^table\s+of\s+contents$",
+    r"(?i)^bibliography$",
+    r"(?i)^index$",
+    r"(?i)^glossary$",
+    r"(?i)^abstract$",
+)
+"""Default regex patterns for structural headings to exclude from matching.
+
+These headings are navigational or organizational — they don't contain
+topical content relevant to user queries.  Patterns are matched against
+the heading label (after stripping leading section numbers like "12.2.").
+"""
+
 
 # ------------------------------------------------------------------
 # Data types
@@ -142,11 +161,16 @@ class HeadingMatchConfig:
         min_word_length: Minimum word length to keep (inclusive).
         min_heading_depth: Exclude headings shallower than this level.
             Depth 0 is the document title; depth 1 is top-level sections.
+        exclude_patterns: Regex patterns for structural headings to exclude.
+            Matched against the heading label after stripping leading
+            section numbers (e.g. "12.2. Informative References" is tested
+            as "Informative References").  Set to ``()`` to disable.
     """
 
     stopwords: frozenset[str] = DEFAULT_HEADING_STOPWORDS
     min_word_length: int = DEFAULT_MIN_WORD_LENGTH
     min_heading_depth: int = 1
+    exclude_patterns: tuple[str, ...] = DEFAULT_HEADING_EXCLUDE_PATTERNS
 
 
 # ------------------------------------------------------------------
@@ -264,7 +288,8 @@ def find_heading_regions(
 
     Performs case-insensitive word-boundary matching of query terms
     against heading labels.  Returns nodes whose labels match at least
-    one query term, filtered by minimum heading depth.
+    one query term, filtered by minimum heading depth and exclusion
+    patterns.
 
     Args:
         query: User query string.
@@ -284,11 +309,18 @@ def find_heading_regions(
     if not query_words:
         return []
 
+    # Pre-compile exclusion patterns
+    compiled_excludes = [re.compile(p) for p in cfg.exclude_patterns]
+
     matches: list[TopicNode] = []
     all_nodes = tree.flatten()
 
     for node in all_nodes:
         if node.level < cfg.min_heading_depth:
+            continue
+        # Check exclusion patterns against label stripped of section numbers
+        stripped_label = _strip_section_number(node.label)
+        if _is_excluded(stripped_label, compiled_excludes):
             continue
         label_lower = node.label.lower()
         for word in query_words:
@@ -299,6 +331,29 @@ def find_heading_regions(
     # Sort deepest first — more specific matches preferred
     matches.sort(key=lambda n: n.level, reverse=True)
     return matches
+
+
+# Section number pattern: "10.", "10.2.", "10.2.1.", "A.", "C.1." etc.
+_SECTION_NUMBER_RE = re.compile(r"^[A-Z0-9]+(?:\.[A-Z0-9]+)*\.?\s+")
+
+
+def _strip_section_number(label: str) -> str:
+    """Strip leading section number from a heading label.
+
+    "10.2. Informative References" → "Informative References"
+    "Appendix C. Acknowledgements" → "Acknowledgements"
+    "Security Considerations" → "Security Considerations" (no change)
+    """
+    # Handle "Appendix X." prefix specially
+    appendix_match = re.match(r"(?i)^appendix\s+", label)
+    if appendix_match:
+        return label  # Keep as-is; the exclude pattern matches "^appendix"
+    return _SECTION_NUMBER_RE.sub("", label)
+
+
+def _is_excluded(label: str, patterns: list[re.Pattern[str]]) -> bool:
+    """Check if a label matches any exclusion pattern."""
+    return any(p.search(label) for p in patterns)
 
 
 def expand_region(
