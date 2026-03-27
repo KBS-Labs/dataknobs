@@ -7,11 +7,39 @@ structured intent, and translate it deterministically to native queries.
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 from .database import DatabaseSource
+from .processing import (
+    CrossSourceNormalizer,
+    EmbedFn,
+    EmbeddingClusterer,
+    QueryClusterScorer,
+    QueryRelevanceRanker,
+    RelativeRelevanceFilter,
+    ResultPipeline,
+    ResultProcessor,
+    StrategyChain,
+    StrategyUnavailable,
+    TermOverlapClusterer,
+    TfidfClusterer,
+    build_pipeline,
+)
 
 __all__ = [
-    "GroundedSource",
+    "CrossSourceNormalizer",
     "DatabaseSource",
+    "EmbedFn",
+    "EmbeddingClusterer",
+    "GroundedSource",
+    "QueryClusterScorer",
+    "QueryRelevanceRanker",
+    "RelativeRelevanceFilter",
+    "ResultPipeline",
+    "ResultProcessor",
     "RetrievalIntent",
     "SourceResult",
     "SourceSchema",
+    "StrategyChain",
+    "StrategyUnavailable",
+    "TermOverlapClusterer",
+    "TfidfClusterer",
+    "build_pipeline",
 ]

@@ -473,12 +473,29 @@ class GroundedConfigBuilder:
             **kwargs: Keys merged into the synthesis config dict.
                 Common: ``mode``, ``style``, ``require_citations``,
                 ``allow_parametric``, ``citation_format``, ``template``,
-                ``provenance_template``.
+                ``provenance_template``, ``instruction``.
 
         Returns:
             Self for method chaining.
         """
         self._synthesis.update(kwargs)
+        return self
+
+    def result_processing(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Configure the result processing pipeline.
+
+        Args:
+            **kwargs: Keys set on the result_processing config dict.
+                Common: ``normalize_strategy``, ``relative_threshold``,
+                ``min_results``, ``query_rerank_weight``,
+                ``cluster_strategy``.
+
+        Returns:
+            Self for method chaining.
+        """
+        if not hasattr(self, "_result_processing"):
+            self._result_processing: dict[str, Any] = {}
+        self._result_processing.update(kwargs)
         return self
 
     def source(self, **kwargs: Any) -> GroundedConfigBuilder:
@@ -525,6 +542,8 @@ class GroundedConfigBuilder:
             "synthesis": dict(self._synthesis),
             "store_provenance": self._store_provenance,
         }
+        if hasattr(self, "_result_processing") and self._result_processing:
+            reasoning["result_processing"] = dict(self._result_processing)
         if self._sources:
             reasoning["sources"] = list(self._sources)
         if self._greeting_template is not None:

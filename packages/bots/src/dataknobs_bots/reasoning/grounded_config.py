@@ -174,23 +174,78 @@ class GroundedSynthesisConfig:
             When ``None``, falls back to ``mode``.
         require_citations: (conversational/hybrid) Instruct the LLM to
             cite sources.
-        allow_parametric: (conversational/hybrid) Allow the LLM to
-            supplement with its own parametric knowledge.
+        allow_parametric: (conversational/hybrid) Controls whether the
+            LLM may supplement with knowledge beyond the retrieved content.
+
+            - ``False``: Strict grounding -- only KB content, flag gaps.
+            - ``True``: Relaxed -- may supplement, but distinguish sources.
+            - ``"bridge"``: May connect concepts across retrieved content
+              but must not introduce external facts.  When clustering is
+              active, cluster annotations provide structural guidance.
         citation_format: (conversational/hybrid) ``"section"`` (heading
             paths) or ``"source"`` (file paths).
         template: Custom Jinja2 template for structured output.
         provenance_template: Custom Jinja2 template for the provenance
             appendix (hybrid mode) or structured output.  When ``None``,
             a built-in default is used.
+        instruction: Optional domain-specific instruction appended to the
+            synthesis system prompt after grounding instructions.  Use this
+            to guide the model toward the config author's desired synthesis
+            focus (e.g. "prioritize content that directly addresses the
+            question").  Applied for ``conversational`` and ``hybrid``
+            styles.  When ``None``, no extra instruction is appended.
     """
 
     mode: str = "llm"
     style: str | None = None
     require_citations: bool = True
-    allow_parametric: bool = False
+    allow_parametric: bool | str = False
     citation_format: str = "section"
     template: str | None = None
     provenance_template: str | None = None
+    instruction: str | None = None
+
+
+@dataclass
+class GroundedResultProcessingConfig:
+    """Configuration for the result processing pipeline.
+
+    Stages run in order: normalize -> filter -> rerank -> cluster
+    (Phase 3) -> cluster-query score (Phase 3).  Each stage is
+    enabled by setting its config.  Omitting a field disables that
+    stage entirely.
+
+    Stages that support multiple strategies accept either a string
+    shorthand (single strategy) or a list of dicts (strategy chain
+    with explicit fallback order).  Every strategy is a first-class
+    choice, not a fallback.
+
+    Attributes:
+        normalize_strategy: Normalization method or strategy chain.
+            String shorthand: ``"min_max"``, ``"z_score"``, ``"rank"``.
+            List form: ``[{"method": "z_score"}, {"method": "min_max"}]``.
+        relative_threshold: Drop results below this fraction of the
+            best score (0.0-1.0).  ``None`` disables filtering.
+        min_results: Never drop below this count regardless of scores.
+        query_rerank_weight: Blend weight for query term overlap
+            (0.0-1.0).  ``None`` disables re-ranking.
+        cluster_strategy: Clustering method or strategy chain (Phase 3).
+            String shorthand: ``"embedding"``, ``"tfidf"``,
+            ``"term_overlap"``.  ``None`` disables clustering.
+        cluster_min_size: Minimum results to form a cluster.
+        cluster_threshold: Intra-cluster similarity threshold.
+    """
+
+    # Level 1
+    normalize_strategy: str | list[dict[str, Any]] | None = None
+    relative_threshold: float | None = None
+    min_results: int = 3
+    query_rerank_weight: float | None = None
+
+    # Level 2-3 (Phase 3)
+    cluster_strategy: str | list[dict[str, Any]] | None = None
+    cluster_min_size: int = 2
+    cluster_threshold: float = 0.7
 
 
 @dataclass
@@ -240,6 +295,9 @@ class GroundedReasoningConfig:
         intent: Intent resolution configuration (replaces ``query_generation``).
         retrieval: Retrieval phase configuration.
         synthesis: Synthesis phase configuration.
+        result_processing: Optional result processing pipeline configuration.
+            When present, enables post-retrieval processing (normalization,
+            filtering, re-ranking) between merge and format.
         sources: Optional list of source configurations for config-driven
             source construction.  When empty, sources are injected
             programmatically via ``set_knowledge_base()`` / ``add_source()``.
@@ -258,6 +316,7 @@ class GroundedReasoningConfig:
     synthesis: GroundedSynthesisConfig = field(
         default_factory=GroundedSynthesisConfig,
     )
+    result_processing: GroundedResultProcessingConfig | None = None
     sources: list[GroundedSourceConfig] = field(default_factory=list)
     store_provenance: bool = True
     greeting_template: str | None = None
@@ -304,6 +363,14 @@ class GroundedReasoningConfig:
             for s in data.get("sources", [])
         ]
 
+        # Result processing config
+        rp_data = data.get("result_processing")
+        rp_config = (
+            GroundedResultProcessingConfig(**rp_data)
+            if rp_data
+            else None
+        )
+
         return cls(
             intent=GroundedIntentConfig(**intent_data),
             retrieval=GroundedRetrievalConfig(
@@ -312,6 +379,7 @@ class GroundedReasoningConfig:
             synthesis=GroundedSynthesisConfig(
                 **data.get("synthesis", {}),
             ),
+            result_processing=rp_config,
             sources=source_configs,
             store_provenance=data.get("store_provenance", True),
             greeting_template=data.get("greeting_template"),

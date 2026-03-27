@@ -314,13 +314,15 @@ Three runtime-switchable synthesis styles control how results are presented:
 synthesis:
   style: conversational          # or "structured" or "hybrid"
   require_citations: true        # (conversational/hybrid) Cite sources
-  allow_parametric: false        # (conversational/hybrid) Supplement with general knowledge
+  allow_parametric: false        # false, true, or "bridge"
   citation_format: section       # "section" (heading paths) or "source" (file paths)
+  instruction: >                 # Optional domain-specific synthesis guidance
+    Prioritize content that directly addresses the user's question.
   provenance_template: |         # Optional custom template for structured/hybrid output
     {% for r in results %}...{% endfor %}
 ```
 
-**Conversational** (default) — LLM synthesizes a natural-language response grounded in retrieved results. When `allow_parametric: false`, the LLM explicitly states when KB content is insufficient rather than filling gaps. When `true`, it may supplement but must distinguish KB-grounded claims from general knowledge.
+**Conversational** (default) — LLM synthesizes a natural-language response grounded in retrieved results. When `allow_parametric: false`, the LLM explicitly states when KB content is insufficient rather than filling gaps. When `true`, it may supplement but must distinguish KB-grounded claims from general knowledge. When `"bridge"`, the LLM may connect concepts across retrieved content but must not introduce external facts.
 
 **Structured** — A Jinja2 template formats results deterministically. No LLM call. When no custom `template` or `provenance_template` is configured, a built-in default template is used that shows results grouped by source with headings and relevance scores.
 
@@ -394,6 +396,53 @@ synthesis:
 ```
 
 When `style` is set, it takes precedence over `mode`.
+
+## Result Processing Pipeline
+
+An optional post-retrieval processing pipeline runs between merge and synthesis, transforming raw results into ranked, filtered, and optionally clustered output. Configure via `result_processing`:
+
+```yaml
+result_processing:
+  normalize_strategy: min_max     # Cross-source score normalization
+  relative_threshold: 0.5         # Drop results below 50% of best score
+  min_results: 3                  # Never drop below this count
+  query_rerank_weight: 0.3        # Blend original query relevance
+  cluster_strategy: tfidf         # Cluster by TF-IDF similarity
+  cluster_threshold: 0.5          # Intra-cluster similarity threshold
+  cluster_min_size: 2             # Minimum results to form a cluster
+```
+
+### Level 1: Cross-Source Scoring (no embedding dependency)
+
+- **Normalization** (`normalize_strategy`) — Make scores comparable across sources. Strategies: `min_max`, `z_score`, `rank`.
+- **Relative filtering** (`relative_threshold`) — Drop results significantly weaker than the best match.
+- **Query re-ranking** (`query_rerank_weight`) — Boost results whose content matches the user's original query terms.
+
+### Level 2-3: Clustering + Query-Cluster Scoring
+
+Clustering groups related results and scores each cluster against the user's query:
+
+| Strategy | Requires embeddings | Characteristics |
+|----------|-------------------|-----------------|
+| `term_overlap` | No | Shared-term grouping. Lightest, fully deterministic. |
+| `tfidf` | No | TF-IDF cosine similarity. Good quality, deterministic. |
+| `embedding` | Yes | Semantic similarity via embedding model. Highest quality. |
+
+When clustering is active, results are formatted with `<cluster>` XML tags showing label and query relevance. This pairs well with `allow_parametric: "bridge"`, which instructs the LLM to synthesize across clusters.
+
+### Strategy Chains
+
+Every processing stage supports explicit fallback chains:
+
+```yaml
+result_processing:
+  cluster_strategy:
+    - method: embedding
+      embedding: {provider: ollama, model: nomic-embed-text}
+    - method: tfidf    # fallback if embedding unavailable
+```
+
+Strategies are tried in order; `StrategyUnavailable` triggers the next alternative. A single strategy with no alternatives means failure is not silently handled.
 
 ## Provenance
 
@@ -548,9 +597,20 @@ reasoning:
   synthesis:
     mode: llm                  # "llm" or "template"
     require_citations: true    # Instruct LLM to cite (llm mode)
-    allow_parametric: false    # Allow general knowledge (llm mode)
+    allow_parametric: false    # false, true, or "bridge"
     citation_format: section   # "section" or "source" (llm mode)
     template: null             # Jinja2 template string (template mode)
+    instruction: null          # Optional domain-specific synthesis guidance
+
+  # Result processing (optional — post-retrieval pipeline)
+  result_processing:
+    normalize_strategy: null   # "min_max", "z_score", "rank", or chain
+    relative_threshold: null   # Drop below fraction of best (0.0-1.0)
+    min_results: 3             # Floor for filtering
+    query_rerank_weight: null  # Query term overlap blend (0.0-1.0)
+    cluster_strategy: null     # "term_overlap", "tfidf", "embedding", or chain
+    cluster_threshold: 0.7     # Intra-cluster similarity
+    cluster_min_size: 2        # Minimum results per cluster
 
   # Sources (optional — config-driven construction)
   sources:

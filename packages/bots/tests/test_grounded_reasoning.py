@@ -20,6 +20,7 @@ from dataknobs_data.sources.base import RetrievalIntent, SourceResult
 from dataknobs_bots.reasoning.grounded_config import (
     GroundedIntentConfig,
     GroundedReasoningConfig,
+    GroundedResultProcessingConfig,
     GroundedRetrievalConfig,
     GroundedSourceConfig,
     GroundedSynthesisConfig,
@@ -2437,3 +2438,288 @@ class TestIntentGrounding:
             # The query should still work — scope falls back to
             # default "focused" when dropped
             assert result.response == "Answer."
+
+
+# ------------------------------------------------------------------
+# Synthesis instruction tests
+# ------------------------------------------------------------------
+
+
+class TestSynthesisInstruction:
+    """Tests for the synthesis instruction config field."""
+
+    def test_instruction_appended_to_prompt(self) -> None:
+        cfg = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(
+                instruction="Focus on security risks.",
+            ),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        prompt = strategy._build_synthesis_system_prompt(
+            "KB content", "System prompt",
+        )
+        assert "Focus on security risks." in prompt
+        # Instruction should come after grounding lines
+        grounding_idx = prompt.index("Do not fill gaps")
+        instruction_idx = prompt.index("Focus on security risks.")
+        assert instruction_idx > grounding_idx
+
+    def test_instruction_none_no_effect(self) -> None:
+        cfg_with = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(instruction="Extra guidance."),
+        )
+        cfg_without = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(instruction=None),
+        )
+        strategy_with = GroundedReasoning(config=cfg_with)
+        strategy_without = GroundedReasoning(config=cfg_without)
+        prompt_with = strategy_with._build_synthesis_system_prompt(
+            "KB content", "System prompt",
+        )
+        prompt_without = strategy_without._build_synthesis_system_prompt(
+            "KB content", "System prompt",
+        )
+        assert "Extra guidance." in prompt_with
+        assert "Extra guidance." not in prompt_without
+
+    def test_instruction_with_parametric(self) -> None:
+        cfg = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(
+                allow_parametric=True,
+                instruction="Emphasize practical examples.",
+            ),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        prompt = strategy._build_synthesis_system_prompt("content", "sys")
+        assert "general knowledge" in prompt
+        assert "Emphasize practical examples." in prompt
+
+    @pytest.mark.asyncio
+    async def test_instruction_reaches_llm_integration(self) -> None:
+        """Instruction appears in the synthesis prompt sent to the LLM."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["test"])
+            .synthesis(instruction="Prioritize security content.")
+            .build()
+        )
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("response")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Tell me about security")
+            assert result.response == "response"
+
+    def test_config_from_dict_with_instruction(self) -> None:
+        cfg = GroundedReasoningConfig.from_dict({
+            "synthesis": {
+                "instruction": "Be concise.",
+            },
+        })
+        assert cfg.synthesis.instruction == "Be concise."
+
+
+# ------------------------------------------------------------------
+# Result processing config tests
+# ------------------------------------------------------------------
+
+
+class TestResultProcessingConfig:
+    """Tests for GroundedResultProcessingConfig and pipeline wiring."""
+
+    def test_config_from_dict_with_result_processing(self) -> None:
+        cfg = GroundedReasoningConfig.from_dict({
+            "result_processing": {
+                "normalize_strategy": "min_max",
+                "relative_threshold": 0.4,
+                "query_rerank_weight": 0.3,
+            },
+        })
+        assert cfg.result_processing is not None
+        assert cfg.result_processing.normalize_strategy == "min_max"
+        assert cfg.result_processing.relative_threshold == pytest.approx(0.4)
+        assert cfg.result_processing.query_rerank_weight == pytest.approx(0.3)
+
+    def test_config_from_dict_without_result_processing(self) -> None:
+        cfg = GroundedReasoningConfig.from_dict({})
+        assert cfg.result_processing is None
+
+    def test_pipeline_built_when_configured(self) -> None:
+        cfg = GroundedReasoningConfig(
+            result_processing=GroundedResultProcessingConfig(
+                normalize_strategy="min_max",
+                relative_threshold=0.5,
+            ),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        assert strategy._result_pipeline is not None
+
+    def test_pipeline_none_when_not_configured(self) -> None:
+        cfg = GroundedReasoningConfig()
+        strategy = GroundedReasoning(config=cfg)
+        assert strategy._result_pipeline is None
+
+    def test_grounded_config_builder_result_processing(self) -> None:
+        config = (
+            GroundedConfigBuilder()
+            .result_processing(
+                normalize_strategy="rank",
+                relative_threshold=0.3,
+            )
+            .build()
+        )
+        rp = config["reasoning"]["result_processing"]
+        assert rp["normalize_strategy"] == "rank"
+        assert rp["relative_threshold"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_pipeline_integration(self) -> None:
+        """Pipeline runs between merge and format in retrieve_context."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = (
+            GroundedConfigBuilder()
+            .intent(mode="static", text_queries=["test"])
+            .result_processing(
+                normalize_strategy="min_max",
+                relative_threshold=0.3,
+                min_results=1,
+            )
+            .build()
+        )
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("processed")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("Tell me about authorization")
+            assert result.response == "processed"
+
+
+# ------------------------------------------------------------------
+# Bridge mode tests
+# ------------------------------------------------------------------
+
+
+class TestBridgeMode:
+    """Tests for allow_parametric: bridge synthesis mode."""
+
+    def test_bridge_prompt_instruction(self) -> None:
+        cfg = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(allow_parametric="bridge"),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        assert "connect and synthesize concepts" in prompt
+        assert "Do not introduce facts from outside" in prompt
+
+    def test_strict_mode_unchanged(self) -> None:
+        cfg = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(allow_parametric=False),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        assert "Do not fill gaps" in prompt
+        assert "connect and synthesize" not in prompt
+
+    def test_relaxed_mode_unchanged(self) -> None:
+        cfg = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(allow_parametric=True),
+        )
+        strategy = GroundedReasoning(config=cfg)
+        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        assert "general knowledge" in prompt
+        assert "connect and synthesize" not in prompt
+
+    def test_bridge_config_from_dict(self) -> None:
+        cfg = GroundedReasoningConfig.from_dict({
+            "synthesis": {"allow_parametric": "bridge"},
+        })
+        assert cfg.synthesis.allow_parametric == "bridge"
+
+
+# ------------------------------------------------------------------
+# Cluster-annotated formatting tests
+# ------------------------------------------------------------------
+
+
+class TestClusteredFormatting:
+    """Tests for cluster-annotated result formatting."""
+
+    def test_clustered_results_use_xml_tags(self) -> None:
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        results = [
+            SourceResult(
+                content="Security risk A",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.9,
+                metadata={"cluster_id": 0, "cluster_label": "security",
+                          "cluster_size": 2, "cluster_query_score": 0.9},
+            ),
+            SourceResult(
+                content="Security risk B",
+                source_id="b",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.8,
+                metadata={"cluster_id": 0, "cluster_label": "security",
+                          "cluster_size": 2, "cluster_query_score": 0.9},
+            ),
+            SourceResult(
+                content="Database info",
+                source_id="c",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.5,
+                metadata={"cluster_id": 1, "cluster_label": "database",
+                          "cluster_size": 1, "cluster_query_score": 0.3},
+            ),
+        ]
+        formatted = strategy._format_source_results(results)
+        assert '<cluster id="0"' in formatted
+        assert 'label="security"' in formatted
+        assert '<cluster id="1"' in formatted
+        assert "</cluster>" in formatted
+
+    def test_unclustered_results_use_flat_format(self) -> None:
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        results = [
+            SourceResult(
+                content="Some content",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.9,
+            ),
+        ]
+        formatted = strategy._format_source_results(results)
+        assert "<cluster" not in formatted
+
+    def test_mixed_clustered_and_unclustered(self) -> None:
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        results = [
+            SourceResult(
+                content="Clustered item",
+                source_id="a",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.9,
+                metadata={"cluster_id": 0, "cluster_label": "test",
+                          "cluster_size": 1, "cluster_query_score": 0.5},
+            ),
+            SourceResult(
+                content="Unclustered item",
+                source_id="b",
+                source_name="kb",
+                source_type="vector_kb",
+                relevance=0.5,
+                metadata={"cluster_id": -1, "cluster_label": "unclustered",
+                          "cluster_size": 1},
+            ),
+        ]
+        formatted = strategy._format_source_results(results)
+        assert '<cluster id="0"' in formatted
+        assert "Unclustered item" in formatted

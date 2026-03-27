@@ -39,6 +39,7 @@ from dataknobs_data.sources.base import (
     RetrievalIntent,
     SourceResult,
 )
+from dataknobs_data.sources.processing import ResultPipeline, build_pipeline
 
 from dataknobs_llm.extraction.grounding import ground_extraction
 
@@ -255,6 +256,13 @@ class GroundedReasoning(ReasoningStrategy):
             config.synthesis.provenance_template
             or DEFAULT_PROVENANCE_TEMPLATE,
         )
+
+        # Result processing pipeline (Phase 2: post-retrieval processing)
+        self._result_pipeline: ResultPipeline | None = None
+        if config.result_processing is not None:
+            from dataclasses import asdict
+            rp_dict = asdict(config.result_processing)
+            self._result_pipeline = build_pipeline(rp_dict)
 
     # ------------------------------------------------------------------
     # Source management
@@ -474,6 +482,12 @@ class GroundedReasoning(ReasoningStrategy):
 
         # Merge results across sources
         all_results = self._merge_source_results(results_by_source)
+
+        # Result processing pipeline (normalization, filtering, re-ranking)
+        if self._result_pipeline is not None:
+            all_results = await self._result_pipeline.process(
+                all_results, intent, user_message,
+            )
 
         # Format for synthesis
         formatted_context = self._format_source_results(all_results)
@@ -880,11 +894,27 @@ class GroundedReasoning(ReasoningStrategy):
         self,
         results: list[SourceResult],
     ) -> str:
-        """Format SourceResult instances for the synthesis prompt."""
+        """Format SourceResult instances for the synthesis prompt.
+
+        When results carry ``cluster_id`` metadata (from a clustering
+        processor), they are grouped into ``<cluster>`` XML tags with
+        label and query relevance attributes.  Otherwise, the standard
+        flat formatting is used.
+        """
         if not results:
             return ""
 
-        # Convert to dict format for existing formatter infrastructure
+        # Check if results have cluster annotations
+        has_clusters = any(
+            r.metadata.get("cluster_id", -1) >= 0 for r in results
+        )
+        if has_clusters:
+            return self._format_clustered_results(results)
+
+        return self._format_flat_results(results)
+
+    def _format_flat_results(self, results: list[SourceResult]) -> str:
+        """Format results as a flat list (standard path)."""
         result_dicts = [r.to_dict() for r in results]
 
         if self._merger is not None:
@@ -901,6 +931,46 @@ class GroundedReasoning(ReasoningStrategy):
             return "\n\n---\n\n".join(parts)
 
         return self._formatter.format(result_dicts)
+
+    def _format_clustered_results(self, results: list[SourceResult]) -> str:
+        """Format results grouped by cluster with XML tags."""
+        from collections import defaultdict
+
+        # Group by cluster_id, preserving order
+        clusters: dict[int, list[SourceResult]] = defaultdict(list)
+        unclustered: list[SourceResult] = []
+        for r in results:
+            cid = r.metadata.get("cluster_id", -1)
+            if cid >= 0:
+                clusters[cid].append(r)
+            else:
+                unclustered.append(r)
+
+        # Sort clusters by query_score (highest first)
+        sorted_clusters = sorted(
+            clusters.items(),
+            key=lambda item: item[1][0].metadata.get("cluster_query_score", 0.0),
+            reverse=True,
+        )
+
+        parts: list[str] = []
+        for cid, members in sorted_clusters:
+            label = members[0].metadata.get("cluster_label", f"cluster_{cid}")
+            query_score = members[0].metadata.get("cluster_query_score", 0.0)
+            result_dicts = [r.to_dict() for r in members]
+            formatted = self._formatter.format(result_dicts)
+            parts.append(
+                f'<cluster id="{cid}" label="{label}" '
+                f'query_relevance="{query_score:.2f}">\n'
+                f"{formatted}\n"
+                f"</cluster>"
+            )
+
+        if unclustered:
+            result_dicts = [r.to_dict() for r in unclustered]
+            parts.append(self._formatter.format(result_dicts))
+
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # Synthesis
@@ -1090,7 +1160,16 @@ class GroundedReasoning(ReasoningStrategy):
             grounding_lines.append(
                 f"Cite the relevant {cite_what} for each claim.",
             )
-        if not cfg.allow_parametric:
+        if cfg.allow_parametric == "bridge":
+            grounding_lines.append(
+                "You may connect and synthesize concepts across the "
+                "retrieved content. Identify relationships between "
+                "different sections and sources when they help answer "
+                "the question. Do not introduce facts from outside "
+                "the knowledge base -- only synthesize across what "
+                "is provided.",
+            )
+        elif not cfg.allow_parametric:
             grounding_lines.append(
                 "If the knowledge base content does not contain sufficient "
                 "information to fully answer the question, explicitly state "
@@ -1104,6 +1183,9 @@ class GroundedReasoning(ReasoningStrategy):
                 "KB-grounded claims from general knowledge.",
             )
         parts.append(" ".join(grounding_lines))
+
+        if cfg.instruction:
+            parts.append(cfg.instruction)
 
         return "\n".join(parts)
 
