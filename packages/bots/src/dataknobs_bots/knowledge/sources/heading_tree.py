@@ -291,12 +291,18 @@ class HeadingTreeIndex:
         """
         params = _resolve_params(self._config, intent)
 
+        logger.info(
+            "HeadingTreeIndex resolving for source '%s': "
+            "entry_strategy=%s, expansion_mode=%s",
+            self._source_name, params.entry_strategy, params.expansion_mode,
+        )
+
         # Steps 2-3: Get chunk pool and heading tree for this turn
         chunks_by_id, tree = await self._get_tree_and_chunks(query, params)
 
         if tree is None:
-            logger.debug(
-                "No heading tree available for source '%s' "
+            logger.info(
+                "HeadingTreeIndex: no heading tree for source '%s' "
                 "(no seeds or no heading metadata)",
                 self._source_name,
             )
@@ -308,8 +314,8 @@ class HeadingTreeIndex:
         )
 
         if not seed_nodes:
-            logger.debug(
-                "No heading regions found for query in source '%s'",
+            logger.info(
+                "HeadingTreeIndex: no heading regions matched for source '%s'",
                 self._source_name,
             )
             return []
@@ -321,6 +327,12 @@ class HeadingTreeIndex:
         ]
         if not seed_nodes:
             return []
+
+        matched_labels = [n.label for n in seed_nodes]
+        logger.info(
+            "HeadingTreeIndex: %d heading regions matched for source '%s': %s",
+            len(seed_nodes), self._source_name, matched_labels,
+        )
 
         # Step 6: Optional LLM heading selection
         if llm is not None and len(seed_nodes) > 1:
@@ -347,6 +359,12 @@ class HeadingTreeIndex:
         # Step 8: Cap results
         if len(all_results) > params.max_expanded_results:
             all_results = all_results[:params.max_expanded_results]
+
+        logger.info(
+            "HeadingTreeIndex: %d heading regions -> %d expanded chunks "
+            "for source '%s'",
+            len(seed_nodes), len(all_results), self._source_name,
+        )
 
         return all_results
 

@@ -300,7 +300,10 @@ class GroundedReasoning(ReasoningStrategy):
 
         # Check if any source config declares a topic_index
         topic_index_config = self._find_topic_index_config()
-        topic_index = self._build_topic_index(topic_index_config, kb)
+
+        from dataknobs_bots.knowledge.sources.factory import build_topic_index
+
+        topic_index = build_topic_index(topic_index_config, kb)
 
         self._sources.insert(
             0, VectorKnowledgeSource(kb, topic_index=topic_index),
@@ -311,95 +314,6 @@ class GroundedReasoning(ReasoningStrategy):
         for source_cfg in self._config.sources:
             if source_cfg.source_type == "vector_kb" and source_cfg.topic_index:
                 return source_cfg.topic_index
-        return None
-
-    def _build_topic_index(
-        self,
-        topic_index_config: dict[str, Any] | None,
-        kb: Any,
-    ) -> Any | None:
-        """Build a topic index from config + KB.
-
-        Both topic index types are constructed in lazy mode — they store
-        query functions but build structures per-turn from seed results.
-
-        Args:
-            topic_index_config: The ``topic_index`` dict from source config.
-            kb: KnowledgeBase instance for wiring query/embed functions.
-
-        Returns:
-            A ``HeadingTreeIndex`` or ``ClusterTopicIndex``, or ``None``
-            if no topic index is configured.
-        """
-        if topic_index_config is None:
-            return None
-
-        index_type = topic_index_config.get("type", "heading_tree")
-
-        # Build a vector_query_fn from the KB
-        async def vector_query_fn(query: str, top_k: int) -> list[SourceResult]:
-            from dataknobs_data.sources.base import SourceResult
-
-            raw_results = await kb.query(query, k=top_k)
-            return [
-                SourceResult(
-                    content=r.get("text", ""),
-                    source_id=f"{r.get('source', '')}:chunk_{r.get('metadata', {}).get('chunk_index', idx)}",
-                    source_name="knowledge_base",
-                    source_type="vector_kb",
-                    relevance=r.get("similarity", 1.0),
-                    metadata={
-                        "heading_path": r.get("heading_path", ""),
-                        "source": r.get("source", ""),
-                        **r.get("metadata", {}),
-                    },
-                )
-                for idx, r in enumerate(raw_results)
-            ]
-
-        if index_type == "heading_tree":
-            from dataknobs_bots.knowledge.sources.heading_tree import (
-                HeadingTreeConfig,
-                HeadingTreeIndex,
-            )
-
-            config = HeadingTreeConfig.from_dict(topic_index_config)
-            return HeadingTreeIndex(
-                vector_query_fn=vector_query_fn,
-                config=config,
-            )
-
-        if index_type == "cluster":
-            from dataknobs_data.sources.cluster_index import (
-                ClusterTopicConfig,
-                ClusterTopicIndex,
-            )
-
-            # Build an embed_fn from the KB's embedding capability
-            embed_fn = self._build_embed_fn(kb)
-
-            config = ClusterTopicConfig.from_dict(topic_index_config)
-            return ClusterTopicIndex(
-                embed_fn=embed_fn,
-                vector_query_fn=vector_query_fn,
-                config=config,
-            )
-
-        logger.warning(
-            "Unknown topic_index type %r, ignoring", index_type,
-        )
-        return None
-
-    @staticmethod
-    def _build_embed_fn(kb: Any) -> Any | None:
-        """Build an embed_fn from KB's embedding capability.
-
-        Returns ``None`` if the KB doesn't support embedding.
-        """
-        if hasattr(kb, "embed"):
-            async def embed_fn(text: str) -> list[float]:
-                return await kb.embed(text)
-            return embed_fn
         return None
 
     # ------------------------------------------------------------------
@@ -965,7 +879,7 @@ class GroundedReasoning(ReasoningStrategy):
                     # Fall back to standard text queries if topic index
                     # found no results (e.g. vocabulary gap, no seed matches)
                     if not results:
-                        logger.debug(
+                        logger.info(
                             "Topic index returned empty for source '%s', "
                             "falling back to standard text query retrieval",
                             source.name,

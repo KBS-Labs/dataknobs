@@ -102,9 +102,135 @@ def _create_vector_kb_source(
             f"source type."
         )
 
-    # Topic index is constructed lazily by the source or externally
-    # after all chunks are available — the factory stores the config.
-    return VectorKnowledgeSource(knowledge_base, name=config.name)
+    topic_index = build_topic_index(
+        config.topic_index, knowledge_base, source_name=config.name,
+    )
+    return VectorKnowledgeSource(
+        knowledge_base, name=config.name, topic_index=topic_index,
+    )
+
+
+def build_topic_index(
+    topic_index_config: dict[str, Any] | None,
+    kb: Any,
+    *,
+    source_name: str = "knowledge_base",
+) -> Any | None:
+    """Build a topic index from config + KnowledgeBase.
+
+    Both topic index types are constructed in lazy mode — they store
+    query functions but build structures per-turn from seed results.
+
+    This is the shared construction logic used by both the factory path
+    (``create_source_from_config``) and the legacy path
+    (``GroundedReasoning.set_knowledge_base``).
+
+    Args:
+        topic_index_config: The ``topic_index`` dict from source config.
+            ``None`` means no topic index is configured.
+        kb: KnowledgeBase instance for wiring query/embed functions.
+        source_name: Source name for logging and provenance.
+
+    Returns:
+        A ``HeadingTreeIndex`` or ``ClusterTopicIndex``, or ``None``
+        if no topic index is configured.
+    """
+    if topic_index_config is None:
+        return None
+
+    index_type = topic_index_config.get("type", "heading_tree")
+
+    # Build a vector_query_fn from the KB
+    vector_query_fn = _build_vector_query_fn(kb, source_name)
+
+    if index_type == "heading_tree":
+        from dataknobs_bots.knowledge.sources.heading_tree import (
+            HeadingTreeConfig,
+            HeadingTreeIndex,
+        )
+
+        config = HeadingTreeConfig.from_dict(topic_index_config)
+        idx = HeadingTreeIndex(
+            vector_query_fn=vector_query_fn,
+            source_name=source_name,
+            config=config,
+        )
+        logger.info(
+            "Built heading_tree topic index for source '%s' "
+            "(entry_strategy=%s, expansion_mode=%s)",
+            source_name, config.entry_strategy, config.expansion_mode,
+        )
+        return idx
+
+    if index_type == "cluster":
+        from dataknobs_data.sources.cluster_index import (
+            ClusterTopicConfig,
+            ClusterTopicIndex,
+        )
+
+        embed_fn = _build_embed_fn(kb)
+        config = ClusterTopicConfig.from_dict(topic_index_config)
+        idx = ClusterTopicIndex(
+            embed_fn=embed_fn,
+            vector_query_fn=vector_query_fn,
+            source_name=source_name,
+            config=config,
+        )
+        logger.info(
+            "Built cluster topic index for source '%s' "
+            "(cluster_threshold=%.2f, top_clusters=%d)",
+            source_name, config.cluster_threshold, config.top_clusters,
+        )
+        return idx
+
+    logger.warning(
+        "Unknown topic_index type %r for source '%s', skipping",
+        index_type, source_name,
+    )
+    return None
+
+
+def _build_vector_query_fn(
+    kb: Any,
+    source_name: str,
+) -> Any:
+    """Build a vector_query_fn closure from a KnowledgeBase."""
+    from dataknobs_data.sources.base import SourceResult
+
+    async def vector_query_fn(query: str, top_k: int) -> list[SourceResult]:
+        raw_results = await kb.query(query, k=top_k)
+        return [
+            SourceResult(
+                content=r.get("text", ""),
+                source_id=(
+                    f"{r.get('source', '')}:chunk_"
+                    f"{r.get('metadata', {}).get('chunk_index', idx)}"
+                ),
+                source_name=source_name,
+                source_type="vector_kb",
+                relevance=r.get("similarity", 1.0),
+                metadata={
+                    "heading_path": r.get("heading_path", ""),
+                    "source": r.get("source", ""),
+                    **r.get("metadata", {}),
+                },
+            )
+            for idx, r in enumerate(raw_results)
+        ]
+
+    return vector_query_fn
+
+
+def _build_embed_fn(kb: Any) -> Any | None:
+    """Build an embed_fn from KB's embedding capability.
+
+    Returns ``None`` if the KB doesn't support embedding.
+    """
+    if hasattr(kb, "embed"):
+        async def embed_fn(text: str) -> list[float]:
+            return await kb.embed(text)
+        return embed_fn
+    return None
 
 
 async def _create_database_source(

@@ -361,6 +361,13 @@ class ClusterTopicIndex:
 
         params = _resolve_params(self._config, intent)
 
+        logger.info(
+            "ClusterTopicIndex resolving for source '%s': "
+            "top_clusters=%d, centroid_threshold=%.2f",
+            self._source_name, params.top_clusters,
+            params.centroid_score_threshold,
+        )
+
         # Embed the query
         try:
             query_embedding = await self._embed_fn(query)
@@ -375,7 +382,16 @@ class ClusterTopicIndex:
         chunks, embeddings, clusters = await self._get_clusters(query, params)
 
         if not clusters:
+            logger.info(
+                "ClusterTopicIndex: no clusters formed for source '%s'",
+                self._source_name,
+            )
             return []
+
+        logger.info(
+            "ClusterTopicIndex: %d seeds -> %d clusters for source '%s'",
+            len(chunks), len(clusters), self._source_name,
+        )
 
         # Score clusters by centroid similarity
         cluster_scores: list[tuple[_Cluster, float]] = []
@@ -389,7 +405,18 @@ class ClusterTopicIndex:
         cluster_scores = cluster_scores[:params.top_clusters]
 
         if not cluster_scores:
+            logger.info(
+                "ClusterTopicIndex: no clusters matched query for source '%s' "
+                "(threshold=%.2f)",
+                self._source_name, params.centroid_score_threshold,
+            )
             return []
+
+        matched_labels = [c.label for c, _ in cluster_scores]
+        logger.info(
+            "ClusterTopicIndex: query matched %d clusters for source '%s': %s",
+            len(cluster_scores), self._source_name, matched_labels,
+        )
 
         # Collect chunks from matched clusters, ranked by query similarity
         all_results: list[SourceResult] = []
@@ -417,6 +444,12 @@ class ClusterTopicIndex:
         effective_max = min(top_k, params.max_total_results)
         if len(all_results) > effective_max:
             all_results = all_results[:effective_max]
+
+        logger.info(
+            "ClusterTopicIndex: %d matched clusters -> %d chunks "
+            "for source '%s'",
+            len(cluster_scores), len(all_results), self._source_name,
+        )
 
         return all_results
 

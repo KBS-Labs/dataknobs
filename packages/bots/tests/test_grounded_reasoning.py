@@ -1149,6 +1149,60 @@ class TestSourceFactory:
         assert source.source_type == "vector_kb"
 
     @pytest.mark.asyncio
+    async def test_vector_kb_source_with_topic_index_heading_tree(self) -> None:
+        """Factory builds heading_tree topic index when config.topic_index is set."""
+        from dataknobs_bots.knowledge.sources.factory import create_source_from_config
+        from dataknobs_bots.knowledge.sources.heading_tree import HeadingTreeIndex
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = GroundedSourceConfig(
+            source_type="vector_kb",
+            name="docs",
+            topic_index={
+                "type": "heading_tree",
+                "entry_strategy": "both",
+                "expansion_mode": "subtree",
+            },
+        )
+        source = await create_source_from_config(config, knowledge_base=kb)
+        assert source.name == "docs"
+        assert source.topic_index is not None
+        assert isinstance(source.topic_index, HeadingTreeIndex)
+
+    @pytest.mark.asyncio
+    async def test_vector_kb_source_with_topic_index_cluster(self) -> None:
+        """Factory builds cluster topic index when config.topic_index is set."""
+        from dataknobs_bots.knowledge.sources.factory import create_source_from_config
+        from dataknobs_data.sources.cluster_index import ClusterTopicIndex
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = GroundedSourceConfig(
+            source_type="vector_kb",
+            name="docs",
+            topic_index={
+                "type": "cluster",
+                "cluster_threshold": 0.8,
+            },
+        )
+        source = await create_source_from_config(config, knowledge_base=kb)
+        assert source.name == "docs"
+        assert source.topic_index is not None
+        assert isinstance(source.topic_index, ClusterTopicIndex)
+
+    @pytest.mark.asyncio
+    async def test_vector_kb_source_without_topic_index(self) -> None:
+        """Factory creates source with no topic index when not configured."""
+        from dataknobs_bots.knowledge.sources.factory import create_source_from_config
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = GroundedSourceConfig(
+            source_type="vector_kb",
+            name="docs",
+        )
+        source = await create_source_from_config(config, knowledge_base=kb)
+        assert source.topic_index is None
+
+    @pytest.mark.asyncio
     async def test_vector_kb_source_requires_knowledge_base(self) -> None:
         """vector_kb type raises without a knowledge_base."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
