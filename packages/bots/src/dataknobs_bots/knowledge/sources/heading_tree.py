@@ -270,6 +270,7 @@ class HeadingTreeIndex:
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: HeadingTreeConfig | None = None,
+        heading_selection_llm: Any | None = None,
         min_heading_chunks: int = 3,
     ) -> HeadingTreeIndex | None:
         """Eagerly build from source results if heading metadata is present.
@@ -290,6 +291,7 @@ class HeadingTreeIndex:
             vector_query_fn=vector_query_fn,
             source_name=source_name,
             config=config,
+            heading_selection_llm=heading_selection_llm,
         )
 
     async def resolve(
@@ -540,6 +542,7 @@ class HeadingTreeIndex:
             stopwords=self._config.heading_match.stopwords,
             min_word_length=self._config.heading_match.min_word_length,
             min_heading_depth=params.min_heading_depth,
+            exclude_patterns=self._config.heading_match.exclude_patterns,
         )
         return find_heading_regions(query, tree, config=match_config)
 

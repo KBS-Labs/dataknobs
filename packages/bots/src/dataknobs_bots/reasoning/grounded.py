@@ -303,10 +303,21 @@ class GroundedReasoning(ReasoningStrategy):
 
         from dataknobs_bots.knowledge.sources.factory import build_topic_index
 
-        topic_index = build_topic_index(topic_index_config, kb)
+        # Determine source name from config (if a vector_kb source is declared)
+        source_name = "knowledge_base"
+        for source_cfg in self._config.sources:
+            if source_cfg.source_type == "vector_kb":
+                source_name = source_cfg.name
+                break
+
+        topic_index = build_topic_index(
+            topic_index_config, kb, source_name=source_name,
+        )
 
         self._sources.insert(
-            0, VectorKnowledgeSource(kb, topic_index=topic_index),
+            0, VectorKnowledgeSource(
+                kb, name=source_name, topic_index=topic_index,
+            ),
         )
 
     def _find_topic_index_config(self) -> dict[str, Any] | None:
@@ -1104,9 +1115,18 @@ class GroundedReasoning(ReasoningStrategy):
         if style in ("structured", "hybrid"):
             messages = manager.get_messages()
             user_message = self._extract_user_message(messages)
-            template_text = self._render_provenance_output(
-                context, provenance, user_message, manager.metadata,
-            )
+            try:
+                template_text = self._render_provenance_output(
+                    context, provenance, user_message, manager.metadata,
+                )
+            except Exception:
+                logger.warning(
+                    "Provenance template render failed, falling back "
+                    "to conversational style",
+                    exc_info=True,
+                )
+                style = "conversational"
+                template_text = None
 
         if style in ("conversational", "hybrid"):
             system_prompt = self._build_synthesis_system_prompt(

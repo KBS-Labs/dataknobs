@@ -235,28 +235,27 @@ class TestDatabaseSourceQueryBuilding:
         assert query.filters[0].field == "created"
         assert query.filters[0].operator == Operator.GTE
 
-    def test_text_search(self) -> None:
+    def test_text_search_not_in_structural_query(self) -> None:
+        """Text search uses OR semantics via retrieve(), not _build_query()."""
         source = self._make_source()
         intent = RetrievalIntent(
             text_queries=["algorithms"],
             filters={},
         )
         query = source._build_query(intent)
-        # 1 text query × 2 text_search_fields = 2 LIKE filters
-        assert len(query.filters) == 2
-        for f in query.filters:
-            assert f.operator == Operator.LIKE
-            assert "%algorithms%" in f.value
+        # _build_query returns only structural filters; text search
+        # is handled separately in _text_or_search with OR semantics
+        assert len(query.filters) == 0
 
-    def test_combined_filters_and_text(self) -> None:
+    def test_combined_structural_only(self) -> None:
         source = self._make_source()
         intent = RetrievalIntent(
             text_queries=["intro"],
             filters={"courses": {"department": "CS", "level": 100}},
         )
         query = source._build_query(intent)
-        # 2 structured filters + 2 LIKE filters (1 query × 2 fields)
-        assert len(query.filters) == 4
+        # Only structural filters in the query (text search handled via OR)
+        assert len(query.filters) == 2
 
     def test_other_source_filters_ignored(self) -> None:
         source = self._make_source()
@@ -355,6 +354,42 @@ class TestDatabaseSourceExecution:
         )
         assert source.name == "my_db"
         assert source.source_type == "database"
+
+    @pytest.mark.asyncio
+    async def test_text_search_or_semantics(self) -> None:
+        """Multiple text queries use OR — matching any query counts."""
+        db = AsyncMemoryDatabase()
+        schema = _make_course_schema()
+        db.set_schema(schema)
+
+        await db.create(Record.from_dict({
+            "title": "Algorithms",
+            "department": "CS",
+            "level": 100,
+            "active": True,
+            "description": "Learn about algorithms.",
+        }))
+        await db.create(Record.from_dict({
+            "title": "Calculus",
+            "department": "Math",
+            "level": 200,
+            "active": True,
+            "description": "Derivatives and integrals.",
+        }))
+
+        source = DatabaseSource(
+            db=db, schema=schema, name="courses",
+            content_field="description",
+            text_search_fields=["title", "description"],
+        )
+        # Two queries — should find both records (OR, not AND)
+        results = await source.query(RetrievalIntent(
+            text_queries=["algorithms", "calculus"],
+        ))
+        assert len(results) == 2
+        titles = {r.metadata.get("title") for r in results}
+        assert "Algorithms" in titles
+        assert "Calculus" in titles
 
 
 class TestDatabaseSourceRelevanceScoring:

@@ -29,7 +29,7 @@ from dataknobs_llm.extraction.grounding import (
 
 def _string_prop(description: str = "", **extra: object) -> dict:
     """Build a string schema property."""
-    p: dict = {"type": "string"}
+    p: dict[str, Any] = {"type": "string"}
     if description:
         p["description"] = description
     p.update(extra)
@@ -37,7 +37,7 @@ def _string_prop(description: str = "", **extra: object) -> dict:
 
 
 def _enum_prop(values: list[str], description: str = "", **extra: object) -> dict:
-    p: dict = {"type": "string", "enum": values}
+    p: dict[str, Any] = {"type": "string", "enum": values}
     if description:
         p["description"] = description
     p.update(extra)
@@ -45,7 +45,7 @@ def _enum_prop(values: list[str], description: str = "", **extra: object) -> dic
 
 
 def _bool_prop(description: str = "", **extra: object) -> dict:
-    p: dict = {"type": "boolean"}
+    p: dict[str, Any] = {"type": "boolean"}
     if description:
         p["description"] = description
     p.update(extra)
@@ -53,13 +53,13 @@ def _bool_prop(description: str = "", **extra: object) -> dict:
 
 
 def _number_prop(num_type: str = "integer", **extra: object) -> dict:
-    p: dict = {"type": num_type}
+    p: dict[str, Any] = {"type": num_type}
     p.update(extra)
     return p
 
 
 def _array_prop(description: str = "", **extra: object) -> dict:
-    p: dict = {"type": "array", "items": {"type": "string"}}
+    p: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
     if description:
         p["description"] = description
     p.update(extra)
@@ -420,7 +420,7 @@ class TestUtilities:
         assert "alerts" in kw
 
     def test_field_keywords_from_field_name(self) -> None:
-        prop: dict = {}
+        prop: dict[str, Any] = {}
         kw = field_keywords("save_confirmed", prop)
         assert "save" in kw
         assert "confirmed" in kw

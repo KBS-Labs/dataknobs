@@ -1742,6 +1742,8 @@ class TestAutoContextAutoDisable:
         """Grounded strategy does not use auto_context for retrieval."""
         kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
         config = _grounded_bot_config()
+        # Disable auto_context via config (not private attribute mutation)
+        config["knowledge_base"] = {"auto_context": False}
         async with await BotTestHarness.create(
             bot_config=config,
             main_responses=[
@@ -1749,8 +1751,6 @@ class TestAutoContextAutoDisable:
                 text_response("answer"),
             ],
         ) as harness:
-            # Explicitly disable auto_context — should not affect grounded
-            harness.bot._kb_auto_context = False
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             result = await harness.chat("test query")
             assert result.response == "answer"
@@ -2199,7 +2199,9 @@ class TestSynthesisStyleIntegration:
             assert "First turn LLM" in result1.response
 
             # Now override at session level to structured
-            manager = list(harness.bot._conversation_managers.values())[0]
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
             manager.metadata["synthesis_style"] = "structured"
             result2 = await harness.chat("Show me sources")
             # Should use structured (template) despite config saying conversational
@@ -2262,7 +2264,9 @@ class TestSynthesisStyleIntegration:
         ) as harness:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             await harness.chat("query")
-            manager = list(harness.bot._conversation_managers.values())[0]
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
             prov = manager.metadata.get("retrieval_provenance", {})
             assert "raw_data" in prov.get("intent", {})
 

@@ -1453,7 +1453,9 @@ class ConversationManager:
         for API compatibility with test fixtures and other managers.
 
         Returns:
-            List of message dicts with 'role' and 'content' keys.
+            List of message dicts with 'role', 'content', and 'metadata'
+            keys.  See :attr:`messages` for full detail on the metadata
+            structure.
         """
         return self.messages
 

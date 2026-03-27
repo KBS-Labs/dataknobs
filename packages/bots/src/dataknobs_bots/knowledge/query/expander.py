@@ -49,7 +49,7 @@ class ContextualExpander:
         max_context_turns: int = 3,
         include_assistant: bool = False,
         keyword_weight: int = 2,
-    ):
+    ) -> None:
         """Initialize the contextual expander.
 
         Args:

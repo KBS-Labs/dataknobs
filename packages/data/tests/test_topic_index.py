@@ -28,7 +28,7 @@ def _chunk(
     content: str = "",
 ) -> SourceResult:
     """Create a SourceResult with heading metadata."""
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
     if headings is not None:
         metadata["headings"] = headings
     if heading_levels is not None:

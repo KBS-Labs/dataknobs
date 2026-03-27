@@ -785,22 +785,23 @@ reasoning:
 
 ## Testing
 
-Use `EchoProvider` for scripted LLM responses and `BotTestHarness` for integration tests:
+Use `GroundedConfigBuilder` for fluent config construction, `EchoProvider` for
+scripted LLM responses, and `BotTestHarness` for integration tests:
 
 ```python
-from dataknobs_bots.testing import BotTestHarness
+from dataknobs_bots.testing import BotTestHarness, GroundedConfigBuilder
 from dataknobs_llm.testing import text_response
 
+config = (
+    GroundedConfigBuilder()
+    .intent(mode="extract", num_queries=2)
+    .retrieval(top_k=3)
+    .synthesis(require_citations=True)
+    .build()
+)
+
 async with await BotTestHarness.create(
-    bot_config={
-        "llm": {"provider": "echo", "model": "test"},
-        "reasoning": {
-            "strategy": "grounded",
-            "intent": {"mode": "extract", "num_queries": 2},
-            "retrieval": {"top_k": 3},
-            "synthesis": {"require_citations": True},
-        },
-    },
+    bot_config=config,
     main_responses=[
         text_response("query one\nquery two"),       # Query generation
         text_response("Based on the KB content..."),  # Synthesis
