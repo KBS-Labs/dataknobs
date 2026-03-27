@@ -9,6 +9,8 @@ High-level helpers (preferred for new tests):
   Supports tools (for ReAct testing) and middleware injection.
 - ``WizardConfigBuilder``: Fluent builder for wizard config dicts, replacing
   verbose inline dict construction with a readable chained API.
+- ``GroundedConfigBuilder``: Fluent builder for grounded-strategy bot config
+  dicts.  Produces a complete ``bot_config`` dict for ``BotTestHarness``.
 - ``TurnResult``: Dataclass capturing response + wizard state snapshot per turn.
 
 Low-level primitives:
@@ -379,6 +381,179 @@ class WizardConfigBuilder:
                         f"Stage {stage['name']!r} has transition to "
                         f"nonexistent stage {target!r}"
                     )
+
+
+# =============================================================================
+# GroundedConfigBuilder — fluent grounded-strategy bot config construction
+# =============================================================================
+
+
+class GroundedConfigBuilder:
+    """Fluent builder for grounded-strategy bot configuration dicts.
+
+    Produces a complete ``bot_config`` dict suitable for
+    :meth:`BotTestHarness.create(bot_config=...)`.  Eliminates verbose
+    inline dict construction in grounded reasoning tests.
+
+    Example:
+        ```python
+        config = (GroundedConfigBuilder()
+            .intent(mode="extract", num_queries=3, domain_context="OAuth 2.0")
+            .retrieval(top_k=5)
+            .synthesis(style="hybrid", require_citations=True)
+            .build())
+
+        async with await BotTestHarness.create(
+            bot_config=config,
+            main_responses=[text_response("LLM synthesis")],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("How does OAuth work?")
+        ```
+    """
+
+    def __init__(self) -> None:
+        self._intent: dict[str, Any] = {
+            "mode": "extract",
+            "num_queries": 2,
+        }
+        self._retrieval: dict[str, Any] = {
+            "top_k": 5,
+            "score_threshold": 0.0,
+        }
+        self._synthesis: dict[str, Any] = {
+            "mode": "llm",
+            "require_citations": True,
+        }
+        self._sources: list[dict[str, Any]] = []
+        self._store_provenance: bool = True
+        self._greeting_template: str | None = None
+        self._result_processing: dict[str, Any] = {}
+        self._extra_reasoning: dict[str, Any] = {}
+        self._llm: dict[str, Any] = {
+            "provider": "echo",
+            "model": "echo-test",
+        }
+        self._conversation_storage: dict[str, Any] = {"backend": "memory"}
+
+    def intent(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Configure intent resolution.
+
+        Args:
+            **kwargs: Keys merged into the intent config dict. Common:
+                ``mode`` (``"extract"``/``"static"``/``"template"``),
+                ``num_queries``, ``domain_context``,
+                ``use_conversation_context``, ``extraction_config``,
+                ``text_queries``, ``template``,
+                ``expand_ambiguous_queries``.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._intent.update(kwargs)
+        return self
+
+    def retrieval(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Configure the retrieval phase.
+
+        Args:
+            **kwargs: Keys merged into the retrieval config dict.
+                Common: ``top_k``, ``score_threshold``,
+                ``merge_adjacent``, ``deduplicate``.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._retrieval.update(kwargs)
+        return self
+
+    def synthesis(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Configure the synthesis phase.
+
+        Args:
+            **kwargs: Keys merged into the synthesis config dict.
+                Common: ``mode``, ``style``, ``require_citations``,
+                ``allow_parametric``, ``citation_format``, ``template``,
+                ``provenance_template``, ``instruction``.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._synthesis.update(kwargs)
+        return self
+
+    def result_processing(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Configure the result processing pipeline.
+
+        Args:
+            **kwargs: Keys set on the result_processing config dict.
+                Common: ``normalize_strategy``, ``relative_threshold``,
+                ``min_results``, ``query_rerank_weight``,
+                ``cluster_strategy``.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._result_processing.update(kwargs)
+        return self
+
+    def source(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Add a source configuration.
+
+        Args:
+            **kwargs: Source config dict. Keys: ``type``, ``name``,
+                ``weight``, plus source-specific options.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._sources.append(kwargs)
+        return self
+
+    def provenance(self, enabled: bool = True) -> GroundedConfigBuilder:
+        """Enable or disable provenance recording.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._store_provenance = enabled
+        return self
+
+    def llm(self, **kwargs: Any) -> GroundedConfigBuilder:
+        """Override default LLM config (default: echo provider).
+
+        Returns:
+            Self for method chaining.
+        """
+        self._llm.update(kwargs)
+        return self
+
+    def build(self) -> dict[str, Any]:
+        """Build the complete bot_config dict.
+
+        Returns:
+            A dict suitable for ``BotTestHarness.create(bot_config=...)``.
+        """
+        reasoning: dict[str, Any] = {
+            "strategy": "grounded",
+            "intent": dict(self._intent),
+            "retrieval": dict(self._retrieval),
+            "synthesis": dict(self._synthesis),
+            "store_provenance": self._store_provenance,
+        }
+        if self._result_processing:
+            reasoning["result_processing"] = dict(self._result_processing)
+        if self._sources:
+            reasoning["sources"] = list(self._sources)
+        if self._greeting_template is not None:
+            reasoning["greeting_template"] = self._greeting_template
+        reasoning.update(self._extra_reasoning)
+
+        return {
+            "llm": dict(self._llm),
+            "conversation_storage": dict(self._conversation_storage),
+            "reasoning": reasoning,
+        }
 
 
 # =============================================================================

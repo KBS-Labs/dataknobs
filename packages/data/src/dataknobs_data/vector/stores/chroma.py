@@ -321,6 +321,20 @@ class ChromaVectorStore(VectorStore):
         # In production, you might want to maintain counts separately
         return len(results["ids"][0]) if results["ids"] else 0
 
+    async def metadata_fields(self) -> set[str]:
+        """Discover metadata field names across all stored vectors."""
+        if not self._initialized:
+            await self.initialize()
+
+        # Fetch all metadata from the collection
+        result = self.collection.get(include=["metadatas"])
+        fields: set[str] = set()
+        if result.get("metadatas"):
+            for meta in result["metadatas"]:
+                if meta:
+                    fields.update(meta.keys())
+        return fields
+
     async def clear(self) -> None:
         """Clear all vectors from the collection."""
         if not self._initialized:

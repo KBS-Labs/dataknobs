@@ -3647,8 +3647,8 @@ class WizardReasoning(ReasoningStrategy):
     def _get_last_user_message(self, manager: Any) -> str:
         """Extract the last user message from conversation.
 
-        Prefers ``raw_content`` from node metadata (set by DynaBot when
-        knowledge-base or memory context is prepended) so that schema
+        Prefers ``raw_content`` from message/node metadata (set by DynaBot
+        when knowledge-base or memory context is prepended) so that schema
         extraction sees the user's original message without context noise.
 
         Args:
@@ -3657,33 +3657,17 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Last user message text
         """
-        # Try node-level access first (ConversationManager with state).
-        # Nodes carry per-message metadata including raw_content.
-        if hasattr(manager, "state") and manager.state is not None:
-            nodes = manager.state.get_current_nodes()
-            for node in reversed(nodes):
-                if node.message.role == "user":
-                    raw = node.metadata.get("raw_content")
-                    if raw is not None:
-                        return raw
-                    content = node.message.content
-                    if isinstance(content, str):
-                        return content
-                    # Handle structured content (list of content parts)
-                    if isinstance(content, list):
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                return part.get("text", "")
-            return ""
-
-        # Fallback: dict-based access (test managers without state)
         messages = manager.get_messages()
         for msg in reversed(messages):
             if msg.get("role") == "user":
+                # Prefer raw_content from metadata (unaugmented user input)
+                raw = msg.get("metadata", {}).get("raw_content")
+                if raw is not None:
+                    return raw
                 content = msg.get("content", "")
                 if isinstance(content, str):
                     return content
-                # Handle structured content
+                # Handle structured content (list of content parts)
                 if isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "text":
@@ -4298,34 +4282,24 @@ class WizardReasoning(ReasoningStrategy):
         """
         user_messages: list[str] = []
 
-        # Try node-level access first (prefers raw_content from metadata)
-        if hasattr(manager, "state") and manager.state is not None:
-            nodes = manager.state.get_current_nodes()
-            for node in nodes:
-                if node.message.role == "user":
-                    raw = node.metadata.get("raw_content")
-                    if raw is not None:
-                        user_messages.append(raw)
-                    elif isinstance(node.message.content, str):
-                        user_messages.append(node.message.content)
-                    elif isinstance(node.message.content, list):
-                        # Handle structured content (list of content parts)
-                        for part in node.message.content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                user_messages.append(part.get("text", ""))
-                                break
-        else:
-            # Fallback: dict-based access (test managers without state)
-            for msg in manager.get_messages():
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        user_messages.append(content)
-                    elif isinstance(content, list):
-                        # Handle structured content
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                user_messages.append(part.get("text", ""))
+        # Use get_messages() for consistent access (includes raw_content
+        # in metadata, aligned with _get_last_user_message approach).
+        for msg in manager.get_messages():
+            if msg.get("role") == "user":
+                # Prefer raw_content from metadata (unaugmented user input)
+                raw = msg.get("metadata", {}).get("raw_content")
+                if raw is not None:
+                    user_messages.append(raw)
+                    continue
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_messages.append(content)
+                elif isinstance(content, list):
+                    # Handle structured content (list of content parts)
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_messages.append(part.get("text", ""))
+                            break
 
         # Exclude the last message (it's the current one we're processing)
         previous_messages = user_messages[:-1] if len(user_messages) > 1 else []

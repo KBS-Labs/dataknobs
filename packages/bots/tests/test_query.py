@@ -6,6 +6,7 @@ from dataknobs_bots.knowledge.query import (
     ContextualExpander,
     QueryTransformer,
     TransformerConfig,
+    parse_query_response,
 )
 from dataknobs_bots.knowledge.query.expander import Message, is_ambiguous_query
 
@@ -122,6 +123,162 @@ learning from demonstrations"""
 
         assert "query one" in queries
         assert "query two" in queries
+
+
+class TestParseQueryResponse:
+    """Tests for parse_query_response module-level function."""
+
+    def test_basic_lines(self) -> None:
+        queries = parse_query_response("query one\nquery two\nquery three", "fallback")
+        assert queries == ["query one", "query two", "query three"]
+
+    def test_numbered_list(self) -> None:
+        queries = parse_query_response("1. first query\n2. second query", "fallback")
+        assert queries == ["first query", "second query"]
+
+    def test_empty_returns_fallback(self) -> None:
+        assert parse_query_response("", "fallback") == ["fallback"]
+
+    def test_strips_quotes(self) -> None:
+        queries = parse_query_response('"quoted query"\n\'single quoted\'', "fb")
+        assert "quoted query" in queries
+        assert "single quoted" in queries
+
+    def test_filters_short_lines(self) -> None:
+        queries = parse_query_response("ok\nvalid query\nno", "fallback")
+        assert queries == ["valid query"]
+
+
+class TestQueryTransformerExternalProvider:
+    """Tests for QueryTransformer with externally-injected providers."""
+
+    @pytest.mark.asyncio
+    async def test_constructor_provider(self) -> None:
+        """External provider makes transformer immediately ready."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("OAuth grant types\nauthorization code")])
+
+        config = TransformerConfig(enabled=True, num_queries=2)
+        transformer = QueryTransformer(config, provider=provider)
+
+        queries = await transformer.transform("What are OAuth grants?")
+        assert len(queries) == 2
+        assert provider.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_set_provider(self) -> None:
+        """set_provider() makes transformer ready without initialize()."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("search query one\nsearch query two")])
+
+        config = TransformerConfig(enabled=True, num_queries=2)
+        transformer = QueryTransformer(config)
+
+        # Not initialized yet
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await transformer.transform("test")
+
+        # Now inject provider
+        transformer.set_provider(provider)
+        queries = await transformer.transform("test question")
+        assert len(queries) == 2
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_close_external_provider(self) -> None:
+        """close() does not close externally-provided providers."""
+        from dataknobs_llm import EchoProvider
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        transformer = QueryTransformer(
+            TransformerConfig(enabled=True),
+            provider=provider,
+        )
+
+        await transformer.close()
+        # Transformer is no longer initialized, but provider is still alive
+        assert transformer._initialized is False
+        # Provider should still work (not closed)
+        response = await provider.complete("test")
+        assert response.content is not None
+
+    @pytest.mark.asyncio
+    async def test_transform_with_context(self) -> None:
+        """transform_with_context uses contextual prompt."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("context aware query")])
+
+        transformer = QueryTransformer(
+            TransformerConfig(enabled=True, domain_context="OAuth 2.0"),
+            provider=provider,
+        )
+
+        queries = await transformer.transform_with_context(
+            "What about refresh tokens?",
+            "user: How do OAuth grants work?\nassistant: There are several types...",
+        )
+        assert len(queries) >= 1
+        # Verify the prompt included conversation context
+        last_call = provider.get_last_call()
+        assert last_call is not None
+        # The prompt is the first message content
+        prompt = last_call["messages"][0].content if hasattr(last_call["messages"][0], "content") else str(last_call["messages"][0])
+        assert "conversation context" in prompt.lower()
+        assert "OAuth 2.0" in prompt
+
+
+class TestSuppressThinking:
+    """Tests for suppress_thinking config option."""
+
+    @pytest.mark.asyncio
+    async def test_suppress_thinking_passes_config_override(self) -> None:
+        """When suppress_thinking=True, think: False is in config_overrides."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("query one\nquery two")])
+
+        config = TransformerConfig(enabled=True, num_queries=2, suppress_thinking=True)
+        transformer = QueryTransformer(config, provider=provider)
+
+        await transformer.transform("test question")
+        last_call = provider.get_last_call()
+        assert last_call is not None
+        overrides = last_call.get("config_overrides", {})
+        assert overrides.get("options", {}).get("think") is False
+
+    @pytest.mark.asyncio
+    async def test_no_suppress_thinking_no_override(self) -> None:
+        """When suppress_thinking=False (default), no config_overrides."""
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([text_response("query one")])
+
+        config = TransformerConfig(enabled=True, num_queries=1, suppress_thinking=False)
+        transformer = QueryTransformer(config, provider=provider)
+
+        await transformer.transform("test question")
+        last_call = provider.get_last_call()
+        assert last_call is not None
+        # Should have no config_overrides or None
+        overrides = last_call.get("config_overrides")
+        assert overrides is None
+
+    def test_suppress_thinking_default_false(self) -> None:
+        """suppress_thinking defaults to False."""
+        config = TransformerConfig()
+        assert config.suppress_thinking is False
 
 
 class TestContextualExpander:
@@ -246,6 +403,34 @@ class TestContextualExpander:
         assert "deep" in keywords
         assert "reinforcement" in keywords
         assert "learning" in keywords
+
+    def test_prefers_raw_content_over_augmented(self):
+        """Messages with metadata.raw_content use that instead of content."""
+        expander = ContextualExpander()
+        history = [
+            {
+                "role": "user",
+                "content": "<knowledge_base>kb chunks here</knowledge_base>\nTell me about neural networks",
+                "metadata": {"raw_content": "Tell me about neural networks"},
+            },
+        ]
+
+        result = expander.expand("More details", history)
+
+        # Should extract keywords from raw_content, not augmented content
+        assert "neural" in result.lower() or "networks" in result.lower()
+        assert "knowledge_base" not in result.lower()
+
+    def test_falls_back_to_content_without_raw_content(self):
+        """Without metadata.raw_content, uses content as before."""
+        expander = ContextualExpander()
+        history = [
+            {"role": "user", "content": "Tell me about quantum computing"},
+        ]
+
+        result = expander.expand("More details", history)
+
+        assert "quantum" in result.lower()
 
 
 class TestIsAmbiguousQuery:

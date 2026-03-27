@@ -102,6 +102,7 @@ nav:
         - packages/data/migration.md
         - packages/data/validation.md
         - packages/data/pandas-integration.md
+        - packages/data/grounded-sources.md
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md
@@ -202,6 +203,7 @@ nav:
         - packages/bots/guides/rag-ingestion.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
+        - packages/bots/guides/grounded-reasoning.md
         - Artifact & Evaluation System:
           - packages/bots/guides/artifacts.md
           - packages/bots/guides/artifact-corpus.md

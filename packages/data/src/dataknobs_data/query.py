@@ -154,14 +154,14 @@ class Filter:
             import re
 
             pattern = self.value.replace("%", ".*").replace("_", ".")
-            return bool(re.match(f"^{pattern}$", record_value))
+            return bool(re.match(f"^{pattern}$", record_value, re.IGNORECASE))
         elif self.operator == Operator.NOT_LIKE:
             if not isinstance(record_value, str):
                 return False
             import re
 
             pattern = self.value.replace("%", ".*").replace("_", ".")
-            return not bool(re.match(f"^{pattern}$", record_value))
+            return not bool(re.match(f"^{pattern}$", record_value, re.IGNORECASE))
         elif self.operator == Operator.REGEX:
             if not isinstance(record_value, str):
                 return False

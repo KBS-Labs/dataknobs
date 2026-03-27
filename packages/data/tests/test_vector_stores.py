@@ -225,6 +225,43 @@ class TestMemoryVectorStore:
         assert len(store.vectors) == 0
         assert len(store.metadata_store) == 0
 
+    @pytest.mark.asyncio
+    async def test_metadata_fields_empty(self, store):
+        """Test metadata_fields returns empty set for empty store."""
+        await store.initialize()
+        fields = await store.metadata_fields()
+        assert fields == set()
+
+    @pytest.mark.asyncio
+    async def test_metadata_fields_with_data(self, store):
+        """Test metadata_fields returns union of all field names."""
+        await store.initialize()
+        vectors = np.random.rand(3, 128).astype(np.float32)
+        metadata = [
+            {"headings": ["A"], "heading_levels": [1], "source": "doc.md"},
+            {"headings": ["B"], "category": "test"},
+            {"heading_levels": [2], "author": "alice"},
+        ]
+        await store.add_vectors(vectors, metadata=metadata)
+        fields = await store.metadata_fields()
+        assert fields == {"headings", "heading_levels", "source", "category", "author"}
+
+    @pytest.mark.asyncio
+    async def test_metadata_fields_after_delete(self, store):
+        """Test metadata_fields reflects current state after deletion."""
+        await store.initialize()
+        vectors = np.random.rand(2, 128).astype(np.float32)
+        ids = ["v1", "v2"]
+        metadata = [
+            {"field_a": 1},
+            {"field_b": 2},
+        ]
+        await store.add_vectors(vectors, ids=ids, metadata=metadata)
+        await store.delete_vectors(["v1"])
+        fields = await store.metadata_fields()
+        assert "field_a" not in fields
+        assert "field_b" in fields
+
 
 # Conditional test classes for optional dependencies
 try:
@@ -336,6 +373,28 @@ try:
                 results = await new_store.search(vectors[0], k=1)
                 assert results[0][0] == "0"
 
+            @pytest.mark.asyncio
+            async def test_metadata_fields_empty(self, store):
+                """Test metadata_fields returns empty set for empty store."""
+                await store.initialize()
+                fields = await store.metadata_fields()
+                assert fields == set()
+
+            @pytest.mark.asyncio
+            async def test_metadata_fields_with_data(self, store):
+                """Test metadata_fields returns union of all field names."""
+                await store.initialize()
+                vectors = np.random.rand(3, 128).astype(np.float32)
+                ids = ["f1", "f2", "f3"]
+                metadata = [
+                    {"headings": ["A"], "source": "doc.md"},
+                    {"headings": ["B"], "category": "test"},
+                    {"author": "alice"},
+                ]
+                await store.add_vectors(vectors, ids=ids, metadata=metadata)
+                fields = await store.metadata_fields()
+                assert fields == {"headings", "source", "category", "author"}
+
 except ImportError:
     pass
 
@@ -428,6 +487,28 @@ try:
                 remaining = await store.get_vectors(ids)
                 assert remaining[0][0] is None  # Deleted
                 assert remaining[3][0] is not None  # Still exists
+
+            @pytest.mark.asyncio
+            async def test_metadata_fields_empty(self, store):
+                """Test metadata_fields returns empty set for empty collection."""
+                await store.initialize()
+                fields = await store.metadata_fields()
+                assert fields == set()
+
+            @pytest.mark.asyncio
+            async def test_metadata_fields_with_data(self, store):
+                """Test metadata_fields returns union of all field names."""
+                await store.initialize()
+                vectors = np.random.rand(3, 384).astype(np.float32)
+                ids = [str(uuid4()) for _ in range(3)]
+                metadata = [
+                    {"headings": "A", "source": "doc.md"},
+                    {"headings": "B", "category": "test"},
+                    {"author": "alice"},
+                ]
+                await store.add_vectors(vectors, ids=ids, metadata=metadata)
+                fields = await store.metadata_fields()
+                assert fields == {"headings", "source", "category", "author"}
 
 except ImportError:
     pass

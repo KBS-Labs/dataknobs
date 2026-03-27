@@ -557,7 +557,42 @@ class DynaBot:
                         reasoning_config["config_base_path"],
                         config["config_base_path"],
                     )
-            reasoning_strategy = create_reasoning_from_config(reasoning_config)
+            reasoning_strategy = create_reasoning_from_config(
+                reasoning_config,
+                knowledge_base=knowledge_base,
+            )
+
+            # Config-driven source construction for grounded strategy
+            if (
+                reasoning_config.get("strategy", "").lower() == "grounded"
+                and reasoning_config.get("sources")
+            ):
+                from ..knowledge.sources.factory import create_source_from_config
+                from ..reasoning.grounded_config import GroundedSourceConfig
+
+                for source_dict in reasoning_config["sources"]:
+                    source_cfg = GroundedSourceConfig.from_dict(source_dict)
+                    source = await create_source_from_config(
+                        source_cfg,
+                        knowledge_base=knowledge_base,
+                    )
+                    reasoning_strategy.add_source(source)
+
+            # Auto-disable auto_context for grounded strategy — retrieval
+            # is structural and auto_context is completely redundant.  Leaving
+            # it on causes the grounded strategy to receive KB-augmented
+            # messages as query-generation input, wasting tokens and risking
+            # timeouts with thinking models.
+            if (
+                reasoning_config.get("strategy", "").lower() == "grounded"
+                and knowledge_base is not None
+                and kb_auto_context
+            ):
+                kb_auto_context = False
+                logger.info(
+                    "Grounded strategy: auto_context disabled "
+                    "(retrieval is structural).",
+                )
 
         # Create middleware
         if middleware_override is not None:

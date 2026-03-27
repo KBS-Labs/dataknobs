@@ -336,6 +336,16 @@ class FaissVectorStore(VectorStore):
 
         return count
 
+    async def metadata_fields(self) -> set[str]:
+        """Discover metadata field names across all stored vectors."""
+        if not self._initialized:
+            await self.initialize()
+
+        fields: set[str] = set()
+        for meta in self.metadata_store.values():
+            fields.update(meta.keys())
+        return fields
+
     async def clear(self) -> None:
         """Clear all vectors from the store."""
         if not self._initialized:

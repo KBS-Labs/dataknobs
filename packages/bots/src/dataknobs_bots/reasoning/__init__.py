@@ -4,6 +4,14 @@ from typing import Any
 
 from .base import ReasoningManagerProtocol, ReasoningStrategy
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
+from .grounded import GroundedReasoning
+from .grounded_config import (
+    GroundedIntentConfig,
+    GroundedReasoningConfig,
+    GroundedRetrievalConfig,
+    GroundedSourceConfig,
+    GroundedSynthesisConfig,
+)
 from .observability import (
     # Task tracking types
     TaskCompletionTrigger,
@@ -45,6 +53,12 @@ __all__ = [
     "ReasoningStrategy",
     "SimpleReasoning",
     "ReActReasoning",
+    "GroundedReasoning",
+    "GroundedReasoningConfig",
+    "GroundedIntentConfig",
+    "GroundedRetrievalConfig",
+    "GroundedSynthesisConfig",
+    "GroundedSourceConfig",
     "WizardAdvanceResult",
     "WizardReasoning",
     "WizardStageContext",
@@ -89,12 +103,16 @@ __all__ = [
 ]
 
 
-def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
+def create_reasoning_from_config(
+    config: dict[str, Any],
+    *,
+    knowledge_base: Any | None = None,
+) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
     Args:
         config: Reasoning configuration with:
-            - strategy: Strategy type ('simple', 'react', 'wizard')
+            - strategy: Strategy type ('simple', 'react', 'wizard', 'grounded')
             - greeting_template: Optional Jinja2 template for bot-initiated
               greetings (simple/react only; wizard uses FSM start stage)
             - max_iterations: For ReAct, max reasoning loops (default: 5)
@@ -106,6 +124,17 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
             - consistent_navigation_lifecycle: For wizard, whether back/skip
               navigation fires the same lifecycle hooks as forward transitions
               (default: True)
+            - intent: For grounded, intent resolution config dict with:
+              - mode: "extract" (LLM), "static" (config), "template" (Jinja2)
+              - default_filters: Always-applied filters (any mode)
+            - query_generation: Legacy alias for intent (extract mode)
+            - retrieval: For grounded, retrieval config dict
+            - synthesis: For grounded, synthesis config dict with:
+              - mode: "llm" (default) or "template" (Jinja2)
+            - sources: For grounded, list of source config dicts
+            - store_provenance: For grounded, enable provenance recording (default: True)
+        knowledge_base: Optional knowledge base instance.  Required by the
+            ``"grounded"`` strategy; ignored by other strategies.
 
     Returns:
         Configured reasoning strategy instance
@@ -139,6 +168,15 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
             "strict_validation": True
         }
         strategy = create_reasoning_from_config(config)
+
+        # Grounded reasoning (deterministic KB retrieval)
+        config = {
+            "strategy": "grounded",
+            "query_generation": {"num_queries": 3},
+            "retrieval": {"top_k": 5},
+            "synthesis": {"require_citations": True},
+        }
+        strategy = create_reasoning_from_config(config, knowledge_base=kb)
         ```
     """
     strategy_type = config.get("strategy", "simple").lower()
@@ -159,8 +197,22 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
     elif strategy_type == "wizard":
         return WizardReasoning.from_config(config)
 
+    elif strategy_type == "grounded":
+        grounded_config = GroundedReasoningConfig.from_dict(config)
+        strategy = GroundedReasoning(config=grounded_config)
+        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but only
+        # when the config doesn't already declare a vector_kb source
+        # (otherwise the same KB gets wrapped twice: once here, once by
+        # the source construction loop in base.py).
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb" for s in grounded_config.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            strategy.set_knowledge_base(knowledge_base)
+        return strategy
+
     else:
         raise ValueError(
             f"Unknown reasoning strategy: {strategy_type}. "
-            f"Available strategies: simple, react, wizard"
+            f"Available strategies: simple, react, wizard, grounded"
         )

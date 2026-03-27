@@ -13,12 +13,14 @@ from dataknobs_bots.knowledge.query.transformer import (
     QueryTransformer,
     TransformerConfig,
     create_transformer,
+    parse_query_response,
 )
 
 __all__ = [
     "QueryTransformer",
     "TransformerConfig",
     "create_transformer",
+    "parse_query_response",
     "ContextualExpander",
     "Message",
     "is_ambiguous_query",
