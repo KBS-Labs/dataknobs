@@ -564,6 +564,56 @@ class TestLLMHeadingSelection:
         assert messages[0].role == "system"
         assert messages[1].role == "user"
 
+    @pytest.mark.asyncio
+    async def test_dedicated_heading_selection_llm(self) -> None:
+        """Dedicated heading_selection_llm is used instead of the main LLM."""
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(entry_strategy="heading_match")
+
+        # Dedicated LLM for heading selection
+        dedicated_llm = EchoProvider(_ECHO_CONFIG)
+        dedicated_llm.set_responses([text_response("[0]")])
+
+        index = HeadingTreeIndex.from_chunks(
+            chunks, config=config,
+            heading_selection_llm=dedicated_llm,
+        )
+
+        # Main LLM should NOT be called
+        main_llm = EchoProvider(_ECHO_CONFIG)
+
+        results = await index.resolve("CSRF security", llm=main_llm)
+        assert dedicated_llm.call_count == 1
+        assert main_llm.call_count == 0
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_dedicated_llm_fallback_to_main(self) -> None:
+        """Without dedicated LLM, falls back to main LLM parameter."""
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(entry_strategy="heading_match")
+
+        # No dedicated LLM
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        main_llm = EchoProvider(_ECHO_CONFIG)
+        main_llm.set_responses([text_response("[0]")])
+
+        results = await index.resolve("CSRF security", llm=main_llm)
+        assert main_llm.call_count == 1
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_no_llm_at_all_returns_all_candidates(self) -> None:
+        """Without any LLM, all heading candidates are returned."""
+        chunks = _rfc_chunks()
+        config = HeadingTreeConfig(entry_strategy="heading_match")
+        index = HeadingTreeIndex.from_chunks(chunks, config=config)
+
+        # No LLM at all
+        results = await index.resolve("CSRF security")
+        assert len(results) > 0
+
 
 # ------------------------------------------------------------------
 # Result limits

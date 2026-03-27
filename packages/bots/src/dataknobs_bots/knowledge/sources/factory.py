@@ -150,15 +150,22 @@ def build_topic_index(
         )
 
         config = HeadingTreeConfig.from_dict(topic_index_config)
+
+        # Build a dedicated heading-selection LLM if configured
+        heading_selection_llm = _build_heading_selection_llm(config)
+
         idx = HeadingTreeIndex(
             vector_query_fn=vector_query_fn,
             source_name=source_name,
             config=config,
+            heading_selection_llm=heading_selection_llm,
         )
         logger.info(
             "Built heading_tree topic index for source '%s' "
-            "(entry_strategy=%s, expansion_mode=%s)",
+            "(entry_strategy=%s, expansion_mode=%s, "
+            "heading_selection_llm=%s)",
             source_name, config.entry_strategy, config.expansion_mode,
+            "dedicated" if heading_selection_llm else "main",
         )
         return idx
 
@@ -231,6 +238,38 @@ def _build_embed_fn(kb: Any) -> Any | None:
             return await kb.embed(text)
         return embed_fn
     return None
+
+
+def _build_heading_selection_llm(config: Any) -> Any | None:
+    """Build a dedicated LLM provider for heading selection.
+
+    When ``heading_selection_config`` is set on the config, creates a
+    lightweight provider for the constrained heading classification task.
+    This avoids using the main (often expensive/slow) thinking model for
+    a simple selection task.
+
+    Returns ``None`` if no dedicated config is set (falls back to main LLM).
+    """
+    hs_config = getattr(config, "heading_selection_config", None)
+    if not hs_config:
+        return None
+
+    from dataknobs_llm import create_llm_provider
+
+    try:
+        provider = create_llm_provider(hs_config)
+        logger.info(
+            "Built dedicated heading selection LLM: provider=%s, model=%s",
+            hs_config.get("provider"), hs_config.get("model"),
+        )
+        return provider
+    except Exception:
+        logger.warning(
+            "Failed to build heading selection LLM from config %r, "
+            "will fall back to main LLM",
+            hs_config, exc_info=True,
+        )
+        return None
 
 
 async def _create_database_source(

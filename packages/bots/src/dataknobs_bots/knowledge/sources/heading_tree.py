@@ -77,6 +77,11 @@ class HeadingTreeConfig:
         heading_match: Configuration for heading-text matching.
         scope_profiles: Per-scope parameter overrides keyed by scope
             name (e.g. ``"focused"``, ``"broad"``).
+        heading_selection_config: Optional LLM provider config dict for
+            heading selection (e.g. ``{"provider": "ollama", "model":
+            "phi4-mini"}``).  When set, a dedicated lightweight provider
+            is used for LLM heading selection instead of the main model.
+            Falls back to the main LLM when ``None``.
     """
 
     entry_strategy: str = "both"
@@ -90,6 +95,7 @@ class HeadingTreeConfig:
     max_headings_for_llm: int = 100
     heading_match: HeadingMatchConfig = field(default_factory=HeadingMatchConfig)
     scope_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    heading_selection_config: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> HeadingTreeConfig:
@@ -194,6 +200,9 @@ class HeadingTreeIndex:
             and ``"both"`` entry strategies.
         source_name: Source name for logging.
         config: Full configuration.
+        heading_selection_llm: Optional dedicated LLM provider for
+            heading selection.  When set, ``_llm_select_headings``
+            uses this instead of the main LLM passed to ``resolve()``.
     """
 
     def __init__(
@@ -202,10 +211,12 @@ class HeadingTreeIndex:
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: HeadingTreeConfig | None = None,
+        heading_selection_llm: Any | None = None,
     ) -> None:
         self._config = config or HeadingTreeConfig()
         self._source_name = source_name
         self._vector_query_fn = vector_query_fn
+        self._heading_selection_llm = heading_selection_llm
 
         # Eager-mode state: populated by from_chunks(), None in lazy mode
         self._chunks_by_id: dict[str, SourceResult] | None = None
@@ -219,6 +230,7 @@ class HeadingTreeIndex:
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: HeadingTreeConfig | None = None,
+        heading_selection_llm: Any | None = None,
     ) -> HeadingTreeIndex:
         """Eagerly build from a pre-loaded chunk set.
 
@@ -231,6 +243,7 @@ class HeadingTreeIndex:
             vector_query_fn=vector_query_fn,
             source_name=source_name,
             config=config,
+            heading_selection_llm=heading_selection_llm,
         )
         idx._chunks_by_id = {c.source_id: c for c in all_chunks}
         idx._tree = build_heading_tree(all_chunks)
@@ -339,9 +352,11 @@ class HeadingTreeIndex:
         )
 
         # Step 6: Optional LLM heading selection
-        if llm is not None and len(seed_nodes) > 1:
+        # Prefer dedicated heading_selection_llm over the main provider
+        selection_llm = self._heading_selection_llm or llm
+        if selection_llm is not None and len(seed_nodes) > 1:
             seed_nodes = await self._llm_select_headings(
-                query, seed_nodes, llm,
+                query, seed_nodes, selection_llm,
             )
 
         # Step 7: Expand matched regions and collect chunks

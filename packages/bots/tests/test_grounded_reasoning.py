@@ -1190,6 +1190,29 @@ class TestSourceFactory:
         assert isinstance(source.topic_index, ClusterTopicIndex)
 
     @pytest.mark.asyncio
+    async def test_vector_kb_source_with_heading_selection_config(self) -> None:
+        """Factory builds dedicated heading selection LLM when configured."""
+        from dataknobs_bots.knowledge.sources.factory import create_source_from_config
+        from dataknobs_bots.knowledge.sources.heading_tree import HeadingTreeIndex
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        config = GroundedSourceConfig(
+            source_type="vector_kb",
+            name="docs",
+            topic_index={
+                "type": "heading_tree",
+                "heading_selection_config": {
+                    "provider": "echo",
+                    "model": "test",
+                },
+            },
+        )
+        source = await create_source_from_config(config, knowledge_base=kb)
+        assert isinstance(source.topic_index, HeadingTreeIndex)
+        # The dedicated heading selection LLM should be set
+        assert source.topic_index._heading_selection_llm is not None
+
+    @pytest.mark.asyncio
     async def test_vector_kb_source_without_topic_index(self) -> None:
         """Factory creates source with no topic index when not configured."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
