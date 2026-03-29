@@ -1,13 +1,15 @@
-name: Update Dependencies
+name: Update Python Dependencies
 
-# Consolidated weekly dependency update workflow.
+# Weekly Python dependency update workflow.
 #
 # Triggers:
-#   1. When a PR with the 'dependencies' label is opened (e.g., dependabot) —
-#      merges it in, updates Python deps, creates a single combined PR.
-#   2. Weekly Monday schedule — updates Python deps (and picks up any pending
-#      'dependencies' PRs that haven't been processed yet).
-#   3. Manual dispatch.
+#   1. Weekly Monday schedule — upgrades Python deps and audits for CVEs.
+#   2. Manual dispatch.
+#
+# GitHub Actions updates are handled by Dependabot directly (grouped
+# into a single PR via dependabot.yml). This workflow only handles
+# Python dependencies because pushing workflow file changes requires
+# `workflows: write` permission, which we intentionally do not grant.
 #
 # After updating, osv-scanner audits the resolved lock file for known
 # CVEs. Findings are included in the PR body so reviewers see them.
@@ -16,8 +18,6 @@ name: Update Dependencies
 # (Settings > Code security and analysis) — independent of dependabot.yml.
 
 on:
-  pull_request:
-    types: [opened, labeled]
   schedule:
     # Run weekly on Monday at 15:00 UTC (9 AM MDT / 8 AM MST)
     - cron: '0 15 * * 1'
@@ -29,11 +29,6 @@ concurrency:
 
 jobs:
   update-dependencies:
-    # Run on schedule/dispatch always; on pull_request only for trusted 'dependencies' PRs
-    if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'dependencies') &&
-       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -67,53 +62,6 @@ jobs:
           fi
         fi
         echo "skip=false" >> "$GITHUB_OUTPUT"
-
-    - name: Merge pending dependency PRs
-      id: merge_deps
-      if: steps.debounce.outputs.skip != 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -e
-        echo "Checking for open dependency PRs..."
-
-        # Capture PR numbers and branches together so close step uses the same list
-        prs=$(gh pr list \
-          --label "dependencies" \
-          --state open \
-          --json number,headRefName \
-          --jq '.[] | "\(.number) \(.headRefName)"')
-
-        if [ -z "$prs" ]; then
-          echo "No pending dependency PRs found."
-          echo "merged=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        merged_numbers=""
-        while read -r pr_number branch; do
-          echo "Merging dependency branch: ${branch} (PR #${pr_number})"
-          git fetch origin "${branch}"
-          git merge "origin/${branch}" --no-edit
-          merged_numbers="${merged_numbers} ${pr_number}"
-        done <<< "$prs"
-
-        echo "merged=true" >> "$GITHUB_OUTPUT"
-        echo "pr_numbers=${merged_numbers}" >> "$GITHUB_OUTPUT"
-
-    - name: Close merged dependency PRs
-      if: steps.debounce.outputs.skip != 'true' && steps.merge_deps.outputs.merged == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        MERGED_PR_NUMBERS: ${{ steps.merge_deps.outputs.pr_numbers }}
-      run: |
-        echo "Closing merged dependency PRs..."
-        for pr_number in $MERGED_PR_NUMBERS; do
-          echo "Closing PR #${pr_number}"
-          gh pr close "$pr_number" \
-            --comment "Changes included in the consolidated weekly dependency update PR." \
-            --delete-branch
-        done
 
     - name: Install uv
       if: steps.debounce.outputs.skip != 'true'
@@ -180,13 +128,12 @@ jobs:
       uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0  # v8.1.0
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        commit-message: 'chore: update dependencies'
-        title: 'chore: update dependencies'
+        commit-message: 'chore: update Python dependencies'
+        title: 'chore: update Python dependencies'
         body: |
-          Automated weekly dependency update.
+          Automated weekly Python dependency update.
 
           **Python dependencies:** Updated via `uv lock --upgrade`.
-          **GitHub Actions:** ${{ steps.merge_deps.outputs.merged == 'true' && 'Included from dependency PR.' || 'No pending updates.' }}
           **Vulnerability audit:** ${{ steps.audit.outputs.vuln_summary }}
 
           Lock file verified. Run `bin/dk pr --all` locally before merging.
