@@ -29,10 +29,11 @@ concurrency:
 
 jobs:
   update-dependencies:
-    # Run on schedule/dispatch always; on pull_request only for 'dependencies' label
+    # Run on schedule/dispatch always; on pull_request only for trusted 'dependencies' PRs
     if: >-
       github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'dependencies')
+      (contains(github.event.pull_request.labels.*.name, 'dependencies') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,9 +105,10 @@ jobs:
       if: steps.debounce.outputs.skip != 'true' && steps.merge_deps.outputs.merged == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        MERGED_PR_NUMBERS: ${{ steps.merge_deps.outputs.pr_numbers }}
       run: |
         echo "Closing merged dependency PRs..."
-        for pr_number in ${{ steps.merge_deps.outputs.pr_numbers }}; do
+        for pr_number in $MERGED_PR_NUMBERS; do
           echo "Closing PR #${pr_number}"
           gh pr close "$pr_number" \
             --comment "Changes included in the consolidated weekly dependency update PR." \
