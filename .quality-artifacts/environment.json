@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-30T16:03:09Z",
+  "timestamp": "2026-03-30T16:55:55Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.11.1 (Homebrew 2026-03-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-md-chunker-overlap",
-  "git_commit": "13484511e12767c56b6c6a76f2def25ecf174536",
+  "git_branch": "update-dependencies",
+  "git_commit": "afbc0f00b945f73da3c2cb1932d2864aca2bfa23",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
