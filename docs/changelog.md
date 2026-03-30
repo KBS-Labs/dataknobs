@@ -5,6 +5,89 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-30
+
+### dataknobs-bots [0.6.7]
+
+#### Added
+- added grounded reasoning strategy with configurable search result
+  synthesis and deterministic retrieval (PR #216)
+- added standalone extraction grounding utility for reuse across
+  reasoning strategies (PR #216)
+- added per-stage first-render confirmation control for wizard
+  flows (PR #215)
+- added composite memory fallback and embedding provider factory
+  improvements (PR #211)
+- added wizard loader validation for stage configuration (PR #211)
+
+#### Fixed
+- fixed tool/middleware error propagation and timeout handling in
+  turn lifecycle (PR #213)
+- fixed process hanging and error swallowing during bot
+  creation (PR #214)
+- fixed metadata dropping in grounded reasoning pipeline (PR #216)
+- fixed thinking mode interference with extraction (PR #216)
+
+### dataknobs-llm [0.5.4]
+
+#### Added
+- added extraction grounding utility for validating extracted
+  values against field schemas (PR #216)
+- added retrieval intent types for structured source
+  queries (PR #216)
+
+#### Fixed
+- fixed Anthropic messages bug by standardizing LLM adapter pattern
+  across all providers (PR #212)
+- fixed Ollama provider model matching to be strict (PR #211)
+
+### dataknobs-data [0.4.13]
+
+#### Added
+- added grounded source abstraction with database, topic index,
+  and cluster index implementations (PR #216)
+- added cross-source normalization and result processing
+  utilities (PR #216)
+
+#### Fixed
+- fixed `LIKE`/`NOT_LIKE` filter operators to be
+  case-insensitive (PR #216)
+
+### dataknobs-fsm [0.1.14]
+
+#### Fixed
+- fixed async HTTP provider session cleanup to drain SSL transport
+  callbacks before event loop shutdown (PR #214)
+
+### dataknobs-config [0.3.8]
+
+#### Fixed
+- fixed `substitute_env_vars` to also substitute environment
+  variables in dictionary keys
+
+### dataknobs-xization [1.3.0]
+
+#### Added
+- added HTML-to-markdown converter with structure-preserving
+  table and list handling (PR #209)
+
+#### Fixed
+- replaced `chunk_overlap` with priority-based boundary splitting
+  in `MarkdownChunker` (paragraph, sentence, word) (PR #220)
+
+### dataknobs-common [1.3.5]
+
+#### Fixed
+- testing utility with markdown chunk_overlap parameter removal (PR #220)
+
+### Infrastructure / CI
+
+- added vulnerability auditing with `osv-scanner` (PR #210)
+- updated `nltk` and `torch` for CVE remediation (PR #210)
+- simplified dependency-update workflow to Python-only (PR #218)
+- bumped GitHub Actions in the `github-actions` group (PR #219)
+
+
 ## Release - 2026-03-23
 
 ### dataknobs-bots [0.6.6]
