@@ -4,7 +4,7 @@ from typing import Any
 
 from .base import ReasoningManagerProtocol, ReasoningStrategy
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
-from .grounded import GroundedReasoning
+from .grounded import GroundedReasoning, SynthesisPlan
 from .grounded_config import (
     GroundedIntentConfig,
     GroundedReasoningConfig,
@@ -12,6 +12,8 @@ from .grounded_config import (
     GroundedSourceConfig,
     GroundedSynthesisConfig,
 )
+from .hybrid import HybridReasoning
+from .hybrid_config import HybridReasoningConfig
 from .observability import (
     # Task tracking types
     TaskCompletionTrigger,
@@ -59,6 +61,9 @@ __all__ = [
     "GroundedRetrievalConfig",
     "GroundedSynthesisConfig",
     "GroundedSourceConfig",
+    "SynthesisPlan",
+    "HybridReasoning",
+    "HybridReasoningConfig",
     "WizardAdvanceResult",
     "WizardReasoning",
     "WizardStageContext",
@@ -112,7 +117,7 @@ def create_reasoning_from_config(
 
     Args:
         config: Reasoning configuration with:
-            - strategy: Strategy type ('simple', 'react', 'wizard', 'grounded')
+            - strategy: Strategy type ('simple', 'react', 'wizard', 'grounded', 'hybrid')
             - greeting_template: Optional Jinja2 template for bot-initiated
               greetings (simple/react only; wizard uses FSM start stage)
             - max_iterations: For ReAct, max reasoning loops (default: 5)
@@ -211,8 +216,20 @@ def create_reasoning_from_config(
             strategy.set_knowledge_base(knowledge_base)
         return strategy
 
+    elif strategy_type == "hybrid":
+        hybrid_config = HybridReasoningConfig.from_dict(config)
+        strategy = HybridReasoning(config=hybrid_config)
+        # Auto-wrap knowledge_base — same logic as grounded
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb"
+            for s in hybrid_config.grounded.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            strategy.set_knowledge_base(knowledge_base)
+        return strategy
+
     else:
         raise ValueError(
             f"Unknown reasoning strategy: {strategy_type}. "
-            f"Available strategies: simple, react, wizard, grounded"
+            f"Available strategies: simple, react, wizard, grounded, hybrid"
         )

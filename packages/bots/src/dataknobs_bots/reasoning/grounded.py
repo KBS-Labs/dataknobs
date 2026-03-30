@@ -124,10 +124,10 @@ _VALID_STYLES = frozenset({"conversational", "structured", "hybrid"})
 
 
 @dataclass
-class _SynthesisPlan:
+class SynthesisPlan:
     """Resolved synthesis strategy for a single turn.
 
-    Computed once by :meth:`GroundedReasoning._resolve_synthesis` and
+    Computed once by :meth:`GroundedReasoning.resolve_synthesis` and
     consumed by both the buffered and streaming delivery paths — ensuring
     style resolution, template rendering, and prompt construction happen
     in a single shared code path.
@@ -442,7 +442,7 @@ class GroundedReasoning(ReasoningStrategy):
         Only LLM synthesis streams; structured/hybrid template output
         is yielded as discrete chunks.
 
-        Uses :meth:`_resolve_synthesis` for style resolution — the same
+        Uses :meth:`resolve_synthesis` for style resolution — the same
         shared code path as the buffered :meth:`_synthesize`.
 
         Yields:
@@ -451,7 +451,7 @@ class GroundedReasoning(ReasoningStrategy):
         from dataknobs_llm import LLMResponse
 
         context, provenance = await self.retrieve_context(manager, llm)
-        plan = self._resolve_synthesis(context, manager, provenance)
+        plan = self.resolve_synthesis(context, manager, provenance)
 
         if plan.effective_style == "structured":
             yield LLMResponse(
@@ -1062,11 +1062,11 @@ class GroundedReasoning(ReasoningStrategy):
         """Synthesize a response using the resolved synthesis style.
 
         Delegates style resolution and artifact preparation to
-        :meth:`_resolve_synthesis`, then handles buffered delivery only.
+        :meth:`resolve_synthesis`, then handles buffered delivery only.
         """
         from dataknobs_llm import LLMResponse
 
-        plan = self._resolve_synthesis(context, manager, provenance)
+        plan = self.resolve_synthesis(context, manager, provenance)
 
         if plan.effective_style == "structured":
             return LLMResponse(
@@ -1095,12 +1095,12 @@ class GroundedReasoning(ReasoningStrategy):
     # Shared synthesis resolution (used by both buffered and streaming)
     # ------------------------------------------------------------------
 
-    def _resolve_synthesis(
+    def resolve_synthesis(
         self,
         context: str,
         manager: Any,
         provenance: dict[str, Any],
-    ) -> _SynthesisPlan:
+    ) -> SynthesisPlan:
         """Resolve the effective synthesis style and pre-compute artifacts.
 
         This is the single shared code path consumed by both
@@ -1129,11 +1129,11 @@ class GroundedReasoning(ReasoningStrategy):
                 template_text = None
 
         if style in ("conversational", "hybrid"):
-            system_prompt = self._build_synthesis_system_prompt(
+            system_prompt = self.build_synthesis_system_prompt(
                 context, manager.system_prompt,
             )
 
-        return _SynthesisPlan(
+        return SynthesisPlan(
             effective_style=style,
             template_text=template_text,
             system_prompt=system_prompt,
@@ -1221,7 +1221,7 @@ class GroundedReasoning(ReasoningStrategy):
             intent=provenance.get("intent", {}),
         )
 
-    def _build_synthesis_system_prompt(
+    def build_synthesis_system_prompt(
         self,
         kb_context: str,
         original_system_prompt: str,

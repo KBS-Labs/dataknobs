@@ -562,15 +562,30 @@ class DynaBot:
                 knowledge_base=knowledge_base,
             )
 
-            # Config-driven source construction for grounded strategy
-            if (
-                reasoning_config.get("strategy", "").lower() == "grounded"
-                and reasoning_config.get("sources")
-            ):
+            # Config-driven source construction for grounded/hybrid strategies
+            strategy_name = reasoning_config.get("strategy", "").lower()
+            _grounded_family = strategy_name in ("grounded", "hybrid")
+
+            # For grounded, sources are at the top level.
+            # For hybrid, sources live under the "grounded" sub-key.
+            if strategy_name == "hybrid":
+                source_list = reasoning_config.get(
+                    "grounded", {},
+                ).get("sources", [])
+                # Warn if top-level sources found — user likely misplaced them
+                if reasoning_config.get("sources"):
+                    logger.warning(
+                        "Hybrid strategy: top-level 'sources' key ignored; "
+                        "sources must be under 'grounded.sources'.",
+                    )
+            else:
+                source_list = reasoning_config.get("sources", [])
+
+            if _grounded_family and source_list:
                 from ..knowledge.sources.factory import create_source_from_config
                 from ..reasoning.grounded_config import GroundedSourceConfig
 
-                for source_dict in reasoning_config["sources"]:
+                for source_dict in source_list:
                     source_cfg = GroundedSourceConfig.from_dict(source_dict)
                     source = await create_source_from_config(
                         source_cfg,
@@ -578,20 +593,21 @@ class DynaBot:
                     )
                     reasoning_strategy.add_source(source)
 
-            # Auto-disable auto_context for grounded strategy — retrieval
-            # is structural and auto_context is completely redundant.  Leaving
-            # it on causes the grounded strategy to receive KB-augmented
-            # messages as query-generation input, wasting tokens and risking
+            # Auto-disable auto_context for grounded/hybrid — retrieval
+            # is structural and auto_context is completely redundant.
+            # Leaving it on causes KB-augmented messages as
+            # query-generation input, wasting tokens and risking
             # timeouts with thinking models.
             if (
-                reasoning_config.get("strategy", "").lower() == "grounded"
+                _grounded_family
                 and knowledge_base is not None
                 and kb_auto_context
             ):
                 kb_auto_context = False
                 logger.info(
-                    "Grounded strategy: auto_context disabled "
+                    "%s strategy: auto_context disabled "
                     "(retrieval is structural).",
+                    strategy_name.title(),
                 )
 
         # Create middleware
