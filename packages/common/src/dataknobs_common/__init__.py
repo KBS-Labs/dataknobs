@@ -31,6 +31,12 @@ Example:
 """
 
 # Import all public APIs from submodules
+from dataknobs_common.expressions import (
+    SAFE_BUILTINS,
+    ExpressionResult,
+    safe_eval,
+    safe_eval_value,
+)
 from dataknobs_common.events import (
     Event,
     EventBus,
@@ -107,6 +113,11 @@ __version__ = "1.3.5"
 __all__ = [
     # Version
     "__version__",
+    # Expressions
+    "SAFE_BUILTINS",
+    "ExpressionResult",
+    "safe_eval",
+    "safe_eval_value",
     # Events
     "Event",
     "EventBus",
