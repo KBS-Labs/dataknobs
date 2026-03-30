@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-03-30T16:03:09Z",
+  "timestamp": "2026-03-30T16:55:55Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
+  "packages": "all",
+  "tested_packages": [],
   "checks": {
     "documentation": {
       "status": "pass",
