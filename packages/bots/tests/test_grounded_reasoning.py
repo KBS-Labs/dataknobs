@@ -1095,7 +1095,7 @@ class TestSynthesisPrompt:
             ),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt(
+        prompt = strategy.build_synthesis_system_prompt(
             "KB content here", "Original system prompt",
         )
         assert "Original system prompt" in prompt
@@ -1108,7 +1108,7 @@ class TestSynthesisPrompt:
             synthesis=GroundedSynthesisConfig(allow_parametric=True),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("content", "sys")
         assert "general knowledge" in prompt
 
     def test_parametric_blocked(self) -> None:
@@ -1116,12 +1116,12 @@ class TestSynthesisPrompt:
             synthesis=GroundedSynthesisConfig(allow_parametric=False),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("content", "sys")
         assert "Do not fill gaps" in prompt
 
     def test_empty_context(self) -> None:
         strategy = GroundedReasoning(config=GroundedReasoningConfig())
-        prompt = strategy._build_synthesis_system_prompt("", "sys prompt")
+        prompt = strategy.build_synthesis_system_prompt("", "sys prompt")
         assert "sys prompt" in prompt
         assert "<knowledge_base>" not in prompt
 
@@ -1906,7 +1906,7 @@ class TestStyleResolution:
 
 
 class TestSynthesisPlan:
-    """Test _resolve_synthesis produces correct plan artifacts."""
+    """Test resolve_synthesis produces correct plan artifacts."""
 
     def _make_strategy(
         self,
@@ -1942,7 +1942,7 @@ class TestSynthesisPlan:
     def test_conversational_has_prompt_only(self) -> None:
         """Conversational plan has system_prompt, no template_text."""
         strategy = self._make_strategy(style="conversational")
-        plan = strategy._resolve_synthesis(
+        plan = strategy.resolve_synthesis(
             "kb context", self._FakeManager(), self._make_provenance(),
         )
         assert plan.effective_style == "conversational"
@@ -1952,7 +1952,7 @@ class TestSynthesisPlan:
     def test_structured_has_template_only(self) -> None:
         """Structured plan has template_text, no system_prompt."""
         strategy = self._make_strategy(style="structured")
-        plan = strategy._resolve_synthesis(
+        plan = strategy.resolve_synthesis(
             "kb context", self._FakeManager(), self._make_provenance(),
         )
         assert plan.effective_style == "structured"
@@ -1962,7 +1962,7 @@ class TestSynthesisPlan:
     def test_hybrid_has_both(self) -> None:
         """Hybrid plan has both system_prompt and template_text."""
         strategy = self._make_strategy(style="hybrid")
-        plan = strategy._resolve_synthesis(
+        plan = strategy.resolve_synthesis(
             "kb context", self._FakeManager(), self._make_provenance(),
         )
         assert plan.effective_style == "hybrid"
@@ -2059,7 +2059,7 @@ class TestDefaultProvenanceTemplate:
             "results": [{"source_id": "a", "relevance": 0.9}],
             "results_by_source": {},
         }
-        plan = strategy._resolve_synthesis("context", _Mgr(), prov)
+        plan = strategy.resolve_synthesis("context", _Mgr(), prov)
         assert plan.template_text == "Custom: 1 hits"
 
 
@@ -2536,7 +2536,7 @@ class TestSynthesisInstruction:
             ),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt(
+        prompt = strategy.build_synthesis_system_prompt(
             "KB content", "System prompt",
         )
         assert "Focus on security risks." in prompt
@@ -2554,10 +2554,10 @@ class TestSynthesisInstruction:
         )
         strategy_with = GroundedReasoning(config=cfg_with)
         strategy_without = GroundedReasoning(config=cfg_without)
-        prompt_with = strategy_with._build_synthesis_system_prompt(
+        prompt_with = strategy_with.build_synthesis_system_prompt(
             "KB content", "System prompt",
         )
-        prompt_without = strategy_without._build_synthesis_system_prompt(
+        prompt_without = strategy_without.build_synthesis_system_prompt(
             "KB content", "System prompt",
         )
         assert "Extra guidance." in prompt_with
@@ -2571,7 +2571,7 @@ class TestSynthesisInstruction:
             ),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("content", "sys")
         assert "general knowledge" in prompt
         assert "Emphasize practical examples." in prompt
 
@@ -2691,7 +2691,7 @@ class TestBridgeMode:
             synthesis=GroundedSynthesisConfig(allow_parametric="bridge"),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("KB content", "sys")
         assert "connect and synthesize concepts" in prompt
         assert "Do not introduce facts from outside" in prompt
 
@@ -2700,7 +2700,7 @@ class TestBridgeMode:
             synthesis=GroundedSynthesisConfig(allow_parametric=False),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("KB content", "sys")
         assert "Do not fill gaps" in prompt
         assert "connect and synthesize" not in prompt
 
@@ -2709,7 +2709,7 @@ class TestBridgeMode:
             synthesis=GroundedSynthesisConfig(allow_parametric=True),
         )
         strategy = GroundedReasoning(config=cfg)
-        prompt = strategy._build_synthesis_system_prompt("KB content", "sys")
+        prompt = strategy.build_synthesis_system_prompt("KB content", "sys")
         assert "general knowledge" in prompt
         assert "connect and synthesize" not in prompt
 

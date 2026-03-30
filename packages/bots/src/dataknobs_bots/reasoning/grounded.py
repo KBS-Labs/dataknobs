@@ -124,13 +124,18 @@ _VALID_STYLES = frozenset({"conversational", "structured", "hybrid"})
 
 
 @dataclass
-class _SynthesisPlan:
+class SynthesisPlan:
     """Resolved synthesis strategy for a single turn.
 
-    Computed once by :meth:`GroundedReasoning._resolve_synthesis` and
+    Computed once by :meth:`GroundedReasoning.resolve_synthesis` and
     consumed by both the buffered and streaming delivery paths — ensuring
     style resolution, template rendering, and prompt construction happen
     in a single shared code path.
+
+    The :meth:`apply_to_response` method applies the plan to an existing
+    ``LLMResponse``, handling all three styles (conversational, structured,
+    hybrid).  This is the shared dispatch logic used by both
+    ``GroundedReasoning._synthesize`` and ``HybridReasoning``.
     """
 
     effective_style: str
@@ -141,6 +146,45 @@ class _SynthesisPlan:
 
     system_prompt: str | None
     """LLM synthesis prompt (conversational / hybrid)."""
+
+    def apply_to_response(self, response: Any) -> Any:
+        """Apply synthesis formatting to an existing LLM response.
+
+        - ``conversational``: return the response unchanged.
+        - ``structured``: return the pre-rendered template, discarding
+          the LLM response.
+        - ``hybrid``: append the template to the LLM response content.
+
+        Args:
+            response: An ``LLMResponse`` (or compatible object with
+                ``content``, ``model``, ``finish_reason`` attributes).
+
+        Returns:
+            The formatted ``LLMResponse``.
+        """
+        from dataknobs_llm import LLMResponse as _LLMResponse
+
+        if self.effective_style == "structured" and self.template_text is not None:
+            return _LLMResponse(
+                content=self.template_text,
+                model="template",
+                finish_reason="stop",
+            )
+
+        if self.effective_style == "hybrid" and self.template_text:
+            combined = (
+                (getattr(response, "content", "") or "")
+                + "\n\n"
+                + self.template_text
+            )
+            return _LLMResponse(
+                content=combined,
+                model=getattr(response, "model", "unknown"),
+                finish_reason=getattr(response, "finish_reason", "stop"),
+            )
+
+        # conversational or fallback — return as-is
+        return response
 
 
 class GroundedReasoning(ReasoningStrategy):
@@ -413,7 +457,7 @@ class GroundedReasoning(ReasoningStrategy):
             manager: Conversation manager (ReasoningManagerProtocol).
             llm: Bot's main LLM provider.
             tools: Accepted for ABC compliance; unused in this strategy.
-                Phase 5 hybrid strategy will use tools.
+                :class:`HybridReasoning` uses tools in its ReAct phase.
             **kwargs: Forwarded to ``manager.complete()`` (temperature, etc.).
         """
         context, provenance = await self.retrieve_context(manager, llm)
@@ -442,7 +486,7 @@ class GroundedReasoning(ReasoningStrategy):
         Only LLM synthesis streams; structured/hybrid template output
         is yielded as discrete chunks.
 
-        Uses :meth:`_resolve_synthesis` for style resolution — the same
+        Uses :meth:`resolve_synthesis` for style resolution — the same
         shared code path as the buffered :meth:`_synthesize`.
 
         Yields:
@@ -451,7 +495,7 @@ class GroundedReasoning(ReasoningStrategy):
         from dataknobs_llm import LLMResponse
 
         context, provenance = await self.retrieve_context(manager, llm)
-        plan = self._resolve_synthesis(context, manager, provenance)
+        plan = self.resolve_synthesis(context, manager, provenance)
 
         if plan.effective_style == "structured":
             yield LLMResponse(
@@ -478,7 +522,7 @@ class GroundedReasoning(ReasoningStrategy):
             self._store_provenance(manager, provenance)
 
     # ------------------------------------------------------------------
-    # Public retrieval pipeline (composable for Phase 5 hybrid)
+    # Public retrieval pipeline (used by HybridReasoning)
     # ------------------------------------------------------------------
 
     async def retrieve_context(
@@ -489,8 +533,8 @@ class GroundedReasoning(ReasoningStrategy):
         """Run intent resolution + multi-source retrieval + processing.
 
         Returns the formatted context string and a provenance dict.
-        This is the public entry point that a future HybridReasoning
-        can call to obtain grounded context before entering a ReAct loop.
+        This is the public entry point that :class:`HybridReasoning`
+        calls to obtain grounded context before entering a ReAct loop.
 
         Args:
             manager: Conversation manager.
@@ -1062,18 +1106,16 @@ class GroundedReasoning(ReasoningStrategy):
         """Synthesize a response using the resolved synthesis style.
 
         Delegates style resolution and artifact preparation to
-        :meth:`_resolve_synthesis`, then handles buffered delivery only.
+        :meth:`resolve_synthesis`, then handles buffered delivery only.
+        For structured style, no LLM call is needed — the template
+        output is the response.  For conversational and hybrid, the
+        LLM generates a response which is then formatted via
+        :meth:`SynthesisPlan.apply_to_response`.
         """
-        from dataknobs_llm import LLMResponse
-
-        plan = self._resolve_synthesis(context, manager, provenance)
+        plan = self.resolve_synthesis(context, manager, provenance)
 
         if plan.effective_style == "structured":
-            return LLMResponse(
-                content=plan.template_text,
-                model="template",
-                finish_reason="stop",
-            )
+            return plan.apply_to_response(None)
 
         # conversational or hybrid — LLM synthesis
         response = await manager.complete(
@@ -1081,26 +1123,18 @@ class GroundedReasoning(ReasoningStrategy):
             **kwargs,
         )
 
-        if plan.effective_style == "hybrid":
-            combined = response.content + "\n\n" + plan.template_text
-            return LLMResponse(
-                content=combined,
-                model=response.model,
-                finish_reason=response.finish_reason,
-            )
-
-        return response
+        return plan.apply_to_response(response)
 
     # ------------------------------------------------------------------
     # Shared synthesis resolution (used by both buffered and streaming)
     # ------------------------------------------------------------------
 
-    def _resolve_synthesis(
+    def resolve_synthesis(
         self,
         context: str,
         manager: Any,
         provenance: dict[str, Any],
-    ) -> _SynthesisPlan:
+    ) -> SynthesisPlan:
         """Resolve the effective synthesis style and pre-compute artifacts.
 
         This is the single shared code path consumed by both
@@ -1129,11 +1163,11 @@ class GroundedReasoning(ReasoningStrategy):
                 template_text = None
 
         if style in ("conversational", "hybrid"):
-            system_prompt = self._build_synthesis_system_prompt(
+            system_prompt = self.build_synthesis_system_prompt(
                 context, manager.system_prompt,
             )
 
-        return _SynthesisPlan(
+        return SynthesisPlan(
             effective_style=style,
             template_text=template_text,
             system_prompt=system_prompt,
@@ -1208,6 +1242,8 @@ class GroundedReasoning(ReasoningStrategy):
             ``message``: The user's message.
             ``metadata``: Conversation metadata.
             ``intent``: The resolved intent dict.
+            ``tool_executions``: List of tool execution records (hybrid
+                strategy only; empty list for pure grounded).
         """
         # Custom synthesis template takes precedence (backward compat)
         template = self._synthesis_template or self._provenance_template
@@ -1219,9 +1255,10 @@ class GroundedReasoning(ReasoningStrategy):
             message=user_message,
             metadata=metadata,
             intent=provenance.get("intent", {}),
+            tool_executions=provenance.get("tool_executions", []),
         )
 
-    def _build_synthesis_system_prompt(
+    def build_synthesis_system_prompt(
         self,
         kb_context: str,
         original_system_prompt: str,

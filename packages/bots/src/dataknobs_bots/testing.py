@@ -55,6 +55,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1236,3 +1237,89 @@ class ErrorRaisingStrategy(ReasoningStrategy):
         **kwargs: Any,
     ) -> Any | None:
         raise self._error
+
+
+# =============================================================================
+# StubManager — lightweight ReasoningManagerProtocol for unit tests
+# =============================================================================
+
+
+class StubManager:
+    """Minimal implementation of :class:`ReasoningManagerProtocol` for tests.
+
+    Use this when testing strategy methods (``greet()``, ``generate()``)
+    directly — i.e., without the full ``DynaBot`` / ``BotTestHarness``
+    lifecycle.  Tracks messages and metadata in memory.
+
+    For integration tests that exercise the DynaBot pipeline, use
+    :class:`BotTestHarness` instead.
+
+    Example:
+        .. code-block:: python
+
+            from dataknobs_bots.testing import StubManager
+
+            manager = StubManager(system_prompt="You are helpful.")
+            result = await strategy.greet(
+                manager, None, initial_context={"user": "Alice"},
+            )
+            assert result is not None
+    """
+
+    def __init__(
+        self,
+        *,
+        system_prompt: str = "",
+        metadata: dict[str, Any] | None = None,
+        conversation_id: str = "stub-conversation",
+    ) -> None:
+        self._system_prompt = system_prompt
+        self._metadata: dict[str, Any] = metadata if metadata is not None else {}
+        self._messages: list[dict[str, Any]] = []
+        self.conversation_id = conversation_id
+
+    @property
+    def system_prompt(self) -> str:
+        return self._system_prompt
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._metadata
+
+    def get_messages(self) -> list[dict[str, Any]]:
+        return list(self._messages)
+
+    async def add_message(
+        self,
+        role: str = "user",
+        content: str | None = None,
+        *,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        msg: dict[str, Any] = {"role": role, "content": content}
+        if metadata:
+            msg["metadata"] = metadata
+        self._messages.append(msg)
+
+    async def complete(
+        self,
+        *,
+        system_prompt_override: str | None = None,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        return LLMResponse(content="", model="stub", finish_reason="stop")
+
+    def stream_complete(
+        self,
+        *,
+        system_prompt_override: str | None = None,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        async def _empty() -> AsyncIterator[Any]:
+            return
+            yield  # pragma: no cover
+
+        return _empty()
