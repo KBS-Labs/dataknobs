@@ -60,7 +60,6 @@ uv run python scripts/md_cli.py chunk examples/markdown/example_document.md
 uv run python scripts/md_cli.py chunk \
   examples/markdown/constructs_example.md \
   --max-size 500 \
-  --overlap 50 \
   --show-metadata
 
 # Output as JSON

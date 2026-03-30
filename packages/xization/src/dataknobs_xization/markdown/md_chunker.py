@@ -318,6 +318,20 @@ class MarkdownChunker:
     def _split_text(self, text: str) -> list[str]:
         """Split text into chunks respecting max_chunk_size.
 
+        When text exceeds max_chunk_size, splits are placed at the best
+        available boundary using a priority-based strategy. Within the
+        current window (start to start + max_chunk_size), the method
+        searches backward (via rfind) for the highest-priority boundary:
+
+        1. Paragraph break (double newline) — preserves paragraph-level coherence
+        2. Sentence end (period/exclamation/question followed by space or newline)
+           — keeps sentences intact
+        3. Word break (space) — avoids splitting mid-word
+        4. Hard cut at max_chunk_size — used only when no boundary exists
+
+        The backward search ensures each chunk is as large as possible
+        while still ending at a clean boundary.
+
         Args:
             text: Text to split
 

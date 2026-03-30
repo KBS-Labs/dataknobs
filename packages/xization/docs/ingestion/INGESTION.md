@@ -360,7 +360,7 @@ async def process_documents(directory: str):
 ### Markdown Files
 
 - Parsed into tree structure preserving heading hierarchy
-- Chunked with configurable size and overlap
+- Chunked with configurable size and smart boundary detection
 - Quality filtering available
 - Heading metadata preserved
 
