@@ -6554,7 +6554,8 @@ class WizardReasoning(ReasoningStrategy):
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.
 
-        Uses a restricted execution environment to evaluate condition
+        Uses the shared safe expression engine from
+        :mod:`dataknobs_common.expressions` to evaluate condition
         expressions like ``data.get('subject')``, ``has('count')``,
         or ``data.get('count', 0) > 5``.
 
@@ -6577,35 +6578,29 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             True if condition is satisfied, False otherwise
         """
-        try:
-            # Wrap in return statement if not already
-            code = condition.strip()
-            if not code.startswith("return"):
-                code = f"return {code}"
+        from dataknobs_common.expressions import safe_eval_value
 
-            # Create a function to evaluate the condition.
-            # Shallow copy so exec cannot add/remove/replace top-level
-            # keys in live wizard state.  Nested mutable values are
-            # still shared.
-            data_snapshot = dict(data)
-            global_vars: dict[str, Any] = {
+        # Shallow copy so expression cannot add/remove/replace
+        # top-level keys in live wizard state.
+        data_snapshot = dict(data)
+        result = safe_eval_value(
+            condition,
+            scope={
                 "data": data_snapshot,
-                "has": lambda key: self._field_is_present(data_snapshot.get(key)),
+                "has": lambda key: self._field_is_present(
+                    data_snapshot.get(key)
+                ),
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
-                # Common aliases for YAML/JSON boolean literals
-                "true": True,
-                "false": False,
-                "null": None,
-                "none": None,
-            }
-            local_vars: dict[str, Any] = {}
-            exec_code = f"def _test():\n    {code}\n_result = _test()"
-            exec(exec_code, global_vars, local_vars)  # nosec B102
-            return bool(local_vars.get("_result", False))
-        except Exception as e:
-            logger.debug("Condition evaluation failed for '%s': %s", condition, e)
-            return False
+            },
+            coerce_bool=True,
+            default=False,
+        )
+        if not result:
+            logger.debug(
+                "Condition evaluation returned False for '%s'", condition
+            )
+        return result
 
     # =========================================================================
     # Post-Completion Amendment Methods

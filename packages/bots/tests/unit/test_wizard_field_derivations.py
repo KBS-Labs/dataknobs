@@ -8,12 +8,14 @@ Integration tests exercise the full DynaBot.from_config() → bot.chat() path
 via ``BotTestHarness``.  Unit tests verify the derivation engine directly.
 """
 
+import re
 from typing import Any
 
 import pytest
 
 from dataknobs_bots.reasoning.wizard_derivations import (
     BUILTIN_TRANSFORMS,
+    PARAMETERIZED_TRANSFORMS,
     DerivationRule,
     FieldTransform,
     apply_field_derivations,
@@ -21,6 +23,22 @@ from dataknobs_bots.reasoning.wizard_derivations import (
     _lower_hyphen,
     _lower_underscore,
     _title_case,
+    _equals,
+    _not_equals,
+    _constant,
+    _map_transform,
+    _boolean,
+    _one_of,
+    _contains,
+    _first,
+    _last,
+    _join,
+    _split,
+    _length,
+    _regex_match,
+    _regex_extract,
+    _regex_replace,
+    _execute_expression,
 )
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
@@ -323,6 +341,513 @@ class TestCustomTransform:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests: conditional/logical transforms
+# ---------------------------------------------------------------------------
+
+
+class TestConditionalTransforms:
+    """Verify conditional/logical transform functions."""
+
+    def test_equals_match(self) -> None:
+        assert _equals("research_assistant", {}, transform_value="research_assistant") is True
+
+    def test_equals_no_match(self) -> None:
+        assert _equals("tutor", {}, transform_value="research_assistant") is False
+
+    def test_equals_type_coercion(self) -> None:
+        assert _equals(42, {}, transform_value="42") is True
+
+    def test_not_equals_match(self) -> None:
+        assert _not_equals("tutor", {}, transform_value="research_assistant") is True
+
+    def test_not_equals_no_match(self) -> None:
+        assert _not_equals("research_assistant", {}, transform_value="research_assistant") is False
+
+    def test_constant_returns_value(self) -> None:
+        assert _constant("anything", {}, transform_value="fixed") == "fixed"
+
+    def test_constant_returns_boolean(self) -> None:
+        assert _constant("anything", {}, transform_value=True) is True
+
+    def test_constant_returns_none_skips(self) -> None:
+        assert _constant("anything", {}, transform_value=None) is None
+
+    def test_map_found(self) -> None:
+        assert _map_transform("quiz", {}, transform_map={"quiz": True}) is True
+
+    def test_map_not_found_no_default(self) -> None:
+        assert _map_transform("unknown", {}, transform_map={"quiz": True}) is None
+
+    def test_map_not_found_with_default(self) -> None:
+        result = _map_transform(
+            "unknown", {},
+            transform_map={"quiz": True},
+            transform_default="other",
+        )
+        assert result == "other"
+
+    def test_map_value_is_false(self) -> None:
+        result = _map_transform("quiz", {}, transform_map={"quiz": False})
+        assert result is False
+
+    def test_map_key_coercion(self) -> None:
+        result = _map_transform(42, {}, transform_map={"42": "matched"})
+        assert result == "matched"
+
+    def test_boolean_truthy(self) -> None:
+        assert _boolean("yes", {}) is True
+
+    def test_boolean_falsy_empty_string(self) -> None:
+        assert _boolean("", {}) is False
+
+    def test_boolean_falsy_none(self) -> None:
+        assert _boolean(None, {}) is False
+
+    def test_boolean_falsy_zero(self) -> None:
+        assert _boolean(0, {}) is False
+
+    def test_one_of_match(self) -> None:
+        result = _one_of(
+            "research_assistant", {},
+            transform_values=["research_assistant", "domain_expert"],
+        )
+        assert result is True
+
+    def test_one_of_no_match(self) -> None:
+        result = _one_of(
+            "tutor", {},
+            transform_values=["research_assistant", "domain_expert"],
+        )
+        assert result is False
+
+    def test_contains_match(self) -> None:
+        assert _contains("deep research paper", {}, transform_value="research") is True
+
+    def test_contains_no_match(self) -> None:
+        assert _contains("quiz creation", {}, transform_value="research") is False
+
+    def test_contains_case_insensitive(self) -> None:
+        assert _contains("Research Paper", {}, transform_value="research") is True
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: collection transforms
+# ---------------------------------------------------------------------------
+
+
+class TestCollectionTransforms:
+    """Verify collection transform functions."""
+
+    def test_first_list(self) -> None:
+        assert _first(["a", "b", "c"], {}) == "a"
+
+    def test_first_empty(self) -> None:
+        assert _first([], {}) is None
+
+    def test_first_string(self) -> None:
+        assert _first("abc", {}) == "a"
+
+    def test_last_list(self) -> None:
+        assert _last(["a", "b", "c"], {}) == "c"
+
+    def test_last_empty(self) -> None:
+        assert _last([], {}) is None
+
+    def test_join_default_separator(self) -> None:
+        assert _join(["a", "b", "c"], {}) == "a, b, c"
+
+    def test_join_custom_separator(self) -> None:
+        assert _join(["a", "b"], {}, transform_value=" - ") == "a - b"
+
+    def test_join_non_strings(self) -> None:
+        assert _join([1, 2, 3], {}) == "1, 2, 3"
+
+    def test_split_default_separator(self) -> None:
+        assert _split("a,b,c", {}) == ["a", "b", "c"]
+
+    def test_split_custom_separator(self) -> None:
+        assert _split("a - b - c", {}, transform_value=" - ") == ["a", "b", "c"]
+
+    def test_split_strips_whitespace(self) -> None:
+        assert _split("a, b, c", {}) == ["a", "b", "c"]
+
+    def test_length_list(self) -> None:
+        assert _length(["a", "b"], {}) == 2
+
+    def test_length_string(self) -> None:
+        assert _length("hello", {}) == 5
+
+    def test_length_dict(self) -> None:
+        assert _length({"a": 1}, {}) == 1
+
+    def test_length_non_measurable(self) -> None:
+        assert _length(42, {}) is None
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: regex transforms
+# ---------------------------------------------------------------------------
+
+
+class TestRegexTransforms:
+    """Verify regex transform functions."""
+
+    def test_regex_match_true(self) -> None:
+        pat = re.compile(r"@\w+\.\w+")
+        assert _regex_match("user@example.com", {}, compiled_regex=pat) is True
+
+    def test_regex_match_false(self) -> None:
+        pat = re.compile(r"@\w+\.\w+")
+        assert _regex_match("not-an-email", {}, compiled_regex=pat) is False
+
+    def test_regex_extract_found(self) -> None:
+        pat = re.compile(r"@([\w.]+)")
+        assert _regex_extract("user@example.com", {}, compiled_regex=pat) == "example.com"
+
+    def test_regex_extract_not_found(self) -> None:
+        pat = re.compile(r"@([\w.]+)")
+        assert _regex_extract("no-match", {}, compiled_regex=pat) is None
+
+    def test_regex_replace(self) -> None:
+        pat = re.compile(r"\s+")
+        result = _regex_replace(
+            "hello   world", {},
+            compiled_regex=pat,
+            transform_replacement=" ",
+        )
+        assert result == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: expression transform
+# ---------------------------------------------------------------------------
+
+
+class TestExpressionTransform:
+    """Verify expression transform via _execute_expression."""
+
+    def test_expression_equality(self) -> None:
+        rule = DerivationRule(
+            source="intent", target="flag",
+            transform_name="expression",
+            expression="value == 'ra'",
+        )
+        assert _execute_expression(rule, "ra", {}) is True
+
+    def test_expression_ternary(self) -> None:
+        rule = DerivationRule(
+            source="intent", target="max_q",
+            transform_name="expression",
+            expression="10 if value == 'quiz' else 5",
+        )
+        assert _execute_expression(rule, "quiz", {}) == 10
+
+    def test_expression_data_access(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="int(data.get('count', 0)) * 2",
+        )
+        assert _execute_expression(rule, "x", {"count": 3}) == 6
+
+    def test_expression_has_helper(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="has('name')",
+        )
+        assert _execute_expression(rule, "x", {"name": "test"}) is True
+
+    def test_expression_list_comprehension(self) -> None:
+        rule = DerivationRule(
+            source="topics", target="lower_topics",
+            transform_name="expression",
+            expression="[x.lower() for x in value]",
+        )
+        assert _execute_expression(rule, ["A", "B"], {}) == ["a", "b"]
+
+    def test_expression_dict_lookup(self) -> None:
+        rule = DerivationRule(
+            source="diff", target="time",
+            transform_name="expression",
+            expression="{'easy': 30, 'hard': 120}.get(value, 60)",
+        )
+        assert _execute_expression(rule, "hard", {}) == 120
+
+    def test_expression_returns_none_skips(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="None",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_error_returns_none(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="1/0",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: expression security
+# ---------------------------------------------------------------------------
+
+
+class TestExpressionSecurity:
+    """Verify expression transform blocks dangerous operations."""
+
+    def test_expression_no_import(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="__import__('os')",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_no_open(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="open('/etc/passwd')",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_no_exec(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="exec('import os')",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_no_eval(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="eval('1+1')",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_no_getattr(self) -> None:
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="getattr(data, '__class__')",
+        )
+        assert _execute_expression(rule, "x", {}) is None
+
+    def test_expression_data_is_snapshot(self) -> None:
+        """Data dict mutations in expression don't affect original."""
+        original = {"key": "value"}
+        rule = DerivationRule(
+            source="x", target="y",
+            transform_name="expression",
+            expression="data.update({'injected': True}) or 'done'",
+        )
+        _execute_expression(rule, "x", original)
+        assert "injected" not in original
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: parsing validation for new transforms
+# ---------------------------------------------------------------------------
+
+
+class TestNewTransformParsing:
+    """Verify parsing validation for parameterized transforms."""
+
+    def test_parse_equals_rule(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "flag",
+             "transform": "equals", "transform_value": "research"},
+        ])
+        assert len(rules) == 1
+        assert rules[0].transform_name == "equals"
+        assert rules[0].transform_value == "research"
+
+    def test_parse_map_rule(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "style",
+             "transform": "map",
+             "transform_map": {"tutor": "socratic"},
+             "transform_default": "structured"},
+        ])
+        assert len(rules) == 1
+        assert rules[0].transform_map == {"tutor": "socratic"}
+        assert rules[0].transform_default == "structured"
+
+    def test_parse_one_of_rule(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "flag",
+             "transform": "one_of",
+             "transform_values": ["a", "b"]},
+        ])
+        assert len(rules) == 1
+        assert rules[0].transform_values == ["a", "b"]
+
+    def test_parse_regex_precompiles(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "email", "target": "valid",
+             "transform": "regex_match",
+             "transform_value": r"\d+"},
+        ])
+        assert len(rules) == 1
+        assert rules[0].compiled_regex is not None
+        assert rules[0].compiled_regex.pattern == r"\d+"
+
+    def test_parse_invalid_regex_skips(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "email", "target": "valid",
+             "transform": "regex_match",
+             "transform_value": "[invalid"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_missing_transform_value(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b", "transform": "equals"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_missing_transform_map(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b", "transform": "map"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_missing_expression(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b", "transform": "expression"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_expression_rule(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b",
+             "transform": "expression",
+             "expression": "value == 'x'"},
+        ])
+        assert len(rules) == 1
+        assert rules[0].expression == "value == 'x'"
+
+    def test_parse_regex_replace_missing_replacement(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b",
+             "transform": "regex_replace",
+             "transform_value": r"\s+"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_contains_missing_value(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b", "transform": "contains"},
+        ])
+        assert len(rules) == 0
+
+    def test_parse_one_of_not_list(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "a", "target": "b",
+             "transform": "one_of",
+             "transform_values": "not-a-list"},
+        ])
+        assert len(rules) == 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: engine integration via apply_field_derivations
+# ---------------------------------------------------------------------------
+
+
+class TestNewTransformIntegration:
+    """Verify new transforms through the full derivation engine."""
+
+    def test_equals_derivation_end_to_end(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "kb_enabled",
+             "transform": "equals",
+             "transform_value": "research_assistant"},
+        ])
+        data: dict[str, Any] = {"intent": "research_assistant"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"kb_enabled"}
+        assert data["kb_enabled"] is True
+
+    def test_map_derivation_end_to_end(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "style",
+             "transform": "map",
+             "transform_map": {
+                 "research_assistant": "conversational",
+                 "tutor": "socratic",
+             },
+             "transform_default": "structured"},
+        ])
+        data: dict[str, Any] = {"intent": "tutor"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"style"}
+        assert data["style"] == "socratic"
+
+    def test_expression_derivation_end_to_end(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "max_q",
+             "transform": "expression",
+             "expression": "10 if value == 'quiz_maker' else 5"},
+        ])
+        data: dict[str, Any] = {"intent": "quiz_maker"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"max_q"}
+        assert data["max_q"] == 10
+
+    def test_conditional_with_guard(self) -> None:
+        """when: target_missing respects existing target value."""
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "kb_enabled",
+             "transform": "equals",
+             "transform_value": "research_assistant",
+             "when": "target_missing"},
+        ])
+        data: dict[str, Any] = {"intent": "research_assistant", "kb_enabled": False}
+        derived = apply_field_derivations(rules, data)
+        assert derived == set()
+        assert data["kb_enabled"] is False
+
+    def test_boolean_derivation_return_type(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "path", "target": "configured",
+             "transform": "boolean"},
+        ])
+        data: dict[str, Any] = {"path": "/some/path"}
+        apply_field_derivations(rules, data)
+        assert data["configured"] is True
+        assert isinstance(data["configured"], bool)
+
+    def test_mixed_transforms_in_pipeline(self) -> None:
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "kb_enabled",
+             "transform": "equals",
+             "transform_value": "research_assistant"},
+            {"source": "intent", "target": "style",
+             "transform": "map",
+             "transform_map": {"research_assistant": "conversational"},
+             "transform_default": "structured"},
+            {"source": "domain_id", "target": "domain_name",
+             "transform": "title_case"},
+        ])
+        data: dict[str, Any] = {
+            "intent": "research_assistant",
+            "domain_id": "chess-champ",
+        }
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"kb_enabled", "style", "domain_name"}
+        assert data["kb_enabled"] is True
+        assert data["style"] == "conversational"
+        assert data["domain_name"] == "Chess Champ"
+
+
+# ---------------------------------------------------------------------------
 # Integration tests: BotTestHarness
 # ---------------------------------------------------------------------------
 
@@ -553,4 +1078,84 @@ class TestFieldDerivationIntegration:
             assert harness.wizard_data["intent"] == "tutoring"
             assert harness.wizard_data["subject"] == "chess"
             assert harness.wizard_data["description"] == "A tutoring bot for chess"
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_wizard_conditional_derivation(self) -> None:
+        """Wizard extracts intent, equals derivation auto-sets kb_enabled."""
+        config = (
+            WizardConfigBuilder("conditional-derivation-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What kind of bot?",
+            )
+            .field("intent", field_type="string", required=True)
+            .field("kb_enabled", field_type="boolean", required=True)
+            .transition(
+                "done",
+                "data.get('intent') and data.get('kb_enabled') is not None",
+            )
+            .stage("done", is_end=True, prompt="All done!")
+            .settings(
+                derivations=[
+                    {"source": "intent", "target": "kb_enabled",
+                     "transform": "equals",
+                     "transform_value": "research_assistant"},
+                ],
+                auto_advance_filled_stages=True,
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"intent": "research_assistant"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a research assistant")
+            assert harness.wizard_data["intent"] == "research_assistant"
+            assert harness.wizard_data["kb_enabled"] is True
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_wizard_expression_derivation(self) -> None:
+        """Expression derivation produces typed result in wizard data."""
+        config = (
+            WizardConfigBuilder("expression-derivation-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What kind of bot?",
+            )
+            .field("intent", field_type="string", required=True)
+            .field("max_questions", field_type="integer", required=True)
+            .transition(
+                "done",
+                "data.get('intent') and data.get('max_questions') is not None",
+            )
+            .stage("done", is_end=True, prompt="All done!")
+            .settings(
+                derivations=[
+                    {"source": "intent", "target": "max_questions",
+                     "transform": "expression",
+                     "expression": "10 if value == 'quiz_maker' else 5"},
+                ],
+                auto_advance_filled_stages=True,
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"intent": "quiz_maker"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a quiz maker")
+            assert harness.wizard_data["intent"] == "quiz_maker"
+            assert harness.wizard_data["max_questions"] == 10
             assert harness.wizard_stage == "done"
