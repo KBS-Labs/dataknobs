@@ -65,12 +65,12 @@ class TestFilePatternConfig:
         """Test creation from dictionary."""
         data = {
             "pattern": "docs/**/*.md",
-            "chunking": {"chunk_overlap": 100},
+            "chunking": {"max_chunk_size": 800},
             "text_fields": ["content"],
         }
         config = FilePatternConfig.from_dict(data)
         assert config.pattern == "docs/**/*.md"
-        assert config.chunking == {"chunk_overlap": 100}
+        assert config.chunking == {"max_chunk_size": 800}
         assert config.text_fields == ["content"]
         assert config.enabled is True  # Default
 
@@ -82,7 +82,7 @@ class TestKnowledgeBaseConfig:
         """Test default configuration values."""
         config = KnowledgeBaseConfig(name="test-kb")
         assert config.name == "test-kb"
-        assert config.default_chunking == {"max_chunk_size": 500, "chunk_overlap": 50}
+        assert config.default_chunking == {"max_chunk_size": 500}
         assert config.default_quality_filter is None
         assert config.patterns == []
         assert config.exclude_patterns == []
@@ -173,7 +173,7 @@ patterns:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = KnowledgeBaseConfig.load(tmpdir)
             assert config.name == Path(tmpdir).name
-            assert config.default_chunking == {"max_chunk_size": 500, "chunk_overlap": 50}
+            assert config.default_chunking == {"max_chunk_size": 500}
 
     def test_load_invalid_json_raises_error(self):
         """Test that invalid JSON raises error."""
@@ -237,16 +237,16 @@ patterns:
         """Test getting default chunking config."""
         config = KnowledgeBaseConfig(
             name="test",
-            default_chunking={"max_chunk_size": 500, "chunk_overlap": 50},
+            default_chunking={"max_chunk_size": 500},
         )
         chunking = config.get_chunking_config("any/file.md")
-        assert chunking == {"max_chunk_size": 500, "chunk_overlap": 50}
+        assert chunking == {"max_chunk_size": 500}
 
     def test_get_chunking_config_with_override(self):
         """Test chunking config with pattern override."""
         config = KnowledgeBaseConfig(
             name="test",
-            default_chunking={"max_chunk_size": 500, "chunk_overlap": 50},
+            default_chunking={"max_chunk_size": 500},
             patterns=[
                 FilePatternConfig(
                     pattern="api/**/*.json",
@@ -256,7 +256,6 @@ patterns:
         )
         chunking = config.get_chunking_config("api/v1/endpoints.json")
         assert chunking["max_chunk_size"] == 800
-        assert chunking["chunk_overlap"] == 50  # From default
 
     def test_get_metadata(self):
         """Test getting metadata for a file."""

@@ -288,7 +288,6 @@ def get_test_rag_config(
         "embedding_model": embedding_model,
         "chunking": {
             "max_chunk_size": 800,
-            "chunk_overlap": 100,
         },
         "retrieval": {
             "top_k": 5,

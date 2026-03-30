@@ -15,7 +15,7 @@ The markdown chunking system consists of three main components:
 - **Preserves heading hierarchy**: Each chunk maintains the full path of headings from root to its content
 - **Flexible heading inclusion**: Include headings in text, metadata, both, or neither
 - **Multiple output formats**: Markdown, plain text, or structured JSON
-- **Configurable chunk sizing**: Control maximum chunk size and overlap
+- **Configurable chunk sizing**: Control maximum chunk size with smart boundary detection
 - **Streaming support**: Process large documents without loading entirely into memory
 - **Tree-based structure**: Uses the `Tree` data structure from `dataknobs_structures`
 
@@ -139,14 +139,13 @@ tree = parser.parse(markdown_content)
 
 ### Chunking
 
-#### `chunk_markdown_tree(tree, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True)`
+#### `chunk_markdown_tree(tree, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True)`
 
 Generate chunks from a markdown tree.
 
 **Parameters:**
 - `tree`: Tree structure built from markdown
 - `max_chunk_size`: Maximum size of chunk text in characters
-- `chunk_overlap`: Number of characters to overlap between chunks
 - `heading_inclusion`: How to include headings (BOTH, IN_TEXT, IN_METADATA, NONE)
 - `chunk_format`: Output format (MARKDOWN, PLAIN, DICT)
 - `combine_under_heading`: Whether to combine body text under same heading
@@ -174,23 +173,36 @@ from dataknobs_xization import MarkdownChunker, HeadingInclusion
 
 chunker = MarkdownChunker(
     max_chunk_size=1000,
-    chunk_overlap=100,
     heading_inclusion=HeadingInclusion.BOTH
 )
 
 chunks = list(chunker.chunk(tree))
 ```
 
+#### Text Splitting Strategy
+
+When body text under a single heading exceeds `max_chunk_size`, the chunker splits
+it using a priority-based boundary detection strategy. Within each window of
+`max_chunk_size` characters, it searches backward for the best available break point:
+
+1. **Paragraph boundary** (`\n\n`) — highest priority, preserves paragraph-level coherence
+2. **Sentence boundary** (`. `, `! `, `? `, `.\n`, `!\n`, `?\n`) — keeps sentences intact
+3. **Word boundary** (space) — avoids splitting mid-word
+4. **Hard cut** at `max_chunk_size` — only when no boundary exists in the window
+
+The backward search (last occurrence within the window) ensures each chunk is as
+large as possible while still ending at a clean boundary. Atomic constructs (code
+blocks, tables, lists) are never split, even if they exceed `max_chunk_size`.
+
 ### Streaming
 
-#### `stream_markdown_file(file_path, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN)`
+#### `stream_markdown_file(file_path, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN)`
 
 Stream chunks from a markdown file.
 
 **Parameters:**
 - `file_path`: Path to markdown file
 - `max_chunk_size`: Maximum size of chunk text
-- `chunk_overlap`: Overlap between chunks
 - `heading_inclusion`: How to include headings
 - `chunk_format`: Output format
 
@@ -268,7 +280,6 @@ uv run python packages/xization/scripts/md_cli.py chunk document.md
 # With custom parameters
 uv run python packages/xization/scripts/md_cli.py chunk document.md \
   --max-size 500 \
-  --overlap 50 \
   --headings both \
   --show-metadata
 
@@ -288,7 +299,6 @@ uv run python packages/xization/scripts/md_cli.py parse document.md --show-tree
 
 **chunk command:**
 - `--max-size`: Maximum chunk size in characters (default: 1000)
-- `--overlap`: Chunk overlap in characters (default: 100)
 - `--headings`: How to include headings: both, text, metadata, none (default: both)
 - `--output-format`: Output format: markdown, plain, json (default: markdown)
 - `--output`: Output file (default: stdout)

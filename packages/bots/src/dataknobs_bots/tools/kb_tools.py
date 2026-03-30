@@ -576,11 +576,6 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
                     "description": "Size of text chunks for ingestion",
                     "default": 512,
                 },
-                "chunk_overlap": {
-                    "type": "integer",
-                    "description": "Overlap between consecutive chunks",
-                    "default": 50,
-                },
             },
         }
 
@@ -588,7 +583,6 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         self,
         context: ToolExecutionContext,
         chunk_size: int = 512,
-        chunk_overlap: int = 50,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Write ingestion manifest and finalize KB config.
@@ -596,7 +590,6 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         Args:
             context: Execution context with wizard state.
             chunk_size: Size of text chunks.
-            chunk_overlap: Overlap between chunks.
 
         Returns:
             Dict with ingestion result.
@@ -635,7 +628,6 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             "resources": resources,
             "chunking": {
                 "chunk_size": chunk_size,
-                "chunk_overlap": chunk_overlap,
             },
         }
         manifest_path = manifest_dir / "manifest.json"
@@ -650,7 +642,6 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             "documents_path": str(manifest_dir),
             "chunking": {
                 "chunk_size": chunk_size,
-                "chunk_overlap": chunk_overlap,
             },
         }
 
@@ -676,5 +667,4 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             "manifest_path": str(manifest_path),
             "resource_count": len(resources),
             "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
         }

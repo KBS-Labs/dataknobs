@@ -648,8 +648,7 @@ async def main():
             "embedding_provider": "ollama",
             "embedding_model": "nomic-embed-text",
             "chunking": {
-                "max_chunk_size": 500,
-                "chunk_overlap": 50
+                "max_chunk_size": 500
             }
         }
     }
@@ -1620,8 +1619,7 @@ config["knowledge_base"]["vector_store"]["backend"] = "pinecone"
 ```python
 # Adjust chunking
 config["knowledge_base"]["chunking"] = {
-    "max_chunk_size": 500,  # Larger chunks
-    "chunk_overlap": 100    # More overlap
+    "max_chunk_size": 500   # Larger chunks
 }
 
 # Try different embedding model

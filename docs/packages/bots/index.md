@@ -413,7 +413,7 @@ config = {
     "knowledge_base": {
         "enabled": True,
         "documents_path": "./company_docs",
-        "chunking": {"max_chunk_size": 500, "chunk_overlap": 50}
+        "chunking": {"max_chunk_size": 500}
     }
 }
 

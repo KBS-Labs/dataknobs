@@ -68,7 +68,6 @@ knowledge_base:
   embedding_model: text-embedding-3-small
   chunking:
     max_chunk_size: 500
-    chunk_overlap: 50
 ```
 
 ## Environment Variables

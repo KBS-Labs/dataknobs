@@ -51,7 +51,6 @@ config = KnowledgeBaseConfig(
     name="product-docs",
     default_chunking={
         "max_chunk_size": 500,
-        "chunk_overlap": 50,
     },
     patterns=[
         FilePatternConfig(
@@ -99,7 +98,6 @@ config = KnowledgeBaseConfig(
     # Default chunking for all files
     default_chunking={
         "max_chunk_size": 500,
-        "chunk_overlap": 50,
         "combine_under_heading": True,
     },
 
@@ -159,8 +157,7 @@ Create `knowledge_base.json` or `knowledge_base.yaml` in your docs directory:
 {
   "name": "product-docs",
   "default_chunking": {
-    "max_chunk_size": 500,
-    "chunk_overlap": 50
+    "max_chunk_size": 500
   },
   "patterns": [
     {
@@ -180,7 +177,6 @@ Create `knowledge_base.json` or `knowledge_base.yaml` in your docs directory:
 name: product-docs
 default_chunking:
   max_chunk_size: 500
-  chunk_overlap: 50
 
 patterns:
   - pattern: "api/**/*.json"
@@ -364,7 +360,7 @@ async def process_documents(directory: str):
 ### Markdown Files
 
 - Parsed into tree structure preserving heading hierarchy
-- Chunked with configurable size and overlap
+- Chunked with configurable size and smart boundary detection
 - Quality filtering available
 - Heading metadata preserved
 

@@ -66,8 +66,7 @@ config = {
         "embedding_provider": "ollama",
         "embedding_model": "nomic-embed-text",
         "chunking": {
-            "max_chunk_size": 500,      # Maximum chunk size
-            "chunk_overlap": 50          # Overlap between chunks
+            "max_chunk_size": 500       # Maximum chunk size
         }
     }
 }
@@ -189,8 +188,7 @@ Bot: The Pro plan costs $50/month.
 
 ```python
 "chunking": {
-    "max_chunk_size": 500,
-    "chunk_overlap": 50
+    "max_chunk_size": 500
 }
 ```
 
@@ -200,8 +198,7 @@ Good for general content.
 
 ```python
 "chunking": {
-    "max_chunk_size": 1000,
-    "chunk_overlap": 100
+    "max_chunk_size": 1000
 }
 ```
 
@@ -211,8 +208,7 @@ Better for dense technical content.
 
 ```python
 "chunking": {
-    "max_chunk_size": 300,
-    "chunk_overlap": 30
+    "max_chunk_size": 300
 }
 ```
 

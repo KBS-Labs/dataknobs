@@ -77,7 +77,6 @@ class RAGConfig:
     
     # Chunking settings
     chunk_size: int = 500
-    chunk_overlap: int = 50
 
 
 @dataclass

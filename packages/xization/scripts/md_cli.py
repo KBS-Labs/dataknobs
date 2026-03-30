@@ -25,8 +25,8 @@ Examples:
   # Parse and chunk a markdown file
   %(prog)s chunk document.md
 
-  # Chunk with custom size and overlap
-  %(prog)s chunk document.md --max-size 500 --overlap 50
+  # Chunk with custom size
+  %(prog)s chunk document.md --max-size 500
 
   # Output as JSON
   %(prog)s chunk document.md --output-format json
@@ -56,12 +56,6 @@ Examples:
         type=int,
         default=1000,
         help="Maximum chunk size in characters (default: 1000)",
-    )
-    chunk_parser.add_argument(
-        "--overlap",
-        type=int,
-        default=100,
-        help="Chunk overlap in characters (default: 100)",
     )
     chunk_parser.add_argument(
         "--headings",
@@ -212,7 +206,6 @@ def cmd_chunk(args: argparse.Namespace) -> None:
     chunks = list(stream_markdown_string(
         content,
         max_chunk_size=args.max_size,
-        chunk_overlap=args.overlap,
         heading_inclusion=heading_inclusion,
         chunk_format=chunk_format,
     ))

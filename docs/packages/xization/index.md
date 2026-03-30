@@ -21,7 +21,7 @@ The Xization package specializes in text preprocessing and includes:
   - Preserves heading hierarchy and semantic structure
   - Supports code blocks, tables, lists, and other markdown constructs
   - Streaming support for large documents
-  - Flexible configuration for chunk size, overlap, and heading inclusion
+  - Flexible configuration for chunk size and heading inclusion
 - **JSON Chunking**: Chunk JSON and JSONL documents for RAG applications
   - Template-based or field-selection text generation
   - Streaming support for large JSONL files
@@ -99,7 +99,6 @@ tree = parse_markdown(markdown_text)
 chunks = chunk_markdown_tree(
     tree,
     max_chunk_size=500,
-    chunk_overlap=50,
     heading_inclusion=HeadingInclusion.IN_METADATA
 )
 

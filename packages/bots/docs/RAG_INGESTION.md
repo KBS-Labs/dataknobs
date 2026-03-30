@@ -124,7 +124,6 @@ config = KnowledgeBaseConfig(
     name="api-docs",
     default_chunking={
         "max_chunk_size": 500,
-        "chunk_overlap": 50,
     },
     patterns=[
         FilePatternConfig(
