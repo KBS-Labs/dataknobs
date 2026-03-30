@@ -99,7 +99,6 @@ tree = parse_markdown(markdown_text)
 chunks = chunk_markdown_tree(
     tree,
     max_chunk_size=500,
-    chunk_overlap=50,
     heading_inclusion=HeadingInclusion.IN_METADATA
 )
 

@@ -68,7 +68,6 @@ tree = parse_markdown("# Title\nBody text.")
 chunks = chunk_markdown_tree(
     tree,
     max_chunk_size=500,
-    chunk_overlap=50,
     heading_inclusion=HeadingInclusion.BOTH,
     chunk_format=ChunkFormat.MARKDOWN
 )
@@ -156,12 +155,12 @@ trigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 3)
   - Returns Tree with MarkdownNode data
 
 **Chunking Functions:**
-- `chunk_markdown_tree(tree, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True) -> List[Chunk]`
+- `chunk_markdown_tree(tree, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True) -> List[Chunk]`
   - Generate chunks from markdown tree
   - Returns list of Chunk objects with text and metadata
 
 **Streaming Functions:**
-- `stream_markdown_file(file_path, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN) -> Iterator[Chunk]`
+- `stream_markdown_file(file_path, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN) -> Iterator[Chunk]`
   - Stream chunks from file
   - Yields Chunk objects incrementally
 
@@ -232,7 +231,6 @@ class MarkdownChunker:
     def __init__(
         self,
         max_chunk_size=1000,
-        chunk_overlap=100,
         heading_inclusion=HeadingInclusion.BOTH,
         chunk_format=ChunkFormat.MARKDOWN,
         combine_under_heading=True
@@ -244,7 +242,7 @@ class MarkdownChunker:
 `StreamingMarkdownProcessor`
 ```python
 class StreamingMarkdownProcessor:
-    def __init__(self, max_chunk_size=1000, chunk_overlap=100)
+    def __init__(self, max_chunk_size=1000)
 
     def process_file(self, file_path: str) -> Iterator[Chunk]
     def process_string(self, content: str) -> Iterator[Chunk]
@@ -256,7 +254,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
     def __init__(
         self,
         max_chunk_size=1000,
-        chunk_overlap=100,
         memory_limit_nodes=10000,
         adaptive_threshold=0.8
     )

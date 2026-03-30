@@ -139,14 +139,13 @@ tree = parser.parse(markdown_content)
 
 ### Chunking
 
-#### `chunk_markdown_tree(tree, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True)`
+#### `chunk_markdown_tree(tree, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True)`
 
 Generate chunks from a markdown tree.
 
 **Parameters:**
 - `tree`: Tree structure built from markdown
 - `max_chunk_size`: Maximum size of chunk text in characters
-- `chunk_overlap`: Number of characters to overlap between chunks
 - `heading_inclusion`: How to include headings (BOTH, IN_TEXT, IN_METADATA, NONE)
 - `chunk_format`: Output format (MARKDOWN, PLAIN, DICT)
 - `combine_under_heading`: Whether to combine body text under same heading
@@ -174,7 +173,6 @@ from dataknobs_xization import MarkdownChunker, HeadingInclusion
 
 chunker = MarkdownChunker(
     max_chunk_size=1000,
-    chunk_overlap=100,
     heading_inclusion=HeadingInclusion.BOTH
 )
 
@@ -183,14 +181,13 @@ chunks = list(chunker.chunk(tree))
 
 ### Streaming
 
-#### `stream_markdown_file(file_path, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN)`
+#### `stream_markdown_file(file_path, max_chunk_size=1000, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN)`
 
 Stream chunks from a markdown file.
 
 **Parameters:**
 - `file_path`: Path to markdown file
 - `max_chunk_size`: Maximum size of chunk text
-- `chunk_overlap`: Overlap between chunks
 - `heading_inclusion`: How to include headings
 - `chunk_format`: Output format
 

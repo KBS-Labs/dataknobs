@@ -34,7 +34,6 @@ config = KnowledgeBaseConfig(
     # Default chunking for all files
     default_chunking={
         "max_chunk_size": 500,
-        "chunk_overlap": 50,
     },
 
     # File patterns
@@ -62,7 +61,6 @@ Create `knowledge_base.json` or `knowledge_base.yaml` in your docs directory:
 name: product-docs
 default_chunking:
   max_chunk_size: 500
-  chunk_overlap: 50
 
 patterns:
   - pattern: "api/**/*.json"

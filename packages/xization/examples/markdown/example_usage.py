@@ -137,11 +137,10 @@ def example_chunk_sizing():
     tree = parse_markdown(markdown)
 
     # Small chunks
-    print("\nSmall chunks (max_size=100, overlap=20):")
+    print("\nSmall chunks (max_size=100):")
     chunks = chunk_markdown_tree(
         tree,
         max_chunk_size=100,
-        chunk_overlap=20,
         heading_inclusion=HeadingInclusion.NONE,
     )
     print(f"   Generated {len(chunks)} chunks")
@@ -149,11 +148,10 @@ def example_chunk_sizing():
         print(f"   Chunk {i}: {len(chunk.text)} chars - {chunk.text[:50]}...")
 
     # Large chunks
-    print("\nLarge chunks (max_size=500, overlap=50):")
+    print("\nLarge chunks (max_size=500):")
     chunks = chunk_markdown_tree(
         tree,
         max_chunk_size=500,
-        chunk_overlap=50,
         heading_inclusion=HeadingInclusion.NONE,
     )
     print(f"   Generated {len(chunks)} chunks")

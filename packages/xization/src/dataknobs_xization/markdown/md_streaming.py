@@ -25,7 +25,6 @@ class StreamingMarkdownProcessor:
     def __init__(
         self,
         max_chunk_size: int = 1000,
-        chunk_overlap: int = 100,
         max_line_length: int | None = None,
         heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
         chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
@@ -36,7 +35,6 @@ class StreamingMarkdownProcessor:
 
         Args:
             max_chunk_size: Maximum size of chunk text in characters
-            chunk_overlap: Number of characters to overlap between chunks
             max_line_length: Maximum length for individual lines
             heading_inclusion: How to include headings in chunks
             chunk_format: Output format for chunks
@@ -50,7 +48,6 @@ class StreamingMarkdownProcessor:
         )
         self.chunker = MarkdownChunker(
             max_chunk_size=max_chunk_size,
-            chunk_overlap=chunk_overlap,
             heading_inclusion=heading_inclusion,
             chunk_format=chunk_format,
             combine_under_heading=True,
@@ -115,7 +112,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
     def __init__(
         self,
         max_chunk_size: int = 1000,
-        chunk_overlap: int = 100,
         max_line_length: int | None = None,
         heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
         chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
@@ -127,7 +123,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
 
         Args:
             max_chunk_size: Maximum size of chunk text in characters
-            chunk_overlap: Number of characters to overlap between chunks
             max_line_length: Maximum length for individual lines
             heading_inclusion: How to include headings in chunks
             chunk_format: Output format for chunks
@@ -138,7 +133,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
         """
         super().__init__(
             max_chunk_size=max_chunk_size,
-            chunk_overlap=chunk_overlap,
             max_line_length=max_line_length,
             heading_inclusion=heading_inclusion,
             chunk_format=chunk_format,
@@ -245,7 +239,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
 def stream_markdown_file(
     file_path: str,
     max_chunk_size: int = 1000,
-    chunk_overlap: int = 100,
     heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
     chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
 ) -> Iterator[Chunk]:
@@ -256,7 +249,6 @@ def stream_markdown_file(
     Args:
         file_path: Path to markdown file
         max_chunk_size: Maximum size of chunk text in characters
-        chunk_overlap: Number of characters to overlap between chunks
         heading_inclusion: How to include headings in chunks
         chunk_format: Output format for chunks
 
@@ -265,7 +257,6 @@ def stream_markdown_file(
     """
     processor = StreamingMarkdownProcessor(
         max_chunk_size=max_chunk_size,
-        chunk_overlap=chunk_overlap,
         heading_inclusion=heading_inclusion,
         chunk_format=chunk_format,
     )
@@ -275,7 +266,6 @@ def stream_markdown_file(
 def stream_markdown_string(
     content: str,
     max_chunk_size: int = 1000,
-    chunk_overlap: int = 100,
     heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
     chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
 ) -> Iterator[Chunk]:
@@ -286,7 +276,6 @@ def stream_markdown_string(
     Args:
         content: Markdown content string
         max_chunk_size: Maximum size of chunk text in characters
-        chunk_overlap: Number of characters to overlap between chunks
         heading_inclusion: How to include headings in chunks
         chunk_format: Output format for chunks
 
@@ -295,7 +284,6 @@ def stream_markdown_string(
     """
     processor = StreamingMarkdownProcessor(
         max_chunk_size=max_chunk_size,
-        chunk_overlap=chunk_overlap,
         heading_inclusion=heading_inclusion,
         chunk_format=chunk_format,
     )

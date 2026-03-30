@@ -1201,7 +1201,6 @@ knowledge_base:
   # Document chunking
   chunking:
     max_chunk_size: 500    # Max characters per chunk
-    chunk_overlap: 50      # Overlap between chunks
     separator: "\n\n"      # Chunk separator
 
   # File processing
@@ -1294,7 +1293,6 @@ knowledge_base:
   chunking:
     strategy: recursive    # recursive, character, token
     max_chunk_size: 500
-    chunk_overlap: 50
 ```
 
 ---
@@ -3179,7 +3177,6 @@ knowledge_base:
   embedding_model: text-embedding-3-small
   chunking:
     max_chunk_size: 500
-    chunk_overlap: 50
 
 # Reasoning
 reasoning:

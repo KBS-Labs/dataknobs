@@ -127,15 +127,12 @@ Body text."""
         # Should not have markdown formatting
         assert "# " not in chunks[0].text
 
-    def test_chunk_overlap_configuration(self):
-        """Test configuring chunk overlap."""
+    def test_large_text_splitting(self):
+        """Test that large text is split into multiple chunks."""
         long_text = "Sentence. " * 50
         markdown = f"# Title\n{long_text}"
 
-        processor = StreamingMarkdownProcessor(
-            max_chunk_size=100,
-            chunk_overlap=20,
-        )
+        processor = StreamingMarkdownProcessor(max_chunk_size=100)
         chunks = list(processor.process_string(markdown))
 
         # Should have multiple chunks
@@ -285,7 +282,6 @@ Body text."""
         chunks = list(stream_markdown_string(
             markdown,
             max_chunk_size=50,
-            chunk_overlap=10,
             heading_inclusion=HeadingInclusion.BOTH,
         ))
 

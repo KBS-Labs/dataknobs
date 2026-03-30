@@ -378,7 +378,6 @@ class TestIngestKnowledgeBaseTool:
         result = await tool.execute_with_context(
             _make_context(wizard_data),
             chunk_size=256,
-            chunk_overlap=32,
         )
 
         assert result["success"] is True
@@ -392,7 +391,6 @@ class TestIngestKnowledgeBaseTool:
         assert manifest["domain_id"] == "test-domain"
         assert len(manifest["resources"]) == 2
         assert manifest["chunking"]["chunk_size"] == 256
-        assert manifest["chunking"]["chunk_overlap"] == 32
 
         # Verify wizard data updated
         assert wizard_data["ingestion_complete"] is True
@@ -447,7 +445,6 @@ class TestIngestKnowledgeBaseTool:
 
         assert result["success"] is True
         assert result["chunk_size"] == 512
-        assert result["chunk_overlap"] == 50
 
     @pytest.mark.asyncio
     async def test_knowledge_dir_from_wizard_data(self, tmp_path: Path) -> None:
@@ -467,4 +464,3 @@ class TestIngestKnowledgeBaseTool:
     async def test_schema(self) -> None:
         tool = IngestKnowledgeBaseTool()
         assert "chunk_size" in tool.schema["properties"]
-        assert "chunk_overlap" in tool.schema["properties"]

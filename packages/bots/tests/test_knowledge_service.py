@@ -53,7 +53,7 @@ async def real_knowledge_base(memory_vector_store, echo_provider):
     kb = RAGKnowledgeBase(
         vector_store=memory_vector_store,
         embedding_provider=echo_provider,
-        chunking_config={"max_chunk_size": 500, "chunk_overlap": 50},
+        chunking_config={"max_chunk_size": 500},
     )
     yield kb
     # Note: Don't close here since we yield the vector store/provider separately

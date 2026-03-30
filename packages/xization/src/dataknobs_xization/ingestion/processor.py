@@ -193,7 +193,6 @@ class DirectoryProcessor:
             md_chunks = chunk_markdown_tree(
                 tree,
                 max_chunk_size=chunking_config.get("max_chunk_size", 500),
-                chunk_overlap=chunking_config.get("chunk_overlap", 50),
                 heading_inclusion=HeadingInclusion.IN_METADATA,
                 combine_under_heading=chunking_config.get("combine_under_heading", True),
                 quality_filter=quality_filter,

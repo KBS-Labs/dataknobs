@@ -56,7 +56,6 @@ class RAGKnowledgeBase(KnowledgeBase):
             embedding_provider: LLM provider with embed() method
             chunking_config: Configuration for chunking:
                 - max_chunk_size: Maximum chunk size in characters
-                - chunk_overlap: Overlap between chunks
                 - combine_under_heading: Combine text under same heading
                 - quality_filter: ChunkQualityConfig for filtering
                 - generate_embeddings: Whether to generate enriched embedding text
@@ -67,7 +66,6 @@ class RAGKnowledgeBase(KnowledgeBase):
         self.embedding_provider = embedding_provider
         self.chunking_config = chunking_config or {
             "max_chunk_size": 500,
-            "chunk_overlap": 50,
             "combine_under_heading": True,
         }
 
@@ -105,8 +103,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                     "model": "nomic-embed-text",
                 },
                 "chunking": {
-                    "max_chunk_size": 500,
-                    "chunk_overlap": 50
+                    "max_chunk_size": 500
                 },
                 "documents_path": "./docs"
             }
@@ -196,7 +193,6 @@ class RAGKnowledgeBase(KnowledgeBase):
         chunks = chunk_markdown_tree(
             tree,
             max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
-            chunk_overlap=self.chunking_config.get("chunk_overlap", 50),
             heading_inclusion=HeadingInclusion.IN_METADATA,  # Keep headings in metadata only
             combine_under_heading=self.chunking_config.get("combine_under_heading", True),
             quality_filter=quality_filter,
@@ -640,7 +636,6 @@ class RAGKnowledgeBase(KnowledgeBase):
         chunks = chunk_markdown_tree(
             tree,
             max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
-            chunk_overlap=self.chunking_config.get("chunk_overlap", 50),
             heading_inclusion=HeadingInclusion.IN_METADATA,
             combine_under_heading=self.chunking_config.get("combine_under_heading", True),
             quality_filter=quality_filter,

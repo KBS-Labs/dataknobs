@@ -278,7 +278,7 @@ markdown = converter.convert(html_content, title="My Document")
 tree = parse_markdown(markdown)
 
 # Step 3: Chunk for vector storage
-chunks = chunk_markdown_tree(tree, max_chunk_size=500, chunk_overlap=50)
+chunks = chunk_markdown_tree(tree, max_chunk_size=500)
 
 for chunk in chunks:
     # Store in vector database

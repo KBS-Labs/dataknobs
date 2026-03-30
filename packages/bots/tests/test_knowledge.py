@@ -44,12 +44,11 @@ class TestRAGKnowledgeBase:
             "vector_store": {"backend": "memory", "dimensions": 384},
             "embedding_provider": "echo",
             "embedding_model": "test",
-            "chunking": {"max_chunk_size": 300, "chunk_overlap": 30},
+            "chunking": {"max_chunk_size": 300},
         }
 
         kb = await RAGKnowledgeBase.from_config(config)
         assert kb.chunking_config["max_chunk_size"] == 300
-        assert kb.chunking_config["chunk_overlap"] == 30
 
     @pytest.mark.asyncio
     async def test_load_markdown_document(self):
@@ -457,7 +456,7 @@ class TestLoadFromDirectory:
         # Create explicit config
         kb_config = KnowledgeBaseConfig(
             name="test-docs",
-            default_chunking={"max_chunk_size": 300, "chunk_overlap": 30},
+            default_chunking={"max_chunk_size": 300},
             patterns=[
                 FilePatternConfig(pattern="**/*.md"),
             ],

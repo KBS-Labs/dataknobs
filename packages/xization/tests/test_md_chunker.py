@@ -298,25 +298,33 @@ Third paragraph."""
         # Each paragraph should be a separate chunk
         assert len(chunks) == 3
 
-    def test_chunk_overlap(self):
-        """Test chunk overlap functionality."""
+    def test_large_text_splitting(self):
+        """Test that large text under a single heading is split without overlap."""
         long_text = "Sentence number one. " * 50
         markdown = f"# Title\n{long_text}"
         tree = parse_markdown(markdown)
 
         chunker = MarkdownChunker(
             max_chunk_size=100,
-            chunk_overlap=20,
+            heading_inclusion=HeadingInclusion.NONE,
         )
         chunks = list(chunker.chunk(tree))
 
-        # Should have overlapping content
+        # Should be split into multiple chunks
         assert len(chunks) > 1
 
-        # Check for some overlap (not exact due to word boundaries)
-        # Just verify we have multiple chunks
+        # Each chunk should have content
         for chunk in chunks:
             assert len(chunk.text) > 0
+
+        # Total content should match original (no duplication, no loss).
+        # Use " " join because _split_text strips whitespace at boundaries.
+        combined = " ".join(c.text for c in chunks)
+        sentence_count = combined.count("Sentence number one.")
+        assert sentence_count == 50, (
+            f"Expected 50 occurrences but got {sentence_count} "
+            "(content duplicated or lost)"
+        )
 
     def test_nested_heading_hierarchy(self):
         """Test preserving nested heading hierarchy in chunks."""

@@ -145,7 +145,6 @@ class MarkdownChunker:
     def __init__(
         self,
         max_chunk_size: int = 1000,
-        chunk_overlap: int = 100,
         heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
         chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
         combine_under_heading: bool = True,
@@ -156,7 +155,6 @@ class MarkdownChunker:
 
         Args:
             max_chunk_size: Maximum size of chunk text in characters
-            chunk_overlap: Number of characters to overlap between chunks
             heading_inclusion: How to include headings in chunks
             chunk_format: Output format for chunks
             combine_under_heading: Whether to combine body text under same heading
@@ -164,7 +162,6 @@ class MarkdownChunker:
             generate_embeddings: Whether to generate heading-enriched embedding text
         """
         self.max_chunk_size = max_chunk_size
-        self.chunk_overlap = chunk_overlap
         self.heading_inclusion = heading_inclusion
         self.chunk_format = chunk_format
         self.combine_under_heading = combine_under_heading
@@ -357,8 +354,7 @@ class MarkdownChunker:
 
             chunks.append(text[start:end].strip())
 
-            # Move start position, accounting for overlap
-            start = max(start + 1, end - self.chunk_overlap)
+            start = end
 
         return [c for c in chunks if c]  # Filter out empty chunks
 
@@ -442,7 +438,6 @@ class MarkdownChunker:
 def chunk_markdown_tree(
     tree: Tree,
     max_chunk_size: int = 1000,
-    chunk_overlap: int = 100,
     heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
     chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
     combine_under_heading: bool = True,
@@ -456,7 +451,6 @@ def chunk_markdown_tree(
     Args:
         tree: Tree structure built from markdown
         max_chunk_size: Maximum size of chunk text in characters
-        chunk_overlap: Number of characters to overlap between chunks
         heading_inclusion: How to include headings in chunks
         chunk_format: Output format for chunks
         combine_under_heading: Whether to combine body text under same heading
@@ -468,7 +462,6 @@ def chunk_markdown_tree(
     """
     chunker = MarkdownChunker(
         max_chunk_size=max_chunk_size,
-        chunk_overlap=chunk_overlap,
         heading_inclusion=heading_inclusion,
         chunk_format=chunk_format,
         combine_under_heading=combine_under_heading,

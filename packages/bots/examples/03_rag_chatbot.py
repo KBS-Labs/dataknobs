@@ -120,7 +120,6 @@ async def main():
             "embedding_model": "nomic-embed-text",
             "embedding_provider": "ollama",
             "chunk_size": 200,
-            "chunk_overlap": 50,
             "top_k": 3,  # Retrieve top 3 relevant documents
         },
         "prompts": {

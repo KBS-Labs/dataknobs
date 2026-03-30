@@ -202,7 +202,7 @@ class TestRAGConfigFactory:
         config = get_test_rag_config()
 
         assert config["chunking"]["max_chunk_size"] == 800
-        assert config["chunking"]["chunk_overlap"] == 100
+        assert "chunk_overlap" not in config["chunking"]
 
     def test_retrieval_config(self):
         """Test that retrieval configuration is present."""

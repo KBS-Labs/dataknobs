@@ -93,7 +93,6 @@ class KnowledgeBaseConfig:
         name: product-docs
         default_chunking:
           max_chunk_size: 500
-          chunk_overlap: 50
 
         patterns:
           - pattern: "api/**/*.json"
@@ -113,7 +112,6 @@ class KnowledgeBaseConfig:
     name: str
     default_chunking: dict[str, Any] = field(default_factory=lambda: {
         "max_chunk_size": 500,
-        "chunk_overlap": 50,
     })
     default_quality_filter: dict[str, Any] | None = None
     patterns: list[FilePatternConfig] = field(default_factory=list)
@@ -179,7 +177,6 @@ class KnowledgeBaseConfig:
             name=data.get("name", default_name),
             default_chunking=data.get("default_chunking", {
                 "max_chunk_size": 500,
-                "chunk_overlap": 50,
             }),
             default_quality_filter=data.get("default_quality_filter"),
             patterns=patterns,
