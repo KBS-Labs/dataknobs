@@ -20,6 +20,7 @@ This package provides shared cross-cutting functionality used across all datakno
 - **Retry**: Configurable retry execution with multiple backoff strategies
 - **Transitions**: Stateless transition validation for declarative status graphs
 - **Event Bus**: Pub/sub event system for distributed applications
+- **Expressions**: Safe Python expression evaluation with restricted builtins and AST validation
 
 These patterns were extracted from common implementations across multiple packages to reduce duplication and provide consistency.
 

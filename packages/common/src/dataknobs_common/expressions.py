@@ -1,13 +1,13 @@
 """Safe expression evaluation engine.
 
 Evaluates Python expression strings with restricted globals.
-Used by wizard conditions, FSM inline functions, derivation
-expressions, and any other context requiring safe user-provided
-code evaluation.
+Used by wizard conditions, derivation expressions, and any other
+context requiring safe config-authored code evaluation.
 
 The engine wraps expressions in a function body, executes with
 controlled globals (``__builtins__`` restricted to a safe allowlist),
-and returns native Python types.
+and validates the AST to block dunder attribute access (preventing
+MRO traversal attacks like ``().__class__.__bases__[0].__subclasses__()``).
 
 Example::
 
@@ -35,6 +35,7 @@ Example::
 
 from __future__ import annotations
 
+import ast
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -91,6 +92,9 @@ YAML_ALIASES: dict[str, Any] = {
 Included in expression scope so that config-authored expressions
 can use ``true``/``false``/``null`` (YAML style) alongside Python's
 ``True``/``False``/``None``.
+
+Note: scope variables with the same name override these aliases
+(scope is applied after YAML_ALIASES).
 """
 
 
@@ -109,6 +113,42 @@ class ExpressionResult:
     error: str | None = None
 
 
+def _validate_ast(code: str) -> str | None:
+    """Check the expression AST for unsafe attribute access.
+
+    Blocks dunder attribute access (``__class__``, ``__bases__``,
+    ``__subclasses__``, etc.) which can be used for MRO traversal
+    to escape the restricted builtins sandbox.
+
+    Also blocks dunder names used as standalone variables.
+
+    Returns:
+        Error message if unsafe access detected, ``None`` if safe.
+    """
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as e:
+        return f"Syntax error: {e}"
+
+    for node in ast.walk(tree):
+        # Block dunder attribute access: obj.__class__, obj.__bases__, etc.
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                return (
+                    f"Access to dunder attribute '{node.attr}' is not "
+                    f"allowed in safe expressions"
+                )
+        # Block dunder names as variables: __builtins__, __import__, etc.
+        if isinstance(node, ast.Name):
+            if node.id.startswith("__") and node.id.endswith("__"):
+                return (
+                    f"Access to dunder name '{node.id}' is not "
+                    f"allowed in safe expressions"
+                )
+
+    return None
+
+
 def safe_eval(
     code: str,
     scope: dict[str, Any] | None = None,
@@ -121,8 +161,14 @@ def safe_eval(
 
     Wraps the expression in a function body, executes with restricted
     globals, and returns the native result.  This is the shared core
-    used by wizard conditions, FSM inline functions, and derivation
-    expressions.
+    used by wizard conditions and derivation expressions.
+
+    Security model (when ``restrict_builtins=True``):
+
+    1. ``__builtins__`` restricted to ``SAFE_BUILTINS`` (blocks
+       ``exec``, ``eval``, ``__import__``, ``open``, etc.)
+    2. AST validation blocks dunder attribute access (prevents
+       MRO traversal via ``__class__.__bases__.__subclasses__``)
 
     Args:
         code: Python expression string.  If it does not start with
@@ -130,14 +176,15 @@ def safe_eval(
         scope: Variables available in the expression.  Merged on top
             of ``SAFE_BUILTINS`` and ``YAML_ALIASES``.  Callers
             provide context-specific variables here (e.g., ``data``,
-            ``value``, ``has()``, ``bank``).
+            ``value``, ``has()``, ``bank``).  Scope variables with
+            the same name as YAML aliases override the alias.
         coerce_bool: If True, coerce the result to ``bool`` (for
             condition evaluation).  If False, return native type.
         restrict_builtins: If True (default), set ``__builtins__``
-            to ``SAFE_BUILTINS``, blocking access to ``exec``,
-            ``eval``, ``__import__``, ``open``, etc.  If False,
-            use Python's default builtins (for trusted code like
-            FSM function manager).
+            to ``SAFE_BUILTINS`` and validate AST for unsafe access,
+            blocking ``exec``, ``eval``, ``__import__``, ``open``,
+            and MRO traversal.  If False, use Python's default
+            builtins and skip AST validation (for trusted code only).
         default: Value to return on evaluation failure.  Defaults
             to ``None``.  For condition evaluation, callers typically
             pass ``default=False``.
@@ -156,6 +203,17 @@ def safe_eval(
 
         if not stripped.startswith("return"):
             stripped = f"return {stripped}"
+
+        # AST validation: block dunder access when builtins restricted
+        if restrict_builtins:
+            exec_code = f"def _fn():\n    {stripped}\n_result = _fn()"
+            ast_error = _validate_ast(exec_code)
+            if ast_error:
+                return ExpressionResult(
+                    value=default,
+                    success=False,
+                    error=ast_error,
+                )
 
         global_vars: dict[str, Any] = {}
         if restrict_builtins:

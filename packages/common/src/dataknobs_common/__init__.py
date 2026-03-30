@@ -33,6 +33,7 @@ Example:
 # Import all public APIs from submodules
 from dataknobs_common.expressions import (
     SAFE_BUILTINS,
+    YAML_ALIASES,
     ExpressionResult,
     safe_eval,
     safe_eval_value,
@@ -115,6 +116,7 @@ __all__ = [
     "__version__",
     # Expressions
     "SAFE_BUILTINS",
+    "YAML_ALIASES",
     "ExpressionResult",
     "safe_eval",
     "safe_eval_value",

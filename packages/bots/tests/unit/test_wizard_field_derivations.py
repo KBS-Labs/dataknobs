@@ -18,6 +18,7 @@ from dataknobs_bots.reasoning.wizard_derivations import (
     PARAMETERIZED_TRANSFORMS,
     DerivationRule,
     FieldTransform,
+    _SKIP,
     apply_field_derivations,
     parse_derivation_rules,
     _lower_hyphen,
@@ -582,13 +583,13 @@ class TestExpressionTransform:
         )
         assert _execute_expression(rule, "x", {}) is None
 
-    def test_expression_error_returns_none(self) -> None:
+    def test_expression_error_returns_skip(self) -> None:
         rule = DerivationRule(
             source="x", target="y",
             transform_name="expression",
             expression="1/0",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +606,7 @@ class TestExpressionSecurity:
             transform_name="expression",
             expression="__import__('os')",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
     def test_expression_no_open(self) -> None:
         rule = DerivationRule(
@@ -613,7 +614,7 @@ class TestExpressionSecurity:
             transform_name="expression",
             expression="open('/etc/passwd')",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
     def test_expression_no_exec(self) -> None:
         rule = DerivationRule(
@@ -621,7 +622,7 @@ class TestExpressionSecurity:
             transform_name="expression",
             expression="exec('import os')",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
     def test_expression_no_eval(self) -> None:
         rule = DerivationRule(
@@ -629,7 +630,7 @@ class TestExpressionSecurity:
             transform_name="expression",
             expression="eval('1+1')",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
     def test_expression_no_getattr(self) -> None:
         rule = DerivationRule(
@@ -637,7 +638,7 @@ class TestExpressionSecurity:
             transform_name="expression",
             expression="getattr(data, '__class__')",
         )
-        assert _execute_expression(rule, "x", {}) is None
+        assert _execute_expression(rule, "x", {}) is _SKIP
 
     def test_expression_data_is_snapshot(self) -> None:
         """Data dict mutations in expression don't affect original."""
@@ -823,6 +824,30 @@ class TestNewTransformIntegration:
         apply_field_derivations(rules, data)
         assert data["configured"] is True
         assert isinstance(data["configured"], bool)
+
+    def test_constant_none_sets_field(self) -> None:
+        """constant with transform_value: null sets the field to None."""
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "cleared",
+             "transform": "constant",
+             "transform_value": None},
+        ])
+        data: dict[str, Any] = {"intent": "anything"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"cleared"}
+        assert data["cleared"] is None
+
+    def test_expression_none_sets_field(self) -> None:
+        """expression evaluating to None sets the field to None."""
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "cleared",
+             "transform": "expression",
+             "expression": "None"},
+        ])
+        data: dict[str, Any] = {"intent": "anything"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"cleared"}
+        assert data["cleared"] is None
 
     def test_mixed_transforms_in_pipeline(self) -> None:
         rules = parse_derivation_rules([

@@ -170,6 +170,37 @@ class TestSecurity:
         result = safe_eval("compile('1+1', '<>', 'eval')")
         assert result.success is False
 
+    def test_no_mro_traversal_class(self) -> None:
+        """Block MRO traversal via __class__."""
+        result = safe_eval("().__class__")
+        assert result.success is False
+        assert "dunder attribute" in (result.error or "")
+
+    def test_no_mro_traversal_bases(self) -> None:
+        """Block MRO traversal via __bases__."""
+        result = safe_eval("().__class__.__bases__")
+        assert result.success is False
+
+    def test_no_mro_traversal_subclasses(self) -> None:
+        """Block full MRO chain to __subclasses__."""
+        result = safe_eval(
+            "().__class__.__bases__[0].__subclasses__()"
+        )
+        assert result.success is False
+
+    def test_no_mro_popen_attack(self) -> None:
+        """Block the classic Popen sandbox escape."""
+        result = safe_eval(
+            "[c for c in ().__class__.__bases__[0].__subclasses__() "
+            "if c.__name__ == 'Popen']"
+        )
+        assert result.success is False
+
+    def test_no_dunder_name(self) -> None:
+        """Block dunder names as standalone variables."""
+        result = safe_eval("__builtins__")
+        assert result.success is False
+
     def test_scope_does_not_leak(self) -> None:
         """Scope variables don't leak into the caller's namespace."""
         safe_eval("x", scope={"x": 1})
@@ -181,6 +212,11 @@ class TestSecurity:
         """With restrict_builtins=False, full Python builtins available."""
         result = safe_eval("len([1])", restrict_builtins=False)
         assert result.value == 1
+
+    def test_restrict_builtins_false_skips_ast_check(self) -> None:
+        """When restrict_builtins=False, dunder access is allowed (trusted code)."""
+        result = safe_eval("().__class__.__name__", restrict_builtins=False)
+        assert result.value == "tuple"
 
 
 # ---------------------------------------------------------------------------

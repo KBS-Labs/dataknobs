@@ -6578,12 +6578,12 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             True if condition is satisfied, False otherwise
         """
-        from dataknobs_common.expressions import safe_eval_value
+        from dataknobs_common.expressions import safe_eval
 
         # Shallow copy so expression cannot add/remove/replace
         # top-level keys in live wizard state.
         data_snapshot = dict(data)
-        result = safe_eval_value(
+        result = safe_eval(
             condition,
             scope={
                 "data": data_snapshot,
@@ -6596,11 +6596,13 @@ class WizardReasoning(ReasoningStrategy):
             coerce_bool=True,
             default=False,
         )
-        if not result:
+        if not result.success:
             logger.debug(
-                "Condition evaluation returned False for '%s'", condition
+                "Condition evaluation failed for '%s': %s",
+                condition,
+                result.error,
             )
-        return result
+        return result.value
 
     # =========================================================================
     # Post-Completion Amendment Methods

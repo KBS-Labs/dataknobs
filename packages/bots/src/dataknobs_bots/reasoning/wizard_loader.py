@@ -738,20 +738,23 @@ class WizardConfigLoader:
                 try:
                     # Create a function that evaluates the condition
                     # using the shared safe expression engine.
+                    from dataknobs_common.expressions import (
+                        safe_eval,
+                    )
+
                     def make_condition(
                         code: str, name: str
                     ) -> Callable[[Any, Any], bool]:
                         def condition_func(
                             data: dict[str, Any], context: Any = None
                         ) -> bool:
-                            from dataknobs_common.expressions import (
-                                safe_eval,
-                            )
-
                             result = safe_eval(
                                 code,
                                 scope={
                                     "data": data,
+                                    "has": lambda key: (
+                                        data.get(key) is not None
+                                    ),
                                     "bank": data.get(
                                         "_bank_fn", _null_bank
                                     ),

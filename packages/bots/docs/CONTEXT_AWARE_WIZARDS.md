@@ -621,17 +621,97 @@ Each rule specifies:
 
 ### Built-In Transforms
 
+The derivation system provides 22 transforms across 6 categories. See the full reference in the [MkDocs guide](../../docs/packages/bots/guides/context-aware-wizards.md).
+
+#### String Formatting
+
 | Transform | Input → Output | Use Case |
 |-----------|---------------|----------|
 | `title_case` | `chess-champ` → `Chess Champ` | ID → display name |
 | `lower_hyphen` | `Chess Champ` → `chess-champ` | Display name → slug ID |
 | `lower_underscore` | `Chess Champ` → `chess_champ` | Display name → snake_case |
 | `copy` | Direct copy of source value | Aliased fields |
-| `template` | Jinja2 template rendered with wizard data | Composite derivation |
+| `template` | Jinja2 template rendered with wizard data | Composite string derivation |
+
+#### Conditional/Logical
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `equals` | `transform_value` | `bool` | `True` if `str(source) == str(transform_value)` |
+| `not_equals` | `transform_value` | `bool` | `True` if `str(source) != str(transform_value)` |
+| `constant` | `transform_value` | `Any` | Returns `transform_value` regardless of source |
+| `map` | `transform_map`, `transform_default` | `Any` | Lookup `str(source)` in map; returns mapped value or default |
+| `boolean` | (none) | `bool` | `True` if source is truthy |
+| `one_of` | `transform_values` (list) | `bool` | `True` if source is in the values list |
+| `contains` | `transform_value` | `bool` | `True` if `transform_value` is a case-insensitive substring of source |
+
+#### Collection
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `first` | (none) | `Any` | First element of iterable source |
+| `last` | (none) | `Any` | Last element of iterable source |
+| `join` | `transform_value` (separator, default `", "`) | `str` | Join list elements into string |
+| `split` | `transform_value` (separator, default `","`) | `list[str]` | Split string into list |
+| `length` | (none) | `int` | Length of string/list/dict |
+
+#### Regex
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `regex_match` | `transform_value` (pattern) | `bool` | `True` if source matches pattern |
+| `regex_extract` | `transform_value` (pattern with group) | `str\|None` | First capture group match |
+| `regex_replace` | `transform_value`, `transform_replacement` | `str` | Replace all matches |
+
+#### Expression (General-Purpose)
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `expression` | `expression` (Python expression) | `Any` | Safe eval with `value`, `data`, `has()` in scope |
+
+The `expression` transform uses the safe expression engine from `dataknobs-common` to evaluate Python expressions and return native types. Unlike `template` (string-only), `expression` returns `bool`, `int`, `list`, etc.
+
+### Configuration Examples
+
+```yaml
+settings:
+  derivations:
+    # Conditional: set flag when intent matches
+    - source: intent
+      target: kb_enabled
+      transform: equals
+      transform_value: research_assistant
+
+    # Lookup table: map intent to config
+    - source: intent
+      target: synthesis_style
+      transform: map
+      transform_map:
+        research_assistant: conversational
+        tutor: socratic
+      transform_default: structured
+
+    # Expression: complex logic via config
+    - source: intent
+      target: max_questions
+      transform: expression
+      expression: "10 if value == 'quiz_maker' else 5"
+
+    # Regex: extract domain from email
+    - source: email
+      target: email_domain
+      transform: regex_extract
+      transform_value: "@([\\w.-]+)$"
+
+    # Collection: first topic as primary
+    - source: selected_topics
+      target: primary_topic
+      transform: first
+```
 
 ### Template Derivation
 
-For deriving a field from multiple source fields, use the `template` transform with a Jinja2 template:
+For deriving a string field from multiple source fields, use the `template` transform with a Jinja2 template:
 
 ```yaml
 settings:
@@ -644,6 +724,8 @@ settings:
 ```
 
 The template has access to the full wizard data dict. If any referenced variable is undefined, the derivation is skipped (the template uses strict undefined checking to prevent partial renders).
+
+For typed results (boolean, integer, list, etc.), use the `expression` transform instead.
 
 ### Guard Conditions
 

@@ -328,6 +328,8 @@ def _split(
     **_kwargs: Any,
 ) -> list[str] | None:
     """Split string into list, with ``strip()`` on each element."""
+    if value is None:
+        return None
     separator = str(transform_value) if transform_value is not None else ","
     s = str(value)
     if not s:
@@ -431,6 +433,12 @@ PARAMETERIZED_TRANSFORMS: frozenset[str] = frozenset({
 
 _VALID_WHEN_CONDITIONS = frozenset({"target_missing", "target_empty", "always"})
 
+# Sentinel value to signal "skip this derivation" — distinct from None,
+# which is a valid derivation result (e.g., constant: null, expression
+# evaluating to None).  Transforms that cannot compute a value return
+# _SKIP; transforms that return None produce a None value in wizard data.
+_SKIP = object()
+
 
 # ── Parsing ──
 
@@ -519,7 +527,7 @@ def parse_derivation_rules(
 
         # Validate parameterized fields per transform type
         if not _validate_transform_params(
-            transform_name, source, target, item,
+            transform_name, source, target,
             transform_value=transform_value,
             transform_values=transform_values,
             transform_map=transform_map,
@@ -567,7 +575,6 @@ def _validate_transform_params(
     transform_name: str,
     source: str,
     target: str,
-    item: dict[str, Any],
     *,
     transform_value: Any,
     transform_values: Any,
@@ -718,7 +725,7 @@ def apply_field_derivations(
 
         # Execute transform
         result = _execute_transform(rule, source_value, data)
-        if result is not None:
+        if result is not _SKIP:
             data[rule.target] = result
             derived.add(rule.target)
             logger.debug(
@@ -737,7 +744,12 @@ def _execute_transform(
     source_value: Any,
     data: dict[str, Any],
 ) -> Any:
-    """Execute a single transform, returning the derived value or None."""
+    """Execute a single transform, returning the derived value or ``_SKIP``.
+
+    Returns ``_SKIP`` when the transform cannot compute a value (error,
+    missing config, template with undefined variables, etc.).  Any other
+    return value — including ``None`` — is stored as the derived result.
+    """
     # Step 1: template (existing special case)
     if rule.transform_name == "template":
         if not rule.template:
@@ -747,18 +759,18 @@ def _execute_transform(
                 rule.source,
                 rule.target,
             )
-            return None
+            return _SKIP
         import jinja2
 
         try:
             env = jinja2.Environment(undefined=jinja2.StrictUndefined)
             rendered = env.from_string(rule.template).render(**data)
-            return rendered.strip() if rendered.strip() else None
+            return rendered.strip() if rendered.strip() else _SKIP
         except jinja2.UndefinedError:
             # Not all referenced variables are present yet — skip
             # silently.  This is expected when the template references
             # multiple fields and only some have been extracted so far.
-            return None
+            return _SKIP
         except jinja2.TemplateError:
             logger.warning(
                 "Derivation template render failed for %s → %s",
@@ -766,7 +778,7 @@ def _execute_transform(
                 rule.target,
                 exc_info=True,
             )
-            return None
+            return _SKIP
 
     # Step 2: custom (existing special case)
     if rule.transform_name == "custom" and rule.custom_transform is not None:
@@ -779,7 +791,7 @@ def _execute_transform(
                 rule.target,
                 exc_info=True,
             )
-            return None
+            return _SKIP
 
     # Step 3: expression (new special case — safe eval, native type)
     if rule.transform_name == "expression":
@@ -793,7 +805,7 @@ def _execute_transform(
                 "Unknown parameterized transform: %s",
                 rule.transform_name,
             )
-            return None
+            return _SKIP
         try:
             return transform_fn(
                 source_value,
@@ -813,7 +825,7 @@ def _execute_transform(
                 rule.target,
                 exc_info=True,
             )
-            return None
+            return _SKIP
 
     # Step 5: existing non-parameterized built-ins
     transform_fn = BUILTIN_TRANSFORMS.get(rule.transform_name)
@@ -822,10 +834,15 @@ def _execute_transform(
             "Unknown derivation transform: %s",
             rule.transform_name,
         )
-        return None
+        return _SKIP
 
     try:
-        return transform_fn(source_value, data)
+        result = transform_fn(source_value, data)
+        # Non-parameterized string transforms use None to signal
+        # "couldn't compute" (e.g., empty input) — convert to _SKIP
+        if result is None:
+            return _SKIP
+        return result
     except (TypeError, ValueError, AttributeError):
         logger.warning(
             "Derivation transform %s failed for %s → %s",
@@ -834,7 +851,7 @@ def _execute_transform(
             rule.target,
             exc_info=True,
         )
-        return None
+        return _SKIP
 
 
 def _execute_expression(
@@ -842,14 +859,18 @@ def _execute_expression(
     source_value: Any,
     data: dict[str, Any],
 ) -> Any:
-    """Execute an expression transform using the shared safe-eval engine."""
+    """Execute an expression transform using the shared safe-eval engine.
+
+    Returns ``_SKIP`` when the expression fails or is missing.
+    Returns the expression's native result otherwise (including ``None``).
+    """
     if not rule.expression:
         logger.warning(
             "Expression transform missing 'expression' for %s → %s",
             rule.source,
             rule.target,
         )
-        return None
+        return _SKIP
 
     from dataknobs_common.expressions import safe_eval
 
@@ -861,6 +882,7 @@ def _execute_expression(
             "data": data_snapshot,
             "has": lambda key: data_snapshot.get(key) is not None,
         },
+        default=_SKIP,
     )
     if not result.success:
         logger.warning(
@@ -870,6 +892,7 @@ def _execute_expression(
             rule.expression,
             result.error,
         )
+        return _SKIP
     return result.value
 
 
