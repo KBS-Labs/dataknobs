@@ -25,8 +25,6 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from dataknobs_llm import LLMResponse
-
 from dataknobs_bots.reasoning.base import ReasoningStrategy
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
@@ -97,10 +95,14 @@ class HybridReasoning(ReasoningStrategy):
         return result
 
     def set_provider(self, role: str, provider: Any) -> bool:
-        """Delegate provider injection to children."""
-        if self._grounded.set_provider(role, provider):
-            return True
-        return self._react.set_provider(role, provider)
+        """Inject provider into all accepting children.
+
+        Both children are given the opportunity to accept the provider
+        for the given role — no early return after the first acceptance.
+        """
+        grounded_accepted = self._grounded.set_provider(role, provider)
+        react_accepted = self._react.set_provider(role, provider)
+        return grounded_accepted or react_accepted
 
     async def close(self) -> None:
         """Release resources held by both child strategies."""
@@ -212,12 +214,28 @@ class HybridReasoning(ReasoningStrategy):
             )
             yield response
         else:
-            # No tools — true token streaming
-            async for chunk in manager.stream_complete(**kwargs):
-                yield chunk
+            # No tools — resolve synthesis style to decide streaming approach
+            self._merge_provenance(manager, provenance, [])
+            plan = self._grounded.resolve_synthesis(context, manager, provenance)
 
-            if self._config.store_provenance:
-                self._merge_provenance(manager, provenance, [])
+            if plan.effective_style == "structured":
+                # Structured: template IS the response — yield as single chunk
+                yield plan.apply_to_response(None)
+            elif plan.effective_style == "hybrid":
+                # Hybrid: stream LLM narrative, then yield template appendix
+                async for chunk in manager.stream_complete(**kwargs):
+                    yield chunk
+                from dataknobs_llm import LLMResponse as _LLMResponse
+                if plan.template_text:
+                    yield _LLMResponse(
+                        content="\n\n" + plan.template_text,
+                        model="template",
+                        finish_reason="stop",
+                    )
+            else:
+                # Conversational: true token streaming
+                async for chunk in manager.stream_complete(**kwargs):
+                    yield chunk
 
     # ------------------------------------------------------------------
     # Greeting
@@ -267,7 +285,13 @@ class HybridReasoning(ReasoningStrategy):
         provenance: dict[str, Any],
         react_executions: list[Any],
     ) -> None:
-        """Extend provenance with tool executions and store in metadata."""
+        """Extend provenance with tool executions and store in metadata.
+
+        Uses the same schema as :meth:`GroundedReasoning._store_provenance`:
+
+        - ``retrieval_provenance``: current turn's provenance (latest).
+        - ``retrieval_provenance_history``: append-only list of all turns.
+        """
         if not self._config.store_provenance:
             return
 
@@ -281,9 +305,11 @@ class HybridReasoning(ReasoningStrategy):
             }
             for te in react_executions
         ]
-        manager.metadata.setdefault(
-            "retrieval_provenance", [],
-        ).append(provenance)
+        manager.metadata["retrieval_provenance"] = provenance
+        history = manager.metadata.setdefault(
+            "retrieval_provenance_history", [],
+        )
+        history.append(provenance)
 
     def _apply_post_react_synthesis(
         self,
@@ -294,36 +320,10 @@ class HybridReasoning(ReasoningStrategy):
     ) -> Any:
         """Apply post-ReAct synthesis formatting if configured.
 
-        Uses the grounded strategy's synthesis resolution to determine
-        the effective style:
-
-        - ``conversational`` (default): return ReAct response as-is.
-        - ``structured``: render provenance template, discard ReAct
-          response.
-        - ``hybrid``: append provenance template to ReAct response.
-
+        Delegates to :meth:`SynthesisPlan.apply_to_response` — the
+        shared dispatch logic that handles all three synthesis styles.
         The provenance dict at this point includes ``tool_executions``,
         so templates can format both KB results and tool outputs.
         """
         plan = self._grounded.resolve_synthesis(context, manager, provenance)
-
-        if plan.effective_style == "conversational":
-            return response
-
-        if plan.effective_style == "structured":
-            return LLMResponse(
-                content=plan.template_text or "",
-                model="template",
-                finish_reason="stop",
-            )
-
-        # hybrid style — LLM narrative + template appendix
-        if plan.template_text:
-            combined = (response.content or "") + "\n\n" + plan.template_text
-            return LLMResponse(
-                content=combined,
-                model=getattr(response, "model", "unknown"),
-                finish_reason=getattr(response, "finish_reason", "stop"),
-            )
-
-        return response
+        return plan.apply_to_response(response)

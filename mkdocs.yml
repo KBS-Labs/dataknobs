@@ -204,6 +204,7 @@ nav:
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
         - packages/bots/guides/grounded-reasoning.md
+        - packages/bots/guides/hybrid-reasoning.md
         - Artifact & Evaluation System:
           - packages/bots/guides/artifacts.md
           - packages/bots/guides/artifact-corpus.md

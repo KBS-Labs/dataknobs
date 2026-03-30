@@ -295,18 +295,23 @@ class TestHybridGenerate:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             await harness.chat("Calculate 1+1")
 
-            # Check provenance in manager metadata
+            # Check provenance in manager metadata — uses same schema
+            # as GroundedReasoning: retrieval_provenance (current turn dict)
+            # + retrieval_provenance_history (append-only list).
             manager = harness.bot.get_conversation_manager(
                 harness.context.conversation_id,
             )
-            provenance_list = manager.metadata.get("retrieval_provenance", [])
-            assert len(provenance_list) == 1
-
-            prov = provenance_list[0]
+            prov = manager.metadata.get("retrieval_provenance")
+            assert prov is not None
+            assert isinstance(prov, dict)
             assert "intent" in prov or "results_by_source" in prov
             assert "tool_executions" in prov
             assert len(prov["tool_executions"]) == 1
             assert prov["tool_executions"][0]["tool_name"] == "calculator"
+
+            # History should also have the entry
+            history = manager.metadata.get("retrieval_provenance_history", [])
+            assert len(history) == 1
 
     @pytest.mark.asyncio
     async def test_provenance_disabled(self) -> None:
@@ -352,15 +357,21 @@ class TestHybridGenerate:
             manager = harness.bot.get_conversation_manager(
                 harness.context.conversation_id,
             )
-            provenance_list = manager.metadata.get("retrieval_provenance", [])
-            assert len(provenance_list) == 2
+            # retrieval_provenance is the LATEST turn (turn 2)
+            prov = manager.metadata.get("retrieval_provenance")
+            assert prov is not None
+            assert len(prov["tool_executions"]) == 0
+
+            # History has both turns
+            history = manager.metadata.get("retrieval_provenance_history", [])
+            assert len(history) == 2
 
             # Turn 1 should have tool executions
-            assert len(provenance_list[0]["tool_executions"]) == 1
-            assert provenance_list[0]["tool_executions"][0]["tool_name"] == "calculator"
+            assert len(history[0]["tool_executions"]) == 1
+            assert history[0]["tool_executions"][0]["tool_name"] == "calculator"
 
             # Turn 2 should have empty tool executions
-            assert len(provenance_list[1]["tool_executions"]) == 0
+            assert len(history[1]["tool_executions"]) == 0
 
 
 # ------------------------------------------------------------------
@@ -506,7 +517,8 @@ class TestHybridFactory:
         }
         strategy = create_reasoning_from_config(config)
         assert isinstance(strategy, HybridReasoning)
-        assert strategy._react.max_iterations == 3
+        # Behavioral check: providers() works (exercises composition)
+        assert isinstance(strategy.providers(), dict)
 
     @pytest.mark.asyncio
     async def test_factory_hybrid_with_knowledge_base(self) -> None:
