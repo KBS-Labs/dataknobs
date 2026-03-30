@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-03-29T20:34:13Z",
-  "overall_status": "PASS_WITH_SKIPS",
-  "run_mode": "pr",
+  "timestamp": "2026-03-30T14:43:42Z",
+  "overall_status": "PASS",
+  "run_mode": "all",
   "environment": "host",
   "packages": "all",
   "tested_packages": [],
@@ -9,7 +9,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "mkdocs"
     },
     "documentation_versions": {
@@ -20,18 +20,18 @@
     "validation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "validate.sh"
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true
+      "skipped": false
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true
+      "skipped": false
     }
   }
 }
