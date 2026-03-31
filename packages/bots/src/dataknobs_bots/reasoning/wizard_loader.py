@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from dataknobs_common.expressions import safe_eval
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -738,10 +739,6 @@ class WizardConfigLoader:
                 try:
                     # Create a function that evaluates the condition
                     # using the shared safe expression engine.
-                    from dataknobs_common.expressions import (
-                        safe_eval,
-                    )
-
                     def make_condition(
                         code: str, name: str
                     ) -> Callable[[Any, Any], bool]:

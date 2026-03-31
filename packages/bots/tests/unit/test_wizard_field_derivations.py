@@ -370,14 +370,14 @@ class TestConditionalTransforms:
     def test_constant_returns_boolean(self) -> None:
         assert _constant("anything", {}, transform_value=True) is True
 
-    def test_constant_returns_none_skips(self) -> None:
+    def test_constant_returns_none(self) -> None:
         assert _constant("anything", {}, transform_value=None) is None
 
     def test_map_found(self) -> None:
         assert _map_transform("quiz", {}, transform_map={"quiz": True}) is True
 
     def test_map_not_found_no_default(self) -> None:
-        assert _map_transform("unknown", {}, transform_map={"quiz": True}) is None
+        assert _map_transform("unknown", {}, transform_map={"quiz": True}) is _SKIP
 
     def test_map_not_found_with_default(self) -> None:
         result = _map_transform(
@@ -443,7 +443,7 @@ class TestCollectionTransforms:
         assert _first(["a", "b", "c"], {}) == "a"
 
     def test_first_empty(self) -> None:
-        assert _first([], {}) is None
+        assert _first([], {}) is _SKIP
 
     def test_first_string(self) -> None:
         assert _first("abc", {}) == "a"
@@ -452,7 +452,7 @@ class TestCollectionTransforms:
         assert _last(["a", "b", "c"], {}) == "c"
 
     def test_last_empty(self) -> None:
-        assert _last([], {}) is None
+        assert _last([], {}) is _SKIP
 
     def test_join_default_separator(self) -> None:
         assert _join(["a", "b", "c"], {}) == "a, b, c"
@@ -482,7 +482,7 @@ class TestCollectionTransforms:
         assert _length({"a": 1}, {}) == 1
 
     def test_length_non_measurable(self) -> None:
-        assert _length(42, {}) is None
+        assert _length(42, {}) is _SKIP
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +507,7 @@ class TestRegexTransforms:
 
     def test_regex_extract_not_found(self) -> None:
         pat = re.compile(r"@([\w.]+)")
-        assert _regex_extract("no-match", {}, compiled_regex=pat) is None
+        assert _regex_extract("no-match", {}, compiled_regex=pat) is _SKIP
 
     def test_regex_replace(self) -> None:
         pat = re.compile(r"\s+")
@@ -575,7 +575,7 @@ class TestExpressionTransform:
         )
         assert _execute_expression(rule, "hard", {}) == 120
 
-    def test_expression_returns_none_skips(self) -> None:
+    def test_expression_returns_none(self) -> None:
         rule = DerivationRule(
             source="x", target="y",
             transform_name="expression",
@@ -790,6 +790,55 @@ class TestNewTransformIntegration:
         derived = apply_field_derivations(rules, data)
         assert derived == {"style"}
         assert data["style"] == "socratic"
+
+    def test_map_no_default_unmatched_key_skips(self) -> None:
+        """map with no transform_default skips when key not found."""
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "style",
+             "transform": "map",
+             "transform_map": {"tutor": "socratic"}},
+            # No transform_default — unmatched key should skip
+        ])
+        data: dict[str, Any] = {"intent": "research_assistant"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == set()
+        assert "style" not in data
+
+    def test_map_explicit_null_default_stores_none(self) -> None:
+        """map with transform_default: null stores None explicitly."""
+        rules = parse_derivation_rules([
+            {"source": "intent", "target": "style",
+             "transform": "map",
+             "transform_map": {"tutor": "socratic"},
+             "transform_default": None},
+        ])
+        data: dict[str, Any] = {"intent": "research_assistant"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == {"style"}
+        assert data["style"] is None
+
+    def test_first_empty_list_skips(self) -> None:
+        """first on empty list skips instead of storing None."""
+        rules = parse_derivation_rules([
+            {"source": "topics", "target": "primary",
+             "transform": "first"},
+        ])
+        data: dict[str, Any] = {"topics": []}
+        derived = apply_field_derivations(rules, data)
+        assert derived == set()
+        assert "primary" not in data
+
+    def test_regex_extract_no_match_skips(self) -> None:
+        """regex_extract with no match skips instead of storing None."""
+        rules = parse_derivation_rules([
+            {"source": "email", "target": "domain",
+             "transform": "regex_extract",
+             "transform_value": r"@([\w.]+)"},
+        ])
+        data: dict[str, Any] = {"email": "not-an-email"}
+        derived = apply_field_derivations(rules, data)
+        assert derived == set()
+        assert "domain" not in data
 
     def test_expression_derivation_end_to_end(self) -> None:
         rules = parse_derivation_rules([
@@ -1183,4 +1232,232 @@ class TestFieldDerivationIntegration:
             await harness.chat("I want a quiz maker")
             assert harness.wizard_data["intent"] == "quiz_maker"
             assert harness.wizard_data["max_questions"] == 10
+            assert harness.wizard_stage == "done"
+
+
+# ---------------------------------------------------------------------------
+# Post-extraction derivation pass tests
+# ---------------------------------------------------------------------------
+
+
+def _wizard_config_optional_derivation(
+    derivations: list[dict],
+    **extra_settings: Any,
+) -> dict:
+    """Wizard where all required fields satisfy extraction.
+
+    ``kb_enabled`` is optional, derived from required ``intent``.
+    When all required fields are extracted, the recovery pipeline
+    is skipped — derivations must run unconditionally to fill
+    ``kb_enabled``.
+    """
+    return (
+        WizardConfigBuilder("post-extract-derivation-test")
+        .stage(
+            "gather",
+            is_start=True,
+            prompt="Tell me your intent.",
+        )
+        .field("intent", field_type="string", required=True)
+        .field("kb_enabled", field_type="boolean", required=False)
+        .transition(
+            "done",
+            "data.get('intent')",
+        )
+        .stage("done", is_end=True, prompt="All done!")
+        .settings(derivations=derivations, **extra_settings)
+        .build()
+    )
+
+
+class TestPostExtractionDerivation:
+    """Derivations run unconditionally after merge + defaults.
+
+    Prior to this feature, derivations only ran inside the recovery
+    pipeline, which is gated on missing required fields.  These tests
+    verify that optional fields are derived even when all required
+    fields are present.
+    """
+
+    @pytest.mark.asyncio
+    async def test_optional_field_derived_from_required(self) -> None:
+        """Optional kb_enabled derived from required intent via equals."""
+        config = _wizard_config_optional_derivation(
+            derivations=[
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                },
+            ],
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"intent": "research_assistant"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a research assistant")
+            assert harness.wizard_data["intent"] == "research_assistant"
+            assert harness.wizard_data["kb_enabled"] is True
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_optional_derivation_false_when_no_match(self) -> None:
+        """equals returns False when source doesn't match."""
+        config = _wizard_config_optional_derivation(
+            derivations=[
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                },
+            ],
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"intent": "quiz_maker"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a quiz maker")
+            assert harness.wizard_data["intent"] == "quiz_maker"
+            assert harness.wizard_data["kb_enabled"] is False
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_derivation_does_not_overwrite_extracted_optional(
+        self,
+    ) -> None:
+        """Extraction-provided optional value not overwritten by derivation."""
+        config = _wizard_config_optional_derivation(
+            derivations=[
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                },
+            ],
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                # User explicitly set kb_enabled=False despite matching intent
+                [{"intent": "research_assistant", "kb_enabled": False}],
+            ],
+        ) as harness:
+            await harness.chat("research assistant but no KB")
+            assert harness.wizard_data["intent"] == "research_assistant"
+            # target_missing guard: extraction value preserved
+            assert harness.wizard_data["kb_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_derivation_suppressed_by_stage_flag(self) -> None:
+        """derivation_enabled: false suppresses post-extraction pass."""
+        config = (
+            WizardConfigBuilder("suppressed-derivation-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="Tell me your intent.",
+                derivation_enabled=False,
+            )
+            .field("intent", field_type="string", required=True)
+            .field("kb_enabled", field_type="boolean", required=False)
+            .transition("done", "data.get('intent')")
+            .stage("done", is_end=True, prompt="All done!")
+            .settings(
+                derivations=[
+                    {
+                        "source": "intent",
+                        "target": "kb_enabled",
+                        "transform": "equals",
+                        "transform_value": "research_assistant",
+                    },
+                ],
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"intent": "research_assistant"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a research assistant")
+            assert harness.wizard_data["intent"] == "research_assistant"
+            # Derivation suppressed — kb_enabled stays None
+            assert harness.wizard_data.get("kb_enabled") is None
+
+    @pytest.mark.asyncio
+    async def test_recovery_derivation_noop_after_post_extraction(
+        self,
+    ) -> None:
+        """Recovery pipeline derivation is a no-op when post-extraction pass already filled.
+
+        Scenario: required field ``name`` is missing, recovery pipeline
+        runs.  But the derivation target (``kb_enabled``) was already
+        filled by the post-extraction pass, so the recovery derivation
+        step adds nothing new for that field.
+        """
+        config = (
+            WizardConfigBuilder("recovery-noop-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="Tell me everything.",
+            )
+            .field("intent", field_type="string", required=True)
+            .field("name", field_type="string", required=True)
+            .field("kb_enabled", field_type="boolean", required=False)
+            .transition(
+                "done",
+                "data.get('intent') and data.get('name')",
+            )
+            .stage("done", is_end=True, prompt="All done!")
+            .settings(
+                derivations=[
+                    {
+                        "source": "intent",
+                        "target": "kb_enabled",
+                        "transform": "equals",
+                        "transform_value": "research_assistant",
+                    },
+                ],
+                recovery_pipeline=["derivation"],
+            )
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["What's your name?", "Got it!"],
+            extraction_results=[
+                # Turn 1: intent extracted, name missing → recovery runs
+                [{"intent": "research_assistant"}],
+                # Turn 2: name extracted
+                [{"name": "Alice"}],
+            ],
+        ) as harness:
+            await harness.chat("I want a research assistant")
+            # After turn 1: post-extraction derivation fills kb_enabled,
+            # recovery pipeline runs for missing 'name' but derivation
+            # step is no-op for kb_enabled (already filled)
+            assert harness.wizard_data["intent"] == "research_assistant"
+            assert harness.wizard_data["kb_enabled"] is True
+            assert harness.wizard_data.get("name") is None
+
+            await harness.chat("My name is Alice")
+            assert harness.wizard_data["name"] == "Alice"
             assert harness.wizard_stage == "done"

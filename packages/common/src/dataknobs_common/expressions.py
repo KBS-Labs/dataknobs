@@ -201,8 +201,24 @@ def safe_eval(
                 error="Empty expression",
             )
 
+        # Reject multiline expressions — config-authored expressions
+        # should be single-line.  Multiline strings could inject
+        # module-scope code past the function wrapper.
+        if "\n" in stripped:
+            return ExpressionResult(
+                value=default,
+                success=False,
+                error="Multiline expressions are not allowed",
+            )
+
         if not stripped.startswith("return"):
             stripped = f"return {stripped}"
+
+        if not restrict_builtins:
+            logger.warning(
+                "safe_eval called with restrict_builtins=False — "
+                "full Python builtins available (trusted code only)"
+            )
 
         # AST validation: block dunder access when builtins restricted
         if restrict_builtins:

@@ -3,6 +3,7 @@
 This package provides shared functionality used across all dataknobs packages:
 
 - **Exceptions**: Unified exception hierarchy with context support
+- **Expressions**: Safe expression evaluation engine with restricted builtins
 - **Registry**: Generic registry pattern for managing named items
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
 - **Retry**: Configurable retry execution with backoff strategies

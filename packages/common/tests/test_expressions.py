@@ -218,6 +218,12 @@ class TestSecurity:
         result = safe_eval("().__class__.__name__", restrict_builtins=False)
         assert result.value == "tuple"
 
+    def test_no_multiline_expressions(self) -> None:
+        """Block multiline expressions to prevent module-scope injection."""
+        result = safe_eval("1 + 2\nimport os")
+        assert result.success is False
+        assert "Multiline" in (result.error or "")
+
 
 # ---------------------------------------------------------------------------
 # Edge cases

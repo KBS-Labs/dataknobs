@@ -407,7 +407,12 @@ class TestPerStageDisable:
 
     @pytest.mark.asyncio
     async def test_recovery_disabled_on_stage(self) -> None:
-        """recovery_enabled: false prevents all recovery on that stage."""
+        """recovery_enabled: false prevents recovery pipeline on that stage.
+
+        Post-extraction derivation still runs (it is independent of the
+        recovery pipeline).  To suppress derivation too, use
+        ``derivation_enabled: false``.
+        """
         config = (
             WizardConfigBuilder("pipeline-stage-test")
             .stage("gather1", is_start=True, prompt="Tell me your name.")
@@ -443,21 +448,21 @@ class TestPerStageDisable:
 
         async with await BotTestHarness.create(
             wizard_config=config,
-            main_responses=["Got it!", "Need more info"],
+            main_responses=["Got it!", "Got it!"],
             extraction_results=[
                 # Turn 1: name
                 [{"name": "Alice"}],
-                # Turn 2: domain_id only — derivation would fill
-                # domain_name but recovery is disabled
+                # Turn 2: domain_id only — post-extraction derivation
+                # fills domain_name even though recovery is disabled
                 [{"domain_id": "chess-champ"}],
             ],
         ) as harness:
             await harness.chat("I'm Alice")
             assert harness.wizard_stage == "gather2"
             await harness.chat("Domain chess-champ")
-            # Derivation did NOT fire — domain_name missing
-            assert harness.wizard_data.get("domain_name") is None
-            assert harness.wizard_stage == "gather2"
+            # Post-extraction derivation fires (independent of recovery)
+            assert harness.wizard_data["domain_name"] == "Chess Champ"
+            assert harness.wizard_stage == "done"
 
     @pytest.mark.asyncio
     async def test_derivation_disabled_but_escalation_runs(self) -> None:
@@ -532,7 +537,12 @@ class TestPipelineConfiguration:
 
     @pytest.mark.asyncio
     async def test_empty_pipeline_disables_all_recovery(self) -> None:
-        """An empty pipeline list means no recovery strategies run."""
+        """An empty pipeline list means no recovery strategies run.
+
+        Post-extraction derivation still fires (independent of the
+        recovery pipeline), so domain_name is filled by derivation
+        even with an empty pipeline.
+        """
         config = _three_field_config()
         config["settings"] = {
             "extraction_scope": "current_message",
@@ -550,18 +560,19 @@ class TestPipelineConfiguration:
 
         async with await BotTestHarness.create(
             wizard_config=config,
-            main_responses=["Got it!", "Need more"],
+            main_responses=["Got it!", "Got it!"],
             extraction_results=[
                 [{"name": "Alice"}],
-                # Only domain_id — derivation would fill domain_name
-                # but pipeline is empty
+                # Only domain_id — post-extraction derivation fills
+                # domain_name even though recovery pipeline is empty
                 [{"domain_id": "chess-champ"}],
             ],
         ) as harness:
             await harness.chat("I'm Alice")
             await harness.chat("Domain chess-champ")
-            assert harness.wizard_data.get("domain_name") is None
-            assert harness.wizard_stage == "gather"
+            # Post-extraction derivation fires independently
+            assert harness.wizard_data["domain_name"] == "Chess Champ"
+            assert harness.wizard_stage == "done"
 
     @pytest.mark.asyncio
     async def test_schema_defaults_run_before_pipeline(self) -> None:

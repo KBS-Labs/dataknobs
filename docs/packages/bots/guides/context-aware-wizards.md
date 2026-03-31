@@ -581,21 +581,29 @@ Field derivation fills missing fields from present ones using pure functions —
 
 ### How It Works {#derivation-how-it-works}
 
-Derivation runs in the extraction pipeline **after** merge, scope escalation, and schema defaults, and **before** the confidence gate:
+Derivation runs in the extraction pipeline **after** merge and schema defaults, and **before** the recovery pipeline and confidence gate:
 
 ```
 1. Extract from message (SchemaExtractor)
 2. Normalize extracted data (type coercion + enum normalization)
 3. Merge with existing wizard_data (grounding filter)
-4. Scope escalation (if enabled)
-5. Apply schema defaults
-6. Apply field derivations  ← fills missing fields from present ones
+4. Apply schema defaults
+5. Apply field derivations  ← POST-EXTRACTION PASS (unconditional)
+6. Recovery pipeline (if required fields still missing):
+   a. derivation            ← no-op if post-extraction pass already filled
+   b. boolean_recovery
+   c. scope_escalation
+   d. focused_retry
 7. Confidence gate (required fields check)
 8. Transition derivations
 9. FSM step
 ```
 
-This ordering ensures derived values count toward the required-field check and are available for transition conditions.
+The **post-extraction derivation pass** (step 5) runs unconditionally after every extraction, filling derivable fields regardless of whether required fields are missing. This is essential for deriving optional fields from required fields (e.g., `intent=research_assistant` → `kb_enabled=true`) — since all required fields may already be satisfied, the recovery pipeline would never run.
+
+Guard conditions (`target_missing`, `target_empty`, `always`) ensure idempotency — values already set by extraction or defaults are not overwritten.
+
+The recovery pipeline (step 6) may also include derivation as a strategy. If the post-extraction pass already filled a field, the recovery derivation step is a no-op for that field (guard conditions prevent double-write). Recovery derivation is still useful when earlier recovery strategies (e.g., boolean recovery or scope escalation) produce new source values that enable additional derivations.
 
 ### Configuration
 
@@ -846,8 +854,10 @@ Disable derivation on specific stages:
 ```yaml
 stages:
   - name: review
-    derivation_enabled: false   # suppress derivation on this stage
+    derivation_enabled: false   # suppress both post-extraction and recovery derivation
 ```
+
+Note: `derivation_enabled: false` suppresses derivation in **both** the post-extraction pass and the recovery pipeline. This is distinct from `recovery_enabled: false`, which only suppresses the recovery pipeline — post-extraction derivation still runs when recovery is disabled.
 
 ### Custom Transforms
 
@@ -912,8 +922,9 @@ The recovery pipeline runs after initial extraction and merge, executing strateg
 
 ```
 Extract → Normalize → Merge (grounded) → Schema defaults
-  → Recovery pipeline (if required fields missing):
-    1. derivation         [free — pure functions, no LLM call]
+  → Post-extraction derivation (unconditional — fills optional & required)
+  → Recovery pipeline (if required fields still missing):
+    1. derivation         [free — no-op for fields already derived above]
     2. boolean_recovery   [free — signal word matching, no LLM call]
     3. scope_escalation   [1 LLM call — broader context]
     4. focused_retry      [1 LLM call — focused prompt]
@@ -926,8 +937,9 @@ After each strategy, the pipeline checks whether all required fields are now pre
 
 Key design choices:
 
-- **Schema defaults run before the pipeline**, not as a pipeline step. Defaults fill preconfigured values that should always apply, so defaulted fields don't trigger unnecessary recovery.
-- **Derivation runs first** (before scope escalation). Prior to the recovery pipeline, scope escalation ran before field derivation. The pipeline reverses this ordering because derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
+- **Post-extraction derivation runs unconditionally** — after merge and schema defaults, before the recovery pipeline check. This ensures optional fields derived from required fields are always filled, even when all required fields are satisfied and recovery is skipped.
+- **Schema defaults run before derivation**, not as a pipeline step. Defaults fill preconfigured values that should always apply, so defaulted fields are available as derivation sources and don't trigger unnecessary recovery.
+- **Recovery pipeline derivation runs first** (before scope escalation). Derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
 - **Each LLM-backed strategy** (scope escalation, focused retry) runs normalize + merge on its results automatically, including grounding checks.
 
 ### Pipeline Configuration 

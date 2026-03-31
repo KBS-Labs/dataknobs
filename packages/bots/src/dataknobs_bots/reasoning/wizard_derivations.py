@@ -54,7 +54,16 @@ from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.expressions import safe_eval
+
 logger = logging.getLogger(__name__)
+
+
+# Sentinel value to signal "skip this derivation" — distinct from None,
+# which is a valid derivation result (e.g., constant: null, expression
+# evaluating to None).  Transforms that cannot compute a value return
+# _SKIP; transforms that return None produce a None value in wizard data.
+_SKIP = object()
 
 
 # ── Protocol ──
@@ -71,6 +80,9 @@ class FieldTransform(Protocol):
     (e.g., when preconditions are not met).  Any other value —
     including falsy values like ``0``, ``False``, or ``""`` — will
     be stored as the derived result.
+
+    Note: ``None`` is converted to ``_SKIP`` internally so that
+    custom transforms need not know about the internal sentinel.
     """
 
     def transform(self, value: Any, wizard_data: dict[str, Any]) -> Any:
@@ -118,6 +130,8 @@ class DerivationRule:
         transform_values: List parameter for ``one_of``.
         transform_map: Dict parameter for ``map``.
         transform_default: Fallback value for ``map`` when key not found.
+            Defaults to ``_SKIP`` (derivation skipped).  Set to
+            ``null``/``None`` in config to explicitly store ``None``.
         transform_replacement: Replacement string for ``regex_replace``.
         expression: Python expression string for ``expression`` transform.
         compiled_regex: Pre-compiled regex pattern for ``regex_*``
@@ -135,7 +149,7 @@ class DerivationRule:
     transform_value: Any = None
     transform_values: list[Any] | None = None
     transform_map: dict[str, Any] | None = None
-    transform_default: Any = None
+    transform_default: Any = _SKIP
     transform_replacement: str | None = None
     expression: str | None = None
     # Pre-compiled regex (populated at parse time for regex_* transforms)
@@ -228,12 +242,17 @@ def _map_transform(
     _data: dict[str, Any],
     *,
     transform_map: dict[str, Any] | None = None,
-    transform_default: Any = None,
+    transform_default: Any = _SKIP,
     **_kwargs: Any,
 ) -> Any:
-    """Lookup ``str(source)`` in map; returns mapped value or default."""
+    """Lookup ``str(source)`` in map; returns mapped value or default.
+
+    When the key is not found and no ``transform_default`` was
+    configured, returns ``_SKIP`` so the derivation is skipped
+    rather than storing ``None``.
+    """
     if transform_map is None:
-        return None
+        return _SKIP
     key = str(value)
     if key in transform_map:
         return transform_map[key]
@@ -283,12 +302,12 @@ def _first(
     _data: dict[str, Any],
     **_kwargs: Any,
 ) -> Any:
-    """First element of iterable source; ``None`` if empty."""
+    """First element of iterable source; ``_SKIP`` if empty/non-iterable."""
     try:
         it = iter(value)
-        return next(it, None)
+        return next(it, _SKIP)
     except TypeError:
-        return None
+        return _SKIP
 
 
 def _last(
@@ -296,12 +315,12 @@ def _last(
     _data: dict[str, Any],
     **_kwargs: Any,
 ) -> Any:
-    """Last element of iterable source; ``None`` if empty."""
+    """Last element of iterable source; ``_SKIP`` if empty/non-iterable."""
     try:
         items = list(value)
-        return items[-1] if items else None
+        return items[-1] if items else _SKIP
     except TypeError:
-        return None
+        return _SKIP
 
 
 def _join(
@@ -310,14 +329,14 @@ def _join(
     *,
     transform_value: Any = None,
     **_kwargs: Any,
-) -> str | None:
+) -> str | Any:
     """Join list elements into string with separator."""
     separator = str(transform_value) if transform_value is not None else ", "
     try:
         items = list(value)
-        return separator.join(str(item) for item in items) if items else None
+        return separator.join(str(item) for item in items) if items else _SKIP
     except TypeError:
-        return None
+        return _SKIP
 
 
 def _split(
@@ -326,14 +345,14 @@ def _split(
     *,
     transform_value: Any = None,
     **_kwargs: Any,
-) -> list[str] | None:
+) -> list[str] | Any:
     """Split string into list, with ``strip()`` on each element."""
     if value is None:
-        return None
+        return _SKIP
     separator = str(transform_value) if transform_value is not None else ","
     s = str(value)
     if not s:
-        return None
+        return _SKIP
     return [part.strip() for part in s.split(separator)]
 
 
@@ -341,12 +360,12 @@ def _length(
     value: Any,
     _data: dict[str, Any],
     **_kwargs: Any,
-) -> int | None:
-    """Length of string/list/dict; ``None`` if not measurable."""
+) -> int | Any:
+    """Length of string/list/dict; ``_SKIP`` if not measurable."""
     try:
         return len(value)  # type: ignore[arg-type]
     except TypeError:
-        return None
+        return _SKIP
 
 
 # ── Regex transforms (parameterized) ──
@@ -371,14 +390,14 @@ def _regex_extract(
     *,
     compiled_regex: re.Pattern[str] | None = None,
     **_kwargs: Any,
-) -> str | None:
-    """First capture group match, or ``None``."""
+) -> str | Any:
+    """First capture group match, or ``_SKIP`` if no match."""
     if compiled_regex is None:
-        return None
+        return _SKIP
     match = compiled_regex.search(str(value))
     if match and match.groups():
         return match.group(1)
-    return None
+    return _SKIP
 
 
 def _regex_replace(
@@ -432,13 +451,6 @@ PARAMETERIZED_TRANSFORMS: frozenset[str] = frozenset({
 })
 
 _VALID_WHEN_CONDITIONS = frozenset({"target_missing", "target_empty", "always"})
-
-# Sentinel value to signal "skip this derivation" — distinct from None,
-# which is a valid derivation result (e.g., constant: null, expression
-# evaluating to None).  Transforms that cannot compute a value return
-# _SKIP; transforms that return None produce a None value in wizard data.
-_SKIP = object()
-
 
 # ── Parsing ──
 
@@ -520,7 +532,7 @@ def parse_derivation_rules(
         transform_value = item.get("transform_value")
         transform_values = item.get("transform_values")
         transform_map = item.get("transform_map")
-        transform_default = item.get("transform_default")
+        transform_default = item.get("transform_default", _SKIP)
         transform_replacement = item.get("transform_replacement")
         expression = item.get("expression")
         compiled_regex: re.Pattern[str] | None = None
@@ -781,9 +793,12 @@ def _execute_transform(
             return _SKIP
 
     # Step 2: custom (existing special case)
+    # Custom transforms use None to signal "skip" per the FieldTransform
+    # protocol — convert to _SKIP so the caller's sentinel check works.
     if rule.transform_name == "custom" and rule.custom_transform is not None:
         try:
-            return rule.custom_transform.transform(source_value, data)
+            result = rule.custom_transform.transform(source_value, data)
+            return _SKIP if result is None else result
         except Exception:  # Custom user code — cannot predict exception types
             logger.warning(
                 "Custom derivation transform failed for %s → %s",
@@ -838,8 +853,9 @@ def _execute_transform(
 
     try:
         result = transform_fn(source_value, data)
-        # Non-parameterized string transforms use None to signal
-        # "couldn't compute" (e.g., empty input) — convert to _SKIP
+        # Non-parameterized built-in transforms (title_case, lower_hyphen,
+        # lower_underscore, copy) use None to signal "couldn't compute"
+        # (e.g., empty input) — convert to _SKIP
         if result is None:
             return _SKIP
         return result
@@ -861,6 +877,12 @@ def _execute_expression(
 ) -> Any:
     """Execute an expression transform using the shared safe-eval engine.
 
+    Available scope variables in expressions:
+
+    - ``value`` — the source field value
+    - ``data`` — snapshot of the full wizard data dict
+    - ``has(key)`` — shorthand for ``data.get(key) is not None``
+
     Returns ``_SKIP`` when the expression fails or is missing.
     Returns the expression's native result otherwise (including ``None``).
     """
@@ -871,8 +893,6 @@ def _execute_expression(
             rule.target,
         )
         return _SKIP
-
-    from dataknobs_common.expressions import safe_eval
 
     data_snapshot = dict(data)
     result = safe_eval(

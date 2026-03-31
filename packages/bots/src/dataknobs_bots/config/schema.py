@@ -391,7 +391,7 @@ class DynaBotConfigSchema:
                     "strategy": {
                         "type": "string",
                         "description": "Reasoning strategy",
-                        "enum": ["simple", "react", "wizard"],
+                        "enum": ["simple", "react", "wizard", "grounded", "hybrid"],
                     },
                 },
             },
