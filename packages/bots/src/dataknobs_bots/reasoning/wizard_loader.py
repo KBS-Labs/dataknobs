@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from dataknobs_common.expressions import safe_eval
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -737,49 +738,46 @@ class WizardConfigLoader:
                 # Create the function
                 try:
                     # Create a function that evaluates the condition
+                    # using the shared safe expression engine.
                     def make_condition(
                         code: str, name: str
                     ) -> Callable[[Any, Any], bool]:
                         def condition_func(
                             data: dict[str, Any], context: Any = None
                         ) -> bool:
-                            try:
-                                # Simple evaluation - data is available directly
-                                # Pass data in globals so _test() can access it
-                                exec_globals: dict[str, Any] = {
+                            result = safe_eval(
+                                code,
+                                scope={
                                     "data": data,
+                                    "has": lambda key: (
+                                        data.get(key) is not None
+                                    ),
                                     "bank": data.get(
                                         "_bank_fn", _null_bank
                                     ),
-                                    # Common aliases for YAML/JSON boolean
-                                    # literals
-                                    "true": True,
-                                    "false": False,
-                                    "null": None,
-                                    "none": None,
-                                }
-                                exec_code = f"def _test():\n    {code}\n_result = _test()"
-                                exec(exec_code, exec_globals)  # nosec B102
-                                result = bool(exec_globals.get("_result", False))
-                                logger.debug(
-                                    "Condition '%s': code=%r, result=%s, "
-                                    "data_keys=%s",
-                                    name,
-                                    code,
-                                    result,
-                                    list(data.keys()),
-                                )
-                                return result
-                            except Exception as e:
+                                },
+                                coerce_bool=True,
+                                default=False,
+                            )
+                            if not result.success:
                                 logger.warning(
-                                    "Condition '%s' evaluation failed: %s "
-                                    "(code=%r, data_keys=%s)",
+                                    "Condition '%s' evaluation failed: "
+                                    "%s (code=%r, data_keys=%s)",
                                     name,
-                                    e,
+                                    result.error,
                                     code,
                                     list(data.keys()),
                                 )
-                                return False
+                            else:
+                                logger.debug(
+                                    "Condition '%s': code=%r, "
+                                    "result=%s, data_keys=%s",
+                                    name,
+                                    code,
+                                    result.value,
+                                    list(data.keys()),
+                                )
+                            return result.value
 
                         return condition_func
 

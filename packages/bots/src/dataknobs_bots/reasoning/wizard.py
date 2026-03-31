@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.expressions import safe_eval
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
@@ -2283,7 +2284,9 @@ class WizardReasoning(ReasoningStrategy):
             # on the prior turn when extraction executed.
             pass
         elif is_conversation:
-            # Conversation mode: skip extraction, run intent detection
+            # Conversation mode: skip extraction, run intent detection.
+            # Field derivations are also skipped — no new data extracted,
+            # so there is nothing to derive from.
             stage_name = stage.get("name", "unknown")
             logger.debug(
                 "Conversation mode for stage '%s': skipping extraction",
@@ -2291,8 +2294,8 @@ class WizardReasoning(ReasoningStrategy):
             )
             await self._detect_intent(user_message, stage, wizard_state, llm)
         elif _collection_done_signal:
-            # Done keyword detected — skip extraction and fall through
-            # to transition evaluation below.
+            # Done keyword detected — skip extraction (and derivation)
+            # and fall through to transition evaluation below.
             pass
         elif _collection_help:
             # Help request during collection — generate a contextual
@@ -2386,6 +2389,23 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 if default_keys:
                     new_data_keys |= default_keys
+
+                # ── Post-extraction derivation pass ──
+                # Derivations express deterministic field relationships
+                # (e.g. intent=research_assistant → kb_enabled=true)
+                # that hold regardless of whether recovery is needed.
+                # Running unconditionally here lets optional fields be
+                # derived from extracted required fields.  Guard
+                # conditions (target_missing, etc.) ensure idempotency.
+                derived = self._apply_field_derivations(
+                    wizard_state, stage,
+                )
+                if derived:
+                    new_data_keys |= derived
+                    logger.debug(
+                        "Post-extraction derivation filled: %s",
+                        sorted(derived),
+                    )
 
                 # ── Recovery pipeline ──
                 # Run configured strategies in order, stopping as
@@ -5683,15 +5703,22 @@ class WizardReasoning(ReasoningStrategy):
         wizard_state: WizardState,
         stage: dict[str, Any],
     ) -> set[str]:
-        """Apply field derivation rules to fill missing fields.
+        """Apply field derivation rules to fill derivable fields.
 
-        Runs as a recovery pipeline strategy — by default first, before
-        scope escalation and focused retry.  Derived values never
-        overwrite user-provided or extracted data unless the rule
-        specifies ``when: always``.
+        Called in two contexts:
+
+        1. **Post-extraction pass** (unconditional) — runs after merge
+           and schema defaults, before the recovery pipeline check.
+           Catches the common case of deriving optional fields from
+           extracted required fields.
+        2. **Recovery pipeline strategy** — runs (by default first)
+           when required fields are still missing after extraction.
+
+        Derived values never overwrite user-provided or extracted data
+        unless the rule specifies ``when: always``.
 
         Per-stage override: set ``derivation_enabled: false`` on a
-        stage to suppress derivation for that stage.
+        stage to suppress derivation for that stage (both contexts).
 
         Args:
             wizard_state: Current wizard state (data modified in-place).
@@ -6554,7 +6581,8 @@ class WizardReasoning(ReasoningStrategy):
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.
 
-        Uses a restricted execution environment to evaluate condition
+        Uses the shared safe expression engine from
+        :mod:`dataknobs_common.expressions` to evaluate condition
         expressions like ``data.get('subject')``, ``has('count')``,
         or ``data.get('count', 0) > 5``.
 
@@ -6577,35 +6605,29 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             True if condition is satisfied, False otherwise
         """
-        try:
-            # Wrap in return statement if not already
-            code = condition.strip()
-            if not code.startswith("return"):
-                code = f"return {code}"
-
-            # Create a function to evaluate the condition.
-            # Shallow copy so exec cannot add/remove/replace top-level
-            # keys in live wizard state.  Nested mutable values are
-            # still shared.
-            data_snapshot = dict(data)
-            global_vars: dict[str, Any] = {
+        # Shallow copy so expression cannot add/remove/replace
+        # top-level keys in live wizard state.
+        data_snapshot = dict(data)
+        result = safe_eval(
+            condition,
+            scope={
                 "data": data_snapshot,
-                "has": lambda key: self._field_is_present(data_snapshot.get(key)),
+                "has": lambda key: self._field_is_present(
+                    data_snapshot.get(key)
+                ),
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
-                # Common aliases for YAML/JSON boolean literals
-                "true": True,
-                "false": False,
-                "null": None,
-                "none": None,
-            }
-            local_vars: dict[str, Any] = {}
-            exec_code = f"def _test():\n    {code}\n_result = _test()"
-            exec(exec_code, global_vars, local_vars)  # nosec B102
-            return bool(local_vars.get("_result", False))
-        except Exception as e:
-            logger.debug("Condition evaluation failed for '%s': %s", condition, e)
-            return False
+            },
+            coerce_bool=True,
+            default=False,
+        )
+        if not result.success:
+            logger.debug(
+                "Condition evaluation failed for '%s': %s",
+                condition,
+                result.error,
+            )
+        return result.value
 
     # =========================================================================
     # Post-Completion Amendment Methods

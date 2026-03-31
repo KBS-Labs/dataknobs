@@ -3,6 +3,7 @@
 This package provides shared functionality used across all dataknobs packages:
 
 - **Exceptions**: Unified exception hierarchy with context support
+- **Expressions**: Safe expression evaluation engine with restricted builtins
 - **Registry**: Generic registry pattern for managing named items
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
 - **Retry**: Configurable retry execution with backoff strategies
@@ -31,6 +32,13 @@ Example:
 """
 
 # Import all public APIs from submodules
+from dataknobs_common.expressions import (
+    SAFE_BUILTINS,
+    YAML_ALIASES,
+    ExpressionResult,
+    safe_eval,
+    safe_eval_value,
+)
 from dataknobs_common.events import (
     Event,
     EventBus,
@@ -107,6 +115,12 @@ __version__ = "1.3.5"
 __all__ = [
     # Version
     "__version__",
+    # Expressions
+    "SAFE_BUILTINS",
+    "YAML_ALIASES",
+    "ExpressionResult",
+    "safe_eval",
+    "safe_eval_value",
     # Events
     "Event",
     "EventBus",

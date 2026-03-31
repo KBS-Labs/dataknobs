@@ -581,21 +581,29 @@ Field derivation fills missing fields from present ones using pure functions —
 
 ### How It Works {#derivation-how-it-works}
 
-Derivation runs in the extraction pipeline **after** merge, scope escalation, and schema defaults, and **before** the confidence gate:
+Derivation runs in the extraction pipeline **after** merge and schema defaults, and **before** the recovery pipeline and confidence gate:
 
 ```
 1. Extract from message (SchemaExtractor)
 2. Normalize extracted data (type coercion + enum normalization)
 3. Merge with existing wizard_data (grounding filter)
-4. Scope escalation (if enabled)
-5. Apply schema defaults
-6. Apply field derivations  ← fills missing fields from present ones
+4. Apply schema defaults
+5. Apply field derivations  ← POST-EXTRACTION PASS (unconditional)
+6. Recovery pipeline (if required fields still missing):
+   a. derivation            ← no-op if post-extraction pass already filled
+   b. boolean_recovery
+   c. scope_escalation
+   d. focused_retry
 7. Confidence gate (required fields check)
 8. Transition derivations
 9. FSM step
 ```
 
-This ordering ensures derived values count toward the required-field check and are available for transition conditions.
+The **post-extraction derivation pass** (step 5) runs unconditionally after every extraction, filling derivable fields regardless of whether required fields are missing. This is essential for deriving optional fields from required fields (e.g., `intent=research_assistant` → `kb_enabled=true`) — since all required fields may already be satisfied, the recovery pipeline would never run.
+
+Guard conditions (`target_missing`, `target_empty`, `always`) ensure idempotency — values already set by extraction or defaults are not overwritten.
+
+The recovery pipeline (step 6) may also include derivation as a strategy. If the post-extraction pass already filled a field, the recovery derivation step is a no-op for that field (guard conditions prevent double-write). Recovery derivation is still useful when earlier recovery strategies (e.g., boolean recovery or scope escalation) produce new source values that enable additional derivations.
 
 ### Configuration
 
@@ -621,17 +629,189 @@ Each rule specifies:
 
 ### Built-In Transforms
 
+#### String Formatting
+
 | Transform | Input → Output | Use Case |
 |-----------|---------------|----------|
 | `title_case` | `chess-champ` → `Chess Champ` | ID → display name |
 | `lower_hyphen` | `Chess Champ` → `chess-champ` | Display name → slug ID |
 | `lower_underscore` | `Chess Champ` → `chess_champ` | Display name → snake_case |
 | `copy` | Direct copy of source value | Aliased fields |
-| `template` | Jinja2 template rendered with wizard data | Composite derivation |
+| `template` | Jinja2 template rendered with wizard data | Composite string derivation |
+
+#### Conditional/Logical
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `equals` | `transform_value` | `bool` | `True` if `str(source) == str(transform_value)` |
+| `not_equals` | `transform_value` | `bool` | `True` if `str(source) != str(transform_value)` |
+| `constant` | `transform_value` | `Any` | Returns `transform_value` regardless of source |
+| `map` | `transform_map`, `transform_default` | `Any` | Lookup `str(source)` in map; returns mapped value or default |
+| `boolean` | (none) | `bool` | `True` if source is truthy |
+| `one_of` | `transform_values` (list) | `bool` | `True` if source is in the values list |
+| `contains` | `transform_value` | `bool` | `True` if `transform_value` is a case-insensitive substring of source |
+
+#### Collection
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `first` | (none) | `Any` | First element of iterable source |
+| `last` | (none) | `Any` | Last element of iterable source |
+| `join` | `transform_value` (separator, default `", "`) | `str` | Join list elements into string |
+| `split` | `transform_value` (separator, default `","`) | `list[str]` | Split string into list, with `strip()` on each element |
+| `length` | (none) | `int` | Length of string/list/dict |
+
+#### Regex
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `regex_match` | `transform_value` (pattern) | `bool` | `True` if source matches pattern |
+| `regex_extract` | `transform_value` (pattern with capture group) | `str\|None` | First capture group match |
+| `regex_replace` | `transform_value` (pattern), `transform_replacement` | `str` | Replace all matches |
+
+#### Expression (General-Purpose)
+
+| Transform | Config Fields | Return Type | Description |
+|-----------|---------------|-------------|-------------|
+| `expression` | `expression` (Python expression) | `Any` | Safe eval with `value`, `data`, `has()` in scope; returns native type |
+
+The `expression` transform evaluates a Python expression using the [safe expression engine](../../common/expressions.md) from `dataknobs-common`. Unlike `template` (which always returns a string), `expression` returns native Python types (`bool`, `int`, `list`, etc.).
+
+Available variables in expression scope:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `value` | `Any` | The source field value |
+| `data` | `dict` | Shallow copy of full wizard data dict |
+| `has(key)` | `Callable` | `True` if `data[key]` is present and non-None |
+| `true`, `false`, `null`, `none` | literals | YAML/JSON aliases |
+| `len`, `str`, `int`, `float`, `bool`, `list`, `dict`, `min`, `max`, `abs`, `round`, `sorted`, `isinstance` | builtins | Safe built-in functions |
+
+### Configuration Examples
+
+#### Conditional derivation -- set a flag based on field value
+
+```yaml
+settings:
+  derivations:
+    # When intent is "research_assistant", enable KB
+    - source: intent
+      target: kb_enabled
+      transform: equals
+      transform_value: research_assistant
+      when: target_missing
+
+    # Any of these intents enables KB
+    - source: intent
+      target: kb_enabled
+      transform: one_of
+      transform_values:
+        - research_assistant
+        - domain_expert
+      when: target_missing
+```
+
+#### Lookup table -- map enum values to config
+
+```yaml
+settings:
+  derivations:
+    - source: intent
+      target: synthesis_style
+      transform: map
+      transform_map:
+        research_assistant: conversational
+        tutor: socratic
+        quiz_maker: structured
+      transform_default: conversational
+      when: target_missing
+```
+
+#### Collection transforms
+
+```yaml
+settings:
+  derivations:
+    # First selected topic becomes primary
+    - source: selected_topics
+      target: primary_topic
+      transform: first
+      when: target_missing
+
+    # Join list into display string
+    - source: selected_topics
+      target: topics_display
+      transform: join
+      transform_value: ", "
+      when: target_missing
+
+    # Split comma-separated input into list
+    - source: tags_input
+      target: tags
+      transform: split
+      transform_value: ","
+      when: target_missing
+```
+
+#### Regex transforms
+
+```yaml
+settings:
+  derivations:
+    # Validate email format
+    - source: email
+      target: email_valid
+      transform: regex_match
+      transform_value: "^[\\w.+-]+@[\\w-]+\\.[\\w.]+$"
+      when: always
+
+    # Extract domain from email
+    - source: email
+      target: email_domain
+      transform: regex_extract
+      transform_value: "@([\\w.-]+)$"
+      when: target_missing
+```
+
+#### Expression transforms -- complex logic via config
+
+```yaml
+settings:
+  derivations:
+    # Conditional with native boolean return
+    - source: intent
+      target: kb_enabled
+      transform: expression
+      expression: "value == 'research_assistant'"
+
+    # Ternary with numeric result
+    - source: intent
+      target: max_questions
+      transform: expression
+      expression: "10 if value == 'quiz_maker' else 5"
+
+    # Multi-field conditional
+    - source: intent
+      target: needs_review
+      transform: expression
+      expression: "value == 'quiz_maker' and has('rubric_id')"
+
+    # Dict lookup with fallback
+    - source: difficulty
+      target: time_limit_seconds
+      transform: expression
+      expression: "{'easy': 30, 'medium': 60, 'hard': 120}.get(str(value), 60)"
+
+    # List manipulation
+    - source: selected_topics
+      target: topic_ids
+      transform: expression
+      expression: "[t.lower().replace(' ', '-') for t in value] if isinstance(value, list) else [str(value)]"
+```
 
 ### Template Derivation
 
-For deriving a field from multiple source fields, use the `template` transform with a Jinja2 template:
+For deriving a string field from multiple source fields, use the `template` transform with a Jinja2 template:
 
 ```yaml
 settings:
@@ -645,6 +825,8 @@ settings:
 
 The template has access to the full wizard data dict. If any referenced variable is undefined, the derivation is skipped (the template uses strict undefined checking to prevent partial renders).
 
+For typed results (boolean, integer, list, etc.), use the `expression` transform instead of `template`.
+
 ### Guard Conditions
 
 | Condition | Meaning | Default? |
@@ -655,6 +837,16 @@ The template has access to the full wizard data dict. If any referenced variable
 
 `target_missing` is the safe default — it never overwrites user-provided or extracted data. The `always` option exists for cases where derived values should take precedence (e.g., enforcing a naming convention).
 
+### Return Type Behavior
+
+- **Boolean transforms** (`equals`, `not_equals`, `boolean`, `one_of`, `contains`, `regex_match`) return Python `True`/`False`, not strings.
+- **`map` transform** returns whatever type the map values contain (bool, string, int, None).
+- **`constant` transform** returns `transform_value` as-is with its native type.
+- **`expression` transform** returns the native Python result of the expression.
+- **String transforms** (`title_case`, `lower_hyphen`, `lower_underscore`, `template`) return strings.
+- **`equals` and `not_equals`** compare via `str()` coercion to handle mixed types from extraction (LLM may return `"true"` vs `True`).
+- **`contains`** is case-insensitive -- both sides are lowercased for the substring check.
+
 ### Per-Stage Override {#derivation-per-stage-override}
 
 Disable derivation on specific stages:
@@ -662,8 +854,10 @@ Disable derivation on specific stages:
 ```yaml
 stages:
   - name: review
-    derivation_enabled: false   # suppress derivation on this stage
+    derivation_enabled: false   # suppress both post-extraction and recovery derivation
 ```
+
+Note: `derivation_enabled: false` suppresses derivation in **both** the post-extraction pass and the recovery pipeline. This is distinct from `recovery_enabled: false`, which only suppresses the recovery pipeline — post-extraction derivation still runs when recovery is disabled.
 
 ### Custom Transforms
 
@@ -700,6 +894,22 @@ Rules are processed in order. Each rule runs at most once per turn. When two rul
 
 Derivations can also chain: rule A→B fires, then rule B→C fires in the same pass since B is now present.
 
+### Transform Summary
+
+The derivation system provides 22 transforms across 6 categories:
+
+| Category | Transforms | Count |
+|----------|-----------|-------|
+| String formatting | `title_case`, `lower_hyphen`, `lower_underscore`, `copy` | 4 |
+| String templating | `template` | 1 |
+| Conditional/Logical | `equals`, `not_equals`, `constant`, `map`, `boolean`, `one_of`, `contains` | 7 |
+| Collection | `first`, `last`, `join`, `split`, `length` | 5 |
+| Regex | `regex_match`, `regex_extract`, `regex_replace` | 3 |
+| General-purpose | `expression` | 1 |
+| Pluggable | `custom` | 1 |
+
+With `expression` as the general-purpose escape hatch, any derivation pattern expressible as a Python expression is available via config alone.
+
 ---
 
 ## Recovery Pipeline
@@ -712,8 +922,9 @@ The recovery pipeline runs after initial extraction and merge, executing strateg
 
 ```
 Extract → Normalize → Merge (grounded) → Schema defaults
-  → Recovery pipeline (if required fields missing):
-    1. derivation         [free — pure functions, no LLM call]
+  → Post-extraction derivation (unconditional — fills optional & required)
+  → Recovery pipeline (if required fields still missing):
+    1. derivation         [free — no-op for fields already derived above]
     2. boolean_recovery   [free — signal word matching, no LLM call]
     3. scope_escalation   [1 LLM call — broader context]
     4. focused_retry      [1 LLM call — focused prompt]
@@ -726,8 +937,9 @@ After each strategy, the pipeline checks whether all required fields are now pre
 
 Key design choices:
 
-- **Schema defaults run before the pipeline**, not as a pipeline step. Defaults fill preconfigured values that should always apply, so defaulted fields don't trigger unnecessary recovery.
-- **Derivation runs first** (before scope escalation). Prior to the recovery pipeline, scope escalation ran before field derivation. The pipeline reverses this ordering because derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
+- **Post-extraction derivation runs unconditionally** — after merge and schema defaults, before the recovery pipeline check. This ensures optional fields derived from required fields are always filled, even when all required fields are satisfied and recovery is skipped.
+- **Schema defaults run before derivation**, not as a pipeline step. Defaults fill preconfigured values that should always apply, so defaulted fields are available as derivation sources and don't trigger unnecessary recovery.
+- **Recovery pipeline derivation runs first** (before scope escalation). Derivation is free — pure functions with no LLM call. If derivation fills the missing fields, scope escalation never fires, saving an LLM call. If you have derivation rules that depend on fields only available after escalation, list derivation twice in the pipeline: `["derivation", "scope_escalation", "derivation"]`.
 - **Each LLM-backed strategy** (scope escalation, focused retry) runs normalize + merge on its results automatically, including grounding checks.
 
 ### Pipeline Configuration 
