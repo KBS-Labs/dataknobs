@@ -491,3 +491,27 @@ class TestInMemoryClose:
         )
         limiter = InMemoryRateLimiter(config)
         await limiter.close()  # Should not raise
+
+
+class TestPyrateModuleImport:
+    """Tests for pyrate module importability without pyrate-limiter installed."""
+
+    def test_pyrate_module_importable_without_dependency(self):
+        """B9: pyrate module must not crash on import when pyrate-limiter is absent.
+
+        The module defines _CategoryBucketFactory(BucketFactory) at module level.
+        Without a sentinel fallback, this raises NameError when pyrate-limiter
+        is not installed because BucketFactory was never imported.
+        """
+        # This import must not raise NameError or any other exception
+        from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter  # noqa: F401
+
+    def test_pyrate_limiter_raises_clear_error_without_dependency(self):
+        """PyrateRateLimiter.__init__ must raise ImportError, not NameError."""
+        from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
+
+        config = RateLimiterConfig(
+            default_rates=[RateLimit(limit=10, interval=1.0)],
+        )
+        with pytest.raises(ImportError, match="pyrate-limiter"):
+            PyrateRateLimiter(config, {"bucket": "memory"})
