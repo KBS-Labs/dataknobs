@@ -189,12 +189,11 @@ limiter = create_rate_limiter({
     "default_rates": [{"limit": 100, "interval": 60}],
     "redis": {
         "url": "redis://localhost:6379",
-        "ssl": False,
     },
 })
 ```
 
-For AWS ElastiCache:
+For AWS ElastiCache (use `rediss://` scheme for TLS):
 
 ```python
 limiter = create_rate_limiter({
@@ -202,8 +201,7 @@ limiter = create_rate_limiter({
     "bucket": "redis",
     "default_rates": [{"limit": 100, "interval": 60}],
     "redis": {
-        "url": "redis://my-cluster.cache.amazonaws.com:6379",
-        "ssl": True,
+        "url": "rediss://my-cluster.cache.amazonaws.com:6379",
     },
 })
 ```
@@ -266,8 +264,7 @@ rate_limiters:
       api_write:
         rates: [{limit: 10, interval: 6}]
     redis:
-      url: "redis://elasticache:6379"
-      ssl: true
+      url: "rediss://elasticache:6379"
 ```
 
 ```python
@@ -293,8 +290,7 @@ limiter = create_rate_limiter(config["rate_limiters"]["api"])
 |-----|------|---------|-------------|
 | `bucket` | str | `"memory"` | Bucket backend: `"memory"`, `"sqlite"`, `"redis"`, `"postgres"` |
 | `redis` | dict | — | Redis connection config |
-| `redis.url` | str | `"redis://localhost:6379"` | Redis connection URL |
-| `redis.ssl` | bool | `false` | Enable TLS |
+| `redis.url` | str | `"redis://localhost:6379"` | Redis connection URL (use `rediss://` scheme for TLS) |
 | `postgres` | dict | — | PostgreSQL config |
 | `postgres.pool` | object | — | psycopg pool instance (required) |
 | `postgres.table` | str | `"rate_limits"` | Table name for rate limit state |

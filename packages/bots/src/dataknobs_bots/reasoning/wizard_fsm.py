@@ -312,17 +312,10 @@ class WizardFSM:
         Returns:
             The callable, or ``None`` if not found.
         """
-        registry = getattr(self._fsm.fsm, "function_registry", {})
-        if hasattr(registry, "get_function"):
-            found = registry.get_function(name)
-        elif hasattr(registry, "functions"):
-            found = registry.functions.get(name)
-        else:
-            found = registry.get(name)
-        if found is not None:
-            return found
-        custom = getattr(self._fsm, "_custom_functions", {})
-        return custom.get(name)
+        registry = getattr(self._fsm.fsm, "function_registry", None)
+        if registry is not None and hasattr(registry, "get_function"):
+            return registry.get_function(name)
+        return None
 
     def step(self, data: dict[str, Any]) -> StepResult:
         """Execute one FSM step with given data.

@@ -590,6 +590,12 @@ class WizardAdvanceResult:
             auto-advanced through during post-transition lifecycle.
             Empty when no auto-advance occurred.
         metadata: Full wizard metadata dict for UI rendering.
+        extraction: Extraction result when ``advance()`` ran with raw
+            text input.  ``None`` when ``user_input`` was a dict.
+        missing_fields: Required fields still missing after extraction.
+            ``None`` when no extraction was performed.
+        changed_fields: Fields newly set or changed during extraction.
+            ``None`` when no extraction was performed.
     """
 
     state: WizardState
@@ -2712,8 +2718,8 @@ class WizardReasoning(ReasoningStrategy):
             the result also includes ``extraction`` and ``missing_fields``.
 
         Raises:
-            ValueError: If ``user_input`` is a ``str`` and ``llm`` is
-                ``None``.
+            ValueError: If ``user_input`` is a ``str``, ``llm`` is
+                ``None``, and no ``navigation`` command is provided.
 
         Example::
 
@@ -3146,7 +3152,7 @@ class WizardReasoning(ReasoningStrategy):
 
         Args:
             message: Raw user message text.
-            stage: Current stage metadata (must include ``schema``).
+            stage: Current stage metadata (optionally includes ``schema``).
             state: Wizard state — ``data`` is mutated in place.
             llm: LLM provider for extraction and recovery.
             manager: Optional conversation manager for message history

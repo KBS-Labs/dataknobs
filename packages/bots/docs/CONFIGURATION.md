@@ -1464,6 +1464,7 @@ stages:
 | `max_iterations` | int | Max ReAct iterations for this stage (overrides wizard default) |
 | `mode` | string | Stage mode: "conversation" for free-form chat (default: structured) |
 | `intent_detection` | object | Intent detection configuration for triggering transitions from natural language |
+| `routing_transforms` | list | Transform function names to execute before transition condition evaluation (see [Routing Transforms](#routing-transforms)) |
 | `transitions` | list | Rules for transitioning to next stage |
 | `tasks` | list | Task definitions for granular progress tracking |
 
@@ -2384,6 +2385,52 @@ stages:
 user detours from a structured stage to a conversation stage and back, previously extracted
 fields remain in the data dict. The structured stage resumes where it left off, prompting
 only for remaining missing fields.
+
+**Routing Transforms:**
+
+Routing transforms are stage-level transform functions that run **before** transition
+condition evaluation. They are useful when a stage needs to classify or preprocess
+user input (e.g., via an LLM call) to produce a routing signal that transition
+conditions can then check.
+
+```yaml
+stages:
+  - name: assess_needs
+    prompt: "What would you like to do today?"
+    routing_transforms:
+      - classify_user_need        # Runs before condition evaluation
+    transitions:
+      - target: set_vision
+        condition: "data.get('classified_need') == 'planning'"
+      - target: pick_topic
+        condition: "data.get('classified_need') == 'exploration'"
+      - target: review_progress
+        condition: "data.get('classified_need') == 'review'"
+```
+
+Each entry in `routing_transforms` is the name of a registered transform function.
+The framework resolves each name via the FSM's function registry and executes it
+with `state.data` as input. The transform can modify `state.data` in place (e.g.,
+setting `classified_need`) before transition conditions are evaluated.
+
+Routing transforms run after the extraction pipeline (extract, normalize, merge,
+defaults, derivations, recovery) and after transition derivations, but before
+FSM condition evaluation. They execute in both `generate()` and `advance()`.
+
+Register transform functions when loading the wizard:
+
+```python
+async def classify_user_need(data: dict) -> dict:
+    # ... classify using LLM or rules ...
+    data["classified_need"] = classification
+    return data
+
+loader = WizardConfigLoader()
+wizard_fsm = loader.load_from_dict(
+    config,
+    custom_functions={"classify_user_need": classify_user_need},
+)
+```
 
 **`_message` in Transition Conditions:**
 

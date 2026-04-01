@@ -13,7 +13,7 @@ Non-conversational API for advancing wizards without DynaBot, LLM, or Conversati
 | Method | Path | Input | Output |
 |--------|------|-------|--------|
 | `generate()` | Conversational | User message via ConversationManager | LLM response with metadata |
-| `advance()` | Non-conversational | Structured `dict` + `WizardState` | `WizardAdvanceResult` |
+| `advance()` | Non-conversational | Structured `dict` or raw `str` + `WizardState` | `WizardAdvanceResult` |
 
 ## Quick Start
 
@@ -29,11 +29,20 @@ reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 # Create initial state
 state = WizardState(current_stage=reasoning.initial_stage)
 
-# Advance with structured data
+# Advance with structured data (dict mode)
 result = await reasoning.advance(
     user_input={"name": "Alice"},
     state=state,
 )
+
+# Or advance with raw text (extraction mode — requires LLM)
+result = await reasoning.advance(
+    user_input="My name is Alice",
+    state=state,
+    llm=provider,
+)
+if result.missing_fields:
+    print(f"Still need: {result.missing_fields}")
 
 print(result.stage_name)    # Next stage name
 print(result.stage_prompt)  # Prompt to show user
@@ -47,10 +56,11 @@ print(result.completed)     # Whether wizard is done
 ```python
 async def advance(
     self,
-    user_input: dict[str, Any],
+    user_input: dict[str, Any] | str,
     state: WizardState,
     *,
     navigation: str | None = None,
+    llm: Any | None = None,
 ) -> WizardAdvanceResult:
 ```
 
@@ -58,11 +68,14 @@ async def advance(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `user_input` | `dict[str, Any]` | Structured data for the current stage. Merged into `state.data` before evaluating transitions. |
+| `user_input` | `dict[str, Any] \| str` | Either a `dict` of pre-extracted structured data (merged directly into `state.data`), or a `str` of raw user text that triggers the extraction pipeline (extract, normalize, merge, defaults, derivations, recovery). |
 | `state` | `WizardState` | Current wizard state. Mutated in place and returned in the result. |
 | `navigation` | `str \| None` | Optional navigation command: `"back"`, `"skip"`, or `"restart"`. |
+| `llm` | `Any \| None` | LLM provider for extraction. Required when `user_input` is a `str` and no `navigation` command is provided. Ignored when `user_input` is a `dict`. |
 
 **Returns:** `WizardAdvanceResult`
+
+**Raises:** `ValueError` if `user_input` is a `str`, `llm` is `None`, and no `navigation` command is provided.
 
 ### `WizardAdvanceResult`
 
@@ -80,6 +93,9 @@ async def advance(
 | `from_stage` | `str \| None` | Stage before the advance (None if no transition). |
 | `auto_advance_messages` | `list[str]` | Rendered templates from auto-advanced intermediate stages. Empty when no auto-advance occurred. |
 | `metadata` | `dict` | Full wizard metadata dict for UI rendering. |
+| `extraction` | `Any \| None` | Extraction result when `advance()` ran with raw text input. `None` when `user_input` was a dict. |
+| `missing_fields` | `set[str] \| None` | Required fields still missing after extraction. `None` when no extraction was performed. |
+| `changed_fields` | `set[str] \| None` | Fields newly set or changed during extraction. `None` when no extraction was performed. |
 
 ### `WizardReasoning.initial_stage`
 
@@ -194,7 +210,7 @@ reasoning: WizardReasoning  # initialized at startup
 
 @app.post("/wizard/advance")
 async def advance_wizard(
-    user_input: dict,
+    user_input: dict | str,
     state: dict,
     navigation: str | None = None,
 ):
@@ -204,6 +220,7 @@ async def advance_wizard(
         user_input=user_input,
         state=wizard_state,
         navigation=navigation,
+        llm=provider if isinstance(user_input, str) else None,
     )
 
     return {
@@ -214,6 +231,8 @@ async def advance_wizard(
         "can_skip": result.can_skip,
         "can_go_back": result.can_go_back,
         "completed": result.completed,
+        "missing_fields": sorted(result.missing_fields) if result.missing_fields else None,
+        "changed_fields": sorted(result.changed_fields) if result.changed_fields else None,
         "state": result.state.to_dict(),
     }
 ```
