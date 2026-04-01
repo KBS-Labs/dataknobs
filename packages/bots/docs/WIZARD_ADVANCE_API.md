@@ -41,7 +41,7 @@ result = await reasoning.advance(
     state=state,
     llm=provider,
 )
-if result.missing_fields:
+if result.missing_fields is not None:
     print(f"Still need: {result.missing_fields}")
 
 print(result.stage_name)    # Next stage name
