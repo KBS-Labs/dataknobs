@@ -13,6 +13,7 @@ import pytest
 
 from dataknobs_bots.reasoning.observability import TransitionRecord
 from dataknobs_bots.reasoning.wizard import (
+    ExtractionPipelineResult,
     SubflowContext,
     WizardAdvanceResult,
     WizardReasoning,
@@ -20,6 +21,8 @@ from dataknobs_bots.reasoning.wizard import (
 )
 from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm import EchoProvider
+from dataknobs_llm.testing import ConfigurableExtractor
 
 
 # ---------------------------------------------------------------------------
@@ -32,10 +35,11 @@ def _make_reasoning(
     *,
     hooks: WizardHooks | None = None,
     consistent_navigation_lifecycle: bool = True,
+    custom_functions: dict[str, Any] | None = None,
 ) -> WizardReasoning:
     """Create a WizardReasoning from a config dict."""
     loader = WizardConfigLoader()
-    wizard_fsm = loader.load_from_dict(config)
+    wizard_fsm = loader.load_from_dict(config, custom_functions=custom_functions)
     return WizardReasoning(
         wizard_fsm=wizard_fsm,
         strict_validation=False,
@@ -1256,3 +1260,310 @@ class TestFromConfigFlag:
         }
         reasoning = WizardReasoning.from_config(config)
         assert reasoning._consistent_navigation_lifecycle is True
+
+
+# ---------------------------------------------------------------------------
+# Extraction mode tests
+# ---------------------------------------------------------------------------
+
+
+class TestAdvanceExtractionMode:
+    """Test advance() with string input (extraction mode)."""
+
+    @pytest.mark.asyncio
+    async def test_str_input_requires_llm(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """advance() raises ValueError when str input without llm."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)
+
+        with pytest.raises(ValueError, match="llm parameter is required"):
+            await reasoning.advance("hello", state)
+
+    @pytest.mark.asyncio
+    async def test_str_input_runs_extraction(self) -> None:
+        """advance() with str input runs extraction pipeline."""
+        config = {
+            "name": "test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Provide details",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "age": {"type": "integer"},
+                        },
+                        "required": ["name"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "done",
+                            "condition": "data.get('name')",
+                        },
+                    ],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done!"},
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        extractor = ConfigurableExtractor(
+            result_data={"name": "Alice", "age": 30}, confidence=0.95,
+        )
+        reasoning.set_extractor(extractor)
+        state = _make_state(reasoning)
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+
+        result = await reasoning.advance(
+            "My name is Alice and I am 30", state, llm=provider,
+        )
+
+        # Extraction result is populated
+        assert result.extraction is not None
+        assert result.extraction.confidence == 0.95
+        # Extracted data was merged into state
+        assert state.data.get("name") == "Alice"
+        # Transition happened (gather → done via name condition)
+        assert result.transitioned is True
+        assert result.stage_name == "done"
+
+    @pytest.mark.asyncio
+    async def test_str_input_reports_missing_fields(self) -> None:
+        """advance() with str input reports missing required fields."""
+        config = {
+            "name": "test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Provide your details",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "email": {"type": "string"},
+                        },
+                        "required": ["name", "email"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "done",
+                            "condition": (
+                                "data.get('name') and data.get('email')"
+                            ),
+                        },
+                    ],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done!"},
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        # Extractor only returns name, not email
+        extractor = ConfigurableExtractor(
+            result_data={"name": "Alice"}, confidence=0.5,
+        )
+        reasoning.set_extractor(extractor)
+        state = _make_state(reasoning)
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+
+        result = await reasoning.advance(
+            "My name is Alice", state, llm=provider,
+        )
+
+        assert result.missing_fields is not None
+        assert "email" in result.missing_fields
+        # Name was still merged
+        assert state.data.get("name") == "Alice"
+        # Did not transition (missing email)
+        assert result.transitioned is False
+
+    @pytest.mark.asyncio
+    async def test_dict_input_no_extraction_fields(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """advance() with dict input has None extraction/missing_fields."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"intent": "create"}, state)
+
+        assert result.extraction is None
+        assert result.missing_fields is None
+        # But the dict was merged and transition happened
+        assert result.transitioned is True
+        assert state.data["intent"] == "create"
+
+    @pytest.mark.asyncio
+    async def test_str_input_on_schema_less_stage(self) -> None:
+        """advance() with str input on a stage without schema."""
+        config = {
+            "name": "test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "chat",
+                    "is_start": True,
+                    "prompt": "Tell me anything",
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done!"},
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        state = _make_state(reasoning)
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+
+        result = await reasoning.advance(
+            "hello world", state, llm=provider,
+        )
+
+        # Raw input captured, no missing fields
+        assert result.extraction is not None
+        assert result.missing_fields == set()
+        # Unconditional transition fires
+        assert result.transitioned is True
+
+    @pytest.mark.asyncio
+    async def test_str_input_with_navigation_skips_extraction(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """advance() with str input and navigation skips extraction."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(
+            reasoning,
+            current_stage="configure",
+            history=["welcome", "configure"],
+        )
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+
+        result = await reasoning.advance(
+            "go back", state, llm=provider, navigation="back",
+        )
+
+        # Navigation happened, extraction was skipped
+        assert result.extraction is None
+        assert result.missing_fields is None
+        assert result.stage_name == "welcome"
+
+
+# ---------------------------------------------------------------------------
+# Routing transforms tests
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingTransforms:
+    """Test routing transforms in wizard config."""
+
+    @pytest.mark.asyncio
+    async def test_routing_transform_sets_signal(self) -> None:
+        """Routing transform sets a signal used by transition conditions."""
+
+        def set_route_signal(data: dict[str, Any]) -> dict[str, Any]:
+            data["_route"] = "path_a"
+            return data
+
+        config = {
+            "name": "routing-test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "routing_transforms": ["set_route_signal"],
+                    "transitions": [
+                        {
+                            "target": "path_a",
+                            "condition": "data.get('_route') == 'path_a'",
+                        },
+                        {"target": "path_b"},
+                    ],
+                },
+                {"name": "path_a", "is_end": True, "prompt": "A"},
+                {"name": "path_b", "is_end": True, "prompt": "B"},
+            ],
+        }
+        reasoning = _make_reasoning(
+            config,
+            custom_functions={"set_route_signal": set_route_signal},
+        )
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"input": "test"}, state)
+
+        # The routing transform set _route='path_a', so path_a wins
+        assert result.transitioned is True
+        assert result.stage_name == "path_a"
+
+    @pytest.mark.asyncio
+    async def test_no_routing_transforms_is_noop(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Stages without routing_transforms work normally."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"intent": "create"}, state)
+
+        assert result.transitioned is True
+        assert result.stage_name == "configure"
+
+    @pytest.mark.asyncio
+    async def test_missing_routing_transform_logs_warning(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unknown routing transform name logs a warning."""
+        config = {
+            "name": "test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "S",
+                    "routing_transforms": ["nonexistent_func"],
+                    "transitions": [{"target": "end"}],
+                },
+                {"name": "end", "is_end": True, "prompt": "E"},
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"x": 1}, state)
+
+        # Should still work (transition fires unconditionally)
+        assert result.transitioned is True
+        # Warning was logged
+        assert any(
+            "nonexistent_func" in r.message and "not found" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_routing_transforms_in_metadata(self) -> None:
+        """routing_transforms are present in stage metadata."""
+        config = {
+            "name": "test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "S",
+                    "routing_transforms": ["classify_intent"],
+                    "transitions": [{"target": "end"}],
+                },
+                {"name": "end", "is_end": True, "prompt": "E"},
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        stages = reasoning._fsm.stages
+
+        assert stages["start"]["routing_transforms"] == ["classify_intent"]
+        assert stages["end"]["routing_transforms"] == []

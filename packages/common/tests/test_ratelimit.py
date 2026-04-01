@@ -506,6 +506,10 @@ class TestPyrateModuleImport:
         # This import must not raise NameError or any other exception
         from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter  # noqa: F401
 
+    @pytest.mark.skipif(
+        __import__("importlib").util.find_spec("pyrate_limiter") is not None,
+        reason="pyrate-limiter is installed; test only applies without it",
+    )
     def test_pyrate_limiter_raises_clear_error_without_dependency(self):
         """PyrateRateLimiter.__init__ must raise ImportError, not NameError."""
         from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
