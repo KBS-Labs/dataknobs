@@ -307,8 +307,8 @@ CMD ["python", "app.py"]
 dataknobs-config>=0.3.8
 dataknobs-data>=0.4.13
 dataknobs-fsm>=0.1.14
-dataknobs-llm>=0.5.4
-dataknobs-bots>=0.6.8
+dataknobs-llm>=0.5.5
+dataknobs-bots>=0.6.9
 dataknobs-structures>=1.0.5
 dataknobs-utils>=1.2.5
 dataknobs-xization>=1.3.0
