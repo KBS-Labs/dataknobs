@@ -53,6 +53,10 @@ try:
     _HAS_PYRATE = True
 except ImportError:
     _HAS_PYRATE = False
+    # Sentinel so _CategoryBucketFactory can be defined at module level
+    # without crashing when pyrate-limiter is not installed. Actual usage
+    # is gated by the _HAS_PYRATE check in PyrateRateLimiter.__init__().
+    BucketFactory = object  # type: ignore[assignment,misc]
 
 
 def _to_pyrate_rates(rates: list[RateLimit]) -> list[Any]:
@@ -119,10 +123,10 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
             raise ImportError(
                 "Redis bucket requires the 'redis' package: pip install redis"
             ) from e
-        # Using sync Redis client so RedisBucket.init() returns synchronously
+        # Using sync Redis client so RedisBucket.init() returns synchronously.
+        # SSL is inferred from the URL scheme: use rediss:// for TLS.
         conn = Redis.from_url(
             redis_config.get("url", "redis://localhost:6379"),
-            ssl=redis_config.get("ssl", False),
         )
         return RedisBucket.init(rates, conn, "rate_limit")
 

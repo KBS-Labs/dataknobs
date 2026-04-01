@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -589,6 +590,12 @@ class WizardAdvanceResult:
             auto-advanced through during post-transition lifecycle.
             Empty when no auto-advance occurred.
         metadata: Full wizard metadata dict for UI rendering.
+        extraction: Extraction result when ``advance()`` ran with raw
+            text input.  ``None`` when ``user_input`` was a dict.
+        missing_fields: Required fields still missing after extraction.
+            ``None`` when no extraction was performed.
+        changed_fields: Fields newly set or changed during extraction.
+            ``None`` when no extraction was performed.
     """
 
     state: WizardState
@@ -603,6 +610,45 @@ class WizardAdvanceResult:
     from_stage: str | None
     auto_advance_messages: list[str]
     metadata: dict[str, Any]
+    extraction: Any | None = None
+    """Extraction result when ``advance()`` ran with raw text input.
+
+    ``None`` when ``user_input`` was a dict (no extraction performed).
+    When populated, contains the extraction result with ``.data``,
+    ``.confidence``, ``.errors``, and ``.is_confident`` attributes.
+    """
+    missing_fields: set[str] | None = None
+    """Required fields still missing after extraction.
+
+    ``None`` when no extraction was performed.  Empty set when all
+    required fields are satisfied.
+    """
+    changed_fields: set[str] | None = None
+    """Fields that were newly set or changed during extraction.
+
+    ``None`` when no extraction was performed.  Useful for UI clients
+    that need to highlight updated fields or show a diff.
+    """
+
+
+@dataclass
+class ExtractionPipelineResult:
+    """Result from the shared extraction pipeline.
+
+    Encapsulates the data-processing outcome (extract, normalize, merge,
+    defaults, derivations, recovery) without any presentation concerns.
+    Used by both ``generate()`` and ``advance()`` to share the extraction
+    logic.
+    """
+
+    extraction: Any
+    """The raw extraction result from ``_extract_data()``."""
+    new_data_keys: set[str]
+    """Keys that were newly set or changed in ``state.data``."""
+    missing_fields: set[str]
+    """Required fields still missing after the full pipeline."""
+    is_confident: bool
+    """Whether the extraction met the confidence threshold."""
 
 
 # ---------------------------------------------------------------------------
@@ -2321,147 +2367,54 @@ class WizardReasoning(ReasoningStrategy):
         else:
             # Structured mode: extract data and validate
 
-            # Extract structured data from user input
-            extraction = await self._extract_data(
-                user_message, stage, llm, manager, wizard_state
-            )
-
-            # Log extraction results for debugging
-            stage_name = stage.get("name", "unknown")
-            logger.debug(
-                "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
-                stage_name,
-                extraction.confidence,
-                list(extraction.data.keys()) if extraction.data else [],
-            )
-            if extraction.data:
-                # Log actual extracted values (truncate long values)
-                for key, value in extraction.data.items():
-                    if not key.startswith("_"):
-                        value_str = str(value)[:100]
-                        logger.debug("  Extracted %s = %r", key, value_str)
-
             # Run intent detection on structured stages IF configured.
-            # This runs before the confidence check so that detour intents
-            # (e.g. "help", "confused") can trigger transitions even when
-            # extraction fails.
+            # This runs before extraction so that detour intents
+            # (e.g. "help", "confused") can skip extraction entirely
+            # and trigger transitions via transition conditions.
             if stage.get("intent_detection"):
                 await self._detect_intent(
                     user_message, stage, wizard_state, llm
                 )
 
-            # If an intent was detected, skip clarification/validation and
+            # If an intent was detected, skip extraction/validation and
             # proceed to transition evaluation so the detour can fire.
             if "_intent" not in wizard_state.data:
-                # ── Always normalize and merge extracted data ──
-                # Partial data must accumulate across turns even when
-                # extraction confidence is low.  Without this, multi-turn
-                # gather stages enter a dead loop where wizard_state.data
-                # stays {} and can_satisfy never becomes True.
-                schema = stage.get("schema")
-                if schema and extraction.data:
-                    extraction.data = self._normalize_extracted_data(
-                        extraction.data, schema
-                    )
-
-                # Merge extracted data into wizard_state.data (in-place),
-                # tracking which keys are new or changed so we can
-                # decide whether to show a confirmation template before
-                # allowing a transition.
-                # Note: user_message is always the *last* user message.
-                # With wizard_session extraction scope, the extractor
-                # sees the full history, but the grounding check
-                # intentionally grounds against only the current
-                # message.  First-write (existing_value is None) is
-                # always allowed through, which compensates for
-                # session-scope re-extraction of prior turns.
-                new_data_keys = self._merge_extraction_result(
-                    extraction.data, wizard_state, stage, user_message,
+                # Run the shared extraction pipeline (extract, normalize,
+                # merge, defaults, derivations, recovery).
+                pipeline_result = await self._run_extraction_pipeline(
+                    user_message, stage, wizard_state, llm,
+                    manager=manager,
                 )
-
-                # Apply schema defaults for properties the user
-                # didn't mention.  This runs before the recovery
-                # pipeline so that defaults are available as
-                # derivation sources and so defaulted fields don't
-                # count as "missing" in the pipeline.
-                default_keys = self._apply_schema_defaults(
-                    wizard_state, stage
-                )
-                if default_keys:
-                    new_data_keys |= default_keys
-
-                # ── Post-extraction derivation pass ──
-                # Derivations express deterministic field relationships
-                # (e.g. intent=research_assistant → kb_enabled=true)
-                # that hold regardless of whether recovery is needed.
-                # Running unconditionally here lets optional fields be
-                # derived from extracted required fields.  Guard
-                # conditions (target_missing, etc.) ensure idempotency.
-                derived = self._apply_field_derivations(
-                    wizard_state, stage,
-                )
-                if derived:
-                    new_data_keys |= derived
-                    logger.debug(
-                        "Post-extraction derivation filled: %s",
-                        sorted(derived),
-                    )
-
-                # ── Recovery pipeline ──
-                # Run configured strategies in order, stopping as
-                # soon as all required fields are satisfied.
-                missing = self._check_required_fields_missing(
-                    wizard_state, stage,
-                )
-                if missing:
-                    new_data_keys, extraction = (
-                        await self._run_recovery_pipeline(
-                            extraction,
-                            wizard_state,
-                            stage,
-                            schema,
-                            user_message,
-                            llm,
-                            manager,
-                            new_data_keys,
-                        )
-                    )
+                extraction = pipeline_result.extraction
+                new_data_keys = pipeline_result.new_data_keys
+                stage_name = stage.get("name", "unknown")
 
                 # ── Confidence gate ──
                 # After merge, check whether we have enough data to
                 # proceed.  If confidence is low and required fields are
                 # still missing, ask for clarification — but the partial
                 # data is preserved in wizard_state.data for the next turn.
-                if not extraction.is_confident:
-                    required_fields = (
-                        schema.get("required", []) if schema else []
-                    )
-                    can_satisfy = all(
-                        self._field_is_present(wizard_state.data.get(f))
-                        for f in required_fields
-                    )
+                if not pipeline_result.is_confident:
+                    wizard_state.clarification_attempts += 1
+                    await self._save_wizard_state(manager, wizard_state)
 
-                    if not can_satisfy:
-                        wizard_state.clarification_attempts += 1
-                        await self._save_wizard_state(manager, wizard_state)
-
-                        if wizard_state.clarification_attempts >= 3:
-                            response = await self._generate_restart_offer(
+                    if wizard_state.clarification_attempts >= 3:
+                        response = await self._generate_restart_offer(
+                            manager, llm, stage, extraction.errors,
+                            tools=tools, wizard_state=wizard_state,
+                        )
+                    else:
+                        response = (
+                            await self._generate_clarification_response(
                                 manager, llm, stage, extraction.errors,
                                 tools=tools, wizard_state=wizard_state,
                             )
-                        else:
-                            response = (
-                                await self._generate_clarification_response(
-                                    manager, llm, stage, extraction.errors,
-                                    tools=tools, wizard_state=wizard_state,
-                                )
-                            )
-
-                        self._add_wizard_metadata(
-                            response, wizard_state, stage
                         )
-                        return response
+
+                    self._add_wizard_metadata(
+                        response, wizard_state, stage
+                    )
+                    return response
 
                 # Reset clarification attempts on viable extraction
                 wizard_state.clarification_attempts = 0
@@ -2606,6 +2559,9 @@ class WizardReasoning(ReasoningStrategy):
         # own conditions and subsequent auto-advance checks.
         self._apply_transition_derivations(stage, wizard_state)
 
+        # Execute routing transforms (before condition evaluation)
+        await self._execute_routing_transforms(stage, wizard_state)
+
         # Log pre-transition state
         logger.debug(
             "FSM transition attempt: from_stage='%s', data_keys=%s",
@@ -2723,24 +2679,27 @@ class WizardReasoning(ReasoningStrategy):
 
     async def advance(
         self,
-        user_input: dict[str, Any],
+        user_input: dict[str, Any] | str,
         state: WizardState,
         *,
         navigation: str | None = None,
+        llm: Any | None = None,
     ) -> WizardAdvanceResult:
         """Advance the wizard one step without DynaBot infrastructure.
 
         This is the non-conversational counterpart to ``generate()``.  It
-        performs the same FSM operations and hook lifecycle but without LLM
-        calls, conversation storage, or message formatting.
+        performs the same FSM operations and hook lifecycle but without
+        conversation storage or message formatting.
 
         The caller manages state persistence — pass in the current state,
         receive the updated state in the result, and persist it however
         you choose.
 
         Args:
-            user_input: Structured data for the current stage.  Merged into
-                ``state.data`` before evaluating transitions.
+            user_input: Either a ``dict`` of pre-extracted structured data
+                (merged directly into ``state.data``), or a ``str`` of raw
+                user text that triggers the extraction pipeline (extract,
+                normalize, merge, defaults, derivations, recovery).
             state: Current wizard state.  Mutated in place and also returned
                 in the result for convenience.
             navigation: Optional navigation command.  One of:
@@ -2749,29 +2708,43 @@ class WizardReasoning(ReasoningStrategy):
                 - ``"skip"`` — skip current stage (must be skippable)
                 - ``"restart"`` — reset to initial state
 
+            llm: LLM provider for extraction.  Required when
+                ``user_input`` is a ``str``.  Ignored when ``user_input``
+                is a ``dict``.
+
         Returns:
             :class:`WizardAdvanceResult` with updated state, current stage
-            info, and completion status.
+            info, and completion status.  When ``user_input`` was a ``str``,
+            the result also includes ``extraction`` and ``missing_fields``.
+
+        Raises:
+            ValueError: If ``user_input`` is a ``str``, ``llm`` is
+                ``None``, and no ``navigation`` command is provided.
 
         Example::
 
-            # Initial state
-            state = WizardState(current_stage=reasoning.initial_stage)
-
-            # Advance through wizard stages
+            # Pre-extracted input (existing behavior)
             result = await reasoning.advance(
                 user_input={"name": "Alice"},
                 state=state,
             )
-            print(result.stage_prompt)  # Next stage's prompt
 
-            # Navigate back
+            # Raw text input with extraction
             result = await reasoning.advance(
-                user_input={},
-                state=result.state,
-                navigation="back",
+                user_input="My name is Alice",
+                state=state,
+                llm=provider,
             )
+            if result.missing_fields:
+                print(f"Still need: {result.missing_fields}")
         """
+        extract_mode = isinstance(user_input, str)
+        if extract_mode and llm is None and navigation is None:
+            raise ValueError(
+                "llm parameter is required when user_input is a string "
+                "and no navigation command is provided"
+            )
+
         # Clear per-turn keys from previous turn
         for key in self._per_turn_keys:
             state.data.pop(key, None)
@@ -2781,6 +2754,7 @@ class WizardReasoning(ReasoningStrategy):
         self._restore_fsm_state(state)
 
         from_stage = state.current_stage
+        pipeline_result: ExtractionPipelineResult | None = None
 
         # Handle navigation
         auto_advance_messages: list[str] = []
@@ -2794,8 +2768,17 @@ class WizardReasoning(ReasoningStrategy):
             await self._navigate_restart(state)
             transitioned = state.current_stage != from_stage
         else:
-            # Normal advance: merge user input and step FSM
-            state.data.update(user_input)
+            active_fsm = self._get_active_fsm()
+            stage = active_fsm.current_metadata
+
+            if extract_mode:
+                # Extraction mode: run the full pipeline
+                pipeline_result = await self._run_extraction_pipeline(
+                    user_input, stage, state, llm,
+                )
+            else:
+                # Dict mode: direct merge (existing behavior)
+                state.data.update(user_input)
 
             # Exit hook
             if self._hooks:
@@ -2805,9 +2788,10 @@ class WizardReasoning(ReasoningStrategy):
             self._update_stage_exit_tasks(state, state.current_stage)
 
             # Apply transition derivations
-            active_fsm = self._get_active_fsm()
-            stage = active_fsm.current_metadata
             self._apply_transition_derivations(stage, state)
+
+            # Execute routing transforms (before condition evaluation)
+            await self._execute_routing_transforms(stage, state)
 
             # Execute FSM step (shared method)
             await self._execute_fsm_step(state)
@@ -2852,6 +2836,15 @@ class WizardReasoning(ReasoningStrategy):
             from_stage=from_stage if transitioned else None,
             auto_advance_messages=auto_advance_messages,
             metadata=metadata,
+            extraction=(
+                pipeline_result.extraction if pipeline_result else None
+            ),
+            missing_fields=(
+                pipeline_result.missing_fields if pipeline_result else None
+            ),
+            changed_fields=(
+                pipeline_result.new_data_keys if pipeline_result else None
+            ),
         )
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
@@ -3131,6 +3124,121 @@ class WizardReasoning(ReasoningStrategy):
     # both generate() (conversational path) and advance() (non-conversational
     # path).  Each was extracted from inline code that was duplicated across
     # generate(), _execute_skip(), and _execute_back().
+
+    async def _run_extraction_pipeline(
+        self,
+        message: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        llm: Any,
+        *,
+        manager: Any | None = None,
+    ) -> ExtractionPipelineResult:
+        """Schema-driven extraction, normalization, merge, and recovery.
+
+        Runs the full data-processing pipeline without any presentation
+        concerns (no clarification responses, no confirmation templates).
+        Used by both ``generate()`` (conversational) and ``advance()``
+        (non-conversational) paths.
+
+        The pipeline steps are:
+
+        1. **Extract** — LLM-driven schema extraction from raw text
+        2. **Normalize** — type coercion (bool, int, enum, array)
+        3. **Merge** — grounded merge into ``state.data``
+        4. **Defaults** — apply schema default values
+        5. **Derivations** — deterministic field relationships
+        6. **Recovery** — scope escalation, focused retry, boolean recovery
+
+        Args:
+            message: Raw user message text.
+            stage: Current stage metadata (optionally includes ``schema``).
+            state: Wizard state — ``data`` is mutated in place.
+            llm: LLM provider for extraction and recovery.
+            manager: Optional conversation manager for message history
+                context during extraction.
+
+        Returns:
+            :class:`ExtractionPipelineResult` with extraction result,
+            new data keys, missing fields, and confidence assessment.
+        """
+        stage_name = stage.get("name", "unknown")
+
+        # 1. Extract structured data from user input
+        extraction = await self._extract_data(
+            message, stage, llm, manager, state
+        )
+
+        logger.debug(
+            "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
+            stage_name,
+            extraction.confidence,
+            list(extraction.data.keys()) if extraction.data else [],
+        )
+        if extraction.data:
+            for key, value in extraction.data.items():
+                if not key.startswith("_"):
+                    logger.debug(
+                        "  Extracted %s = %r", key, str(value)[:100]
+                    )
+
+        new_data_keys: set[str] = set()
+        schema = stage.get("schema")
+
+        # 2. Normalize extracted data (type coercion)
+        if schema and extraction.data:
+            extraction.data = self._normalize_extracted_data(
+                extraction.data, schema
+            )
+
+        # 3. Merge into wizard state (grounded merge)
+        new_data_keys = self._merge_extraction_result(
+            extraction.data, state, stage, message,
+        )
+
+        # 4. Apply schema defaults
+        default_keys = self._apply_schema_defaults(state, stage)
+        if default_keys:
+            new_data_keys |= default_keys
+
+        # 5. Post-extraction derivations
+        derived = self._apply_field_derivations(state, stage)
+        if derived:
+            new_data_keys |= derived
+            logger.debug(
+                "Post-extraction derivation filled: %s",
+                sorted(derived),
+            )
+
+        # 6. Recovery pipeline (only if required fields missing)
+        missing = self._check_required_fields_missing(state, stage)
+        if missing:
+            new_data_keys, extraction = await self._run_recovery_pipeline(
+                extraction, state, stage, schema,
+                message, llm, manager, new_data_keys,
+            )
+            # Re-check after recovery
+            missing = self._check_required_fields_missing(state, stage)
+
+        # Confidence assessment
+        is_confident = extraction.is_confident
+        if not is_confident and schema:
+            required_fields = schema.get("required", [])
+            can_satisfy = all(
+                self._field_is_present(state.data.get(f))
+                for f in required_fields
+            )
+            if can_satisfy:
+                # All required fields present despite low confidence —
+                # treat as confident for decision purposes.
+                is_confident = True
+
+        return ExtractionPipelineResult(
+            extraction=extraction,
+            new_data_keys=new_data_keys,
+            missing_fields=missing,
+            is_confident=is_confident,
+        )
 
     async def _execute_fsm_step(
         self,
@@ -5809,6 +5917,73 @@ class WizardReasoning(ReasoningStrategy):
                         value,
                         transition.get("target", "?"),
                     )
+
+    async def _execute_routing_transforms(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+    ) -> None:
+        """Execute routing transforms declared on a stage.
+
+        Routing transforms run after extraction/merge/derivation but
+        *before* transition condition evaluation.  They set routing
+        signals in ``state.data`` (e.g. ``classified_need``) that
+        transition conditions depend on.
+
+        Declared in wizard YAML as::
+
+            stages:
+              - name: assess_needs
+                routing_transforms:
+                  - classify_user_need
+
+        Each name is resolved via the FSM's function registry.
+        Functions receive the wizard state data dict as the sole
+        argument.  They may return an updated dict or mutate the
+        dict in place and return ``None``.
+
+        Args:
+            stage: Current stage metadata.
+            state: Wizard state — ``data`` may be mutated by transforms.
+        """
+        transform_names = stage.get("routing_transforms", [])
+        if not transform_names:
+            return
+
+        active_fsm = self._get_active_fsm()
+        for name in transform_names:
+            func = active_fsm.resolve_function(name)
+            if func is None:
+                logger.warning(
+                    "Routing transform '%s' not found in function registry "
+                    "for stage '%s'",
+                    name,
+                    stage.get("name", "?"),
+                )
+                continue
+
+            try:
+                result = func(state.data)
+                if inspect.isawaitable(result):
+                    result = await result
+
+                # Transforms may return updated data or mutate in-place
+                if isinstance(result, dict):
+                    state.data.update(result)
+
+                logger.debug(
+                    "Routing transform '%s' executed for stage '%s'",
+                    name,
+                    stage.get("name", "?"),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Routing transform '%s' failed for stage '%s': %s",
+                    name,
+                    stage.get("name", "?"),
+                    e,
+                    exc_info=True,
+                )
 
     def _can_auto_advance(
         self, wizard_state: WizardState, stage: dict[str, Any]

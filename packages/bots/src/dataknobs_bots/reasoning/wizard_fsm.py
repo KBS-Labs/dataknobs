@@ -298,6 +298,25 @@ class WizardFSM:
         """
         return list(self._subflow_registry.keys())
 
+    def resolve_function(self, name: str) -> Callable[..., Any] | None:
+        """Look up a registered function by name.
+
+        Searches the FSM's function registry (functions, validators,
+        and transforms) and custom functions for a callable matching
+        *name*.  Used by :class:`WizardReasoning` to resolve routing
+        transform names declared in stage config.
+
+        Args:
+            name: Function name as registered in the FSM.
+
+        Returns:
+            The callable, or ``None`` if not found.
+        """
+        registry = getattr(self._fsm.fsm, "function_registry", None)
+        if registry is not None and hasattr(registry, "get_function"):
+            return registry.get_function(name)
+        return None
+
     def step(self, data: dict[str, Any]) -> StepResult:
         """Execute one FSM step with given data.
 

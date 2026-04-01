@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-31T01:29:17Z",
+  "timestamp": "2026-04-01T19:41:19Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/transform-adds",
-  "git_commit": "44cfb1dde507994ea309f29b7be1e7f8ed7b5110",
+  "git_branch": "sbk/misc-fixes-7",
+  "git_commit": "a10dbddb0a8443da743a09725c969206762cdae6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

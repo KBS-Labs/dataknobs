@@ -55,7 +55,7 @@ Configuration Examples:
         "backend": "pyrate",
         "bucket": "redis",
         "default_rates": [{"limit": 100, "interval": 60}],
-        "redis": {"url": "redis://elasticache:6379", "ssl": True},
+        "redis": {"url": "rediss://elasticache:6379"},
     }
     ```
 """
