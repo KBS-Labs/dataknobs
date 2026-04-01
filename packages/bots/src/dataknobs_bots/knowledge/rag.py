@@ -153,7 +153,10 @@ class RAGKnowledgeBase(KnowledgeBase):
     async def load_markdown_document(
         self, filepath: str | Path, metadata: dict[str, Any] | None = None
     ) -> int:
-        """Load and chunk a markdown document.
+        """Load and chunk a markdown document from a file.
+
+        Reads the file and delegates to :meth:`load_markdown_text` for
+        parsing, chunking, embedding, and storage.
 
         Args:
             filepath: Path to markdown file
@@ -170,80 +173,15 @@ class RAGKnowledgeBase(KnowledgeBase):
             )
             ```
         """
-        import numpy as np
-
-        # Read document
         filepath = Path(filepath)
         with open(filepath, encoding="utf-8") as f:
             markdown_text = f.read()
 
-        # Parse markdown
-        tree = parse_markdown(markdown_text)
-
-        # Build quality filter config if specified
-        quality_filter = None
-        if "quality_filter" in self.chunking_config:
-            qf_config = self.chunking_config["quality_filter"]
-            if isinstance(qf_config, ChunkQualityConfig):
-                quality_filter = qf_config
-            elif isinstance(qf_config, dict):
-                quality_filter = ChunkQualityConfig(**qf_config)
-
-        # Chunk the document with enhanced options
-        chunks = chunk_markdown_tree(
-            tree,
-            max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
-            heading_inclusion=HeadingInclusion.IN_METADATA,  # Keep headings in metadata only
-            combine_under_heading=self.chunking_config.get("combine_under_heading", True),
-            quality_filter=quality_filter,
-            generate_embeddings=self.chunking_config.get("generate_embeddings", True),
+        return await self.load_markdown_text(
+            markdown_text,
+            source=str(filepath),
+            metadata=metadata,
         )
-
-        # Process and store chunks
-        vectors = []
-        ids = []
-        metadatas = []
-
-        for i, chunk in enumerate(chunks):
-            # Use embedding_text if available, otherwise use chunk text
-            text_for_embedding = chunk.metadata.embedding_text or chunk.text
-
-            # Generate embedding
-            embedding = await self.embedding_provider.embed(text_for_embedding)
-
-            # Convert to numpy if needed
-            if not isinstance(embedding, np.ndarray):
-                embedding = np.array(embedding, dtype=np.float32)
-
-            # Prepare metadata with new fields
-            chunk_id = f"{filepath.stem}_{i}"
-            chunk_metadata = {
-                "text": chunk.text,
-                "source": str(filepath),
-                "chunk_index": i,
-                "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
-                "headings": chunk.metadata.headings,
-                "heading_levels": chunk.metadata.heading_levels,
-                "line_number": chunk.metadata.line_number,
-                "chunk_size": chunk.metadata.chunk_size,
-                "content_length": chunk.metadata.content_length,
-            }
-
-            # Merge with user metadata
-            if metadata:
-                chunk_metadata.update(metadata)
-
-            vectors.append(embedding)
-            ids.append(chunk_id)
-            metadatas.append(chunk_metadata)
-
-        # Batch insert into vector store
-        if vectors:
-            await self.vector_store.add_vectors(
-                vectors=vectors, ids=ids, metadata=metadatas
-            )
-
-        return len(chunks)
 
     async def load_documents_from_directory(
         self, directory: str | Path, pattern: str = "**/*.md"
@@ -352,7 +290,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             title=title or filepath.stem.replace("_", " ").title(),
         )
 
-        return await self._load_markdown_text(
+        return await self.load_markdown_text(
             markdown_text,
             source=str(filepath),
             metadata=metadata,
@@ -398,7 +336,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             title=title or filepath.stem.replace("_", " ").title(),
         )
 
-        return await self._load_markdown_text(
+        return await self.load_markdown_text(
             markdown_text,
             source=str(filepath),
             metadata=metadata,
@@ -447,7 +385,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             title_field=title_field,
         )
 
-        return await self._load_markdown_text(
+        return await self.load_markdown_text(
             markdown_text,
             source=str(filepath),
             metadata=metadata,
@@ -600,15 +538,18 @@ class RAGKnowledgeBase(KnowledgeBase):
 
         return results
 
-    async def _load_markdown_text(
+    async def load_markdown_text(
         self,
         markdown_text: str,
         source: str,
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        """Internal method to load markdown text directly.
+        """Load markdown content from a string.
 
-        Used by load_json_document, load_yaml_document, and load_csv_document.
+        Parses, chunks, embeds, and stores the markdown text.  This is
+        the shared implementation used by :meth:`load_markdown_document`,
+        :meth:`load_json_document`, :meth:`load_yaml_document`, and
+        :meth:`load_csv_document`.
 
         Args:
             markdown_text: Markdown content to load
