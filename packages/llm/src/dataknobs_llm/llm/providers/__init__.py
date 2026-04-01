@@ -4,8 +4,10 @@ This module provides implementations for various LLM providers.
 Supports both direct instantiation and dataknobs Config-based factory pattern.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Union, Type
+from typing import TYPE_CHECKING, Any
 
 from ..base import (
     LLMConfig, AsyncLLMProvider, SyncLLMProvider,
@@ -55,7 +57,7 @@ class LLMProviderFactory:
     """
 
     # Registry of provider classes
-    _providers: Dict[str, Type[AsyncLLMProvider] | None] = {
+    _providers: dict[str, type[AsyncLLMProvider] | None] = {
         'openai': None,  # Populated lazily
         'anthropic': None,
         'ollama': None,
@@ -83,9 +85,9 @@ class LLMProviderFactory:
 
     def create(
         self,
-        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        config: LLMConfig | Config | dict[str, Any],
         **kwargs: Any
-    ) -> Union[AsyncLLMProvider, SyncLLMProvider]:
+    ) -> AsyncLLMProvider | SyncLLMProvider:
         """Create an LLM provider from configuration.
 
         Args:
@@ -121,7 +123,7 @@ class LLMProviderFactory:
     def register_provider(
         cls,
         name: str,
-        provider_class: Type[AsyncLLMProvider]
+        provider_class: type[AsyncLLMProvider]
     ) -> None:
         """Register a custom provider class.
 
@@ -142,9 +144,9 @@ class LLMProviderFactory:
 
     def __call__(
         self,
-        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        config: LLMConfig | Config | dict[str, Any],
         **kwargs: Any
-    ) -> Union[AsyncLLMProvider, SyncLLMProvider]:
+    ) -> AsyncLLMProvider | SyncLLMProvider:
         """Allow factory to be called directly.
 
         Makes the factory callable for convenience.
@@ -160,9 +162,9 @@ class LLMProviderFactory:
 
 
 def create_llm_provider(
-    config: Union[LLMConfig, "Config", Dict[str, Any]],
+    config: LLMConfig | Config | dict[str, Any],
     is_async: bool = True
-) -> Union[AsyncLLMProvider, SyncLLMProvider]:
+) -> AsyncLLMProvider | SyncLLMProvider:
     """Create appropriate LLM provider based on configuration.
 
     Convenience function that uses LLMProviderFactory internally.
@@ -195,7 +197,7 @@ def create_llm_provider(
 
 
 async def create_embedding_provider(
-    config: Dict[str, Any],
+    config: dict[str, Any],
     *,
     default_provider: str = "ollama",
     default_model: str = "nomic-embed-text",
@@ -236,7 +238,7 @@ async def create_embedding_provider(
         ```
     """
     # 1. Nested "embedding" sub-dict (preferred)
-    extra: Dict[str, Any]
+    extra: dict[str, Any]
     embedding_config = config.get("embedding", {})
     if embedding_config and isinstance(embedding_config, dict):
         provider_name = embedding_config.get("provider", default_provider)

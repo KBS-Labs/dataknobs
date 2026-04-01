@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-01T22:03:19Z",
+  "timestamp": "2026-04-01T22:28:29Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/migrate-create-embedding-provider-to-llm-package",
-  "git_commit": "b2cb8966e0f61ccacb52baa97c8fef918561c504",
+  "git_commit": "2e9ceaa3fcd096c92f935606637a35bf5c01cef5",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

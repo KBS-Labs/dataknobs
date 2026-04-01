@@ -4,8 +4,7 @@ Shared helpers for creating and initializing LLM providers used across
 bot subsystems (memory, knowledge base, reasoning).
 
 The canonical ``create_embedding_provider()`` implementation lives in
-``dataknobs_llm.llm.providers`` and is re-exported here for backward
-compatibility.
+``dataknobs_llm`` and is re-exported here for backward compatibility.
 """
 
 from __future__ import annotations

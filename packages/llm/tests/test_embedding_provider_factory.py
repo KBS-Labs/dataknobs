@@ -1,8 +1,8 @@
 """Tests for create_embedding_provider().
 
 This is the canonical test suite — the function lives in
-``dataknobs_llm.llm.providers`` and is re-exported from
-``dataknobs_bots.providers`` for backward compatibility.
+``dataknobs_llm`` and is re-exported from ``dataknobs_bots.providers``
+for backward compatibility.
 """
 
 import pytest
@@ -14,8 +14,7 @@ from dataknobs_llm import CompletionMode
 class TestCreateEmbeddingProvider:
     """Tests for the embedding provider factory."""
 
-    @pytest.mark.asyncio
-    async def test_importable_from_top_level(self) -> None:
+    def test_importable_from_top_level(self) -> None:
         """create_embedding_provider is importable from dataknobs_llm."""
         assert callable(create_embedding_provider)
 
