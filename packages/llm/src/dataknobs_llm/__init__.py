@@ -19,6 +19,7 @@ from dataknobs_llm.llm import (
     MemoryEmbeddingCache,
     LLMProviderFactory,
     create_llm_provider,
+    create_embedding_provider,
     create_caching_provider,
     TemplateStrategy,
     MessageTemplate,
@@ -87,6 +88,7 @@ __all__ = [
     "MemoryEmbeddingCache",
     "LLMProviderFactory",
     "create_llm_provider",
+    "create_embedding_provider",
     "create_caching_provider",
     # Utils
     "TemplateStrategy",

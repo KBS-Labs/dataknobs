@@ -4,6 +4,7 @@ This module provides implementations for various LLM providers.
 Supports both direct instantiation and dataknobs Config-based factory pattern.
 """
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict, Union, Type
 
 from ..base import (
@@ -27,6 +28,8 @@ from .echo import EchoProvider
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
+
+_logger = logging.getLogger(__name__)
 
 
 class LLMProviderFactory:
@@ -191,6 +194,93 @@ def create_llm_provider(
     return factory.create(config)
 
 
+async def create_embedding_provider(
+    config: Dict[str, Any],
+    *,
+    default_provider: str = "ollama",
+    default_model: str = "nomic-embed-text",
+) -> AsyncLLMProvider:
+    """Create and initialize an embedding provider from configuration.
+
+    Normalizes configuration from two supported formats:
+
+    - **Nested format:** ``{"embedding": {"provider": "ollama", "model": "..."}}``
+      -- the ``"embedding"`` sub-dict is extracted and used.  All extra keys
+      in the sub-dict (``api_base``, ``api_key``, ``dimensions``, etc.) are
+      forwarded to the provider.
+    - **Legacy prefix format:** ``{"embedding_provider": "ollama",
+      "embedding_model": "..."}`` -- ``embedding_`` prefixed keys at the
+      top level.  ``api_base``, ``api_key``, and ``dimensions`` are also
+      forwarded when present at the top level.
+
+    When neither format is present, *default_provider* / *default_model*
+    are used (``ollama`` / ``nomic-embed-text``).
+
+    Args:
+        config: Configuration dict.
+        default_provider: Default provider if not specified.
+        default_model: Default model if not specified.
+
+    Returns:
+        Initialized ``AsyncLLMProvider`` instance ready for ``embed()`` calls.
+
+    Example:
+        ```python
+        provider = await create_embedding_provider({
+            "embedding": {
+                "provider": "ollama",
+                "model": "nomic-embed-text",
+            },
+        })
+        embedding = await provider.embed("hello world")
+        ```
+    """
+    # 1. Nested "embedding" sub-dict (preferred)
+    extra: Dict[str, Any]
+    embedding_config = config.get("embedding", {})
+    if embedding_config and isinstance(embedding_config, dict):
+        provider_name = embedding_config.get("provider", default_provider)
+        model_name = embedding_config.get("model", default_model)
+        # Forward all extra keys (api_base, api_key, dimensions, etc.)
+        extra = {
+            k: v for k, v in embedding_config.items()
+            if k not in ("provider", "model")
+        }
+    else:
+        # 2. Legacy prefix format (embedding_provider / embedding_model)
+        provider_name = config.get("embedding_provider", default_provider)
+        model_name = config.get("embedding_model", default_model)
+        extra = {}
+        for passthrough in ("api_base", "api_key", "dimensions"):
+            if passthrough in config:
+                extra[passthrough] = config[passthrough]
+
+    factory = LLMProviderFactory(is_async=True)
+    provider_config = {
+        "provider": provider_name,
+        "model": model_name,
+        **extra,
+        "mode": "embedding",  # Always forced — must come after **extra
+    }
+    try:
+        provider = factory.create(provider_config)
+        await provider.initialize()
+    except Exception:
+        _logger.exception(
+            "Failed to create embedding provider: %s/%s",
+            provider_name,
+            model_name,
+        )
+        raise
+
+    _logger.info(
+        "Embedding provider initialized: %s/%s",
+        provider_name,
+        model_name,
+    )
+    return provider
+
+
 # Export all providers and factory for backward compatibility
 __all__ = [
     # Base classes (re-exported for convenience)
@@ -215,5 +305,6 @@ __all__ = [
     # Factory
     'LLMProviderFactory',
     'create_llm_provider',
+    'create_embedding_provider',
     'normalize_llm_config',
 ]

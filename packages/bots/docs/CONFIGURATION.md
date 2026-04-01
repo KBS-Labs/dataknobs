@@ -2386,7 +2386,7 @@ user detours from a structured stage to a conversation stage and back, previousl
 fields remain in the data dict. The structured stage resumes where it left off, prompting
 only for remaining missing fields.
 
-**Routing Transforms:**
+### Routing Transforms
 
 Routing transforms are stage-level transform functions that run **before** transition
 condition evaluation. They are useful when a stage needs to classify or preprocess
