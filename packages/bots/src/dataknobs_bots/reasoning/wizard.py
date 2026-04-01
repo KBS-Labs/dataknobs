@@ -3149,6 +3149,8 @@ class WizardReasoning(ReasoningStrategy):
         4. **Defaults** — apply schema default values
         5. **Derivations** — deterministic field relationships
         6. **Recovery** — scope escalation, focused retry, boolean recovery
+        7. **Confidence** — assess extraction confidence with
+           ``can_satisfy`` override
 
         Args:
             message: Raw user message text.
@@ -6347,7 +6349,7 @@ class WizardReasoning(ReasoningStrategy):
         schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
-        manager: Any,
+        manager: Any | None,
     ) -> tuple[set[str], Any]:
         """Run scope escalation recovery strategy.
 
@@ -6436,7 +6438,7 @@ class WizardReasoning(ReasoningStrategy):
         schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
-        manager: Any,
+        manager: Any | None,
     ) -> tuple[set[str], Any]:
         """Run focused retry — extract only missing required fields.
 
