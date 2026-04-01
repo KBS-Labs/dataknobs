@@ -68,6 +68,60 @@ class TestRAGKnowledgeBase:
         assert num_chunks > 0
 
     @pytest.mark.asyncio
+    async def test_load_markdown_text(self):
+        """Test loading markdown content from a string."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        markdown = (
+            "# API Reference\n\n"
+            "## Authentication\n\n"
+            "Use bearer tokens for all API calls.\n\n"
+            "## Endpoints\n\n"
+            "The `/users` endpoint returns user data.\n"
+        )
+        num_chunks = await kb.load_markdown_text(
+            markdown, source="api-docs", metadata={"category": "api"}
+        )
+
+        assert num_chunks > 0
+
+        # Verify chunks are queryable
+        results = await kb.query("authentication")
+        assert len(results) > 0
+        assert results[0]["source"] == "api-docs"
+        assert results[0]["metadata"].get("category") == "api"
+
+    @pytest.mark.asyncio
+    async def test_load_markdown_text_matches_file_loading(self):
+        """Test that load_markdown_text produces same chunks as load_markdown_document."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        # Load from file
+        kb_file = await RAGKnowledgeBase.from_config(config)
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        num_from_file = await kb_file.load_markdown_document(test_doc)
+
+        # Load same content from string
+        kb_str = await RAGKnowledgeBase.from_config(config)
+        with open(test_doc, encoding="utf-8") as f:
+            content = f.read()
+        num_from_str = await kb_str.load_markdown_text(
+            content, source=str(test_doc)
+        )
+
+        assert num_from_file == num_from_str
+
+    @pytest.mark.asyncio
     async def test_load_documents_from_directory(self):
         """Test loading multiple documents from a directory."""
         config = {

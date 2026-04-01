@@ -283,7 +283,7 @@ class KnowledgeIngestionManager:
     ) -> int:
         """Load markdown content into the knowledge base."""
         text = content.decode("utf-8")
-        return await self._destination._load_markdown_text(
+        return await self._destination.load_markdown_text(
             text,
             source=source,
             metadata=metadata,
@@ -302,7 +302,7 @@ class KnowledgeIngestionManager:
         transformer = ContentTransformer()
         markdown = transformer.transform_json(data)
 
-        return await self._destination._load_markdown_text(
+        return await self._destination.load_markdown_text(
             markdown,
             source=source,
             metadata=metadata,
@@ -324,7 +324,7 @@ class KnowledgeIngestionManager:
         # YAML loads as dict, same as JSON
         markdown = transformer.transform_json(data)
 
-        return await self._destination._load_markdown_text(
+        return await self._destination.load_markdown_text(
             markdown,
             source=source,
             metadata=metadata,
@@ -350,7 +350,7 @@ class KnowledgeIngestionManager:
             md_lines.append("| " + " | ".join(str(v) for v in row.values()) + " |")
         markdown = "\n".join(md_lines)
 
-        return await self._destination._load_markdown_text(
+        return await self._destination.load_markdown_text(
             markdown,
             source=source,
             metadata=metadata,
@@ -364,7 +364,7 @@ class KnowledgeIngestionManager:
     ) -> int:
         """Load plain text content."""
         text = content.decode("utf-8")
-        return await self._destination._load_markdown_text(
+        return await self._destination.load_markdown_text(
             text,
             source=source,
             metadata=metadata,

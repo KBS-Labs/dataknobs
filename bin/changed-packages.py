@@ -86,12 +86,38 @@ def _run_git(*args: str) -> list[str]:
         return []
 
 
+def _resolve_base_ref(base_ref: str) -> str:
+    """Resolve the base ref, preferring the remote-tracking branch.
+
+    When the user passes "main", we want "origin/main" so that change
+    detection works even when the local branch is behind the remote.
+    Falls back to the original ref if the remote variant doesn't exist.
+    """
+    # If already a remote ref or explicit path, use as-is
+    if "/" in base_ref:
+        return base_ref
+
+    # Try origin/<ref> first
+    remote_ref = f"origin/{base_ref}"
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", remote_ref],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return remote_ref
+
+    return base_ref
+
+
 def get_changed_files(base_ref: str) -> list[str]:
     """Get all changed files: committed on branch, staged, and unstaged."""
     files: set[str] = set()
 
+    resolved_ref = _resolve_base_ref(base_ref)
+
     # Changes committed on branch vs base
-    files.update(_run_git("diff", "--name-only", f"{base_ref}...HEAD"))
+    files.update(_run_git("diff", "--name-only", f"{resolved_ref}...HEAD"))
 
     # Staged changes
     files.update(_run_git("diff", "--name-only", "--cached"))

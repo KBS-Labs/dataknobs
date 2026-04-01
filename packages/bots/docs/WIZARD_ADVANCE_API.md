@@ -41,7 +41,7 @@ result = await reasoning.advance(
     state=state,
     llm=provider,
 )
-if result.missing_fields:
+if result.missing_fields is not None:
     print(f"Still need: {result.missing_fields}")
 
 print(result.stage_name)    # Next stage name
@@ -231,8 +231,8 @@ async def advance_wizard(
         "can_skip": result.can_skip,
         "can_go_back": result.can_go_back,
         "completed": result.completed,
-        "missing_fields": sorted(result.missing_fields) if result.missing_fields else None,
-        "changed_fields": sorted(result.changed_fields) if result.changed_fields else None,
+        "missing_fields": sorted(result.missing_fields) if result.missing_fields is not None else None,
+        "changed_fields": sorted(result.changed_fields) if result.changed_fields is not None else None,
         "state": result.state.to_dict(),
     }
 ```

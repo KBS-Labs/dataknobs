@@ -128,6 +128,7 @@ class WizardConfigBuilder:
         reasoning: str | None = None,
         max_iterations: int | None = None,
         capture_mode: str | None = None,
+        routing_transforms: list[str] | None = None,
         **extra_fields: Any,
     ) -> WizardConfigBuilder:
         """Add a stage to the wizard config.
@@ -166,6 +167,8 @@ class WizardConfigBuilder:
             capture_mode: Extraction capture mode — ``"auto"``
                 (default), ``"verbatim"`` (raw input), or ``"extract"``
                 (force LLM extraction).
+            routing_transforms: List of transform function names to
+                execute before transition condition evaluation.
             **extra_fields: Additional stage config fields passed through
                 to the stage dict verbatim. Use for less common fields
                 (e.g. ``llm_assist=True``, ``navigation={...}``) without
@@ -212,6 +215,8 @@ class WizardConfigBuilder:
             stage["max_iterations"] = max_iterations
         if capture_mode is not None:
             stage["capture_mode"] = capture_mode
+        if routing_transforms is not None:
+            stage["routing_transforms"] = routing_transforms
         if extra_fields:
             # Prevent accidental override of structural keys set by
             # positional/explicit parameters above.

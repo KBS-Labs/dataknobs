@@ -1327,6 +1327,9 @@ class TestAdvanceExtractionMode:
         assert result.extraction.confidence == 0.95
         # Extracted data was merged into state
         assert state.data.get("name") == "Alice"
+        # changed_fields tracks what was extracted
+        assert result.changed_fields is not None
+        assert "name" in result.changed_fields
         # Transition happened (gather → done via name condition)
         assert result.transitioned is True
         assert result.stage_name == "done"
@@ -1499,6 +1502,48 @@ class TestRoutingTransforms:
         # The routing transform set _route='path_a', so path_a wins
         assert result.transitioned is True
         assert result.stage_name == "path_a"
+
+    @pytest.mark.asyncio
+    async def test_async_routing_transform(self) -> None:
+        """Async routing transforms are awaited correctly."""
+
+        async def async_classify(data: dict[str, Any]) -> dict[str, Any]:
+            data["_route"] = "async_path"
+            return data
+
+        config = {
+            "name": "async-routing-test",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "routing_transforms": ["async_classify"],
+                    "transitions": [
+                        {
+                            "target": "async_path",
+                            "condition": (
+                                "data.get('_route') == 'async_path'"
+                            ),
+                        },
+                        {"target": "fallback"},
+                    ],
+                },
+                {"name": "async_path", "is_end": True, "prompt": "Async"},
+                {"name": "fallback", "is_end": True, "prompt": "Fallback"},
+            ],
+        }
+        reasoning = _make_reasoning(
+            config,
+            custom_functions={"async_classify": async_classify},
+        )
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"input": "test"}, state)
+
+        assert result.transitioned is True
+        assert result.stage_name == "async_path"
 
     @pytest.mark.asyncio
     async def test_no_routing_transforms_is_noop(
