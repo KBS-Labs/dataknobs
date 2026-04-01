@@ -5,6 +5,29 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-04-01
+
+### dataknobs-common [1.3.7]
+
+#### Fixed
+- bug fixes
+
+### dataknobs-llm [0.5.5]
+
+#### Added
+- migrated create_embedding_provider to the llm package from bots
+
+### dataknobs-bots [0.6.9]
+
+#### Added
+- added routing_transforms
+
+#### Fixed
+- redesigned wizard generate to separate business logic and extraction from presentation
+- fixed load_markdown_text api to be public
+- migrated create_embedding_provider to the llm package
+
+
 ## Release - 2026-03-31
 
 ### dataknobs-common [1.3.6]
