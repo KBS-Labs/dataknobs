@@ -101,16 +101,25 @@ def is_chromadb_available() -> bool:
     return importlib.util.find_spec("chromadb") is not None
 
 
-def is_redis_available(host: str = "localhost", port: int = 6379) -> bool:
+def is_redis_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if Redis service is available.
 
+    Reads ``REDIS_HOST`` and ``REDIS_PORT`` environment variables when
+    explicit arguments are not provided, falling back to ``localhost:6379``.
+    This ensures the check works both on the host and inside Docker
+    where Redis runs on a network hostname.
+
     Args:
-        host: Redis host
-        port: Redis port
+        host: Redis host (default: ``$REDIS_HOST`` or ``localhost``)
+        port: Redis port (default: ``$REDIS_PORT`` or ``6379``)
 
     Returns:
         True if Redis is available, False otherwise
     """
+    import os
+
+    host = host or os.environ.get("REDIS_HOST", "localhost")
+    port = port or int(os.environ.get("REDIS_PORT", "6379"))
     try:
         import socket
 

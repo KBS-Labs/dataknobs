@@ -13,6 +13,7 @@ from dataknobs_common.ratelimit import (
     RateLimitStatus,
     create_rate_limiter,
 )
+from dataknobs_common.testing import requires_package
 
 
 class TestRateLimitTypes:
@@ -519,3 +520,130 @@ class TestPyrateModuleImport:
         )
         with pytest.raises(ImportError, match="pyrate-limiter"):
             PyrateRateLimiter(config, {"bucket": "memory"})
+
+
+@requires_package("pyrate_limiter")
+class TestPyrateRateLimiterBehavior:
+    """Behavioral tests for PyrateRateLimiter with real pyrate-limiter.
+
+    These tests exercise the actual try_acquire()/acquire() code paths
+    with real pyrate-limiter in-memory buckets. No fakes, no mocks.
+
+    B9 symptom 2: PyrateRateLimiter.try_acquire() and acquire()
+    previously crashed with 'TypeError: object bool can't be used in
+    await expression' because Limiter.try_acquire() returns
+    Union[bool, Awaitable[bool]] and the code unconditionally awaited it.
+    """
+
+    def _make_limiter(
+        self,
+        limit: int = 5,
+        interval: float = 1.0,
+        categories: dict | None = None,
+    ) -> "PyrateRateLimiter":
+        from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
+
+        cat_rates = {}
+        if categories:
+            cat_rates = {
+                name: [RateLimit(limit=cfg["limit"], interval=cfg["interval"])]
+                for name, cfg in categories.items()
+            }
+        config = RateLimiterConfig(
+            default_rates=[RateLimit(limit=limit, interval=interval)],
+            categories=cat_rates,
+        )
+        return PyrateRateLimiter(config, {"bucket": "memory"})
+
+    @pytest.mark.asyncio
+    async def test_try_acquire_succeeds(self):
+        """Basic try_acquire returns True when under the limit."""
+        limiter = self._make_limiter(limit=5)
+        result = await limiter.try_acquire("test")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_try_acquire_rate_limited(self):
+        """try_acquire returns False when limit is exhausted."""
+        limiter = self._make_limiter(limit=3, interval=10.0)
+        for _ in range(3):
+            assert await limiter.try_acquire("test") is True
+        # 4th acquire should be denied
+        assert await limiter.try_acquire("test") is False
+
+    @pytest.mark.asyncio
+    async def test_acquire_completes(self):
+        """Blocking acquire completes when capacity is available."""
+        limiter = self._make_limiter(limit=5)
+        # Should not raise
+        await limiter.acquire("test")
+
+    @pytest.mark.asyncio
+    async def test_acquire_timeout_raises(self):
+        """acquire with timeout raises TimeoutError when exhausted."""
+        limiter = self._make_limiter(limit=1, interval=10.0)
+        await limiter.try_acquire("test")  # exhaust the limit
+        with pytest.raises(TimeoutError, match="timed out"):
+            await limiter.acquire("test", timeout=0.1)
+
+    @pytest.mark.asyncio
+    async def test_acquire_does_not_block_event_loop(self):
+        """acquire() must use asyncio.sleep, not time.sleep.
+
+        If acquire() blocks the event loop thread while waiting for
+        capacity, concurrent coroutines cannot make progress. This test
+        verifies that other tasks run during the wait.
+        """
+        limiter = self._make_limiter(limit=1, interval=0.3)
+        await limiter.try_acquire("test")  # exhaust the limit
+
+        counter = 0
+
+        async def increment() -> None:
+            nonlocal counter
+            for _ in range(5):
+                counter += 1
+                await asyncio.sleep(0.02)
+
+        task = asyncio.create_task(increment())
+        await limiter.acquire("test", timeout=0.5)
+        await task
+        assert counter > 0, "Event loop was blocked during acquire()"
+
+    @pytest.mark.asyncio
+    async def test_category_rates(self):
+        """Per-category rate configuration works."""
+        limiter = self._make_limiter(
+            limit=10,
+            interval=10.0,
+            categories={"strict": {"limit": 2, "interval": 10.0}},
+        )
+        # "strict" category has limit of 2
+        assert await limiter.try_acquire("strict") is True
+        assert await limiter.try_acquire("strict") is True
+        assert await limiter.try_acquire("strict") is False
+        # Default category still has capacity
+        assert await limiter.try_acquire("default") is True
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_bucket(self):
+        """Reset allows re-acquire after exhaustion."""
+        limiter = self._make_limiter(limit=1, interval=10.0)
+        assert await limiter.try_acquire("test") is True
+        assert await limiter.try_acquire("test") is False
+        await limiter.reset("test")
+        assert await limiter.try_acquire("test") is True
+
+    @pytest.mark.asyncio
+    async def test_get_status_returns_config(self):
+        """get_status reflects configured limits."""
+        limiter = self._make_limiter(limit=10, interval=60.0)
+        status = await limiter.get_status("test")
+        assert status.name == "test"
+        assert status.limit == 10
+
+    @pytest.mark.asyncio
+    async def test_close(self):
+        """close() completes without error."""
+        limiter = self._make_limiter()
+        await limiter.close()

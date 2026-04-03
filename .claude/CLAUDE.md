@@ -105,6 +105,20 @@ These exist for use by dataknobs tests AND all consuming projects:
 
 If a new testing construct is needed, **add it to the appropriate dataknobs package** for cross-project reuse.
 
+### Optional-Dependency Backend Testing — MANDATORY
+
+Backends that depend on optional packages (asyncpg for `PostgresEventBus`, pyrate-limiter for `PyrateRateLimiter`, etc.) **must have behavioral tests with the real dependency** — not just import/init tests, and not tests using hand-crafted fakes that bypass real code paths. Import-only tests verify the module loads; fakes verify call structure; neither tells you whether the class actually works.
+
+**Requirements for optional-dependency backends:**
+
+1. **The optional dependency must be available in the dev/test environment** — add it to dev dependencies so behavioral tests can run against the real library
+2. **Behavioral tests must call the class's primary methods** (e.g., `subscribe()`/`publish()` for an event bus, `try_acquire()`/`acquire()` for a rate limiter) with the real dependency installed
+3. **Use `@requires_package("dep_name")` or service-specific markers** (`@requires_postgres`, `@requires_redis`) so tests skip gracefully when the dependency or service is unavailable
+4. **Integration tests with real services** (via `bin/dk up` / `bin/test.sh`) should cover the end-to-end path when the service is available
+5. **Do not substitute fakes for the real dependency** — a `FakeConnection` that appends to a list has the same problem as `MagicMock`: it doesn't test real behavior. The `PostgresEventBus` bug (sync fake hiding missing `await`) is the canonical example.
+
+**Anti-pattern:** A class with 300 lines of async methods where the only tests check that the module imports and that `__init__` raises a clean error when the dependency is missing. This guarantees that the first consumer to actually use the class discovers all the runtime bugs.
+
 ### DynaBot Testing — MANDATORY Patterns
 
 When writing tests for DynaBot behavior, **always use `BotTestHarness`** — for ALL bot tests, not just wizard tests. The harness handles `from_config()`, provider injection, context creation, tool registration, and middleware wiring.

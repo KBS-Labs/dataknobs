@@ -158,7 +158,7 @@ class PostgresEventBus:
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        self._listen_conn.remove_listener(
+                        await self._listen_conn.remove_listener(
                             channel, self._notification_handler
                         )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
@@ -250,7 +250,7 @@ class PostgresEventBus:
             # Start listening on this channel if not already
             if channel not in self._channel_topics:
                 await self._listen_conn.execute(f"LISTEN {channel}")
-                self._listen_conn.add_listener(
+                await self._listen_conn.add_listener(
                     channel, self._notification_handler
                 )
                 self._channel_topics[channel] = topic
@@ -287,7 +287,7 @@ class PostgresEventBus:
             if not has_other_subs and channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        self._listen_conn.remove_listener(
+                        await self._listen_conn.remove_listener(
                             channel, self._notification_handler
                         )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
