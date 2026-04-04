@@ -1,9 +1,12 @@
 """Integration tests for RedisEventBus.
 
-These tests require a running Redis instance on localhost:6379.
+These tests require a running Redis instance.  The host and port are read
+from ``REDIS_HOST`` / ``REDIS_PORT`` environment variables, falling back
+to ``localhost:6379``.
+
 Skipped when:
 - TEST_REDIS env var is "false" (explicit opt-out), OR
-- Redis is not reachable on localhost:6379
+- Redis is not reachable
 
 Run via:
     uv run pytest packages/common/tests/test_redis_events.py
@@ -22,7 +25,7 @@ from dataknobs_common.events import Event, EventType
 from dataknobs_common.events.redis import RedisEventBus
 from dataknobs_common.testing import is_redis_available
 
-TEST_REDIS = os.getenv("TEST_REDIS", "true").lower() != "false"
+TEST_REDIS = os.getenv("TEST_REDIS", "").lower() != "false"
 
 skip_redis = pytest.mark.skipif(
     not TEST_REDIS or not is_redis_available(),

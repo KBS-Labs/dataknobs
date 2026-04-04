@@ -118,8 +118,39 @@ def is_redis_available(host: str | None = None, port: int | None = None) -> bool
     """
     import os
 
-    host = host or os.environ.get("REDIS_HOST", "localhost")
-    port = port or int(os.environ.get("REDIS_PORT", "6379"))
+    host = host if host is not None else os.environ.get("REDIS_HOST", "localhost")
+    port = port if port is not None else int(os.environ.get("REDIS_PORT", "6379"))
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
+def is_postgres_available(
+    host: str | None = None, port: int | None = None
+) -> bool:
+    """Check if PostgreSQL service is available.
+
+    Reads ``POSTGRES_HOST`` and ``POSTGRES_PORT`` environment variables when
+    explicit arguments are not provided, falling back to ``localhost:5432``.
+
+    Args:
+        host: PostgreSQL host (default: ``$POSTGRES_HOST`` or ``localhost``)
+        port: PostgreSQL port (default: ``$POSTGRES_PORT`` or ``5432``)
+
+    Returns:
+        True if PostgreSQL is available, False otherwise
+    """
+    import os
+
+    host = host if host is not None else os.environ.get("POSTGRES_HOST", "localhost")
+    port = port if port is not None else int(os.environ.get("POSTGRES_PORT", "5432"))
     try:
         import socket
 
@@ -170,6 +201,11 @@ try:
         reason="Redis not available",
     )
 
+    requires_postgres = pytest.mark.skipif(
+        not is_postgres_available(),
+        reason="PostgreSQL not available",
+    )
+
     def requires_package(package_name: str) -> Any:
         """Create a skip marker for a required package.
 
@@ -204,6 +240,7 @@ except ImportError:
     requires_faiss = None  # type: ignore
     requires_chromadb = None  # type: ignore
     requires_redis = None  # type: ignore
+    requires_postgres = None  # type: ignore
 
     def requires_package(package_name: str) -> Any:  # type: ignore
         return None

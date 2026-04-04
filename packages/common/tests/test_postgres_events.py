@@ -17,6 +17,7 @@ import pytest
 
 from dataknobs_common.events import Event, EventType
 from dataknobs_common.events.postgres import PostgresEventBus
+from dataknobs_common.testing import is_postgres_available
 
 
 class TestTopicToChannel:
@@ -91,6 +92,53 @@ class TestTopicToChannel:
         channel = bus._topic_to_channel("événement")
         # Only ASCII alphanumeric + underscore survive
         assert channel == "events_vnement"
+
+
+class TestChannelPrefixSanitization:
+    """Tests for channel_prefix sanitization in __init__.
+
+    Bug: channel_prefix was interpolated directly into LISTEN/UNLISTEN
+    SQL statements without sanitization. While topics were sanitized by
+    _topic_to_channel(), a malicious channel_prefix could inject SQL.
+    """
+
+    def test_clean_prefix_accepted(self):
+        """Test a normal prefix is accepted unchanged."""
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="myapp",
+        )
+        assert bus._channel_prefix == "myapp"
+
+    def test_prefix_with_underscores(self):
+        """Test prefix with underscores is accepted."""
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="my_app_events",
+        )
+        assert bus._channel_prefix == "my_app_events"
+
+    def test_sql_injection_in_prefix_stripped(self):
+        """Bug: SQL injection via channel_prefix was not prevented.
+
+        Characters like quotes, semicolons, and spaces must be stripped
+        to prevent injection in LISTEN/UNLISTEN statements.
+        """
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="foo'; DROP TABLE users --",
+        )
+        assert "'" not in bus._channel_prefix
+        assert ";" not in bus._channel_prefix
+        assert " " not in bus._channel_prefix
+
+    def test_empty_prefix_after_sanitization_raises(self):
+        """Test that a prefix producing an empty result raises ValueError."""
+        with pytest.raises(ValueError, match="empty after sanitization"):
+            PostgresEventBus(
+                connection_string="postgresql://unused",
+                channel_prefix="!@#$%^&*()",
+            )
 
 
 class TestPublishSqlConstruction:
@@ -337,26 +385,10 @@ PG_DSN = "postgresql://{}:{}@{}:{}/{}".format(
     os.getenv("POSTGRES_DB", "dataknobs"),
 )
 
-TEST_POSTGRES = os.getenv("TEST_POSTGRES", "true").lower() != "false"
-
-
-def _is_postgres_available() -> bool:
-    """Check if Postgres is reachable using the configured DSN."""
-    try:
-        import asyncpg
-
-        async def _check() -> bool:
-            conn = await asyncpg.connect(PG_DSN, timeout=2)
-            await conn.close()
-            return True
-
-        return asyncio.run(_check())
-    except Exception:
-        return False
-
+TEST_POSTGRES = os.getenv("TEST_POSTGRES", "").lower() != "false"
 
 skip_postgres = pytest.mark.skipif(
-    not TEST_POSTGRES or not _is_postgres_available(),
+    not TEST_POSTGRES or not is_postgres_available(),
     reason="PostgreSQL integration tests skipped. Set TEST_POSTGRES=true and ensure Postgres is running.",
 )
 

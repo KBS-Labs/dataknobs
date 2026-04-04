@@ -188,8 +188,6 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
         Returns:
             A RateItem for the limiter.
         """
-        import time
-
         now_ms = int(time.monotonic() * 1_000)
         return RateItem(name, now_ms, weight=weight)
 

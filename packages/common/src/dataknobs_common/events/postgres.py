@@ -76,8 +76,18 @@ class PostgresEventBus:
             connection_string: PostgreSQL connection string
             channel_prefix: Prefix for NOTIFY channels (default: "events")
         """
+        import re
+
         self._connection_string = connection_string
-        self._channel_prefix = channel_prefix
+        # Sanitize prefix the same way we sanitize topics — it is
+        # interpolated into LISTEN/UNLISTEN SQL statements which do
+        # not support parameterized queries.
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", channel_prefix)
+        if not safe_prefix:
+            raise ValueError(
+                f"channel_prefix {channel_prefix!r} is empty after sanitization"
+            )
+        self._channel_prefix = safe_prefix
         self._conn: Any = None  # asyncpg.Connection
         self._listen_conn: Any = None  # Separate connection for LISTEN
         self._subscriptions: dict[str, Subscription] = {}
