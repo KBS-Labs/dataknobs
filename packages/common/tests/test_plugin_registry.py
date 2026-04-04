@@ -555,3 +555,466 @@ class TestPluginRegistryEdgeCases:
 
         assert received["name"] == "unknown_key"
         assert received["config"] == {"default": True}
+
+
+# --- Fixtures for create() tests ---
+
+
+class FromConfigHandler(BaseHandler):
+    """Handler with a from_config classmethod."""
+
+    @classmethod
+    def from_config(
+        cls, config: Dict[str, Any], **kwargs: Any
+    ) -> "FromConfigHandler":
+        instance = cls("from_config", config)
+        instance.extra = kwargs  # type: ignore[attr-defined]
+        return instance
+
+
+class PlainClassHandler:
+    """Handler without from_config, accepts (config, **kwargs)."""
+
+    def __init__(self, config: Dict[str, Any], **kwargs: Any) -> None:
+        self.config = config
+        self.kwargs = kwargs
+
+
+def config_factory(config: Dict[str, Any], **kwargs: Any) -> BaseHandler:
+    """Factory with (config, **kwargs) signature."""
+    handler = BaseHandler("config_factory", config)
+    handler.kwargs = kwargs  # type: ignore[attr-defined]
+    return handler
+
+
+class TestPluginRegistryCreate:
+    """Test the create() method for fresh-instance factory mode."""
+
+    def test_create_with_callable_factory(self) -> None:
+        """create() calls callable as factory(config, **kwargs)."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", config_factory)
+
+        result = registry.create("h", {"x": 1})
+        assert result.config == {"x": 1}
+        assert result.name == "config_factory"
+
+    def test_create_with_class_from_config(self) -> None:
+        """create() detects and calls from_config on class factories."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("fc", FromConfigHandler)
+
+        result = registry.create("fc", {"y": 2}, extra="val")
+        assert result.config == {"y": 2}
+        assert result.extra == {"extra": "val"}  # type: ignore[attr-defined]
+
+    def test_create_with_class_no_from_config(self) -> None:
+        """create() calls class(config, **kwargs) when no from_config."""
+        registry = PluginRegistry[PlainClassHandler]("test")
+        registry.register("plain", PlainClassHandler)
+
+        result = registry.create("plain", {"z": 3}, flag=True)
+        assert result.config == {"z": 3}
+        assert result.kwargs == {"flag": True}
+
+    def test_create_never_caches(self) -> None:
+        """Two create() calls return different instances."""
+        registry = PluginRegistry[PlainClassHandler]("test")
+        registry.register("h", PlainClassHandler)
+
+        a = registry.create("h", {"v": 1})
+        b = registry.create("h", {"v": 1})
+        assert a is not b
+
+    def test_create_does_not_pollute_get_cache(self) -> None:
+        """create() does not write to the instance cache."""
+        registry = PluginRegistry[PlainClassHandler]("test")
+        registry.register("h", PlainClassHandler)
+
+        # create() should not populate the cache
+        registry.create("h", {"a": 1})
+        assert "h" not in registry.cached_instances
+
+        # Multiple creates don't accumulate cache entries
+        registry.create("h", {"b": 2})
+        assert len(registry.cached_instances) == 0
+
+    def test_create_not_found(self) -> None:
+        """create() raises NotFoundError for unregistered key."""
+        registry = PluginRegistry[BaseHandler]("test")
+
+        with pytest.raises(NotFoundError):
+            registry.create("missing", {})
+
+    def test_create_no_default_fallback(self) -> None:
+        """create() does not use default_factory."""
+        registry = PluginRegistry[BaseHandler](
+            "test", default_factory=BaseHandler
+        )
+
+        with pytest.raises(NotFoundError):
+            registry.create("missing", {})
+
+    def test_create_validates_type(self) -> None:
+        """create() validates against validate_type."""
+        registry = PluginRegistry[BaseHandler](
+            "test", validate_type=BaseHandler
+        )
+        registry.register("bad", lambda cfg, **kw: "not a handler")  # type: ignore[arg-type]
+
+        with pytest.raises(OperationError, match="BaseHandler"):
+            registry.create("bad", {})
+
+    def test_create_factory_error_wrapped(self) -> None:
+        """Factory exceptions are wrapped in OperationError."""
+        def bad_factory(config: Dict[str, Any], **kwargs: Any) -> BaseHandler:
+            raise RuntimeError("boom")
+
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("bad", bad_factory)
+
+        with pytest.raises(OperationError, match="boom"):
+            registry.create("bad", {})
+
+    def test_create_with_kwargs(self) -> None:
+        """**kwargs are forwarded to the factory."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", config_factory)
+
+        result = registry.create("h", {"a": 1}, kb="test_kb")
+        assert result.kwargs == {"kb": "test_kb"}  # type: ignore[attr-defined]
+
+    def test_create_config_defaults_to_empty_dict(self) -> None:
+        """config=None becomes {} when passed to factory."""
+        received: Dict[str, Any] = {}
+
+        def tracking(config: Dict[str, Any], **kwargs: Any) -> BaseHandler:
+            received["config"] = config
+            return BaseHandler("t", config)
+
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", tracking)
+
+        registry.create("h")
+        assert received["config"] == {}
+
+
+class TestPluginRegistryConfigKey:
+    """Test config_key, config_key_default, and strip_config_key."""
+
+    def test_create_extracts_key_from_config(self) -> None:
+        """config_key field used as lookup key."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="strategy"
+        )
+        registry.register("simple", PlainClassHandler)
+
+        result = registry.create(config={"strategy": "simple", "val": 1})
+        assert result.config == {"strategy": "simple", "val": 1}
+
+    def test_create_uses_config_key_default(self) -> None:
+        """Fallback when field absent from config."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="strategy", config_key_default="simple"
+        )
+        registry.register("simple", PlainClassHandler)
+
+        result = registry.create(config={"val": 1})
+        assert result.config == {"val": 1}
+
+    def test_create_explicit_key_overrides_config_key(self) -> None:
+        """Explicit key takes precedence over config_key extraction."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="strategy"
+        )
+        registry.register("explicit", PlainClassHandler)
+
+        result = registry.create(
+            "explicit", config={"strategy": "other", "val": 1}
+        )
+        assert result.config == {"strategy": "other", "val": 1}
+
+    def test_create_no_config_key_requires_explicit_key(self) -> None:
+        """ValueError when key is None and config_key not configured."""
+        registry = PluginRegistry[BaseHandler]("test")
+
+        with pytest.raises(ValueError, match="config_key is not configured"):
+            registry.create(config={"x": 1})
+
+    def test_create_no_key_no_default_no_field(self) -> None:
+        """ValueError when config lacks field and no default."""
+        registry = PluginRegistry[BaseHandler](
+            "test", config_key="strategy"
+        )
+
+        with pytest.raises(ValueError, match="config must contain"):
+            registry.create(config={"val": 1})
+
+    def test_config_key_with_canonicalize(self) -> None:
+        """Extracted key is canonicalized."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="strategy", canonicalize_keys=True
+        )
+        registry.register("simple", PlainClassHandler)
+
+        result = registry.create(config={"strategy": "SIMPLE", "v": 1})
+        assert result.config == {"strategy": "SIMPLE", "v": 1}
+
+    def test_strip_config_key_removes_routing_field(self) -> None:
+        """Factory receives config without the key field."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="backend", strip_config_key=True
+        )
+        registry.register("mem", PlainClassHandler)
+
+        result = registry.create(config={"backend": "mem", "size": 100})
+        assert result.config == {"size": 100}
+        assert "backend" not in result.config
+
+    def test_strip_config_key_preserves_other_fields(self) -> None:
+        """Non-key fields are passed through unchanged."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="backend", strip_config_key=True
+        )
+        registry.register("pg", PlainClassHandler)
+
+        result = registry.create(
+            config={"backend": "pg", "host": "localhost", "port": 5432}
+        )
+        assert result.config == {"host": "localhost", "port": 5432}
+
+    def test_strip_config_key_no_effect_with_explicit_key(self) -> None:
+        """Stripping only applies when key extracted from config."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", config_key="backend", strip_config_key=True
+        )
+        registry.register("mem", PlainClassHandler)
+
+        # Explicit key — config passed through unchanged
+        result = registry.create(
+            "mem", config={"backend": "mem", "size": 100}
+        )
+        assert result.config == {"backend": "mem", "size": 100}
+
+
+class TestPluginRegistryCanonicalizeKeys:
+    """Test canonicalize_keys parameter."""
+
+    def test_register_and_get_case_insensitive(self) -> None:
+        """'Foo' and 'foo' resolve to same registration."""
+        registry = PluginRegistry[BaseHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("Foo", CustomHandler)
+
+        h = registry.get("foo", config={})
+        assert isinstance(h, CustomHandler)
+
+        h2 = registry.get("FOO", config={})
+        assert h is h2  # Same cached instance
+
+    def test_is_registered_case_insensitive(self) -> None:
+        """is_registered ignores case."""
+        registry = PluginRegistry[BaseHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("MyPlugin", CustomHandler)
+
+        assert registry.is_registered("myplugin")
+        assert registry.is_registered("MYPLUGIN")
+        assert registry.is_registered("MyPlugin")
+
+    def test_get_factory_case_insensitive(self) -> None:
+        """get_factory ignores case."""
+        registry = PluginRegistry[BaseHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("Handler", CustomHandler)
+
+        assert registry.get_factory("handler") is CustomHandler
+        assert registry.get_factory("HANDLER") is CustomHandler
+
+    def test_unregister_case_insensitive(self) -> None:
+        """unregister ignores case."""
+        registry = PluginRegistry[BaseHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("Plugin", CustomHandler)
+
+        registry.unregister("PLUGIN")
+        assert not registry.is_registered("plugin")
+
+    def test_list_keys_returns_canonical(self) -> None:
+        """All keys stored in lowercase."""
+        registry = PluginRegistry[BaseHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("Alpha", CustomHandler)
+        registry.register("BETA", AnotherHandler)
+
+        keys = registry.list_keys()
+        assert set(keys) == {"alpha", "beta"}
+
+    def test_create_case_insensitive(self) -> None:
+        """create() ignores case."""
+        registry = PluginRegistry[PlainClassHandler](
+            "test", canonicalize_keys=True
+        )
+        registry.register("handler", PlainClassHandler)
+
+        result = registry.create("HANDLER", {"v": 1})
+        assert result.config == {"v": 1}
+
+    def test_canonicalize_off_by_default(self) -> None:
+        """Default preserves case — 'Foo' and 'foo' are different."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("Foo", CustomHandler)
+
+        assert registry.is_registered("Foo")
+        assert not registry.is_registered("foo")
+
+
+class TestPluginRegistryLazyInit:
+    """Test on_first_access callback."""
+
+    def test_on_first_access_called_once(self) -> None:
+        """Callback runs on first access only."""
+        calls: list[int] = []
+
+        def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
+            calls.append(1)
+            reg.register("auto", CustomHandler)
+
+        registry = PluginRegistry[BaseHandler](
+            "test", on_first_access=init_cb
+        )
+
+        assert len(calls) == 0
+        assert registry.is_registered("auto")
+        assert len(calls) == 1
+        # Second access — no re-invocation
+        registry.list_keys()
+        assert len(calls) == 1
+
+    def test_on_first_access_not_called_without_config(self) -> None:
+        """No overhead when on_first_access is None."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", CustomHandler)
+
+        # Should work without any initialization callback
+        assert registry.is_registered("h")
+
+    def test_callback_can_register(self) -> None:
+        """Callback calls register() without deadlock (re-entrant)."""
+        def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
+            reg.register("a", CustomHandler)
+            reg.register("b", AnotherHandler)
+
+        registry = PluginRegistry[BaseHandler](
+            "test", on_first_access=init_cb
+        )
+
+        keys = registry.list_keys()
+        assert "a" in keys
+        assert "b" in keys
+
+    def test_callback_failure_allows_retry(self) -> None:
+        """_initialized rolled back on exception; next call retries."""
+        attempt = [0]
+
+        def flaky_init(reg: PluginRegistry[BaseHandler]) -> None:
+            attempt[0] += 1
+            if attempt[0] == 1:
+                raise RuntimeError("first attempt fails")
+            reg.register("h", CustomHandler)
+
+        registry = PluginRegistry[BaseHandler](
+            "test", on_first_access=flaky_init
+        )
+
+        # First access fails
+        with pytest.raises(RuntimeError, match="first attempt fails"):
+            registry.list_keys()
+
+        # Second access retries and succeeds
+        keys = registry.list_keys()
+        assert "h" in keys
+        assert attempt[0] == 2
+
+    def test_callback_receives_registry(self) -> None:
+        """Registry instance is passed to callback."""
+        received: list[Any] = []
+
+        def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
+            received.append(reg)
+
+        registry = PluginRegistry[BaseHandler](
+            "test", on_first_access=init_cb
+        )
+
+        registry.list_keys()
+        assert received[0] is registry
+
+    def test_ensure_initialized_idempotent(self) -> None:
+        """Multiple accesses produce single invocation."""
+        calls: list[int] = []
+
+        def init_cb(reg: PluginRegistry[BaseHandler]) -> None:
+            calls.append(1)
+
+        registry = PluginRegistry[BaseHandler](
+            "test", on_first_access=init_cb
+        )
+
+        registry.list_keys()
+        registry.is_registered("x")
+        registry.get_factory("x")
+        _ = len(registry)
+        assert len(calls) == 1
+
+
+class TestPluginRegistryMetadata:
+    """Test metadata support on register() and get_metadata()."""
+
+    def test_register_with_metadata(self) -> None:
+        """Metadata stored and retrievable."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", CustomHandler, metadata={
+            "description": "Custom handler",
+            "version": "1.0",
+        })
+
+        meta = registry.get_metadata("h")
+        assert meta == {"description": "Custom handler", "version": "1.0"}
+
+    def test_get_metadata_returns_copy(self) -> None:
+        """Returned dict is a copy, not a reference."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", CustomHandler, metadata={"key": "val"})
+
+        meta1 = registry.get_metadata("h")
+        meta1["key"] = "modified"
+
+        meta2 = registry.get_metadata("h")
+        assert meta2["key"] == "val"
+
+    def test_get_metadata_missing_key(self) -> None:
+        """Returns empty dict for unregistered key."""
+        registry = PluginRegistry[BaseHandler]("test")
+
+        assert registry.get_metadata("missing") == {}
+
+    def test_get_metadata_no_metadata(self) -> None:
+        """Returns empty dict when registered without metadata."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", CustomHandler)
+
+        assert registry.get_metadata("h") == {}
+
+    def test_unregister_clears_metadata(self) -> None:
+        """Metadata removed on unregister."""
+        registry = PluginRegistry[BaseHandler]("test")
+        registry.register("h", CustomHandler, metadata={"key": "val"})
+
+        registry.unregister("h")
+        assert registry.get_metadata("h") == {}
