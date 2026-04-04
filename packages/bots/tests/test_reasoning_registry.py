@@ -22,6 +22,7 @@ from dataknobs_bots.reasoning import (
     create_reasoning_from_config,
     get_registry,
     get_strategy_factory,
+    is_strategy_registered,
     list_strategies,
     register_strategy,
 )
@@ -69,7 +70,8 @@ class _CustomStrategy(ReasoningStrategy):
 def fresh_registry() -> StrategyRegistry:
     """Return a fresh registry with builtins pre-loaded."""
     registry = StrategyRegistry()
-    registry._ensure_builtins()
+    # Trigger lazy builtin registration via a public API call.
+    registry.list_keys()
     return registry
 
 
@@ -221,14 +223,23 @@ class TestCapabilities:
 class TestFromConfig:
     """from_config classmethods create strategies correctly."""
 
-    def test_simple_from_config(self) -> None:
+    @pytest.mark.asyncio()
+    async def test_simple_from_config(self) -> None:
+        from dataknobs_bots.testing import StubManager
+
         strategy = SimpleReasoning.from_config(
             {"greeting_template": "Hello!"},
         )
         assert isinstance(strategy, SimpleReasoning)
-        assert strategy._greeting_template == "Hello!"
+        # Verify greeting_template via greet() behavior
+        result = await strategy.greet(StubManager(), None)
+        assert result is not None
+        assert result.content == "Hello!"
 
-    def test_react_from_config(self) -> None:
+    @pytest.mark.asyncio()
+    async def test_react_from_config(self) -> None:
+        from dataknobs_bots.testing import StubManager
+
         strategy = ReActReasoning.from_config({
             "max_iterations": 10,
             "verbose": True,
@@ -239,13 +250,67 @@ class TestFromConfig:
         assert strategy.max_iterations == 10
         assert strategy.verbose is True
         assert strategy.store_trace is True
-        assert strategy._greeting_template == "Hi"
+        # Verify greeting_template via greet() behavior
+        result = await strategy.greet(StubManager(), None)
+        assert result is not None
+        assert result.content == "Hi"
 
     def test_react_from_config_defaults(self) -> None:
         strategy = ReActReasoning.from_config({})
         assert strategy.max_iterations == 5
         assert strategy.verbose is False
         assert strategy.store_trace is False
+
+    def test_grounded_from_config_minimal(self) -> None:
+        config: dict[str, Any] = {
+            "strategy": "grounded",
+            "intent": {"mode": "static", "text_queries": ["test"]},
+        }
+        strategy = GroundedReasoning.from_config(config)
+        assert isinstance(strategy, GroundedReasoning)
+
+    def test_grounded_from_config_with_kb(self) -> None:
+        """KB is auto-wrapped when no vector_kb source is declared."""
+        config: dict[str, Any] = {
+            "strategy": "grounded",
+            "intent": {"mode": "static", "text_queries": ["test"]},
+        }
+        kb = object()  # Dummy — from_config only stores, doesn't call
+        strategy = GroundedReasoning.from_config(config, knowledge_base=kb)
+        assert isinstance(strategy, GroundedReasoning)
+
+    def test_grounded_from_config_skips_kb_when_vector_source_declared(self) -> None:
+        """KB auto-wrap is skipped when config already has a vector_kb source."""
+        config: dict[str, Any] = {
+            "strategy": "grounded",
+            "intent": {"mode": "static", "text_queries": ["test"]},
+            "sources": [{"type": "vector_kb", "name": "kb"}],
+        }
+        kb = object()
+        # Should not call set_knowledge_base — the source is declared
+        strategy = GroundedReasoning.from_config(config, knowledge_base=kb)
+        assert isinstance(strategy, GroundedReasoning)
+
+    def test_hybrid_from_config_minimal(self) -> None:
+        config: dict[str, Any] = {
+            "strategy": "hybrid",
+            "grounded": {
+                "intent": {"mode": "static", "text_queries": ["test"]},
+            },
+        }
+        strategy = HybridReasoning.from_config(config)
+        assert isinstance(strategy, HybridReasoning)
+
+    def test_hybrid_from_config_with_kb(self) -> None:
+        config: dict[str, Any] = {
+            "strategy": "hybrid",
+            "grounded": {
+                "intent": {"mode": "static", "text_queries": ["test"]},
+            },
+        }
+        kb = object()
+        strategy = HybridReasoning.from_config(config, knowledge_base=kb)
+        assert isinstance(strategy, HybridReasoning)
 
 
 # ------------------------------------------------------------------
@@ -334,6 +399,10 @@ class TestPublicAPI:
     def test_get_strategy_factory_missing(self) -> None:
         assert get_strategy_factory("nonexistent") is None
 
+    def test_is_strategy_registered(self) -> None:
+        assert is_strategy_registered("simple") is True
+        assert is_strategy_registered("nonexistent") is False
+
     def test_get_registry(self) -> None:
         registry = get_registry()
         assert isinstance(registry, StrategyRegistry)
@@ -357,7 +426,6 @@ class TestThirdPartyEndToEnd:
         import dataknobs_bots.reasoning.registry as reg_module
 
         fresh = StrategyRegistry()
-        fresh._ensure_builtins()
         fresh.register("test_custom", _CustomStrategy)
         monkeypatch.setattr(reg_module, "_registry", fresh)
 

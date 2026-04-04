@@ -6,7 +6,8 @@ strategies are registered lazily at first access.
 
 Usage::
 
-    from dataknobs_bots.reasoning.registry import register_strategy
+    from dataknobs_bots import register_strategy
+    from dataknobs_bots.reasoning import create_reasoning_from_config
 
     # Register a custom strategy
     register_strategy("my_strategy", MyStrategy)
@@ -41,6 +42,10 @@ class StrategyRegistry:
     Unlike ``PluginRegistry`` (which caches singleton instances and has
     a ``(key, config)`` factory signature), ``StrategyRegistry`` creates
     a fresh instance per call — strategies are per-bot, not singletons.
+
+    When ``PluginRegistry`` gains a ``create()`` method for fresh-instance
+    factory invocation (consumer-gaps plan Item 65), this class should
+    be migrated to use it as its backing store.
     """
 
     def __init__(self) -> None:
@@ -53,8 +58,15 @@ class StrategyRegistry:
         with self._lock:
             if self._initialized:
                 return
+            # Set flag before calling _register_builtins to prevent
+            # re-entry (register() calls _ensure_builtins internally).
+            # Reset on failure so a subsequent call can retry.
             self._initialized = True
-            _register_builtins(self)
+            try:
+                _register_builtins(self)
+            except Exception:
+                self._initialized = False
+                raise
 
     def register(
         self,

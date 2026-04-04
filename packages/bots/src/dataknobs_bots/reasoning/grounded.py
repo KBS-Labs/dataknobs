@@ -250,6 +250,11 @@ class GroundedReasoning(ReasoningStrategy):
         """
         grounded_config = GroundedReasoningConfig.from_dict(config)
         strategy = cls(config=grounded_config)
+        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but
+        # only when the config doesn't already declare a vector_kb
+        # source.  Otherwise the same KB gets wrapped twice: once
+        # here, and once by the source construction loop in
+        # DynaBot.from_config (bot/base.py).
         knowledge_base = kwargs.get("knowledge_base")
         has_vector_kb_source = any(
             s.source_type == "vector_kb" for s in grounded_config.sources

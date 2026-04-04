@@ -99,6 +99,9 @@ class HybridReasoning(ReasoningStrategy):
         """
         hybrid_config = HybridReasoningConfig.from_dict(config)
         strategy = cls(config=hybrid_config)
+        # Auto-wrap knowledge_base — same guard as GroundedReasoning.
+        # Check the grounded child's sources to avoid double-wrapping
+        # when the config already declares a vector_kb source.
         knowledge_base = kwargs.get("knowledge_base")
         has_vector_kb_source = any(
             s.source_type == "vector_kb"

@@ -263,8 +263,9 @@ class ReasoningStrategy(ABC):
             NotImplementedError: If not overridden by a subclass.
         """
         raise NotImplementedError(
-            f"{type(self).__name__} declares manages_sources=True "
-            f"but does not implement add_source()"
+            f"{type(self).__name__} does not implement add_source(). "
+            f"Strategies that declare manages_sources=True in "
+            f"capabilities() must override this method."
         )
 
     def providers(self) -> dict[str, Any]:
@@ -316,10 +317,23 @@ class ReasoningStrategy(ABC):
     ) -> Any:
         """Generate response using this reasoning strategy.
 
+        Pass ``tools`` through to ``manager.complete(tools=tools)`` so
+        the LLM can see available tools.  If the returned response
+        contains ``tool_calls``, ``DynaBot`` will execute them
+        automatically in a post-strategy loop — strategies do not need
+        to handle tool execution unless they want full control (like
+        ``ReActReasoning``).
+
+        Strategies that execute tools internally should record them via
+        ``self._tool_executions.append(ToolExecution(...))`` and
+        consume ``tool_calls`` before returning, so the DynaBot loop
+        is a no-op.
+
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
-            tools: Optional list of available tools
+            tools: Optional list of available tools.  Forward to
+                ``manager.complete(tools=tools)`` for LLM visibility.
             **kwargs: Additional generation parameters (temperature, max_tokens, etc.)
 
         Returns:

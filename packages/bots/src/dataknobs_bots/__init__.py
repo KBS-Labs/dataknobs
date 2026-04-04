@@ -35,7 +35,10 @@ from .reasoning import (
     ReActReasoning,
     ReasoningStrategy,
     SimpleReasoning,
+    StrategyCapabilities,
+    StrategyRegistry,
     create_reasoning_from_config,
+    register_strategy,
 )
 from .testing import BotTestHarness, CaptureReplay, TurnResult, WizardConfigBuilder, inject_providers
 from .tools import (
@@ -95,6 +98,8 @@ __all__ = [
     "RemoveKBResourceTool",
     "SaveConfigTool",
     "SimpleReasoning",
+    "StrategyCapabilities",
+    "StrategyRegistry",
     "SummaryMemory",
     "TemplateVariable",
     "UndoResult",
@@ -111,4 +116,5 @@ __all__ = [
     "default_catalog",
     "inject_providers",
     "normalize_wizard_state",
+    "register_strategy",
 ]

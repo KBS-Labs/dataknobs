@@ -564,7 +564,6 @@ class DynaBot:
             # manage their own sources (grounded, hybrid, or any custom
             # strategy declaring manages_sources=True).
             strategy_caps = reasoning_strategy.capabilities()
-            strategy_name = reasoning_config.get("strategy", "").lower()
 
             # Each strategy knows where its source configs live via
             # get_source_configs() — no hardcoded name checks needed.
@@ -596,9 +595,9 @@ class DynaBot:
             ):
                 kb_auto_context = False
                 logger.info(
-                    "%s strategy: auto_context disabled "
+                    "%s: auto_context disabled "
                     "(retrieval is structural).",
-                    strategy_name.title(),
+                    type(reasoning_strategy).__name__,
                 )
 
         # Create middleware

@@ -32,7 +32,13 @@ class SummarizeReasoning(ReasoningStrategy):
         super().__init__(greeting_template=greeting_template)
         self.max_summary_tokens = max_summary_tokens
 
-    async def generate(self, manager, llm, tools=None, **kwargs):
+    async def generate(
+        self,
+        manager: Any,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         # Inject a summarization instruction into the system prompt
         messages = manager.get_messages()
         instruction = (
@@ -41,6 +47,7 @@ class SummarizeReasoning(ReasoningStrategy):
         )
         return await manager.complete(
             system_prompt_override=instruction,
+            tools=tools,
             **kwargs,
         )
 ```
@@ -51,6 +58,21 @@ The only required method is `generate()`. It receives:
 - **`llm`** — the bot's main LLM provider instance
 - **`tools`** — list of registered tools (may be `None`)
 - **`**kwargs`** — generation parameters (`temperature`, `max_tokens`, etc.)
+
+**Tool execution:** Pass `tools=tools` to `manager.complete()` so the
+LLM can see available tools. If the LLM returns `tool_calls` in its
+response, DynaBot automatically executes them and re-calls the LLM —
+your strategy does not need to handle tool execution itself. This
+fallback loop runs after `generate()` returns, with configurable
+iteration limits and timeouts (`max_tool_iterations`,
+`tool_loop_timeout`).
+
+Strategies that handle tool execution internally (like ReAct, which
+runs its own reason-act loop) should consume the `tool_calls` before
+returning, so DynaBot's fallback loop sees no pending calls and
+becomes a no-op. Record any tool executions via
+`self._tool_executions.append(ToolExecution(...))` so DynaBot can
+fire `on_tool_executed` middleware hooks.
 
 ### Step 2: Override `from_config`
 
@@ -157,8 +179,14 @@ def add_source(self, source) -> None:
 The default `stream_generate()` wraps `generate()` and yields the complete response as a single chunk. Override for true streaming:
 
 ```python
-async def stream_generate(self, manager, llm, tools=None, **kwargs):
-    async for chunk in manager.stream_complete(**kwargs):
+async def stream_generate(
+    self,
+    manager: Any,
+    llm: Any,
+    tools: list[Any] | None = None,
+    **kwargs: Any,
+) -> AsyncIterator[Any]:
+    async for chunk in manager.stream_complete(tools=tools, **kwargs):
         yield chunk
 ```
 
@@ -167,7 +195,14 @@ async def stream_generate(self, manager, llm, tools=None, **kwargs):
 The default renders `greeting_template` via Jinja2. Override for dynamic greetings:
 
 ```python
-async def greet(self, manager, llm, *, initial_context=None, **kwargs):
+async def greet(
+    self,
+    manager: Any,
+    llm: Any,
+    *,
+    initial_context: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Any | None:
     # Generate a greeting using the LLM
     await manager.add_message(role="user", content="Greet the user briefly.")
     return await manager.complete(**kwargs)
@@ -245,7 +280,6 @@ def _register(monkeypatch):
     from dataknobs_bots.reasoning.registry import StrategyRegistry
 
     fresh = StrategyRegistry()
-    fresh._ensure_builtins()
     fresh.register("summarize", SummarizeReasoning)
     monkeypatch.setattr(reg_module, "_registry", fresh)
 
@@ -310,7 +344,13 @@ class SentimentReasoning(ReasoningStrategy):
             neutral_prompt=config.get("neutral_prompt", "Respond naturally."),
         )
 
-    async def generate(self, manager, llm, tools=None, **kwargs):
+    async def generate(
+        self,
+        manager: Any,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         messages = manager.get_messages()
         last_user_msg = next(
             (m["content"] for m in reversed(messages) if m["role"] == "user"),

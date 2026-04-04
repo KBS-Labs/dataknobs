@@ -54,7 +54,7 @@ class ReActReasoning(ReasoningStrategy):
     """
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> ReActReasoning:
+    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> ReActReasoning:  # type: ignore[override]
         """Create ReActReasoning from a configuration dict.
 
         Args:
