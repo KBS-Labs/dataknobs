@@ -7,7 +7,7 @@ name = "dataknobs-config"
 version = "0.3.8"
 description = "Modular configuration system with composable settings and environment variable overrides"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "KBS Labs", email = "info@kbs-labs.com"}

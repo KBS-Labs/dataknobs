@@ -9,9 +9,7 @@ import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
-from typing import Any, List, TextIO, Tuple, Union
-
-from typing_extensions import Self
+from typing import Any, List, Self, TextIO, Tuple, Union
 
 import bs4
 import pandas as pd

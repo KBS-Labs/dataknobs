@@ -10,9 +10,7 @@ from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import (
