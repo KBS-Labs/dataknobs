@@ -2468,23 +2468,32 @@ else:
     pass
 ```
 
-**ReAct-Style Tool Reasoning:**
+**Per-State Strategy Injection:**
 
-Enable multi-tool ReAct loops within wizard stages. When a stage has tools and is
-configured for ReAct reasoning, the LLM can make multiple sequential tool calls within
-a single wizard turn, reasoning about results before responding.
+Wizard stages can use any registered reasoning strategy — not just the built-in
+`single` (direct LLM call) and `react` (tool loop). Any strategy registered in
+the strategy registry (including custom strategies) can be referenced by name.
 
 ```yaml
 # wizard.yaml
 name: configbot
 settings:
-  tool_reasoning: single       # Default for all stages: "single" or "react"
+  tool_reasoning: single       # Default for all stages
   max_tool_iterations: 3       # Default max tool-calling iterations
 
 stages:
+  - name: research
+    prompt: "Let me look that up for you"
+    reasoning: grounded        # Use grounded retrieval for this stage
+    reasoning_config:          # Strategy-specific config
+      intent: { mode: extract, num_queries: 3 }
+      retrieval: { top_k: 5 }
+    transitions:
+      - target: review
+
   - name: review
     prompt: "Let's review your configuration"
-    reasoning: react           # Override: use ReAct loop for this stage
+    reasoning: react           # Use ReAct loop for this stage
     max_iterations: 5          # Override: allow up to 5 tool calls
     tools: [preview_config, validate_config]
     transitions:
@@ -2497,6 +2506,21 @@ stages:
     transitions:
       - target: review
 ```
+
+The `reasoning` field accepts any registered strategy name. Built-in options:
+
+| Value | Behavior |
+|-------|----------|
+| `single` (default) | Direct `manager.complete()` call — fast, one LLM round-trip |
+| `react` | ReAct reason-act loop with tool calls |
+| `grounded` | Deterministic multi-source KB retrieval + synthesis |
+| `hybrid` | Grounded retrieval + ReAct tool loop |
+| `simple` | Routes through `SimpleReasoning.generate()` (functionally equivalent to `single`) |
+| *custom name* | Any strategy registered via `register_strategy()` |
+
+The optional `reasoning_config` dict is forwarded to the strategy's `from_config()`.
+This lets you pass strategy-specific parameters (e.g. grounded retrieval settings,
+custom strategy options) at the stage level.
 
 **ReAct Behavior:**
 
@@ -2522,19 +2546,27 @@ LLM responds: "Here's your config preview: ... Validation passed!"
 
 | Setting | Level | Description |
 |---------|-------|-------------|
-| `tool_reasoning` | wizard settings | Default reasoning mode: "single" (one LLM call) or "react" (loop) |
-| `max_tool_iterations` | wizard settings | Default max iterations for react mode |
-| `store_trace` | wizard settings / stage | Store reasoning trace in conversation metadata (for capture/replay and debugging). Per-stage value overrides wizard-level. Default: `false` |
-| `verbose` | wizard settings / stage | Enable debug-level logging for ReAct iterations. Per-stage value overrides wizard-level. Default: `false` |
-| `reasoning` | stage | Per-stage override: "single" or "react" |
+| `tool_reasoning` | wizard settings | Default strategy for all stages: `"single"` or any registered strategy name |
+| `max_tool_iterations` | wizard settings | Default max iterations for strategies that support iteration |
+| `store_trace` | wizard settings / stage | Store reasoning trace in conversation metadata. Per-stage value overrides wizard-level. Default: `false` |
+| `verbose` | wizard settings / stage | Enable debug-level logging. Per-stage value overrides wizard-level. Default: `false` |
+| `reasoning` | stage | Per-stage strategy: `"single"` or any registered strategy name |
+| `reasoning_config` | stage | Strategy-specific config dict (forwarded to `from_config()`) |
 | `max_iterations` | stage | Per-stage max iterations override |
 
-**When to Use ReAct:**
+**Strategy name validation:** Unknown strategy names produce a warning at wizard
+construction time (not a hard error), catching typos early.
+
+**When to Use Each Strategy:**
 
 Use `reasoning: react` for stages where:
 - Multiple tools may need to be called together
 - Tool results inform subsequent tool calls
 - You want the LLM to reason about tool outputs before responding
+
+Use `reasoning: grounded` for stages where:
+- Responses must be grounded in KB content
+- You need deterministic retrieval (not LLM-decided)
 
 Keep `reasoning: single` (default) for:
 - Data collection stages without tools

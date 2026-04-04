@@ -1,7 +1,7 @@
-"""Tests for Wizard + ReAct composition (Phase 4).
+"""Tests for Wizard + strategy composition (Phase 4).
 
-This module tests the ReAct-style tool iteration within wizard stages,
-enabling the LLM to make multiple tool calls within a single wizard turn.
+This module tests per-state strategy injection in wizard stages,
+including ReAct-style tool iteration within a single wizard turn.
 """
 
 import logging
@@ -163,35 +163,40 @@ def validate_tool() -> ValidateConfigTool:
 # -----------------------------------------------------------------------------
 
 
-class TestUseReactForStage:
-    """Tests for _use_react_for_stage method."""
+class TestResolveStageStrategy:
+    """Tests for _resolve_stage_strategy method."""
 
-    def test_stage_with_react_reasoning_uses_react(
+    def test_stage_with_react_reasoning_resolves_react(
         self, react_wizard_config: dict[str, Any]
     ) -> None:
-        """Stage with reasoning: react uses ReAct."""
+        """Stage with reasoning: react resolves to a ReActReasoning."""
+        from dataknobs_bots.reasoning.react import ReActReasoning
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
         stage = {"name": "review", "reasoning": "react"}
-        assert reasoning._use_react_for_stage(stage) is True
+        strategy = reasoning._resolve_stage_strategy(stage)
+        assert isinstance(strategy, ReActReasoning)
 
-    def test_stage_with_single_reasoning_uses_single(
+    def test_stage_with_single_reasoning_resolves_none(
         self, react_wizard_config: dict[str, Any]
     ) -> None:
-        """Stage with reasoning: single uses single call."""
+        """Stage with reasoning: single resolves to None (direct call)."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
         stage = {"name": "welcome", "reasoning": "single"}
-        assert reasoning._use_react_for_stage(stage) is False
+        assert reasoning._resolve_stage_strategy(stage) is None
 
     def test_default_tool_reasoning_applied_when_no_stage_setting(
         self, default_react_wizard_config: dict[str, Any]
     ) -> None:
         """Default tool_reasoning setting applies when stage doesn't specify."""
+        from dataknobs_bots.reasoning.react import ReActReasoning
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(default_react_wizard_config)
         reasoning = WizardReasoning(
@@ -200,20 +205,29 @@ class TestUseReactForStage:
         )
 
         stage = {"name": "review"}  # No explicit reasoning
-        assert reasoning._use_react_for_stage(stage) is True
+        strategy = reasoning._resolve_stage_strategy(stage)
+        assert isinstance(strategy, ReActReasoning)
 
     def test_case_insensitive_reasoning_value(
         self, react_wizard_config: dict[str, Any]
     ) -> None:
         """Reasoning value is case-insensitive."""
+        from dataknobs_bots.reasoning.react import ReActReasoning
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
-        assert reasoning._use_react_for_stage({"reasoning": "REACT"}) is True
-        assert reasoning._use_react_for_stage({"reasoning": "React"}) is True
-        assert reasoning._use_react_for_stage({"reasoning": "Single"}) is False
-        assert reasoning._use_react_for_stage({"reasoning": "SINGLE"}) is False
+        assert isinstance(
+            reasoning._resolve_stage_strategy({"reasoning": "REACT"}),
+            ReActReasoning,
+        )
+        assert isinstance(
+            reasoning._resolve_stage_strategy({"reasoning": "React"}),
+            ReActReasoning,
+        )
+        assert reasoning._resolve_stage_strategy({"reasoning": "Single"}) is None
+        assert reasoning._resolve_stage_strategy({"reasoning": "SINGLE"}) is None
 
 
 # -----------------------------------------------------------------------------
@@ -272,8 +286,23 @@ class TestGetMaxIterations:
 # -----------------------------------------------------------------------------
 
 
-class TestReactStageResponse:
-    """Tests for _react_stage_response method (full ReAct loop)."""
+class TestStrategyStageResponse:
+    """Tests for _strategy_stage_response method (full ReAct loop via registry)."""
+
+    async def _run_strategy_response(
+        self,
+        reasoning: WizardReasoning,
+        manager: Any,
+        stage: dict[str, Any],
+        tools: list[Any],
+    ) -> Any:
+        """Helper: resolve strategy and delegate to _strategy_stage_response."""
+        strategy = reasoning._resolve_stage_strategy(stage)
+        assert strategy is not None, "Expected a non-single strategy"
+        state = WizardState(current_stage=stage.get("name", "test"), data={})
+        return await reasoning._strategy_stage_response(
+            strategy, manager, "Test prompt", stage, state, tools,
+        )
 
     @pytest.mark.asyncio
     async def test_react_loop_no_tool_calls_returns_immediately(
@@ -288,24 +317,20 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Show me the config")
 
-        # Script the provider to return a text response (no tool calls)
         provider.set_responses([
             text_response("Here's your config summary.")
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
-
-        response = await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
+        response = await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
         assert response.content == "Here's your config summary."
-        assert preview_tool.call_count == 0  # Tool was not called
+        assert preview_tool.call_count == 0
 
     @pytest.mark.asyncio
     async def test_react_loop_executes_tool_and_returns_final_response(
@@ -320,21 +345,17 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
-        # Script responses: first a tool call, then a text response
         provider.set_responses([
             tool_call_response("preview_config", {"format": "yaml"}),
             text_response("I've previewed your config. It looks good!"),
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
-
-        response = await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
+        response = await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
         assert preview_tool.call_count == 1
@@ -354,22 +375,18 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
-        await manager.add_message(role="user", content="Preview and validate the config")
+        await manager.add_message(role="user", content="Preview and validate")
 
-        # Script responses: preview, validate, then text
         provider.set_responses([
             tool_call_response("preview_config", {}),
             tool_call_response("validate_config", {}),
             text_response("Config previewed and validated!"),
         ])
 
-        stage = {"name": "review", "max_iterations": 5}
-        tools = [preview_tool, validate_tool]
-
-        response = await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 5}
+        response = await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool, validate_tool],
         )
 
         assert preview_tool.call_count == 1
@@ -389,25 +406,20 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview endlessly")
 
-        # Use *different* params each iteration to avoid duplicate detection
         provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 1
-            tool_call_response("preview_config", {"format": "json"}),  # Iteration 2 (max)
-            text_response("Final response after max iterations"),  # Forced
+            tool_call_response("preview_config", {"format": "yaml"}),
+            tool_call_response("preview_config", {"format": "json"}),
+            text_response("Final response after max iterations"),
         ])
 
-        stage = {"name": "review", "max_iterations": 2}
-        tools = [preview_tool]
-
-        response = await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 2}
+        response = await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
-        # Tool was called twice (once per iteration)
         assert preview_tool.call_count == 2
         assert response.content == "Final response after max iterations"
 
@@ -424,25 +436,20 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview config")
 
-        # Same tool + same params on two consecutive iterations
         provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 1
-            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 2 (dup)
-            text_response("Done after duplicate detection"),  # Post-loop
+            tool_call_response("preview_config", {"format": "yaml"}),
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Done after duplicate detection"),
         ])
 
-        stage = {"name": "review", "max_iterations": 5}
-        tools = [preview_tool]
-
-        response = await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 5}
+        response = await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
-        # Duplicate detection breaks after 1st execution; tool only called once
         assert preview_tool.call_count == 1
         assert response.content == "Done after duplicate detection"
 
@@ -453,19 +460,14 @@ class TestReactStageResponse:
         preview_tool: PreviewConfigTool,
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
-        """Wizard ReAct stage stores reasoning trace when store_trace enabled.
-
-        This ensures the harness tool_called check can see tool calls made
-        within wizard ReAct stages, not just top-level ReAct reasoning.
-        """
+        """Wizard ReAct stage stores reasoning trace when store_trace enabled."""
         manager, provider = conversation_manager_pair
 
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, default_store_trace=True
+            wizard_fsm=wizard_fsm, default_store_trace=True,
         )
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -474,19 +476,15 @@ class TestReactStageResponse:
             text_response("Here is the preview."),
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
-
-        await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
+        await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
-        # Verify reasoning trace is stored in conversation metadata
         trace = manager.metadata.get("reasoning_trace")
         assert trace is not None, "reasoning_trace not stored in metadata"
         assert len(trace) >= 1, "trace should have at least one iteration"
 
-        # Verify the tool call is recorded in the trace
         tool_names = [
             tc["name"]
             for step in trace
@@ -507,7 +505,6 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -516,14 +513,11 @@ class TestReactStageResponse:
             text_response("Here is the preview."),
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
-
-        await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
+        await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
-        # No trace stored by default
         trace = manager.metadata.get("reasoning_trace")
         assert trace is None
 
@@ -537,11 +531,9 @@ class TestReactStageResponse:
         """Per-stage store_trace overrides wizard-level setting."""
         manager, provider = conversation_manager_pair
 
-        # Wizard-level store_trace is OFF (default)
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -550,12 +542,12 @@ class TestReactStageResponse:
             text_response("Here is the preview."),
         ])
 
-        # Stage-level override enables trace
-        stage = {"name": "review", "max_iterations": 3, "store_trace": True}
-        tools = [preview_tool]
-
-        await reasoning._react_stage_response(
-            manager, "Test prompt", stage, state, tools
+        stage = {
+            "name": "review", "reasoning": "react",
+            "max_iterations": 3, "store_trace": True,
+        }
+        await self._run_strategy_response(
+            reasoning, manager, stage, [preview_tool],
         )
 
         trace = manager.metadata.get("reasoning_trace")
@@ -569,20 +561,14 @@ class TestReactStageResponse:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Wizard-level verbose setting is forwarded to ReAct stage.
-
-        When verbose=True, ReAct logs at DEBUG level instead of INFO.
-        We verify that DEBUG-level messages from the ReAct logger appear,
-        confirming the setting was forwarded.
-        """
+        """Wizard-level verbose setting is forwarded to ReAct stage."""
         manager, provider = conversation_manager_pair
 
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, default_verbose=True
+            wizard_fsm=wizard_fsm, default_verbose=True,
         )
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -591,17 +577,15 @@ class TestReactStageResponse:
             text_response("Done."),
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
-            response = await reasoning._react_stage_response(
-                manager, "Test prompt", stage, state, tools
+            response = await self._run_strategy_response(
+                reasoning, manager, stage, [preview_tool],
             )
 
         assert response is not None
-        # verbose=True causes ReAct to log at DEBUG level
         react_debug_msgs = [
             r for r in caplog.records
             if r.name == react_logger and r.levelno == logging.DEBUG
@@ -621,11 +605,9 @@ class TestReactStageResponse:
         """Per-stage verbose overrides wizard-level setting."""
         manager, provider = conversation_manager_pair
 
-        # Wizard-level verbose is OFF (default)
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -634,14 +616,15 @@ class TestReactStageResponse:
             text_response("Done."),
         ])
 
-        # Stage-level override enables verbose
-        stage = {"name": "review", "max_iterations": 3, "verbose": True}
-        tools = [preview_tool]
+        stage = {
+            "name": "review", "reasoning": "react",
+            "max_iterations": 3, "verbose": True,
+        }
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
-            response = await reasoning._react_stage_response(
-                manager, "Test prompt", stage, state, tools
+            response = await self._run_strategy_response(
+                reasoning, manager, stage, [preview_tool],
             )
 
         assert response is not None
@@ -667,7 +650,6 @@ class TestReactStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
 
@@ -676,13 +658,12 @@ class TestReactStageResponse:
             text_response("Done."),
         ])
 
-        stage = {"name": "review", "max_iterations": 3}
-        tools = [preview_tool]
+        stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
-            await reasoning._react_stage_response(
-                manager, "Test prompt", stage, state, tools
+            await self._run_strategy_response(
+                reasoning, manager, stage, [preview_tool],
             )
 
         react_debug_msgs = [

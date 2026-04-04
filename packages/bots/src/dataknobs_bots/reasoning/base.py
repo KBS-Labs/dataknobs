@@ -32,9 +32,14 @@ class StrategyCapabilities:
             (grounded/hybrid).  When ``True``, ``DynaBot`` performs
             config-driven source construction after factory creation
             and disables redundant ``auto_context``.
+        manages_tools: Strategy manages its own tool execution loop
+            (react/hybrid).  When ``True``, wizard stages pre-inject
+            collected artifact context so the LLM doesn't need tool
+            calls to discover what data has been collected.
     """
 
     manages_sources: bool = False
+    manages_tools: bool = False
 
 
 @runtime_checkable
@@ -193,6 +198,41 @@ class ReasoningStrategy(ABC):
     def __init__(self, *, greeting_template: str | None = None) -> None:
         self._greeting_template = greeting_template
         self._tool_executions: list[ToolExecution] = []
+        self._pipeline_context: str = ""
+
+    # ------------------------------------------------------------------
+    # Pipeline composition support
+    # ------------------------------------------------------------------
+
+    def get_and_clear_pipeline_context(self) -> str:
+        """Return context produced during generate() for downstream stages.
+
+        Strategies that produce contextual information (e.g. retrieved
+        KB content, plan output, summaries) store it via
+        :meth:`_set_pipeline_context` during ``generate()``.  Composition
+        orchestrators (e.g. ``HybridReasoning``, future pipeline
+        strategies) call this between stages to collect context and
+        inject it into the system prompt for downstream stages.
+
+        Returns:
+            The accumulated context string (cleared after retrieval).
+        """
+        result = self._pipeline_context
+        self._pipeline_context = ""
+        return result
+
+    def _set_pipeline_context(self, context: str) -> None:
+        """Store context for consumption by a composed pipeline.
+
+        Call this from ``generate()`` when your strategy produces
+        contextual information that downstream pipeline stages should
+        see in their system prompt.
+
+        Args:
+            context: The context string (e.g. retrieved documents,
+                generated plan, summary).
+        """
+        self._pipeline_context = context
 
     def get_and_clear_tool_executions(self) -> list[ToolExecution]:
         """Return tool executions recorded during the last generate() call.

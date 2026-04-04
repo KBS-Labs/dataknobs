@@ -117,6 +117,8 @@ Registration should happen at application startup, before any bot configs refere
 
 ### Step 4: Use It in Configuration
 
+As the bot's primary reasoning strategy:
+
 ```yaml
 llm:
   provider: ollama
@@ -130,6 +132,28 @@ reasoning:
 conversation_storage:
   backend: memory
 ```
+
+Or in specific wizard stages via per-state strategy injection:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config:
+    settings:
+      tool_reasoning: single
+    stages:
+      - name: research
+        reasoning: summarize          # Use custom strategy for this stage
+        reasoning_config:             # Strategy-specific config
+          max_summary_tokens: 100
+        tools: [search_docs]
+        transitions:
+          - target: review
+```
+
+Any registered strategy can be referenced by name in a wizard stage's `reasoning`
+field. The optional `reasoning_config` dict is forwarded to the strategy's
+`from_config()`.
 
 ```python
 bot = await DynaBot.from_config(config)
@@ -145,14 +169,15 @@ Override `capabilities()` to tell DynaBot what your strategy manages. This contr
 ```python
 @classmethod
 def capabilities(cls) -> StrategyCapabilities:
-    return StrategyCapabilities(manages_sources=True)
+    return StrategyCapabilities(manages_sources=True, manages_tools=True)
 ```
 
 | Field | Default | Effect When `True` |
 |-------|---------|-------------------|
 | `manages_sources` | `False` | DynaBot performs config-driven source construction via `add_source()`, and disables redundant `auto_context` on the knowledge base. |
+| `manages_tools` | `False` | Strategy runs its own tool execution loop. In wizard stages, collected artifact context is pre-injected into the system prompt so the LLM can see collected data without making tool calls. |
 
-Only set `manages_sources=True` if your strategy uses retrieval sources (like grounded/hybrid). Most custom strategies leave this at the default.
+Set `manages_sources=True` if your strategy uses retrieval sources (like grounded/hybrid). Set `manages_tools=True` if your strategy manages its own tool execution loop (like ReAct/hybrid). Most custom strategies leave both at the default.
 
 ### `get_source_configs()` — Custom Source Config Layout
 

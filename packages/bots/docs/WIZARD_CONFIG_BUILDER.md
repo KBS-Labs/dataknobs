@@ -128,7 +128,7 @@ builder.set_settings(
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `extraction_hints`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning` (any registered strategy name or `"single"`), `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `extraction_hints`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
 
 #### Extraction Scope
 
@@ -155,7 +155,7 @@ builder.set_settings(
 
 Escalation only fires when (a) required fields are missing, (b) the current scope is narrower than the target, and (c) there is prior conversation history to draw on. The grounding filter protects existing data during escalated re-extraction.
 
-The `store_trace` and `verbose` settings propagate to ReAct stages. Both support per-stage overrides (set directly on the stage dict) that take precedence over the wizard-level default.
+The `store_trace` and `verbose` settings propagate to all strategy-backed stages (not just ReAct). Both support per-stage overrides (set directly on the stage dict or via `reasoning_config`) that take precedence over the wizard-level default.
 
 Use `ephemeral_keys` to declare data keys that should not be persisted to storage
 (e.g., per-step display data, intermediate computation results):
@@ -176,7 +176,7 @@ builder.set_settings(
 | `skip_builtin_grounding` | `bool` | `False` | When `True` and a `merge_filter` is set, bypass the built-in grounding check entirely — only the custom filter runs. |
 | `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. `reject_unmatched` (default `true`): reject enum values that don't match any entry. `boolean_recovery` (default `true`): enable signal-word recovery for boolean fields that extraction fails to fill; only active when `"boolean_recovery"` is in the recovery pipeline. |
 
-See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) and [Enum Normalization](CONTEXT_AWARE_WIZARDS.md#enum-normalization) for full documentation.
+See [Extraction Grounding](context-aware-wizards.md#extraction-grounding) and [Enum Normalization](context-aware-wizards.md#enum-normalization) for full documentation.
 
 ### Stage Methods
 
@@ -247,7 +247,8 @@ builder.add_structured_stage(
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `response_template` | `str \| None` | Template-driven response (bypasses LLM) |
 | `help_text` | `str \| None` | Help message |
-| `reasoning` | `str \| None` | Reasoning mode: `"single"` or `"react"` |
+| `reasoning` | `str \| None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered strategy |
+| `reasoning_config` | `dict \| None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | Max iterations for ReAct reasoning |
 | `context_generation` | `dict \| None` | LLM context generation config |
 | `**kwargs` | `Any` | Additional `StageConfig` fields |
@@ -486,7 +487,7 @@ All fields available on `StageConfig`:
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
-| `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](CONTEXT_AWARE_WIZARDS.md#message-stages) |
+| `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](context-aware-wizards.md#message-stages) |
 | `confirm_first_render` | `bool` | `True` | Whether to pause for confirmation on first render. Set to `false` to skip and evaluate transitions immediately |
 | `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |
@@ -495,7 +496,8 @@ All fields available on `StageConfig`:
 | `schema` | `dict \| None` | `None` | JSON Schema for validation |
 | `transitions` | `tuple[TransitionConfig, ...]` | `()` | Stage transitions |
 | `tools` | `tuple[str, ...]` | `()` | Available tool names |
-| `reasoning` | `str \| None` | `None` | `"single"` or `"react"` |
+| `reasoning` | `str \| None` | `None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered name |
+| `reasoning_config` | `dict[str, Any] \| None` | `None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | `None` | Max ReAct iterations |
 | `extraction_model` | `str \| None` | `None` | Model for extraction |
 | `response_template` | `str \| None` | `None` | Template-driven response |
