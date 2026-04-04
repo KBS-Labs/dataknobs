@@ -25,7 +25,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.react import ReActReasoning
@@ -60,6 +60,56 @@ class HybridReasoning(ReasoningStrategy):
             })
             strategy = HybridReasoning(config=config)
     """
+
+    @classmethod
+    def capabilities(cls) -> StrategyCapabilities:
+        """Hybrid manages its own retrieval sources (via grounded child)."""
+        return StrategyCapabilities(manages_sources=True)
+
+    @classmethod
+    def get_source_configs(cls, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Sources live under the ``"grounded"`` sub-key for hybrid.
+
+        Warns if a top-level ``"sources"`` key is present, since it is
+        likely misplaced.
+        """
+        if config.get("sources"):
+            logger.warning(
+                "Hybrid strategy: top-level 'sources' key ignored; "
+                "sources must be under 'grounded.sources'.",
+            )
+        return config.get("grounded", {}).get("sources", [])
+
+    @classmethod
+    def from_config(  # type: ignore[override]
+        cls,
+        config: dict[str, Any],
+        **kwargs: Any,
+    ) -> HybridReasoning:
+        """Create HybridReasoning from a configuration dict.
+
+        Args:
+            config: Configuration dict (passed to
+                ``HybridReasoningConfig.from_dict``).
+            **kwargs: Optional ``knowledge_base`` — auto-wrapped via
+                the grounded child's ``set_knowledge_base``.
+
+        Returns:
+            Configured HybridReasoning instance.
+        """
+        hybrid_config = HybridReasoningConfig.from_dict(config)
+        strategy = cls(config=hybrid_config)
+        # Auto-wrap knowledge_base — same guard as GroundedReasoning.
+        # Check the grounded child's sources to avoid double-wrapping
+        # when the config already declares a vector_kb source.
+        knowledge_base = kwargs.get("knowledge_base")
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb"
+            for s in hybrid_config.grounded.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            strategy.set_knowledge_base(knowledge_base)
+        return strategy
 
     def __init__(self, *, config: HybridReasoningConfig) -> None:
         super().__init__(greeting_template=config.greeting_template)

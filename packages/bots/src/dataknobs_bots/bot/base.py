@@ -560,26 +560,18 @@ class DynaBot:
                 knowledge_base=knowledge_base,
             )
 
-            # Config-driven source construction for grounded/hybrid strategies
-            strategy_name = reasoning_config.get("strategy", "").lower()
-            _grounded_family = strategy_name in ("grounded", "hybrid")
+            # Config-driven source construction for strategies that
+            # manage their own sources (grounded, hybrid, or any custom
+            # strategy declaring manages_sources=True).
+            strategy_caps = reasoning_strategy.capabilities()
 
-            # For grounded, sources are at the top level.
-            # For hybrid, sources live under the "grounded" sub-key.
-            if strategy_name == "hybrid":
-                source_list = reasoning_config.get(
-                    "grounded", {},
-                ).get("sources", [])
-                # Warn if top-level sources found — user likely misplaced them
-                if reasoning_config.get("sources"):
-                    logger.warning(
-                        "Hybrid strategy: top-level 'sources' key ignored; "
-                        "sources must be under 'grounded.sources'.",
-                    )
-            else:
-                source_list = reasoning_config.get("sources", [])
+            # Each strategy knows where its source configs live via
+            # get_source_configs() — no hardcoded name checks needed.
+            source_list = type(reasoning_strategy).get_source_configs(
+                reasoning_config,
+            )
 
-            if _grounded_family and source_list:
+            if strategy_caps.manages_sources and source_list:
                 from ..knowledge.sources.factory import create_source_from_config
                 from ..reasoning.grounded_config import GroundedSourceConfig
 
@@ -591,21 +583,21 @@ class DynaBot:
                     )
                     reasoning_strategy.add_source(source)
 
-            # Auto-disable auto_context for grounded/hybrid — retrieval
-            # is structural and auto_context is completely redundant.
-            # Leaving it on causes KB-augmented messages as
+            # Auto-disable auto_context for source-managing strategies —
+            # retrieval is structural and auto_context is completely
+            # redundant.  Leaving it on causes KB-augmented messages as
             # query-generation input, wasting tokens and risking
             # timeouts with thinking models.
             if (
-                _grounded_family
+                strategy_caps.manages_sources
                 and knowledge_base is not None
                 and kb_auto_context
             ):
                 kb_auto_context = False
                 logger.info(
-                    "%s strategy: auto_context disabled "
+                    "%s: auto_context disabled "
                     "(retrieval is structural).",
-                    strategy_name.title(),
+                    type(reasoning_strategy).__name__,
                 )
 
         # Create middleware

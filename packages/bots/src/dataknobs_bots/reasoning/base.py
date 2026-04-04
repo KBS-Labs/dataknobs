@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 import jinja2
 
@@ -12,6 +13,28 @@ from dataknobs_llm import LLMResponse
 
 if TYPE_CHECKING:
     from dataknobs_bots.bot.turn import ToolExecution
+
+
+@dataclass(frozen=True)
+class StrategyCapabilities:
+    """Declares what a reasoning strategy manages autonomously.
+
+    Used by ``DynaBot`` and other consumers to decide which orchestration
+    steps to perform (e.g. source construction, auto-context) without
+    hard-coding strategy names.
+
+    All fields default to ``False``; concrete strategies override only
+    the capabilities they possess.  New fields can be added with
+    ``default=False`` without breaking existing strategies.
+
+    Attributes:
+        manages_sources: Strategy manages its own retrieval sources
+            (grounded/hybrid).  When ``True``, ``DynaBot`` performs
+            config-driven source construction after factory creation
+            and disables redundant ``auto_context``.
+    """
+
+    manages_sources: bool = False
 
 
 @runtime_checkable
@@ -117,6 +140,56 @@ class ReasoningStrategy(ABC):
         - ReAct: Reason and act in a loop with tools
     """
 
+    @classmethod
+    def capabilities(cls) -> StrategyCapabilities:
+        """Declare what this strategy manages autonomously.
+
+        The default returns no capabilities.  Concrete strategies
+        override to declare their actual capabilities.
+
+        Returns:
+            Frozen dataclass describing strategy capabilities.
+        """
+        return StrategyCapabilities()
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> Self:
+        """Create a strategy instance from a configuration dict.
+
+        The base implementation extracts ``greeting_template`` and
+        passes it to the constructor.  Concrete strategies with richer
+        configuration override this classmethod.
+
+        Args:
+            config: Strategy configuration dict.
+            **_kwargs: Additional context (e.g. ``knowledge_base``).
+
+        Returns:
+            Configured strategy instance.
+        """
+        return cls(greeting_template=config.get("greeting_template"))
+
+    @classmethod
+    def get_source_configs(cls, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract source configuration dicts from a strategy config.
+
+        ``DynaBot`` calls this after creating the strategy to discover
+        which sources to construct and wire in via :meth:`add_source`.
+        The default looks for a top-level ``"sources"`` key, which is
+        the convention used by ``GroundedReasoning``.
+
+        Strategies with non-standard config layouts (e.g.
+        ``HybridReasoning``, where sources are nested under
+        ``"grounded"``) override this to return the correct list.
+
+        Args:
+            config: The full strategy configuration dict.
+
+        Returns:
+            List of source configuration dicts (may be empty).
+        """
+        return config.get("sources", [])
+
     def __init__(self, *, greeting_template: str | None = None) -> None:
         self._greeting_template = greeting_template
         self._tool_executions: list[ToolExecution] = []
@@ -173,6 +246,28 @@ class ReasoningStrategy(ABC):
         text = env.from_string(self._greeting_template).render(**context)
         return LLMResponse(content=text, model="template", finish_reason="stop")
 
+    def add_source(self, source: Any) -> None:
+        """Add a retrieval source to this strategy.
+
+        Strategies that declare ``manages_sources=True`` in their
+        :meth:`capabilities` MUST override this method.  ``DynaBot``
+        calls it during config-driven source construction.
+
+        The default raises ``NotImplementedError`` so that a 3rd-party
+        strategy that forgets to implement it fails loudly.
+
+        Args:
+            source: A ``GroundedSource`` instance (or compatible).
+
+        Raises:
+            NotImplementedError: If not overridden by a subclass.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement add_source(). "
+            f"Strategies that declare manages_sources=True in "
+            f"capabilities() must override this method."
+        )
+
     def providers(self) -> dict[str, Any]:
         """Return LLM providers managed by this strategy, keyed by role.
 
@@ -222,10 +317,23 @@ class ReasoningStrategy(ABC):
     ) -> Any:
         """Generate response using this reasoning strategy.
 
+        Pass ``tools`` through to ``manager.complete(tools=tools)`` so
+        the LLM can see available tools.  If the returned response
+        contains ``tool_calls``, ``DynaBot`` will execute them
+        automatically in a post-strategy loop — strategies do not need
+        to handle tool execution unless they want full control (like
+        ``ReActReasoning``).
+
+        Strategies that execute tools internally should record them via
+        ``self._tool_executions.append(ToolExecution(...))`` and
+        consume ``tool_calls`` before returning, so the DynaBot loop
+        is a no-op.
+
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
-            tools: Optional list of available tools
+            tools: Optional list of available tools.  Forward to
+                ``manager.complete(tools=tools)`` for LLM visibility.
             **kwargs: Additional generation parameters (temperature, max_tokens, etc.)
 
         Returns:

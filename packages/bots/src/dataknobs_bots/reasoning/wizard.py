@@ -1716,7 +1716,7 @@ class WizardReasoning(ReasoningStrategy):
         return self._context_builder
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> WizardReasoning:
+    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> WizardReasoning:  # type: ignore[override]
         """Create WizardReasoning from configuration dict.
 
         Args:

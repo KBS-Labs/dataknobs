@@ -114,10 +114,11 @@ if __name__ == "__main__":
 - **Simple Reasoning** - Direct LLM response
 - **ReAct Reasoning** - Reasoning + Acting pattern for tool-using agents
 - **Wizard Reasoning** - Guided conversational flows with FSM-backed state management
+- **Grounded / Hybrid** - Deterministic KB retrieval, with optional ReAct tool use
 - **Configurable** - Switch reasoning strategies via configuration
-- **Extensible** - Implement custom reasoning strategies
+- **Extensible** - Implement, register, and configure custom strategies via the plugin registry
 
-[Learn more →](guides/user-guide.md#tutorial-5-creating-tool-using-agents)
+[Built-in strategies →](guides/user-guide.md#tutorial-5-creating-tool-using-agents) | [Custom strategies →](guides/custom-strategies.md)
 
 ### 📊 Wizard Observability & Task Tracking
 
@@ -274,10 +275,13 @@ dataknobs_bots/
 │   ├── resolution.py   # Resource resolution
 │   └── versioning.py   # ConfigVersionManager
 ├── reasoning/           # Reasoning strategies
-│   ├── base.py         # ReasoningStrategy interface
+│   ├── base.py         # ReasoningStrategy interface & StrategyCapabilities
+│   ├── registry.py     # Strategy plugin registry
 │   ├── simple.py       # Simple reasoning
 │   ├── react.py        # ReAct reasoning
 │   ├── wizard.py       # Wizard reasoning
+│   ├── grounded.py     # Grounded reasoning (deterministic retrieval)
+│   ├── hybrid.py       # Hybrid reasoning (grounded + ReAct)
 │   ├── wizard_fsm.py   # FSM wrapper for wizards
 │   ├── wizard_loader.py # Config loader
 │   ├── wizard_hooks.py # Lifecycle hooks
@@ -306,6 +310,12 @@ dataknobs_bots/
 - [**Tools Development**](guides/tools.md) - Creating and configuring custom tools
 - [**Wizard Observability**](guides/observability.md) - Task tracking, state snapshots, and transition auditing
 - [**Architecture**](guides/architecture.md) - System design and scaling considerations
+
+### Reasoning Strategies
+
+- [**Grounded Reasoning**](guides/grounded-reasoning.md) - Deterministic multi-source KB retrieval
+- [**Hybrid Reasoning**](guides/hybrid-reasoning.md) - Grounded retrieval + ReAct tool use
+- [**Custom Strategies**](guides/custom-strategies.md) - Implement, register, and test 3rd-party strategies
 
 ### Artifact & Evaluation System
 

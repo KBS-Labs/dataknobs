@@ -50,7 +50,7 @@ from dataknobs_bots.knowledge.retrieval.formatter import (
     FormatterConfig,
 )
 from dataknobs_bots.knowledge.retrieval.merger import ChunkMerger, MergerConfig
-from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
 from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,44 @@ class GroundedReasoning(ReasoningStrategy):
             require_citations: true
           store_provenance: true
     """
+
+    @classmethod
+    def capabilities(cls) -> StrategyCapabilities:
+        """Grounded strategy manages its own retrieval sources."""
+        return StrategyCapabilities(manages_sources=True)
+
+    @classmethod
+    def from_config(  # type: ignore[override]
+        cls,
+        config: dict[str, Any],
+        **kwargs: Any,
+    ) -> GroundedReasoning:
+        """Create GroundedReasoning from a configuration dict.
+
+        Args:
+            config: Configuration dict (passed to
+                ``GroundedReasoningConfig.from_dict``).
+            **kwargs: Optional ``knowledge_base`` — auto-wrapped as a
+                ``VectorKnowledgeSource`` when the config doesn't
+                already declare a ``vector_kb`` source.
+
+        Returns:
+            Configured GroundedReasoning instance.
+        """
+        grounded_config = GroundedReasoningConfig.from_dict(config)
+        strategy = cls(config=grounded_config)
+        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but
+        # only when the config doesn't already declare a vector_kb
+        # source.  Otherwise the same KB gets wrapped twice: once
+        # here, and once by the source construction loop in
+        # DynaBot.from_config (bot/base.py).
+        knowledge_base = kwargs.get("knowledge_base")
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb" for s in grounded_config.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            strategy.set_knowledge_base(knowledge_base)
+        return strategy
 
     def __init__(
         self,
