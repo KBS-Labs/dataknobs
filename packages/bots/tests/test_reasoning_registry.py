@@ -71,15 +71,15 @@ class _CustomStrategy(ReasoningStrategy):
 
 @pytest.fixture()
 def fresh_registry() -> PluginRegistry[ReasoningStrategy]:
-    """Return a fresh registry with builtins pre-loaded."""
+    """Return a fresh registry matching production configuration."""
     registry = PluginRegistry[ReasoningStrategy](
         "test_strategies",
         validate_type=ReasoningStrategy,
         canonicalize_keys=True,
         config_key="strategy",
         config_key_default="simple",
+        on_first_access=_register_builtins,
     )
-    _register_builtins(registry)
     return registry
 
 

@@ -121,8 +121,9 @@ vector_backends: PluginRegistry[Type[VectorStore]] = PluginRegistry(
     on_first_access=_register_vector_backends,
 )
 
-# Keep VectorBackendRegistry as type alias for backward compat
-VectorBackendRegistry = PluginRegistry[Type[VectorStore]]
+# Keep VectorBackendRegistry as alias for backward compat.
+# Use the unparameterized class so isinstance() checks still work at runtime.
+VectorBackendRegistry = PluginRegistry
 
 # Now import factory (which will import vector_backends from this module)
 from .factory import VectorStoreFactory  # noqa: E402

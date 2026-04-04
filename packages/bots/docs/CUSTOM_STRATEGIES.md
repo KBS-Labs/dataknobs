@@ -2,6 +2,16 @@
 
 DynaBot's reasoning strategies are modular and extensible. You can implement, register, and select custom strategies entirely through configuration — no modifications to core DynaBot code required.
 
+> **Migration note:** The strategy registry now uses `PluginRegistry` from
+> `dataknobs-common`. Exception types have changed:
+>
+> - **Duplicate registration** now raises `OperationError` (was `ValueError`)
+> - **Unknown strategy** now raises `NotFoundError` (was `ValueError`)
+>
+> Both are subclasses of `DataknobsError` from `dataknobs_common.exceptions`.
+> Code that catches `ValueError` from `register_strategy()` or
+> `create_reasoning_from_config()` should be updated.
+
 ## Built-in Strategies
 
 | Strategy | Key | Use Case |
@@ -244,7 +254,7 @@ from dataknobs_bots.reasoning import (
     get_registry,            # Access the PluginRegistry singleton
 )
 
-# Register (raises ValueError if already registered)
+# Register (raises OperationError if already registered)
 register_strategy("my_strategy", MyStrategy)
 
 # Register with override

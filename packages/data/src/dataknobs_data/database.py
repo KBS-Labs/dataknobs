@@ -554,12 +554,13 @@ class AsyncDatabase(ABC):
         Returns:
             Connected AsyncDatabase instance
         """
-        from .backends import BACKEND_REGISTRY
+        from .backends import async_backends
 
-        backend_class = BACKEND_REGISTRY.get(backend)
+        backend_class = async_backends.get_factory(backend)
         if not backend_class:
             raise ValueError(
-                f"Unknown backend: {backend}. Available: {list(BACKEND_REGISTRY.keys())}"
+                f"Unknown backend: {backend}. "
+                f"Available: {async_backends.list_keys()}"
             )
 
         instance = backend_class(config)
@@ -1090,12 +1091,13 @@ class SyncDatabase(ABC):
         Returns:
             Connected SyncDatabase instance
         """
-        from .backends import SYNC_BACKEND_REGISTRY
+        from .backends import sync_backends
 
-        backend_class = SYNC_BACKEND_REGISTRY.get(backend)
+        backend_class = sync_backends.get_factory(backend)
         if not backend_class:
             raise ValueError(
-                f"Unknown backend: {backend}. Available: {list(SYNC_BACKEND_REGISTRY.keys())}"
+                f"Unknown backend: {backend}. "
+                f"Available: {sync_backends.list_keys()}"
             )
 
         instance = backend_class(config)

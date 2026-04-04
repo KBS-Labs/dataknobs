@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Type
+from typing import Type
 
 from dataknobs_common.registry import PluginRegistry
 
@@ -397,104 +397,9 @@ async_backends: PluginRegistry[Type[AsyncDatabase]] = PluginRegistry(
 )
 
 
-# ------------------------------------------------------------------
-# Backward compatibility
-# ------------------------------------------------------------------
-
-# Lazily populated on first access — avoids importing all backends at
-# module load time.  Use sync_backends / async_backends directly instead.
-
-
-def _build_compat_dict(
-    registry: PluginRegistry[Any],
-) -> dict[str, Any]:
-    """Build a backward-compat dict from a PluginRegistry."""
-    return {key: registry.get_factory(key) for key in registry.list_keys()}
-
-
-class _LazyBackendDict(dict):  # type: ignore[type-arg]
-    """Dict that populates itself on first access for backward compat."""
-
-    def __init__(self, registry: PluginRegistry[Any]) -> None:
-        super().__init__()
-        self._registry = registry
-        self._populated = False
-
-    def _ensure_populated(self) -> None:
-        if not self._populated:
-            self._populated = True
-            self.update(_build_compat_dict(self._registry))
-
-    def get(self, key: str, default: Any = None) -> Any:
-        self._ensure_populated()
-        return super().get(key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        self._ensure_populated()
-        return super().__getitem__(key)
-
-    def __contains__(self, key: object) -> bool:
-        self._ensure_populated()
-        return super().__contains__(key)
-
-    def __iter__(self):  # type: ignore[override]
-        self._ensure_populated()
-        return super().__iter__()
-
-    def keys(self):  # type: ignore[override]
-        self._ensure_populated()
-        return super().keys()
-
-    def values(self):  # type: ignore[override]
-        self._ensure_populated()
-        return super().values()
-
-    def items(self):  # type: ignore[override]
-        self._ensure_populated()
-        return super().items()
-
-    def __len__(self) -> int:
-        self._ensure_populated()
-        return super().__len__()
-
-
-BACKEND_REGISTRY: dict[str, Type[AsyncDatabase]] = _LazyBackendDict(async_backends)  # type: ignore[assignment]
-SYNC_BACKEND_REGISTRY: dict[str, Type[SyncDatabase]] = _LazyBackendDict(sync_backends)  # type: ignore[assignment]
-
-
-def register_backend(
-    name: str,
-    async_class: Type[AsyncDatabase] | None = None,
-    sync_class: Type[SyncDatabase] | None = None,
-) -> None:
-    """Register a backend implementation.
-
-    This function is maintained for backward compatibility.
-    Prefer using sync_backends.register() or async_backends.register() directly.
-
-    Args:
-        name: Backend name
-        async_class: Async database class
-        sync_class: Sync database class
-    """
-    if async_class:
-        async_backends.register(name, async_class, override=True)
-    if sync_class:
-        sync_backends.register(name, sync_class, override=True)
-
-
-# Keep BackendRegistry and AsyncBackendRegistry as aliases for type compat
-BackendRegistry = PluginRegistry[Type[SyncDatabase]]
-AsyncBackendRegistry = PluginRegistry[Type[AsyncDatabase]]
-
 __all__ = [
-    "BackendRegistry",
-    "AsyncBackendRegistry",
     "sync_backends",
     "async_backends",
-    "BACKEND_REGISTRY",
-    "SYNC_BACKEND_REGISTRY",
-    "register_backend",
     "AsyncMemoryDatabase",
     "SyncMemoryDatabase",
 ]

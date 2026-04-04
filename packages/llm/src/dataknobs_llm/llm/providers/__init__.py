@@ -130,9 +130,8 @@ class LLMProviderFactory:
             async_provider = provider_class(llm_config)
             return SyncProviderAdapter(async_provider)  # type: ignore[return-value]
 
-    @classmethod
+    @staticmethod
     def register_provider(
-        cls,
         name: str,
         provider_class: type[AsyncLLMProvider],
     ) -> None:

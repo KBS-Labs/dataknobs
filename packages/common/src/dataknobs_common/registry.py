@@ -1127,7 +1127,9 @@ class PluginRegistry(Generic[T]):
         Args:
             key: Plugin identifier. Optional when ``config_key`` is
                 configured on the registry.
-            config: Configuration dictionary passed to factory.
+            config: Configuration dictionary passed to factory.  ``None``
+                is treated as ``{}`` for both key resolution and factory
+                invocation.
             **kwargs: Additional keyword arguments forwarded to factory.
 
         Returns:
@@ -1136,7 +1138,16 @@ class PluginRegistry(Generic[T]):
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
             NotFoundError: If resolved key is not registered.
-            OperationError: If factory raises an exception.
+            OperationError: If factory raises an exception (including
+                type validation failures from ``validate_type``).
+
+        Note:
+            Type validation errors from ``register()`` raise ``TypeError``
+            directly (caught at registration time), while type validation
+            errors from ``create()`` are wrapped in ``OperationError``
+            (caught at creation time).  This asymmetry is intentional:
+            registration errors are programming mistakes caught immediately,
+            while creation errors may arise from dynamic factory behavior.
         """
         self._ensure_initialized()
 
@@ -1178,8 +1189,6 @@ class PluginRegistry(Generic[T]):
         try:
             if isinstance(factory, type) and hasattr(factory, "from_config"):
                 instance = factory.from_config(config or {}, **kwargs)
-            elif isinstance(factory, type):
-                instance = factory(config or {}, **kwargs)
             else:
                 instance = factory(config or {}, **kwargs)
 
