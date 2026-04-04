@@ -772,18 +772,20 @@ def _execute_transform(
                 rule.target,
             )
             return _SKIP
-        import jinja2
+        from jinja2 import TemplateError, UndefinedError
+
+        from dataknobs_bots.utils.template_env import create_template_env
 
         try:
-            env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+            env = create_template_env(strict=True)
             rendered = env.from_string(rule.template).render(**data)
             return rendered.strip() if rendered.strip() else _SKIP
-        except jinja2.UndefinedError:
+        except UndefinedError:
             # Not all referenced variables are present yet — skip
             # silently.  This is expected when the template references
             # multiple fields and only some have been extracted so far.
             return _SKIP
-        except jinja2.TemplateError:
+        except TemplateError:
             logger.warning(
                 "Derivation template render failed for %s → %s",
                 rule.source,

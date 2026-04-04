@@ -5010,9 +5010,9 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Rendered response string
         """
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         template = env.from_string(template_str)
 
         # Non-internal keys for backward-compatible "collected_data" dict
@@ -5106,10 +5106,10 @@ class WizardReasoning(ReasoningStrategy):
             return {}
 
         # Render the prompt template with current state data
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
         try:
-            env = jinja2.Environment(undefined=jinja2.Undefined)
+            env = create_template_env()
             rendered_prompt = env.from_string(prompt_template).render(
                 **{k: v for k, v in state.data.items() if not k.startswith("_")}
             )
@@ -5179,9 +5179,9 @@ class WizardReasoning(ReasoningStrategy):
         if not any("{%" in s or "{{" in s for s in suggestions):
             return suggestions
 
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         collected_data = {
             k: v for k, v in state.data.items() if not k.startswith("_")
         }
@@ -6002,9 +6002,9 @@ class WizardReasoning(ReasoningStrategy):
         if not transitions:
             return
 
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         collected_data = {
             k: v for k, v in state.data.items() if not k.startswith("_")
         }
@@ -7266,10 +7266,14 @@ Be concise and helpful.
                 if groups:
                     if self._clarification_template:
                         try:
-                            from jinja2 import Template
                             from jinja2 import TemplateError
 
-                            template = Template(
+                            from dataknobs_bots.utils.template_env import (
+                                create_template_env,
+                            )
+
+                            env = create_template_env()
+                            template = env.from_string(
                                 self._clarification_template,
                             )
                             issue_list = template.render(

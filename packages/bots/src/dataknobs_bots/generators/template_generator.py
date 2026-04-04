@@ -154,14 +154,15 @@ class TemplateGenerator(Generator):
         Raises:
             ValueError: If the template references undefined variables.
         """
-        import jinja2
+        from jinja2 import UndefinedError
+
+        from dataknobs_bots.utils.template_env import create_template_env
 
         try:
-            template = jinja2.Template(
-                self._template, undefined=jinja2.StrictUndefined
-            )
+            env = create_template_env(strict=True)
+            template = env.from_string(self._template)
             return template.render(**parameters)
-        except jinja2.UndefinedError as e:
+        except UndefinedError as e:
             raise ValueError(f"Template rendering failed: {e}") from e
 
     def _parse_output(self, rendered: str) -> dict[str, Any]:

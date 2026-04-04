@@ -32,8 +32,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import Any
 
-import jinja2
-
+from dataknobs_bots.utils.template_env import create_template_env
 from dataknobs_data.sources.base import (
     GroundedSource,
     RetrievalIntent,
@@ -323,7 +322,7 @@ class GroundedReasoning(ReasoningStrategy):
 
         # Pre-compile Jinja2 environments for template modes (avoids
         # recreating per render call)
-        self._jinja_env = jinja2.Environment(undefined=jinja2.Undefined)
+        self._jinja_env = create_template_env()
         self._intent_template = (
             self._jinja_env.from_string(config.intent.template)
             if config.intent.template

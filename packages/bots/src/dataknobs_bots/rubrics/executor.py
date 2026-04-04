@@ -365,9 +365,10 @@ class RubricExecutor:
 
     def _render_template(self, template_str: str, context: dict[str, Any]) -> str:
         """Render a Jinja2 template string with the given context."""
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        template = jinja2.Template(template_str, undefined=jinja2.StrictUndefined)
+        env = create_template_env(strict=True)
+        template = env.from_string(template_str)
         return template.render(**context)
 
     def _build_decode_system_message(self, criterion: RubricCriterion) -> str:
