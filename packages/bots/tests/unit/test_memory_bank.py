@@ -622,9 +622,9 @@ class TestWizardBankIntegration:
         # _render_response_template is async, but we can test the
         # context building via the public API path indirectly
         # by verifying the bank accessor works in templates
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         template = env.from_string(
             "Count: {{ bank('ingredients').count() }}"
         )

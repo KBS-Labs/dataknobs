@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import jinja2
+from dataknobs_bots.utils.template_env import create_template_env
 import pytest
 
 from dataknobs_bots.artifacts.transforms import TransformContext
@@ -175,7 +175,7 @@ class TestBankTemplateRendering:
         reasoning._banks["milestones"].add({"title": "Sprint 1"})
 
         accessor = reasoning._make_bank_accessor()
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         template = env.from_string(
             "Team: {{ bank('team').count() }} members\n"
             "Milestones: {{ bank('milestones').count() }}\n"
@@ -192,7 +192,7 @@ class TestBankTemplateRendering:
         reasoning._banks["team"].add({"name": "Bob", "role": "Dev"})
 
         accessor = reasoning._make_bank_accessor()
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         template = env.from_string(
             "{% for m in bank('team').all() %}"
             "- {{ m.data.name }}: {{ m.data.role }}\n"

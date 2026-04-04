@@ -7,9 +7,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
-import jinja2
-
 from dataknobs_llm import LLMResponse
+
+from dataknobs_bots.utils.template_env import create_template_env
 
 if TYPE_CHECKING:
     from dataknobs_bots.bot.turn import ToolExecution
@@ -282,7 +282,7 @@ class ReasoningStrategy(ABC):
         if self._greeting_template is None:
             return None
         context = initial_context or {}
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         text = env.from_string(self._greeting_template).render(**context)
         return LLMResponse(content=text, model="template", finish_reason="stop")
 
