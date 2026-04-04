@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .base import ReasoningManagerProtocol, ReasoningStrategy
+from .base import ReasoningManagerProtocol, ReasoningStrategy, StrategyCapabilities
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
 from .grounded import GroundedReasoning, SynthesisPlan
 from .grounded_config import (
@@ -49,10 +49,27 @@ from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
+from .registry import (
+    StrategyFactory,
+    StrategyRegistry,
+    get_registry,
+    get_strategy_factory,
+    is_strategy_registered,
+    list_strategies,
+    register_strategy,
+)
 
 __all__ = [
     "ReasoningManagerProtocol",
     "ReasoningStrategy",
+    "StrategyCapabilities",
+    "StrategyFactory",
+    "StrategyRegistry",
+    "register_strategy",
+    "is_strategy_registered",
+    "list_strategies",
+    "get_strategy_factory",
+    "get_registry",
     "SimpleReasoning",
     "ReActReasoning",
     "GroundedReasoning",
@@ -115,37 +132,28 @@ def create_reasoning_from_config(
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
+    Delegates to the :class:`StrategyRegistry` singleton.  Built-in
+    strategies (simple, react, wizard, grounded, hybrid) are registered
+    automatically; 3rd-party strategies can be added via
+    :func:`register_strategy`.
+
+    See each strategy class's ``from_config()`` for available config
+    keys (e.g. ``ReActReasoning.from_config``,
+    ``WizardReasoning.from_config``).
+
     Args:
-        config: Reasoning configuration with:
-            - strategy: Strategy type ('simple', 'react', 'wizard', 'grounded', 'hybrid')
-            - greeting_template: Optional Jinja2 template for bot-initiated
-              greetings (simple/react only; wizard uses FSM start stage)
-            - max_iterations: For ReAct, max reasoning loops (default: 5)
-            - verbose: Enable debug logging for reasoning steps (default: False)
-            - store_trace: Store reasoning trace in conversation metadata (default: False)
-            - wizard_config: For wizard, path to wizard YAML config
-            - extraction_config: For wizard, extraction configuration dict
-            - strict_validation: For wizard, enforce schema validation (default: True)
-            - consistent_navigation_lifecycle: For wizard, whether back/skip
-              navigation fires the same lifecycle hooks as forward transitions
-              (default: True)
-            - intent: For grounded, intent resolution config dict with:
-              - mode: "extract" (LLM), "static" (config), "template" (Jinja2)
-              - default_filters: Always-applied filters (any mode)
-            - query_generation: Legacy alias for intent (extract mode)
-            - retrieval: For grounded, retrieval config dict
-            - synthesis: For grounded, synthesis config dict with:
-              - mode: "llm" (default) or "template" (Jinja2)
-            - sources: For grounded, list of source config dicts
-            - store_provenance: For grounded, enable provenance recording (default: True)
-        knowledge_base: Optional knowledge base instance.  Required by the
-            ``"grounded"`` strategy; ignored by other strategies.
+        config: Reasoning configuration dict.  The ``strategy`` key
+            selects the strategy type (default ``"simple"``).  All
+            other keys are forwarded to the strategy's
+            ``from_config()`` classmethod.
+        knowledge_base: Optional knowledge base instance forwarded
+            as a kwarg to the strategy factory.
 
     Returns:
-        Configured reasoning strategy instance
+        Configured reasoning strategy instance.
 
     Raises:
-        ValueError: If strategy type is not supported
+        ValueError: If strategy type is not registered.
 
     Example:
         ```python
@@ -153,83 +161,13 @@ def create_reasoning_from_config(
         config = {"strategy": "simple"}
         strategy = create_reasoning_from_config(config)
 
-        # ReAct reasoning with trace storage
-        config = {
-            "strategy": "react",
-            "max_iterations": 5,
-            "verbose": True,
-            "store_trace": True
-        }
-        strategy = create_reasoning_from_config(config)
-
-        # Wizard reasoning
-        config = {
-            "strategy": "wizard",
-            "wizard_config": "wizards/onboarding.yaml",
-            "extraction_config": {
-                "provider": "ollama",
-                "model": "qwen3-coder",
-            },
-            "strict_validation": True
-        }
-        strategy = create_reasoning_from_config(config)
-
         # Grounded reasoning (deterministic KB retrieval)
         config = {
             "strategy": "grounded",
-            "query_generation": {"num_queries": 3},
+            "intent": {"mode": "extract", "num_queries": 3},
             "retrieval": {"top_k": 5},
-            "synthesis": {"require_citations": True},
         }
         strategy = create_reasoning_from_config(config, knowledge_base=kb)
         ```
     """
-    strategy_type = config.get("strategy", "simple").lower()
-
-    if strategy_type == "simple":
-        return SimpleReasoning(
-            greeting_template=config.get("greeting_template"),
-        )
-
-    elif strategy_type == "react":
-        return ReActReasoning(
-            max_iterations=config.get("max_iterations", 5),
-            verbose=config.get("verbose", False),
-            store_trace=config.get("store_trace", False),
-            greeting_template=config.get("greeting_template"),
-        )
-
-    elif strategy_type == "wizard":
-        return WizardReasoning.from_config(config)
-
-    elif strategy_type == "grounded":
-        grounded_config = GroundedReasoningConfig.from_dict(config)
-        strategy = GroundedReasoning(config=grounded_config)
-        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but only
-        # when the config doesn't already declare a vector_kb source
-        # (otherwise the same KB gets wrapped twice: once here, once by
-        # the source construction loop in base.py).
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb" for s in grounded_config.sources
-        )
-        if knowledge_base is not None and not has_vector_kb_source:
-            strategy.set_knowledge_base(knowledge_base)
-        return strategy
-
-    elif strategy_type == "hybrid":
-        hybrid_config = HybridReasoningConfig.from_dict(config)
-        strategy = HybridReasoning(config=hybrid_config)
-        # Auto-wrap knowledge_base — same logic as grounded
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb"
-            for s in hybrid_config.grounded.sources
-        )
-        if knowledge_base is not None and not has_vector_kb_source:
-            strategy.set_knowledge_base(knowledge_base)
-        return strategy
-
-    else:
-        raise ValueError(
-            f"Unknown reasoning strategy: {strategy_type}. "
-            f"Available strategies: simple, react, wizard, grounded, hybrid"
-        )
+    return get_registry().create(config, knowledge_base=knowledge_base)

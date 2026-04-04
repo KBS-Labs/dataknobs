@@ -1,5 +1,7 @@
 """ReAct (Reasoning + Acting) reasoning strategy."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -50,6 +52,25 @@ class ReActReasoning(ReasoningStrategy):
         )
         ```
     """
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> ReActReasoning:
+        """Create ReActReasoning from a configuration dict.
+
+        Args:
+            config: Configuration dict with optional keys:
+                max_iterations, verbose, store_trace, greeting_template.
+            **_kwargs: Ignored (no KB or provider injection needed).
+
+        Returns:
+            Configured ReActReasoning instance.
+        """
+        return cls(
+            max_iterations=config.get("max_iterations", 5),
+            verbose=config.get("verbose", False),
+            store_trace=config.get("store_trace", False),
+            greeting_template=config.get("greeting_template"),
+        )
 
     def __init__(
         self,
