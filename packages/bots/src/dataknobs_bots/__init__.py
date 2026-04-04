@@ -36,7 +36,6 @@ from .reasoning import (
     ReasoningStrategy,
     SimpleReasoning,
     StrategyCapabilities,
-    StrategyRegistry,
     create_reasoning_from_config,
     register_strategy,
 )
@@ -99,7 +98,6 @@ __all__ = [
     "SaveConfigTool",
     "SimpleReasoning",
     "StrategyCapabilities",
-    "StrategyRegistry",
     "SummaryMemory",
     "TemplateVariable",
     "UndoResult",

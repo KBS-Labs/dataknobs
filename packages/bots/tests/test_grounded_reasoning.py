@@ -1073,10 +1073,12 @@ class TestGroundedFactory:
         assert len(strategy._sources) == 0
 
     def test_factory_error_message_includes_grounded(self) -> None:
+        from dataknobs_common import NotFoundError
         from dataknobs_bots.reasoning import create_reasoning_from_config
 
-        with pytest.raises(ValueError, match="grounded"):
+        with pytest.raises(NotFoundError) as exc_info:
             create_reasoning_from_config({"strategy": "nonexistent"})
+        assert "grounded" in exc_info.value.context.get("available", [])
 
 
 # ------------------------------------------------------------------

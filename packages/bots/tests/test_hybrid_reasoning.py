@@ -545,10 +545,12 @@ class TestHybridFactory:
         assert len(kb.queries) > 0
 
     def test_factory_error_message_includes_hybrid(self) -> None:
+        from dataknobs_common import NotFoundError
         from dataknobs_bots.reasoning import create_reasoning_from_config
 
-        with pytest.raises(ValueError, match="hybrid"):
+        with pytest.raises(NotFoundError) as exc_info:
             create_reasoning_from_config({"strategy": "nonexistent"})
+        assert "hybrid" in exc_info.value.context.get("available", [])
 
 
 # ------------------------------------------------------------------

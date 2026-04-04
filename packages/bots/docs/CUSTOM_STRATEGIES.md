@@ -241,7 +241,7 @@ from dataknobs_bots.reasoning import (
     list_strategies,         # List all registered strategy names
     get_strategy_factory,    # Get the factory for a strategy name
     is_strategy_registered,  # Check if a name is registered
-    get_registry,            # Access the StrategyRegistry singleton
+    get_registry,            # Access the PluginRegistry singleton
 )
 
 # Register (raises ValueError if already registered)
@@ -277,9 +277,18 @@ from dataknobs_llm.testing import text_response
 def _register(monkeypatch):
     """Register custom strategy in an isolated registry."""
     import dataknobs_bots.reasoning.registry as reg_module
-    from dataknobs_bots.reasoning.registry import StrategyRegistry
+    from dataknobs_common.registry import PluginRegistry
+    from dataknobs_bots.reasoning import ReasoningStrategy
+    from dataknobs_bots.reasoning.registry import _register_builtins
 
-    fresh = StrategyRegistry()
+    fresh = PluginRegistry[ReasoningStrategy](
+        "test_strategies",
+        validate_type=ReasoningStrategy,
+        canonicalize_keys=True,
+        config_key="strategy",
+        config_key_default="simple",
+        on_first_access=_register_builtins,
+    )
     fresh.register("summarize", SummarizeReasoning)
     monkeypatch.setattr(reg_module, "_registry", fresh)
 

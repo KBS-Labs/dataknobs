@@ -23,9 +23,9 @@ Usage::
 from __future__ import annotations
 
 import logging
-import threading
 from collections.abc import Callable
-from typing import Any
+
+from dataknobs_common.registry import PluginRegistry
 
 from .base import ReasoningStrategy
 
@@ -36,123 +36,9 @@ logger = logging.getLogger(__name__)
 StrategyFactory = type[ReasoningStrategy] | Callable[..., ReasoningStrategy]
 
 
-class StrategyRegistry:
-    """Registry mapping strategy names to their factories.
-
-    Unlike ``PluginRegistry`` (which caches singleton instances and has
-    a ``(key, config)`` factory signature), ``StrategyRegistry`` creates
-    a fresh instance per call — strategies are per-bot, not singletons.
-
-    When ``PluginRegistry`` gains a ``create()`` method for fresh-instance
-    factory invocation (consumer-gaps plan Item 65), this class should
-    be migrated to use it as its backing store.
-    """
-
-    def __init__(self) -> None:
-        self._factories: dict[str, StrategyFactory] = {}
-        self._initialized = False
-        self._lock = threading.RLock()
-
-    def _ensure_builtins(self) -> None:
-        """Register built-in strategies on first access."""
-        with self._lock:
-            if self._initialized:
-                return
-            # Set flag before calling _register_builtins to prevent
-            # re-entry (register() calls _ensure_builtins internally).
-            # Reset on failure so a subsequent call can retry.
-            self._initialized = True
-            try:
-                _register_builtins(self)
-            except Exception:
-                self._initialized = False
-                raise
-
-    def register(
-        self,
-        name: str,
-        factory: StrategyFactory,
-        *,
-        override: bool = False,
-    ) -> None:
-        """Register a strategy factory under the given name.
-
-        Args:
-            name: Strategy name (used in config ``strategy`` field).
-            factory: A ``ReasoningStrategy`` subclass or callable
-                ``(config, **kwargs) -> ReasoningStrategy``.
-            override: If ``True``, silently replace an existing
-                registration.  Otherwise raise ``ValueError``.
-
-        Raises:
-            ValueError: If ``name`` is already registered and
-                ``override`` is ``False``.
-        """
-        self._ensure_builtins()
-        canonical = name.lower()
-        with self._lock:
-            if canonical in self._factories and not override:
-                raise ValueError(
-                    f"Strategy '{canonical}' is already registered. "
-                    f"Use override=True to replace it."
-                )
-            self._factories[canonical] = factory
-        logger.debug("Registered strategy '%s'", canonical)
-
-    def create(
-        self,
-        config: dict[str, Any],
-        **kwargs: Any,
-    ) -> ReasoningStrategy:
-        """Create a strategy instance from a config dict.
-
-        Extracts ``config["strategy"]`` (default ``"simple"``), looks up
-        the factory, and calls it.  For ``ReasoningStrategy`` subclasses
-        the factory is ``cls.from_config(config, **kwargs)``.  For plain
-        callables the factory is called as ``factory(config, **kwargs)``.
-
-        Args:
-            config: Strategy configuration dict (must contain
-                ``strategy`` key).
-            **kwargs: Forwarded to the factory (e.g. ``knowledge_base``).
-
-        Returns:
-            Configured strategy instance.
-
-        Raises:
-            ValueError: If the strategy name is not registered.
-        """
-        self._ensure_builtins()
-        name = config.get("strategy", "simple").lower()
-        factory = self._factories.get(name)
-        if factory is None:
-            available = ", ".join(sorted(self._factories))
-            raise ValueError(
-                f"Unknown reasoning strategy: '{name}'. "
-                f"Available strategies: {available}"
-            )
-
-        if isinstance(factory, type) and issubclass(factory, ReasoningStrategy):
-            return factory.from_config(config, **kwargs)
-        return factory(config, **kwargs)
-
-    def get_factory(self, name: str) -> StrategyFactory | None:
-        """Return the factory for a strategy name, or ``None``."""
-        self._ensure_builtins()
-        return self._factories.get(name.lower())
-
-    def is_registered(self, name: str) -> bool:
-        """Check whether a strategy name is registered."""
-        self._ensure_builtins()
-        return name.lower() in self._factories
-
-    def list_keys(self) -> list[str]:
-        """Return sorted list of registered strategy names."""
-        self._ensure_builtins()
-        return sorted(self._factories)
-
-
-def _register_builtins(registry: StrategyRegistry) -> None:
+def _register_builtins(
+    registry: PluginRegistry[ReasoningStrategy],
+) -> None:
     """Register the 5 built-in strategies via lazy imports.
 
     Imports are deferred to avoid circular imports and to keep
@@ -164,17 +50,26 @@ def _register_builtins(registry: StrategyRegistry) -> None:
     from .simple import SimpleReasoning
     from .wizard import WizardReasoning
 
-    # _initialized is already True (set by caller), so register()
-    # won't re-enter _ensure_builtins.
-    registry.register("simple", SimpleReasoning)
-    registry.register("react", ReActReasoning)
-    registry.register("wizard", WizardReasoning)
-    registry.register("grounded", GroundedReasoning)
-    registry.register("hybrid", HybridReasoning)
+    for name, cls in [
+        ("simple", SimpleReasoning),
+        ("react", ReActReasoning),
+        ("wizard", WizardReasoning),
+        ("grounded", GroundedReasoning),
+        ("hybrid", HybridReasoning),
+    ]:
+        registry.register(name, cls)
 
 
-# Module-level singleton
-_registry = StrategyRegistry()
+# Module-level singleton — configured PluginRegistry replaces
+# the former StrategyRegistry class (consumer-gaps plan Item 65).
+_registry: PluginRegistry[ReasoningStrategy] = PluginRegistry(
+    "reasoning_strategies",
+    validate_type=ReasoningStrategy,
+    canonicalize_keys=True,
+    config_key="strategy",
+    config_key_default="simple",
+    on_first_access=_register_builtins,
+)
 
 
 # ------------------------------------------------------------------
@@ -222,7 +117,7 @@ def list_strategies() -> list[str]:
     return _registry.list_keys()
 
 
-def get_registry() -> StrategyRegistry:
+def get_registry() -> PluginRegistry[ReasoningStrategy]:
     """Return the module-level strategy registry singleton.
 
     Useful for advanced scenarios (e.g. bulk registration, testing).

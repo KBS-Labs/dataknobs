@@ -51,7 +51,6 @@ from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
 from .registry import (
     StrategyFactory,
-    StrategyRegistry,
     get_registry,
     get_strategy_factory,
     is_strategy_registered,
@@ -64,7 +63,6 @@ __all__ = [
     "ReasoningStrategy",
     "StrategyCapabilities",
     "StrategyFactory",
-    "StrategyRegistry",
     "register_strategy",
     "is_strategy_registered",
     "list_strategies",
@@ -132,7 +130,8 @@ def create_reasoning_from_config(
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
-    Delegates to the :class:`StrategyRegistry` singleton.  Built-in
+    Delegates to the strategy :class:`~dataknobs_common.registry.PluginRegistry`
+    singleton.  Built-in
     strategies (simple, react, wizard, grounded, hybrid) are registered
     automatically; 3rd-party strategies can be added via
     :func:`register_strategy`.
@@ -153,7 +152,8 @@ def create_reasoning_from_config(
         Configured reasoning strategy instance.
 
     Raises:
-        ValueError: If strategy type is not registered.
+        NotFoundError: If strategy type is not registered.
+        OperationError: If strategy factory raises an exception.
 
     Example:
         ```python
@@ -170,4 +170,4 @@ def create_reasoning_from_config(
         strategy = create_reasoning_from_config(config, knowledge_base=kb)
         ```
     """
-    return get_registry().create(config, knowledge_base=knowledge_base)
+    return get_registry().create(config=config, knowledge_base=knowledge_base)
