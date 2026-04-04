@@ -42,7 +42,7 @@ When you create a PR, the following workflows run:
 - **Purpose**: Run integration tests in CI environment
 - **Triggers**: PR, push to main/develop, schedule
 - **Services**: PostgreSQL, Elasticsearch, LocalStack
-- **Test Matrix**: Python 3.10, 3.11, 3.12
+- **Test Matrix**: Python 3.12, 3.13
 - **Output**: Test results, coverage reports, PR comments
 
 #### C. Standard CI (`ci.yml`)

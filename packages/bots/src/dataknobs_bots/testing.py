@@ -58,9 +58,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-from typing_extensions import Self
+from typing import Any, Self
 
 from dataknobs_llm import EchoProvider
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMResponse

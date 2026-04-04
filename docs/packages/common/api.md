@@ -1399,7 +1399,7 @@ class MyRegistry:
 
 The Common package has minimal dependencies:
 
-- **Python**: >= 3.10
+- **Python**: >= 3.12
 - **Standard library only**: No external dependencies
 
 ## Changelog

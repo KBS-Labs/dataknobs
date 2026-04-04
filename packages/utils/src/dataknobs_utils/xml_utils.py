@@ -9,9 +9,7 @@ import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
-from typing import Any, List, TextIO, Tuple, Union
-
-from typing_extensions import Self
+from typing import Any, Self, TextIO
 
 import bs4
 import pandas as pd
@@ -33,7 +31,7 @@ class XmlStream(ABC):
         auto_clear_elts: If True, automatically clears closed elements to save memory.
     """
 
-    def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
+    def __init__(self, source: str | TextIO, auto_clear_elts: bool = True):
         """Initialize the XML stream.
 
         Args:
@@ -44,15 +42,15 @@ class XmlStream(ABC):
         self._xml_iter: Any | None = None
         self.source = source
         self.auto_clear_elts = auto_clear_elts
-        self._context: List[ET.Element] = []
+        self._context: list[ET.Element] = []
         self._closed_elt: ET.Element | None = None
 
     @property
-    def context(self) -> List[ET.Element]:
+    def context(self) -> list[ET.Element]:
         """Get the current element context stack from root to current position.
 
         Returns:
-            List[ET.Element]: Copy of the element stack from root to current element.
+            list[ET.Element]: Copy of the element stack from root to current element.
         """
         return self._context.copy()
 
@@ -65,11 +63,11 @@ class XmlStream(ABC):
         """
         return len(self._context)
 
-    def next_xml_iter(self) -> Tuple[str, ET.Element]:
+    def next_xml_iter(self) -> tuple[str, ET.Element]:
         """Get the next event and element from the XML iterator.
 
         Returns:
-            Tuple[str, ET.Element]: Tuple of (event, element) where event is
+            tuple[str, ET.Element]: Tuple of (event, element) where event is
                 'start' or 'end'.
 
         Raises:
@@ -86,14 +84,14 @@ class XmlStream(ABC):
         raise StopIteration
 
     @abstractmethod
-    def loop_through_elements(self) -> List[ET.Element]:
+    def loop_through_elements(self) -> list[ET.Element]:
         """Process XML elements until collecting the next desired element(s).
 
         Subclasses must implement this method to define specific element
         collection behavior, updating the context as elements are encountered.
 
         Returns:
-            List[ET.Element]: The collected element(s) in context from root.
+            list[ET.Element]: The collected element(s) in context from root.
 
         Raises:
             NotImplementedError: Must be implemented by subclasses.
@@ -111,7 +109,7 @@ class XmlStream(ABC):
             self._closed_elt = None
         return self
 
-    def __next__(self) -> List[ET.Element]:
+    def __next__(self) -> list[ET.Element]:
         return self.loop_through_elements()
 
     def __enter__(self) -> Self:
@@ -167,14 +165,14 @@ class XmlStream(ABC):
                 self._closed_elt.clear()  # Clear memory
             self._closed_elt = closed_elem
 
-    def take(self, n: int) -> Generator[List[ET.Element], None, None]:
+    def take(self, n: int) -> Generator[list[ET.Element], None, None]:
         """Generate the next N items from this iterator.
 
         Args:
             n: Number of items to take.
 
         Yields:
-            List[ET.Element]: Each collected element list, stopping early if
+            list[ET.Element]: Each collected element list, stopping early if
                 iterator is exhausted.
         """
         idx = 0
@@ -188,7 +186,7 @@ class XmlStream(ABC):
 
     @staticmethod
     def to_string(
-        elt_path: List[ET.Element], with_text_or_atts: Union[bool, str, List[str]] = True
+        elt_path: list[ET.Element], with_text_or_atts: bool | str | list[str] = True
     ) -> str:
         r"""Convert element path to dot-delimited string with optional leaf value.
 
@@ -200,7 +198,7 @@ class XmlStream(ABC):
             with_text_or_atts: Controls value appending behavior:
                 - True: Append leaf element's text if present
                 - str: Append value of specified attribute if present
-                - List[str]: Append first non-empty attribute value from list
+                - list[str]: Append first non-empty attribute value from list
                 - False: Don't append any values
 
         Returns:
@@ -253,7 +251,7 @@ class XmlLeafStream(XmlStream):
         elts: Most recently yielded element path.
     """
 
-    def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
+    def __init__(self, source: str | TextIO, auto_clear_elts: bool = True):
         """Initialize the XML leaf stream.
 
         Args:
@@ -264,15 +262,15 @@ class XmlLeafStream(XmlStream):
         super().__init__(source, auto_clear_elts=auto_clear_elts)
         self._last_elt: ET.Element | None = None  # The last new element
         self.count = 0  # The number of terminal nodes seen
-        self.elts: List[ET.Element] | None = None  # The latest yielded sequence
+        self.elts: list[ET.Element] | None = None  # The latest yielded sequence
 
-    def loop_through_elements(self) -> List[ET.Element]:
+    def loop_through_elements(self) -> list[ET.Element]:
         """Collect the next leaf element with its full path from root.
 
         Returns:
-            List[ET.Element]: Element path from root to the next leaf element.
+            list[ET.Element]: Element path from root to the next leaf element.
         """
-        gotit: List[ET.Element] | None = None
+        gotit: list[ET.Element] | None = None
         while True:
             event, elem = self.next_xml_iter()
             if event == "start":
@@ -316,8 +314,8 @@ class XmlElementGrabber(XmlStream):
 
     def __init__(
         self,
-        source: Union[str, TextIO],
-        match: Union[str, Callable[[ET.Element], bool]],
+        source: str | TextIO,
+        match: str | Callable[[ET.Element], bool],
         auto_clear_elts: bool = True,
     ):
         """Initialize the XML element grabber.
@@ -347,13 +345,13 @@ class XmlElementGrabber(XmlStream):
             matches = self.match(elem)
         return matches
 
-    def loop_through_elements(self) -> List[ET.Element]:
+    def loop_through_elements(self) -> list[ET.Element]:
         """Find the next matching element with its full path from root.
 
         Returns:
-            List[ET.Element]: Element path from root to the next matching element.
+            list[ET.Element]: Element path from root to the next matching element.
         """
-        gotit: List[ET.Element] | None = None
+        gotit: list[ET.Element] | None = None
         grabbing: ET.Element | None = None
         while True:
             event, elem = self.next_xml_iter()
@@ -460,8 +458,8 @@ def html_table_scraper(
         pd.DataFrame: DataFrame with scraped table data. Column names are taken
             from <th> elements if present, otherwise columns are unnamed.
     """
-    columns: List[str] | None = None
-    rows: List[List[str]] = []
+    columns: list[str] | None = None
+    rows: list[list[str]] = []
 
     def html_text(elt: bs4.element.Tag) -> str:
         return elt.text.replace("\xa0", " ").strip()

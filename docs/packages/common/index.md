@@ -783,7 +783,7 @@ For complete API documentation, see the [Common API Reference](api.md).
 ## Package Dependencies
 
 The Common package requires:
-- Python 3.10+
+- Python 3.12+
 - No external dependencies (uses only standard library)
 
 The Common package is used by:

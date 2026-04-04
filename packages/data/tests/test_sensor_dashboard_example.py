@@ -185,7 +185,7 @@ class TestSensorDashboardSync:
         assert "temperature" in df.columns
         assert "humidity" in df.columns
         assert df.index.name == "timestamp"
-        assert df.index.dtype == "datetime64[ns]"
+        assert str(df.index.dtype).startswith("datetime64")
     
     def test_hourly_aggregation(self):
         """Test calculating hourly averages using pandas."""

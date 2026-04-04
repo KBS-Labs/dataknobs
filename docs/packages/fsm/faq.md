@@ -51,7 +51,7 @@ pip install -e .
 
 ### What are the system requirements?
 
-- Python 3.10 or higher (per pyproject.toml)
+- Python 3.12 or higher (per pyproject.toml)
 - Operating System: Linux, macOS, or Windows
 - Memory: Depends on data mode and dataset size
 - Core dependencies: pydantic>=2.0.0, dataknobs-data>=0.2.0, click>=8.1.0, rich>=13.0.0

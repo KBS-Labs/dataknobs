@@ -3,7 +3,7 @@ name = "dataknobs-fsm"
 version = "0.1.14"
 description = "Finite State Machine framework with data modes, resource management, and streaming support"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [
     {name = "DataKnobs Team", email = "team@dataknobs.com"}
 ]
@@ -24,7 +24,6 @@ dependencies = [
     "dataknobs-structures>=0.1.0",
     "dataknobs-utils>=0.1.0",
     "dataknobs-config>=0.1.0",
-    "typing-extensions>=4.8.0",
     "aiofiles>=23.0.0",
     "click>=8.1.0",
     "rich>=13.0.0",
@@ -56,7 +55,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-mock>=3.11.0",
     "black>=24.0.0",
-    "ruff>=0.1.0",
+    "ruff>=0.8.0",
     "mypy>=1.0.0",
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
@@ -84,7 +83,7 @@ build-backend = "hatchling.build"
 dev = [
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
-    "ruff>=0.12.8",
+    "ruff>=0.8.0",
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
 ]

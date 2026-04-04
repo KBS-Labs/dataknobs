@@ -161,11 +161,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.12', '3.13']
         exclude:
           # Reduce matrix size for faster builds
-          - os: windows-latest
-            python-version: '3.8'
           - os: macos-latest
             python-version: '3.8'
     

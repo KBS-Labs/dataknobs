@@ -3,7 +3,7 @@ name = "dataknobs-workspace"
 version = "1.0.0"
 description = "Dataknobs monorepo workspace"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common",
     "dataknobs-config",
@@ -27,6 +27,7 @@ dev = [
     "pylint>=3.3.6",
     "black>=24.0.0",
     "isort>=5.13.0",
+    "ruff>=0.8.0",
     "mypy>=1.0.0",
     "pandas-stubs>=2.0.0",
     "types-requests>=2.31.0",

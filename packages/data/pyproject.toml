@@ -3,7 +3,7 @@ name = "dataknobs-data"
 version = "0.4.13"
 description = "Unified data abstraction layer for consistent database operations across multiple storage technologies"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [
     {name = "DataKnobs Team", email = "team@dataknobs.com"}
 ]
@@ -64,7 +64,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-mock>=3.11.0",
     "black>=24.0.0",
-    "ruff>=0.1.0",
+    "ruff>=0.8.0",
     "mypy>=1.0.0",
     "moto>=4.2.0",  # For S3 testing
     "testcontainers>=3.7.0",  # For database testing
@@ -95,7 +95,7 @@ dev = [
     "moto>=5.1.10",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
-    "ruff>=0.12.8",
+    "ruff>=0.8.0",
 ]
 
 [tool.hatch.build.targets.wheel]

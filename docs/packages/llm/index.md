@@ -229,7 +229,7 @@ pip install dataknobs-llm[dev]
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.12+
 - dataknobs-fsm (automatically installed)
 - Jinja2 (for template rendering)
 - One or more LLM provider SDKs (OpenAI, Anthropic, etc.)

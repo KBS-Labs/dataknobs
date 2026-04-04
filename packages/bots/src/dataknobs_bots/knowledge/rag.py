@@ -2,9 +2,7 @@
 
 import types
 from pathlib import Path
-from typing import Any
-
-from typing_extensions import Self
+from typing import Any, Self
 
 from dataknobs_xization import (
     ChunkQualityConfig,

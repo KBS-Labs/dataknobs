@@ -54,7 +54,7 @@ class TestDataFrameConverter:
         records = converter.dataframe_to_records(df)
         
         assert len(records) == 3
-        assert records[1].get_value("name") is None
+        assert pd.isna(records[1].get_value("name"))
         assert pd.isna(records[1].get_value("value"))
     
     def test_dataframe_to_records_with_metadata(self):

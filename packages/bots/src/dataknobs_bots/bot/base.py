@@ -10,9 +10,7 @@ from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import (
@@ -209,8 +207,8 @@ class DynaBot:
                 bounded by the remaining budget via
                 ``asyncio.wait_for()``.  For ``stream_chat()``, a
                 streaming re-call that starts within budget runs to
-                completion (streams cannot be cancelled mid-chunk in
-                Python 3.10).  Individual tool executions are always
+                completion (async generators cannot be reliably
+                cancelled mid-chunk).  Individual tool executions are always
                 bounded by ``tool_timeout``.
         """
         self.llm = llm
