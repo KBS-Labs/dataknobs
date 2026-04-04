@@ -76,8 +76,18 @@ class PostgresEventBus:
             connection_string: PostgreSQL connection string
             channel_prefix: Prefix for NOTIFY channels (default: "events")
         """
+        import re
+
         self._connection_string = connection_string
-        self._channel_prefix = channel_prefix
+        # Sanitize prefix the same way we sanitize topics — it is
+        # interpolated into LISTEN/UNLISTEN SQL statements which do
+        # not support parameterized queries.
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", channel_prefix)
+        if not safe_prefix:
+            raise ValueError(
+                f"channel_prefix {channel_prefix!r} is empty after sanitization"
+            )
+        self._channel_prefix = safe_prefix
         self._conn: Any = None  # asyncpg.Connection
         self._listen_conn: Any = None  # Separate connection for LISTEN
         self._subscriptions: dict[str, Subscription] = {}
@@ -158,7 +168,7 @@ class PostgresEventBus:
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        self._listen_conn.remove_listener(
+                        await self._listen_conn.remove_listener(
                             channel, self._notification_handler
                         )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
@@ -250,7 +260,7 @@ class PostgresEventBus:
             # Start listening on this channel if not already
             if channel not in self._channel_topics:
                 await self._listen_conn.execute(f"LISTEN {channel}")
-                self._listen_conn.add_listener(
+                await self._listen_conn.add_listener(
                     channel, self._notification_handler
                 )
                 self._channel_topics[channel] = topic
@@ -287,7 +297,7 @@ class PostgresEventBus:
             if not has_other_subs and channel in self._channel_topics:
                 try:
                     if self._listen_conn:
-                        self._listen_conn.remove_listener(
+                        await self._listen_conn.remove_listener(
                             channel, self._notification_handler
                         )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")

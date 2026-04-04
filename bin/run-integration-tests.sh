@@ -183,12 +183,14 @@ if [ "$IN_DOCKER" = true ]; then
     # Use Docker network hostnames when inside container
     export POSTGRES_HOST=postgres
     export ELASTICSEARCH_HOST=elasticsearch
+    export REDIS_HOST=redis
     export AWS_ENDPOINT_URL=http://localstack:4566
     export LOCALSTACK_ENDPOINT=http://localstack:4566
 else
     # Use localhost when running on host
     export POSTGRES_HOST=localhost
     export ELASTICSEARCH_HOST=localhost
+    export REDIS_HOST=localhost
     export AWS_ENDPOINT_URL=http://localhost:4566
     export LOCALSTACK_ENDPOINT=http://localhost:4566
 fi
@@ -198,6 +200,7 @@ export POSTGRES_USER=postgres
 export POSTGRES_PASSWORD=postgres
 export POSTGRES_DB=dataknobs_test
 export ELASTICSEARCH_PORT=9200
+export REDIS_PORT=6379
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_DEFAULT_REGION=us-east-1
@@ -206,6 +209,7 @@ export AWS_DEFAULT_REGION=us-east-1
 export TEST_S3=true
 export TEST_ELASTICSEARCH=true
 export TEST_POSTGRES=true
+export TEST_REDIS=true
 export TEST_OLLAMA=true
 
 # Determine which packages to test

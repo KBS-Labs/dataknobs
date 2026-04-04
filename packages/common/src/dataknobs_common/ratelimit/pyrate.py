@@ -30,7 +30,10 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from inspect import isawaitable
 from typing import Any
 
 from dataknobs_common.exceptions import TimeoutError
@@ -174,6 +177,10 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
     ) -> RateItem:  # type: ignore[no-any-unimported]
         """Wrap an item name and weight into a RateItem.
 
+        pyrate-limiter uses millisecond timestamps internally
+        (``Duration.SECOND = 1000``). The timestamp must be in the
+        same unit as the rate intervals passed to ``Rate()``.
+
         Args:
             name: Category name.
             weight: Operation weight.
@@ -181,10 +188,8 @@ class _CategoryBucketFactory(BucketFactory):  # type: ignore[misc]
         Returns:
             A RateItem for the limiter.
         """
-        import time
-
-        now = time.monotonic()
-        return RateItem(name, int(now * 1_000_000), weight=weight)
+        now_ms = int(time.monotonic() * 1_000)
+        return RateItem(name, now_ms, weight=weight)
 
     def get(
         self, item: RateItem  # type: ignore[no-any-unimported]
@@ -289,7 +294,9 @@ class PyrateRateLimiter:
         Returns:
             True if the acquire succeeded, False otherwise.
         """
-        result = await self._limiter.try_acquire(name, weight=weight)
+        result = self._limiter.try_acquire(name, weight=weight, blocking=False)
+        if isawaitable(result):
+            result = await result
         return bool(result)
 
     async def acquire(
@@ -298,9 +305,12 @@ class PyrateRateLimiter:
         weight: int = 1,
         timeout: float | None = None,
     ) -> None:
-        """Acquire capacity, blocking until available.
+        """Acquire capacity, waiting asynchronously until available.
 
-        Uses pyrate-limiter's built-in async blocking with max_delay.
+        Polls with ``asyncio.sleep`` so the event loop stays free.
+        Does NOT use pyrate-limiter's built-in ``blocking=True`` mode
+        because that path calls ``time.sleep()`` which blocks the
+        event loop thread.
 
         Args:
             name: Category name.
@@ -311,20 +321,16 @@ class PyrateRateLimiter:
         Raises:
             TimeoutError: If the timeout is exceeded.
         """
-        if timeout is not None:
-            # Use pyrate's max_delay for timeout control
-            limiter = Limiter(
-                self._factory,
-                max_delay=int(timeout * Duration.SECOND),
-            )
-            acquired = await limiter.try_acquire(name, weight=weight)
-            if not acquired:
+        deadline = (time.monotonic() + timeout) if timeout is not None else None
+        while True:
+            if await self.try_acquire(name, weight):
+                return
+            if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"Rate limit acquire timed out for '{name}'",
                     context={"name": name, "weight": weight, "timeout": timeout},
                 )
-        else:
-            await self._limiter.try_acquire(name, weight=weight)
+            await asyncio.sleep(0.05)
 
     async def get_status(self, name: str = "default") -> RateLimitStatus:
         """Get approximate status of a rate limiter bucket.

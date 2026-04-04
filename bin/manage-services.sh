@@ -120,7 +120,7 @@ with open('$ROOT_DIR/$COMPOSE_OVERRIDE', 'r') as f:
     
     # If no services detected, use sensible defaults
     if [ ${#services[@]} -eq 0 ]; then
-        services=("postgres" "elasticsearch" "localstack")
+        services=("postgres" "elasticsearch" "localstack" "redis")
     fi
     
     echo "${services[@]}"
@@ -145,6 +145,9 @@ get_health_check() {
             localstack)
                 echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -r '.services.s3' 2>/dev/null | grep -q 'available'"
                 ;;
+            redis)
+                echo "redis-cli -h $REDIS_HOST ping 2>/dev/null | grep -q PONG"
+                ;;
             *)
                 echo ""
                 ;;
@@ -160,6 +163,9 @@ get_health_check() {
                 ;;
             localstack)
                 echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -r '.services.s3' 2>/dev/null | grep -q 'available'"
+                ;;
+            redis)
+                echo "run_compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG"
                 ;;
             *)
                 echo ""
@@ -177,6 +183,9 @@ get_wait_time() {
             ;;
         postgres|localstack)
             echo 30
+            ;;
+        redis)
+            echo 10
             ;;
         *)
             echo 30
@@ -273,11 +282,13 @@ if is_in_docker; then
     POSTGRES_HOST="postgres"
     ELASTICSEARCH_HOST="elasticsearch"
     LOCALSTACK_HOST="localstack"
+    REDIS_HOST="redis"
 else
     # On host machine - use localhost
     POSTGRES_HOST="localhost"
     ELASTICSEARCH_HOST="localhost"
     LOCALSTACK_HOST="localhost"
+    REDIS_HOST="localhost"
 fi
 
 # Function to check if Docker is running
@@ -372,6 +383,7 @@ start_services() {
                 postgres) local service_name="PostgreSQL" ;;
                 elasticsearch) local service_name="Elasticsearch" ;;
                 localstack) local service_name="LocalStack" ;;
+                redis) local service_name="Redis" ;;
                 *) local service_name="$service" ;;
             esac
             
@@ -544,6 +556,21 @@ show_status() {
                     echo -e "  LocalStack:    ${RED}✗ Not responding${NC}"
                 fi
                 ;;
+            redis)
+                if is_in_docker; then
+                    if redis-cli -h $REDIS_HOST ping 2>/dev/null | grep -q PONG; then
+                        echo -e "  Redis:         ${GREEN}✓ Healthy${NC}"
+                    else
+                        echo -e "  Redis:         ${RED}✗ Not responding${NC}"
+                    fi
+                else
+                    if run_compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+                        echo -e "  Redis:         ${GREEN}✓ Healthy${NC}"
+                    else
+                        echo -e "  Redis:         ${RED}✗ Not responding${NC}"
+                    fi
+                fi
+                ;;
             *)
                 # Generic check
                 if is_in_docker; then
@@ -646,6 +673,13 @@ list_services() {
                         echo -e "  ${RED}○${NC} $service (not reachable)"
                     fi
                     ;;
+                redis)
+                    if redis-cli -h $REDIS_HOST ping 2>/dev/null | grep -q PONG; then
+                        echo -e "  ${GREEN}●${NC} $service (reachable)"
+                    else
+                        echo -e "  ${RED}○${NC} $service (not reachable)"
+                    fi
+                    ;;
                 *)
                     if ping -c 1 -W 1 "$service" >/dev/null 2>&1; then
                         echo -e "  ${GREEN}●${NC} $service (reachable)"
@@ -723,7 +757,15 @@ ensure_services() {
             print_warning "Elasticsearch not reachable at $ELASTICSEARCH_HOST:9200"
             all_reachable=false
         fi
-        
+
+        # Check Redis (only if TEST_REDIS is enabled)
+        if [ "${TEST_REDIS:-false}" = "true" ]; then
+            if ! redis-cli -h $REDIS_HOST ping 2>/dev/null | grep -q PONG; then
+                print_warning "Redis not reachable at $REDIS_HOST"
+                all_reachable=false
+            fi
+        fi
+
         if [ "$all_reachable" = true ]; then
             print_success "All services are reachable from container"
             return 0
@@ -749,6 +791,13 @@ ensure_services() {
     # Check Elasticsearch
     if ! curl -s http://localhost:9200/_cluster/health >/dev/null 2>&1; then
         SERVICES_RUNNING=false
+    fi
+
+    # Check Redis (only if TEST_REDIS is enabled)
+    if [ "${TEST_REDIS:-false}" = "true" ]; then
+        if ! run_compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            SERVICES_RUNNING=false
+        fi
     fi
     
     if [ "$SERVICES_RUNNING" = true ]; then

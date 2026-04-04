@@ -1,13 +1,15 @@
 """Tests for PostgresEventBus.
 
 Unit tests cover channel name sanitization and SQL construction.
-Integration tests (marked with requires_postgres) cover actual pub/sub.
+Integration tests (gated by TEST_POSTGRES env var) cover actual pub/sub
+with a real PostgreSQL instance.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -15,6 +17,7 @@ import pytest
 
 from dataknobs_common.events import Event, EventType
 from dataknobs_common.events.postgres import PostgresEventBus
+from dataknobs_common.testing import is_postgres_available
 
 
 class TestTopicToChannel:
@@ -89,6 +92,53 @@ class TestTopicToChannel:
         channel = bus._topic_to_channel("événement")
         # Only ASCII alphanumeric + underscore survive
         assert channel == "events_vnement"
+
+
+class TestChannelPrefixSanitization:
+    """Tests for channel_prefix sanitization in __init__.
+
+    Bug: channel_prefix was interpolated directly into LISTEN/UNLISTEN
+    SQL statements without sanitization. While topics were sanitized by
+    _topic_to_channel(), a malicious channel_prefix could inject SQL.
+    """
+
+    def test_clean_prefix_accepted(self):
+        """Test a normal prefix is accepted unchanged."""
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="myapp",
+        )
+        assert bus._channel_prefix == "myapp"
+
+    def test_prefix_with_underscores(self):
+        """Test prefix with underscores is accepted."""
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="my_app_events",
+        )
+        assert bus._channel_prefix == "my_app_events"
+
+    def test_sql_injection_in_prefix_stripped(self):
+        """Bug: SQL injection via channel_prefix was not prevented.
+
+        Characters like quotes, semicolons, and spaces must be stripped
+        to prevent injection in LISTEN/UNLISTEN statements.
+        """
+        bus = PostgresEventBus(
+            connection_string="postgresql://unused",
+            channel_prefix="foo'; DROP TABLE users --",
+        )
+        assert "'" not in bus._channel_prefix
+        assert ";" not in bus._channel_prefix
+        assert " " not in bus._channel_prefix
+
+    def test_empty_prefix_after_sanitization_raises(self):
+        """Test that a prefix producing an empty result raises ValueError."""
+        with pytest.raises(ValueError, match="empty after sanitization"):
+            PostgresEventBus(
+                connection_string="postgresql://unused",
+                channel_prefix="!@#$%^&*()",
+            )
 
 
 class TestPublishSqlConstruction:
@@ -171,7 +221,7 @@ class TestListenerRegistration:
             async def execute(self, query: str, *args: Any) -> None:
                 listen_calls.append(query)
 
-            def add_listener(self, channel: str, callback: Any) -> None:
+            async def add_listener(self, channel: str, callback: Any) -> None:
                 registered_listeners.append((channel, callback))
 
             def __bool__(self) -> bool:
@@ -205,14 +255,18 @@ class TestListenerRegistration:
         registered_listeners: list[tuple[str, Any]] = []
 
         async def fake_connect(dsn: str) -> Any:
+            async def _add_listener(ch: str, cb: Any) -> None:
+                registered_listeners.append((ch, cb))
+
+            async def _remove_listener(ch: str, cb: Any) -> None:
+                pass
+
             return type(
                 "FakeConn",
                 (),
                 {
-                    "add_listener": lambda ch, cb: registered_listeners.append(
-                        (ch, cb)
-                    ),
-                    "remove_listener": lambda ch, cb: None,
+                    "add_listener": _add_listener,
+                    "remove_listener": _remove_listener,
                     "close": AsyncMock(),
                 },
             )()
@@ -316,3 +370,137 @@ class TestNotificationHandlerParsesPayload:
 
         # The handler should NOT dispatch — "$1" is not valid JSON
         assert len(dispatched_events) == 0
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — require a real PostgreSQL instance
+# ---------------------------------------------------------------------------
+
+# Construct DSN from individual env vars (matches bin/run-integration-tests.sh)
+PG_DSN = "postgresql://{}:{}@{}:{}/{}".format(
+    os.getenv("POSTGRES_USER", "postgres"),
+    os.getenv("POSTGRES_PASSWORD", "postgres"),
+    os.getenv("POSTGRES_HOST", "localhost"),
+    os.getenv("POSTGRES_PORT", "5432"),
+    os.getenv("POSTGRES_DB", "dataknobs"),
+)
+
+TEST_POSTGRES = os.getenv("TEST_POSTGRES", "").lower() != "false"
+
+skip_postgres = pytest.mark.skipif(
+    not TEST_POSTGRES or not is_postgres_available(),
+    reason="PostgreSQL integration tests skipped. Set TEST_POSTGRES=true and ensure Postgres is running.",
+)
+
+
+@skip_postgres
+class TestPostgresEventBusIntegration:
+    """Integration tests exercising real PostgreSQL LISTEN/NOTIFY.
+
+    These require a running Postgres instance. Run via:
+        TEST_POSTGRES=true uv run pytest tests/test_postgres_events.py -k Integration
+    Or via the full integration test runner:
+        bin/test.sh common
+    """
+
+    @pytest.mark.asyncio
+    async def test_publish_subscribe_roundtrip(self):
+        """Subscribe, publish, verify handler fires with correct event."""
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        try:
+            received: list[Event] = []
+
+            async def handler(event: Event) -> None:
+                received.append(event)
+
+            await bus.subscribe("test:roundtrip", handler)
+
+            event = Event(
+                type=EventType.CREATED,
+                topic="test:roundtrip",
+                payload={"key": "value"},
+            )
+            await bus.publish("test:roundtrip", event)
+
+            # Wait for async notification delivery
+            for _ in range(50):
+                if received:
+                    break
+                await asyncio.sleep(0.05)
+
+            assert len(received) == 1
+            assert received[0].type == EventType.CREATED
+            assert received[0].payload == {"key": "value"}
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_stops_delivery(self):
+        """After unsubscribing, events are no longer delivered."""
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        try:
+            received: list[Event] = []
+
+            async def handler(event: Event) -> None:
+                received.append(event)
+
+            sub = await bus.subscribe("test:unsub", handler)
+            await sub.cancel()
+
+            await bus.publish(
+                "test:unsub",
+                Event(type=EventType.CREATED, topic="test:unsub", payload={}),
+            )
+            await asyncio.sleep(0.5)
+
+            assert len(received) == 0
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_multiple_subscribers_same_topic(self):
+        """Two handlers on the same topic both receive the event."""
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        try:
+            received_a: list[Event] = []
+            received_b: list[Event] = []
+
+            async def handler_a(event: Event) -> None:
+                received_a.append(event)
+
+            async def handler_b(event: Event) -> None:
+                received_b.append(event)
+
+            await bus.subscribe("test:multi", handler_a)
+            await bus.subscribe("test:multi", handler_b)
+
+            await bus.publish(
+                "test:multi",
+                Event(type=EventType.CREATED, topic="test:multi", payload={"n": 1}),
+            )
+
+            for _ in range(50):
+                if received_a and received_b:
+                    break
+                await asyncio.sleep(0.05)
+
+            assert len(received_a) == 1
+            assert len(received_b) == 1
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_close_then_publish_raises(self):
+        """After close(), publish raises RuntimeError."""
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        await bus.close()
+
+        with pytest.raises(RuntimeError, match="not connected"):
+            await bus.publish(
+                "test:closed",
+                Event(type=EventType.CREATED, topic="test:closed", payload={}),
+            )

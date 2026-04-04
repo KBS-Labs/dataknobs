@@ -181,13 +181,13 @@ class RedisEventBus:
                 try:
                     await self._pubsub.unsubscribe()
                     await self._pubsub.punsubscribe()
-                    await self._pubsub.close()
+                    await self._pubsub.aclose()
                 except Exception:
                     pass
                 self._pubsub = None
 
             if self._redis:
-                await self._redis.close()
+                await self._redis.aclose()
                 self._redis = None
 
             self._subscriptions.clear()
