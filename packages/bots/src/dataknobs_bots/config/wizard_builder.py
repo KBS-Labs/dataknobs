@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Valid values for enum-like fields
-_VALID_REASONING = {"single", "react"}
 _VALID_MODE = {"conversation"}
 
 
@@ -137,6 +136,7 @@ class StageConfig:
     # Tools and reasoning
     tools: tuple[str, ...] = ()
     reasoning: str | None = None
+    reasoning_config: dict[str, Any] | None = None
     max_iterations: int | None = None
     extraction_model: str | None = None
     # Response generation
@@ -185,6 +185,8 @@ class StageConfig:
             d["tools"] = list(self.tools)
         if self.reasoning is not None:
             d["reasoning"] = self.reasoning
+        if self.reasoning_config is not None:
+            d["reasoning_config"] = self.reasoning_config
         if self.max_iterations is not None:
             d["max_iterations"] = self.max_iterations
         if self.extraction_model is not None:
@@ -427,6 +429,7 @@ class WizardConfigBuilder:
         response_template: str | None = None,
         help_text: str | None = None,
         reasoning: str | None = None,
+        reasoning_config: dict[str, Any] | None = None,
         max_iterations: int | None = None,
         context_generation: dict[str, Any] | None = None,
         **kwargs: Any,
@@ -445,7 +448,10 @@ class WizardConfigBuilder:
             suggestions: Quick-reply suggestions.
             response_template: Template-driven response (bypasses LLM).
             help_text: Help message for the user.
-            reasoning: Reasoning mode ('single' or 'react').
+            reasoning: Registered strategy name (e.g. ``"react"``,
+                ``"grounded"``) or ``"single"`` for direct LLM call.
+            reasoning_config: Optional strategy-specific configuration
+                dict forwarded to the strategy's ``from_config()``.
             max_iterations: Max iterations for ReAct reasoning.
             context_generation: LLM context generation config with
                 ``variables`` key.
@@ -472,6 +478,7 @@ class WizardConfigBuilder:
             response_template=response_template,
             help_text=help_text,
             reasoning=reasoning,
+            reasoning_config=reasoning_config,
             max_iterations=max_iterations,
             context_generation=ctx_cfg,
             **kwargs,
@@ -787,6 +794,7 @@ class WizardConfigBuilder:
                     skip_default=stage.skip_default,
                     can_go_back=stage.can_go_back,
                     auto_advance=stage.auto_advance,
+                    confirm_on_new_data=stage.confirm_on_new_data,
                     label=stage.label,
                     suggestions=stage.suggestions,
                     help_text=stage.help_text,
@@ -794,6 +802,7 @@ class WizardConfigBuilder:
                     transitions=new_transitions,
                     tools=stage.tools,
                     reasoning=stage.reasoning,
+                    reasoning_config=stage.reasoning_config,
                     max_iterations=stage.max_iterations,
                     extraction_model=stage.extraction_model,
                     response_template=stage.response_template,
@@ -804,6 +813,7 @@ class WizardConfigBuilder:
                     intent_detection=new_intent,
                     tasks=stage.tasks,
                     navigation=stage.navigation,
+                    capture_mode=stage.capture_mode,
                 )
             assembled.append(stage)
 
@@ -886,14 +896,22 @@ class WizardConfigBuilder:
                     )
                 )
 
-        # Validate reasoning values
+        # Validate reasoning values — accept any registered strategy name
+        # or the built-in "single" (direct manager.complete path).
+        from dataknobs_bots.reasoning.registry import get_registry
+
+        registry = get_registry()
+        valid_reasoning = {"single"} | set(registry.list_keys())
         for stage in stages:
-            if stage.reasoning is not None and stage.reasoning not in _VALID_REASONING:
+            if (
+                stage.reasoning is not None
+                and stage.reasoning.lower() not in valid_reasoning
+            ):
                 result = result.merge(
                     ValidationResult.error(
                         f"Stage '{stage.name}' has invalid reasoning "
                         f"value '{stage.reasoning}'. "
-                        f"Valid values: {sorted(_VALID_REASONING)}"
+                        f"Valid values: {sorted(valid_reasoning)}"
                     )
                 )
 
@@ -1054,6 +1072,7 @@ def _stage_from_dict(d: dict[str, Any]) -> StageConfig:
         transitions=transitions,
         tools=tuple(d.get("tools", [])),
         reasoning=d.get("reasoning"),
+        reasoning_config=d.get("reasoning_config"),
         max_iterations=d.get("max_iterations"),
         extraction_model=d.get("extraction_model"),
         response_template=d.get("response_template"),

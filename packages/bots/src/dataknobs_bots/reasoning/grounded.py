@@ -500,6 +500,9 @@ class GroundedReasoning(ReasoningStrategy):
         """
         context, provenance = await self.retrieve_context(manager, llm)
 
+        # Expose retrieved context for composed pipelines.
+        self._set_pipeline_context(context)
+
         result = await self._synthesize(context, manager, provenance, **kwargs)
 
         if self._config.store_provenance:

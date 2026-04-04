@@ -48,7 +48,9 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "can_skip", "skip_default", "can_go_back", "auto_advance",
     "confirm_on_new_data", "confirm_first_render",
     "transitions", "tools",
-    "reasoning", "max_iterations", "extraction_model",
+    "reasoning", "reasoning_config", "max_iterations",
+    "store_trace", "verbose",
+    "extraction_model",
     "context_generation", "mode", "intent_detection",
     "tasks", "navigation",
     "collection_mode", "collection_config",
@@ -618,9 +620,12 @@ class WizardConfigLoader:
                 "is_end": stage.get("is_end", False),
                 "transitions": transitions,  # Include transitions for observability
                 "tasks": stage_tasks,  # Per-stage tasks
-                # ReAct-style tool reasoning settings
-                "reasoning": stage.get("reasoning"),  # "single" or "react"
+                # Per-stage strategy injection settings
+                "reasoning": stage.get("reasoning"),  # registered strategy name
+                "reasoning_config": stage.get("reasoning_config"),
                 "max_iterations": stage.get("max_iterations"),
+                "store_trace": stage.get("store_trace"),
+                "verbose": stage.get("verbose"),
                 # Template-driven response mode (bypasses LLM for stage prompt)
                 "response_template": stage.get("response_template"),
                 "llm_assist": stage.get("llm_assist", False),

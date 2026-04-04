@@ -965,7 +965,7 @@ class GitHubTool(Tool):
 ## Data Collection Tools Reference
 
 The bots package provides built-in tools for data collection workflows. These are
-used by wizard stages with `reasoning_strategy: react` (or `reasoning: react`) to let
+used by wizard stages with `reasoning: react` (or any tool-using strategy) to let
 the LLM manage structured data through tool calls.
 
 All tools are importable from `dataknobs_bots.tools`.

@@ -128,7 +128,7 @@ builder.set_settings(
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `extraction_hints`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning` (any registered strategy name or `"single"`), `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `extraction_hints`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, `verbose`, and `scope_escalation`.
 
 #### Extraction Scope
 
@@ -155,7 +155,7 @@ builder.set_settings(
 
 Escalation only fires when (a) required fields are missing, (b) the current scope is narrower than the target, and (c) there is prior conversation history to draw on. The grounding filter protects existing data during escalated re-extraction.
 
-The `store_trace` and `verbose` settings propagate to ReAct stages. Both support per-stage overrides (set directly on the stage dict) that take precedence over the wizard-level default.
+The `store_trace` and `verbose` settings propagate to all strategy-backed stages (not just ReAct). Both support per-stage overrides (set directly on the stage dict or via `reasoning_config`) that take precedence over the wizard-level default.
 
 Use `ephemeral_keys` to declare data keys that should not be persisted to storage
 (e.g., per-step display data, intermediate computation results):
@@ -247,7 +247,8 @@ builder.add_structured_stage(
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `response_template` | `str \| None` | Template-driven response (bypasses LLM) |
 | `help_text` | `str \| None` | Help message |
-| `reasoning` | `str \| None` | Reasoning mode: `"single"` or `"react"` |
+| `reasoning` | `str \| None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered strategy |
+| `reasoning_config` | `dict \| None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | Max iterations for ReAct reasoning |
 | `context_generation` | `dict \| None` | LLM context generation config |
 | `**kwargs` | `Any` | Additional `StageConfig` fields |
@@ -495,7 +496,8 @@ All fields available on `StageConfig`:
 | `schema` | `dict \| None` | `None` | JSON Schema for validation |
 | `transitions` | `tuple[TransitionConfig, ...]` | `()` | Stage transitions |
 | `tools` | `tuple[str, ...]` | `()` | Available tool names |
-| `reasoning` | `str \| None` | `None` | `"single"` or `"react"` |
+| `reasoning` | `str \| None` | `None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered name |
+| `reasoning_config` | `dict[str, Any] \| None` | `None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | `None` | Max ReAct iterations |
 | `extraction_model` | `str \| None` | `None` | Model for extraction |
 | `response_template` | `str \| None` | `None` | Template-driven response |

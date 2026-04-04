@@ -50,6 +50,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _validate_strategy_names(
+    default_reasoning: str, wizard_fsm: WizardFSM,
+) -> None:
+    """Warn at config-load time if strategy names are unregistered.
+
+    This catches typos in built-in strategy names early rather than
+    failing at runtime when the wizard first enters the misconfigured
+    stage.  3rd-party strategies registered after wizard construction
+    will produce false-positive warnings — the actual resolution at
+    stage entry time will find them.
+    """
+    from .registry import get_registry
+
+    registry = get_registry()
+    names_to_check: list[tuple[str, str]] = []
+
+    if default_reasoning.lower() != "single":
+        names_to_check.append((default_reasoning, "wizard settings.tool_reasoning"))
+
+    for state_name, meta in wizard_fsm.stages.items():
+        stage_reasoning = meta.get("reasoning") if meta else None
+        if stage_reasoning and stage_reasoning.lower() != "single":
+            names_to_check.append((stage_reasoning, f"stage '{state_name}'.reasoning"))
+
+    for name, location in names_to_check:
+        if not registry.is_registered(name.lower()):
+            logger.warning(
+                "Unknown reasoning strategy '%s' in %s; "
+                "registered strategies: %s",
+                name, location, registry.list_keys(),
+            )
+
+
 # Framework-level keys that are always transient (non-persistent).
 # These are either non-serializable runtime objects or ephemeral per-step
 # data that should never reach persistent storage.
@@ -968,6 +1002,9 @@ class WizardReasoning(ReasoningStrategy):
         self._default_max_iterations = default_max_iterations
         self._default_store_trace = default_store_trace
         self._default_verbose = default_verbose
+
+        # Validate strategy names at construction time
+        _validate_strategy_names(default_tool_reasoning, wizard_fsm)
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
@@ -1029,7 +1066,7 @@ class WizardReasoning(ReasoningStrategy):
         # LLM provider set by generate() for transform context access
         self._current_llm: Any = None
         # Completion signal bridge: set by CompleteWizardTool in
-        # _react_stage_response, checked by generate() after response.
+        # _strategy_stage_response, checked by generate() after response.
         self._tool_completion_requested: bool = False
         self._tool_completion_summary: str = ""
         # Restart signal bridge: set by RestartWizardTool, checked
@@ -4905,18 +4942,20 @@ class WizardReasoning(ReasoningStrategy):
         # Filter tools to stage-specific ones
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
-        # Check if stage should use ReAct-style reasoning
+        # Resolve reasoning strategy for this stage
+        strategy = self._resolve_stage_strategy(stage)
+
         logger.debug(
-            "Generating response for stage '%s' (tools=%s, react=%s)",
+            "Generating response for stage '%s' (tools=%s, strategy=%s)",
             stage_name,
             [getattr(t, "name", str(t)) for t in stage_tools] if stage_tools else None,
-            stage_tools and self._use_react_for_stage(stage),
+            type(strategy).__name__ if strategy else "single",
         )
 
-        if stage_tools and self._use_react_for_stage(stage):
-            response = await self._react_stage_response(
-                manager, enhanced_prompt, stage, state, stage_tools,
-                metadata=wizard_snapshot,
+        if strategy:
+            response = await self._strategy_stage_response(
+                strategy, manager, enhanced_prompt, stage, state,
+                stage_tools, metadata=wizard_snapshot,
             )
         else:
             # Single LLM call (default behavior)
@@ -5292,23 +5331,70 @@ class WizardReasoning(ReasoningStrategy):
 
         return stages
 
-    def _use_react_for_stage(self, stage: dict[str, Any]) -> bool:
-        """Check if a stage should use ReAct-style reasoning.
+    def _resolve_stage_strategy(
+        self, stage: dict[str, Any],
+    ) -> ReasoningStrategy | None:
+        """Resolve the reasoning strategy for a wizard stage.
 
-        A stage uses ReAct if:
-        - Stage has `reasoning: react` explicitly set, OR
-        - No explicit reasoning set and default_tool_reasoning is "react"
+        Looks up the strategy by name in the plugin registry, using the
+        per-stage ``reasoning`` key with a fallback to the wizard-level
+        ``default_tool_reasoning``.
+
+        Returns ``None`` for the ``"single"`` path (direct
+        ``manager.complete()``).
 
         Args:
             stage: Stage metadata dict
 
         Returns:
-            True if ReAct should be used for this stage
+            A freshly-created strategy instance, or ``None`` for the
+            single-call fast path.
         """
-        stage_reasoning = stage.get("reasoning")
-        if stage_reasoning:
-            return stage_reasoning.lower() == "react"
-        return self._default_tool_reasoning.lower() == "react"
+        from .registry import get_registry
+
+        name = stage.get("reasoning") or self._default_tool_reasoning
+        name = name.lower()
+
+        if name == "single":
+            return None
+
+        if name == "wizard":
+            from dataknobs_common.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "Cannot use 'reasoning: wizard' inside a wizard stage. "
+                "Nested wizards share the conversation manager, causing "
+                "metadata collisions, and the inner wizard's multi-turn "
+                "FSM cannot function within a single outer-stage turn. "
+                "Use wizard subflows instead — see WIZARD_SUBFLOWS.md.",
+                context={"stage": stage.get("name", "?")},
+            )
+
+        # Build config for strategy creation
+        reasoning_config = dict(stage.get("reasoning_config") or {})
+        reasoning_config["strategy"] = name
+
+        # Inject wizard-level defaults that strategies may need
+        if "max_iterations" not in reasoning_config:
+            reasoning_config["max_iterations"] = self._get_max_iterations(stage)
+        store_trace = stage.get("store_trace", self._default_store_trace)
+        if "store_trace" not in reasoning_config:
+            reasoning_config["store_trace"] = store_trace
+        verbose = stage.get("verbose", self._default_verbose)
+        if "verbose" not in reasoning_config:
+            reasoning_config["verbose"] = verbose
+
+        try:
+            return get_registry().create(config=reasoning_config)
+        except Exception as e:
+            from dataknobs_common.exceptions import ConfigurationError
+
+            stage_name = stage.get("name", "?")
+            raise ConfigurationError(
+                f"Failed to create strategy '{name}' for wizard "
+                f"stage '{stage_name}': {e}",
+                context={"stage": stage_name, "strategy": name},
+            ) from e
 
     def _get_max_iterations(self, stage: dict[str, Any]) -> int:
         """Get maximum ReAct iterations for a stage.
@@ -5386,36 +5472,15 @@ class WizardReasoning(ReasoningStrategy):
 
         return True
 
-    async def _react_stage_response(
-        self,
-        manager: Any,
-        enhanced_prompt: str,
-        stage: dict[str, Any],
-        state: WizardState,
-        tools: list[Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> Any:
-        """Generate response using ReAct loop for tool-using stage.
+    def _build_extra_context(self) -> dict[str, Any]:
+        """Build the extra context dict for strategy delegation.
 
-        Delegates to ``ReActReasoning`` which provides duplicate tool call
-        detection, ToolsNotSupportedError handling, and optional trace
-        storage (when ``store_trace`` is enabled via stage or wizard settings).
-
-        Args:
-            manager: ConversationManager instance
-            enhanced_prompt: Stage-aware system prompt
-            stage: Stage metadata dict
-            state: Current wizard state (kept for call-site stability)
-            tools: Available tools for this stage
-            metadata: Optional metadata to persist on conversation nodes
+        Collects wizard-owned state (banks, artifacts, catalog) into a
+        dict that strategies receive via ``extra_context`` kwargs.
 
         Returns:
-            Final LLM response after ReAct loop completes
+            Dict of wizard context entries (may be empty).
         """
-        from .react import ReActReasoning
-
-        max_iterations = self._get_max_iterations(stage)
-
         extra_context: dict[str, Any] = {}
         if self._banks:
             extra_context["banks"] = self._banks
@@ -5423,6 +5488,37 @@ class WizardReasoning(ReasoningStrategy):
             extra_context["artifact"] = self._artifact
         if self._catalog:
             extra_context["catalog"] = self._catalog
+        return extra_context
+
+    async def _strategy_stage_response(
+        self,
+        strategy: ReasoningStrategy,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Generate response by delegating to a registered strategy.
+
+        Injects wizard context as kwargs that strategies may use or
+        ignore.  Lifecycle signals (completion / restart) are communicated
+        via mutable dicts inside ``extra_context``.
+
+        Args:
+            strategy: The resolved reasoning strategy instance.
+            manager: ConversationManager instance.
+            enhanced_prompt: Stage-aware system prompt.
+            stage: Stage metadata dict.
+            state: Current wizard state.
+            tools: Available tools for this stage.
+            metadata: Optional metadata to persist on conversation nodes.
+
+        Returns:
+            Final LLM response from the strategy.
+        """
+        extra_context = self._build_extra_context()
 
         # Mutable signal dicts for lifecycle tools to communicate back
         completion_signal: dict[str, Any] = {"requested": False}
@@ -5430,30 +5526,30 @@ class WizardReasoning(ReasoningStrategy):
         restart_signal: dict[str, Any] = {"requested": False}
         extra_context["_restart_signal"] = restart_signal
 
-        # Build a prompt refresher so the ReAct loop can re-render the
-        # system prompt between iterations.  This ensures that mutating
-        # tools (load_from_catalog, add_bank_record, etc.) produce an
-        # up-to-date collection summary for the next LLM call.
+        # Build a prompt refresher so loop-based strategies can re-render
+        # the system prompt between iterations.  Strategies that don't
+        # support prompt refreshing simply ignore this kwarg.
         def prompt_refresher() -> str:
             fresh_context = self._build_stage_context(stage, state)
             return f"{manager.system_prompt}\n\n{fresh_context}"
 
-        # Inherit store_trace and verbose from stage or wizard-level default
-        store_trace = stage.get("store_trace", self._default_store_trace)
-        verbose = stage.get("verbose", self._default_verbose)
+        # Wire wizard-owned objects for strategies that accept them.
+        # ReActReasoning reads these from instance attributes rather than
+        # kwargs, so we inject them directly when the attribute exists.
+        for attr in ("artifact_registry", "review_executor", "context_builder"):
+            wizard_val = getattr(self, f"_{attr}", None)
+            if wizard_val is not None and hasattr(strategy, attr):
+                setattr(strategy, attr, wizard_val)
 
-        react = ReActReasoning(
-            max_iterations=max_iterations,
-            verbose=verbose,
-            store_trace=store_trace,
-            artifact_registry=self._artifact_registry,
-            review_executor=self._review_executor,
-            context_builder=self._context_builder,
-            extra_context=extra_context or None,
-            prompt_refresher=prompt_refresher,
-        )
+        # Inject extra_context and prompt_refresher as instance attributes
+        # for strategies that consume them (e.g. ReActReasoning uses
+        # self._extra_context and self._prompt_refresher internally).
+        if hasattr(strategy, "_extra_context"):
+            strategy._extra_context = extra_context
+        if hasattr(strategy, "_prompt_refresher"):
+            strategy._prompt_refresher = prompt_refresher
 
-        response = await react.generate(
+        response = await strategy.generate(
             manager=manager,
             llm=None,
             tools=tools,
@@ -5610,7 +5706,10 @@ class WizardReasoning(ReasoningStrategy):
         # CD-3: Inject compiled artifact snapshot at guided-to-dynamic boundary
         # When transitioning to a ReAct review stage, provide the full artifact
         # overview so the LLM doesn't need tool calls to see collected data.
-        if self._use_react_for_stage(stage) and self._artifact:
+        stage_reasoning = (
+            stage.get("reasoning") or self._default_tool_reasoning
+        ).lower()
+        if stage_reasoning != "single" and self._artifact:
             has_data = (
                 self._artifact.fields
                 or any(

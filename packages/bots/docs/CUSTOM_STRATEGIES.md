@@ -117,6 +117,8 @@ Registration should happen at application startup, before any bot configs refere
 
 ### Step 4: Use It in Configuration
 
+As the bot's primary reasoning strategy:
+
 ```yaml
 llm:
   provider: ollama
@@ -130,6 +132,28 @@ reasoning:
 conversation_storage:
   backend: memory
 ```
+
+Or in specific wizard stages via per-state strategy injection:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config:
+    settings:
+      tool_reasoning: single
+    stages:
+      - name: research
+        reasoning: summarize          # Use custom strategy for this stage
+        reasoning_config:             # Strategy-specific config
+          max_summary_tokens: 100
+        tools: [search_docs]
+        transitions:
+          - target: review
+```
+
+Any registered strategy can be referenced by name in a wizard stage's `reasoning`
+field. The optional `reasoning_config` dict is forwarded to the strategy's
+`from_config()`.
 
 ```python
 bot = await DynaBot.from_config(config)
