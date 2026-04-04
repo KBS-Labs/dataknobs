@@ -1,6 +1,7 @@
 """Factory for creating vector store backends."""
 
 import logging
+import re
 from typing import Any
 
 from dataknobs_config import FactoryBase
@@ -52,18 +53,16 @@ class VectorStoreFactory(FactoryBase):
         """
         backend_type = config.pop("backend", "memory").lower()
 
-        logger.info(f"Creating vector store with backend: {backend_type}")
+        logger.info("Creating vector store with backend: %s", backend_type)
 
         # Get backend class from registry
-        try:
-            backend_class = vector_backends.get(backend_type)
-        except Exception as e:
-            # Backend not found - provide helpful error message
+        backend_class = vector_backends.get_factory(backend_type)
+        if not backend_class:
             available = vector_backends.list_keys()
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
                 f"Available backends: {', '.join(sorted(set(available)))}"
-            ) from e
+            )
 
         # Create and return backend instance
         try:
@@ -71,8 +70,7 @@ class VectorStoreFactory(FactoryBase):
         except ImportError as e:
             # Convert ImportError to ValueError with expected format
             # Extract package name from "pip install X" in error message
-            import re
-            match = re.search(r'pip install ([\w-]+)', str(e))
+            match = re.search(r"pip install ([\w-]+)", str(e))
             if match:
                 package = match.group(1)
                 raise ValueError(
@@ -93,19 +91,14 @@ class VectorStoreFactory(FactoryBase):
         Returns:
             Dictionary with backend information from registry metadata
         """
-        # Normalize to lowercase for case-insensitive lookup
-        backend_type = backend_type.lower()
-
-        # Check if backend exists first
-        if not vector_backends.has(backend_type):
+        # PluginRegistry handles case normalization via canonicalize_keys
+        if not vector_backends.is_registered(backend_type):
             return {
                 "description": "Unknown backend",
                 "error": f"Backend '{backend_type}' not recognized",
             }
 
-        # Get metadata from registry
-        metrics = vector_backends.get_metrics(backend_type)
-        return metrics.get("metadata", {})
+        return vector_backends.get_metadata(backend_type)
 
 
 # Create singleton instance for registration

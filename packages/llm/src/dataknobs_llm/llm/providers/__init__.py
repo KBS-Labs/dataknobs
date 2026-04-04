@@ -9,17 +9,20 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.registry import PluginRegistry
+
 from ..base import (
-    LLMConfig, AsyncLLMProvider, SyncLLMProvider,
-    normalize_llm_config, LLMMessage, LLMResponse
+    AsyncLLMProvider,
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    SyncLLMProvider,
+    normalize_llm_config,
 )
 
 # Import adapters and providers
-from .base import SyncProviderAdapter
-from .openai import OpenAIAdapter, OpenAIProvider
 from .anthropic import AnthropicProvider
-from .ollama import OllamaProvider
-from .huggingface import HuggingFaceProvider
+from .base import SyncProviderAdapter
 from .caching import (
     CachingEmbedProvider,
     EmbeddingCache,
@@ -27,11 +30,37 @@ from .caching import (
     create_caching_provider,
 )
 from .echo import EchoProvider
+from .huggingface import HuggingFaceProvider
+from .ollama import OllamaProvider
+from .openai import OpenAIAdapter, OpenAIProvider
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
 
 _logger = logging.getLogger(__name__)
+
+
+def _register_builtin_providers(
+    registry: PluginRegistry[type[AsyncLLMProvider]],
+) -> None:
+    """Register all built-in LLM providers."""
+    for name, cls in [
+        ("openai", OpenAIProvider),
+        ("anthropic", AnthropicProvider),
+        ("ollama", OllamaProvider),
+        ("huggingface", HuggingFaceProvider),
+        ("echo", EchoProvider),
+    ]:
+        registry.register(name, cls)
+
+
+# Module-level provider registry — PluginRegistry stores provider *classes*
+# (not instances), so get() returns a class and create() is not used here.
+_provider_registry: PluginRegistry[type[AsyncLLMProvider]] = PluginRegistry(
+    "llm_providers",
+    canonicalize_keys=True,
+    on_first_access=_register_builtin_providers,
+)
 
 
 class LLMProviderFactory:
@@ -56,15 +85,6 @@ class LLMProviderFactory:
         ```
     """
 
-    # Registry of provider classes
-    _providers: dict[str, type[AsyncLLMProvider] | None] = {
-        'openai': None,  # Populated lazily
-        'anthropic': None,
-        'ollama': None,
-        'huggingface': None,
-        'echo': None,
-    }
-
     def __init__(self, is_async: bool = True):
         """Initialize the factory.
 
@@ -73,20 +93,10 @@ class LLMProviderFactory:
         """
         self.is_async = is_async
 
-        # Lazily populate provider registry
-        if LLMProviderFactory._providers['openai'] is None:
-            LLMProviderFactory._providers.update({
-                'openai': OpenAIProvider,
-                'anthropic': AnthropicProvider,
-                'ollama': OllamaProvider,
-                'huggingface': HuggingFaceProvider,
-                'echo': EchoProvider,
-            })
-
     def create(
         self,
         config: LLMConfig | Config | dict[str, Any],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncLLMProvider | SyncLLMProvider:
         """Create an LLM provider from configuration.
 
@@ -103,12 +113,13 @@ class LLMProviderFactory:
         # Normalize config to LLMConfig
         llm_config = normalize_llm_config(config)
 
-        # Get provider class
-        provider_class = self._providers.get(llm_config.provider.lower())
+        # Get provider class from registry
+        provider_class = _provider_registry.get_factory(llm_config.provider)
         if not provider_class:
+            available = _provider_registry.list_keys()
             raise ValueError(
                 f"Unknown provider: {llm_config.provider}. "
-                f"Available providers: {list(self._providers.keys())}"
+                f"Available providers: {available}"
             )
 
         # Create provider instance
@@ -117,13 +128,13 @@ class LLMProviderFactory:
         else:
             # Wrap in sync adapter
             async_provider = provider_class(llm_config)
-            return SyncProviderAdapter(async_provider)  # type: ignore
+            return SyncProviderAdapter(async_provider)  # type: ignore[return-value]
 
     @classmethod
     def register_provider(
         cls,
         name: str,
-        provider_class: type[AsyncLLMProvider]
+        provider_class: type[AsyncLLMProvider],
     ) -> None:
         """Register a custom provider class.
 
@@ -140,12 +151,12 @@ class LLMProviderFactory:
             LLMProviderFactory.register_provider('custom', CustomProvider)
             ```
         """
-        cls._providers[name.lower()] = provider_class
+        _provider_registry.register(name, provider_class, override=True)
 
     def __call__(
         self,
         config: LLMConfig | Config | dict[str, Any],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncLLMProvider | SyncLLMProvider:
         """Allow factory to be called directly.
 
@@ -163,7 +174,7 @@ class LLMProviderFactory:
 
 def create_llm_provider(
     config: LLMConfig | Config | dict[str, Any],
-    is_async: bool = True
+    is_async: bool = True,
 ) -> AsyncLLMProvider | SyncLLMProvider:
     """Create appropriate LLM provider based on configuration.
 

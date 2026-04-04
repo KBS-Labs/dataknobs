@@ -30,7 +30,7 @@ class TestDatabaseFactoryPostgres:
         # Verify factory created a database instance
         from dataknobs_data.backends.memory import SyncMemoryDatabase
         assert isinstance(db, SyncMemoryDatabase)
-        mock_logger.info.assert_called_with("Creating database with backend: memory")
+        mock_logger.info.assert_called_with("Creating database with backend: %s", "memory")
 
     def test_postgres_aliases(self):
         """Test that backend aliases work (using memory backend as example)."""

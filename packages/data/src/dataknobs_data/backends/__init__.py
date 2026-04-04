@@ -1,399 +1,465 @@
 """Database backend implementations."""
 
-from typing import Type
+from __future__ import annotations
 
-from dataknobs_common import Registry
+import logging
+from typing import Any, Type
+
+from dataknobs_common.registry import PluginRegistry
 
 from ..database import AsyncDatabase, SyncDatabase
+
+logger = logging.getLogger(__name__)
 
 # Import memory backends for backward compatibility
 try:
     from .memory import AsyncMemoryDatabase, SyncMemoryDatabase
 except ImportError:
-    AsyncMemoryDatabase = None  # type: ignore
-    SyncMemoryDatabase = None  # type: ignore
+    AsyncMemoryDatabase = None  # type: ignore[assignment,misc]
+    SyncMemoryDatabase = None  # type: ignore[assignment,misc]
 
 
-class BackendRegistry(Registry[Type[SyncDatabase]]):
-    """Registry of available sync database backends.
+# ------------------------------------------------------------------
+# Sync backend registry
+# ------------------------------------------------------------------
 
-    This registry manages sync database backend classes and their metadata.
-    Backends are auto-registered on import if their dependencies are available.
-    """
 
-    def __init__(self) -> None:
-        """Initialize the backend registry."""
-        super().__init__("sync_backends", enable_metrics=True)
-        self._register_builtin_backends()
+def _register_sync_backends(
+    registry: PluginRegistry[Type[SyncDatabase]],
+) -> None:
+    """Auto-register all available built-in sync backends."""
+    # Memory backend (always available)
+    try:
+        from .memory import SyncMemoryDatabase
 
-    def _register_builtin_backends(self) -> None:
-        """Auto-register all available built-in backends."""
-        # Memory backend (always available)
-        try:
-            from .memory import SyncMemoryDatabase
-
-            self.register(
-                "memory",
-                SyncMemoryDatabase,
-                metadata={
-                    "description": "In-memory storage for testing and caching",
-                    "persistent": False,
-                    "requires_install": False,
-                    "config_options": {
-                        "initial_data": "Optional initial data dictionary"
-                    },
+        registry.register(
+            "memory",
+            SyncMemoryDatabase,
+            metadata={
+                "description": "In-memory storage for testing and caching",
+                "persistent": False,
+                "requires_install": False,
+                "config_options": {
+                    "initial_data": "Optional initial data dictionary",
                 },
-            )
-            self.register("mem", SyncMemoryDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("mem", SyncMemoryDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # File backend
-        try:
-            from .file import SyncFileDatabase
+    # File backend
+    try:
+        from .file import SyncFileDatabase
 
-            self.register(
-                "file",
-                SyncFileDatabase,
-                metadata={
-                    "description": "File-based storage (JSON, CSV, Parquet)",
-                    "persistent": True,
-                    "requires_install": False,
-                    "vector_support": False,
-                    "config_options": {
-                        "path": "Path to the file (required)",
-                        "format": "File format: json, csv, parquet (default: json)",
-                        "compression": "Optional compression: gzip, bz2, xz",
-                    },
+        registry.register(
+            "file",
+            SyncFileDatabase,
+            metadata={
+                "description": "File-based storage (JSON, CSV, Parquet)",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": False,
+                "config_options": {
+                    "path": "Path to the file (required)",
+                    "format": "File format: json, csv, parquet (default: json)",
+                    "compression": "Optional compression: gzip, bz2, xz",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
-        # SQLite backend
-        try:
-            from .sqlite import SyncSQLiteDatabase
+    # SQLite backend
+    try:
+        from .sqlite import SyncSQLiteDatabase
 
-            self.register(
-                "sqlite",
-                SyncSQLiteDatabase,
-                metadata={
-                    "description": "SQLite database backend with Python-based vector support",
-                    "persistent": True,
-                    "requires_install": False,
-                    "vector_support": True,
-                    "config_options": {
-                        "path": "Path to database file (required)",
-                        "table": "Table name (default: records)",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "sqlite",
+            SyncSQLiteDatabase,
+            metadata={
+                "description": "SQLite database backend with Python-based vector support",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": True,
+                "config_options": {
+                    "path": "Path to database file (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("sqlite3", SyncSQLiteDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("sqlite3", SyncSQLiteDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # PostgreSQL backend
-        try:
-            from .postgres import SyncPostgresDatabase
+    # PostgreSQL backend
+    try:
+        from .postgres import SyncPostgresDatabase
 
-            self.register(
-                "postgres",
-                SyncPostgresDatabase,
-                metadata={
-                    "description": "PostgreSQL database backend with native vector support (pgvector)",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[postgres]",
-                    "vector_support": True,
-                    "config_options": {
-                        "host": "Database host (required)",
-                        "port": "Database port (default: 5432)",
-                        "database": "Database name (required)",
-                        "user": "Username (required)",
-                        "password": "Password (required)",
-                        "table": "Table name (default: records)",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "postgres",
+            SyncPostgresDatabase,
+            metadata={
+                "description": "PostgreSQL database backend with native vector support (pgvector)",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[postgres]",
+                "vector_support": True,
+                "config_options": {
+                    "host": "Database host (required)",
+                    "port": "Database port (default: 5432)",
+                    "database": "Database name (required)",
+                    "user": "Username (required)",
+                    "password": "Password (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("postgresql", SyncPostgresDatabase)  # Alias
-            self.register("pg", SyncPostgresDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("postgresql", SyncPostgresDatabase)  # Alias
+        registry.register("pg", SyncPostgresDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # Elasticsearch backend
-        try:
-            from .elasticsearch import SyncElasticsearchDatabase
+    # Elasticsearch backend
+    try:
+        from .elasticsearch import SyncElasticsearchDatabase
 
-            self.register(
-                "elasticsearch",
-                SyncElasticsearchDatabase,
-                metadata={
-                    "description": "Elasticsearch search engine backend with native KNN vector support",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[elasticsearch]",
-                    "vector_support": True,
-                    "config_options": {
-                        "hosts": "List of host URLs (required)",
-                        "index": "Index name (required)",
-                        "doc_type": "Document type (default: _doc)",
-                        "username": "Optional username",
-                        "password": "Optional password",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "elasticsearch",
+            SyncElasticsearchDatabase,
+            metadata={
+                "description": "Elasticsearch search engine backend with native KNN vector support",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[elasticsearch]",
+                "vector_support": True,
+                "config_options": {
+                    "hosts": "List of host URLs (required)",
+                    "index": "Index name (required)",
+                    "doc_type": "Document type (default: _doc)",
+                    "username": "Optional username",
+                    "password": "Optional password",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("es", SyncElasticsearchDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("es", SyncElasticsearchDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # S3 backend
-        try:
-            from .s3 import SyncS3Database
+    # S3 backend
+    try:
+        from .s3 import SyncS3Database
 
-            self.register(
-                "s3",
-                SyncS3Database,
-                metadata={
-                    "description": "AWS S3 object storage backend",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[s3]",
-                    "vector_support": False,
-                    "config_options": {
-                        "bucket": "S3 bucket name (required)",
-                        "prefix": "Object key prefix (default: records/)",
-                        "region": "AWS region (default: us-east-1)",
-                        "endpoint_url": "Custom endpoint for S3-compatible services",
-                        "access_key_id": "AWS access key (or use IAM role)",
-                        "secret_access_key": "AWS secret key (or use IAM role)",
-                    },
+        registry.register(
+            "s3",
+            SyncS3Database,
+            metadata={
+                "description": "AWS S3 object storage backend",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[s3]",
+                "vector_support": False,
+                "config_options": {
+                    "bucket": "S3 bucket name (required)",
+                    "prefix": "Object key prefix (default: records/)",
+                    "region": "AWS region (default: us-east-1)",
+                    "endpoint_url": "Custom endpoint for S3-compatible services",
+                    "access_key_id": "AWS access key (or use IAM role)",
+                    "secret_access_key": "AWS secret key (or use IAM role)",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
-        # DuckDB backend
-        try:
-            from .duckdb import SyncDuckDBDatabase
+    # DuckDB backend
+    try:
+        from .duckdb import SyncDuckDBDatabase
 
-            self.register(
-                "duckdb",
-                SyncDuckDBDatabase,
-                metadata={
-                    "description": "DuckDB database backend for analytical workloads with columnar storage",
-                    "persistent": True,
-                    "requires_install": "pip install duckdb",
-                    "vector_support": False,
-                    "config_options": {
-                        "path": "Path to database file (required, use :memory: for in-memory)",
-                        "table": "Table name (default: records)",
-                        "timeout": "Connection timeout in seconds (default: 5.0)",
-                        "read_only": "Open database in read-only mode (default: False)",
-                    },
+        registry.register(
+            "duckdb",
+            SyncDuckDBDatabase,
+            metadata={
+                "description": "DuckDB database backend for analytical workloads with columnar storage",
+                "persistent": True,
+                "requires_install": "pip install duckdb",
+                "vector_support": False,
+                "config_options": {
+                    "path": "Path to database file (required, use :memory: for in-memory)",
+                    "table": "Table name (default: records)",
+                    "timeout": "Connection timeout in seconds (default: 5.0)",
+                    "read_only": "Open database in read-only mode (default: False)",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
 
-class AsyncBackendRegistry(Registry[Type[AsyncDatabase]]):
-    """Registry of available async database backends.
+# ------------------------------------------------------------------
+# Async backend registry
+# ------------------------------------------------------------------
 
-    This registry manages async database backend classes and their metadata.
-    Backends are auto-registered on import if their dependencies are available.
-    """
 
-    def __init__(self) -> None:
-        """Initialize the async backend registry."""
-        super().__init__("async_backends", enable_metrics=True)
-        self._register_builtin_backends()
+def _register_async_backends(
+    registry: PluginRegistry[Type[AsyncDatabase]],
+) -> None:
+    """Auto-register all available built-in async backends."""
+    # Memory backend (always available)
+    try:
+        from .memory import AsyncMemoryDatabase
 
-    def _register_builtin_backends(self) -> None:
-        """Auto-register all available built-in async backends."""
-        # Memory backend (always available)
-        try:
-            from .memory import AsyncMemoryDatabase
-
-            self.register(
-                "memory",
-                AsyncMemoryDatabase,
-                metadata={
-                    "description": "In-memory storage for testing and caching",
-                    "persistent": False,
-                    "requires_install": False,
-                    "config_options": {
-                        "initial_data": "Optional initial data dictionary"
-                    },
+        registry.register(
+            "memory",
+            AsyncMemoryDatabase,
+            metadata={
+                "description": "In-memory storage for testing and caching",
+                "persistent": False,
+                "requires_install": False,
+                "config_options": {
+                    "initial_data": "Optional initial data dictionary",
                 },
-            )
-            self.register("mem", AsyncMemoryDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("mem", AsyncMemoryDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # File backend
-        try:
-            from .file import AsyncFileDatabase
+    # File backend
+    try:
+        from .file import AsyncFileDatabase
 
-            self.register(
-                "file",
-                AsyncFileDatabase,
-                metadata={
-                    "description": "File-based storage (JSON, CSV, Parquet)",
-                    "persistent": True,
-                    "requires_install": False,
-                    "vector_support": False,
-                    "config_options": {
-                        "path": "Path to the file (required)",
-                        "format": "File format: json, csv, parquet (default: json)",
-                        "compression": "Optional compression: gzip, bz2, xz",
-                    },
+        registry.register(
+            "file",
+            AsyncFileDatabase,
+            metadata={
+                "description": "File-based storage (JSON, CSV, Parquet)",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": False,
+                "config_options": {
+                    "path": "Path to the file (required)",
+                    "format": "File format: json, csv, parquet (default: json)",
+                    "compression": "Optional compression: gzip, bz2, xz",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
-        # SQLite backend
-        try:
-            from .sqlite_async import AsyncSQLiteDatabase
+    # SQLite backend
+    try:
+        from .sqlite_async import AsyncSQLiteDatabase
 
-            self.register(
-                "sqlite",
-                AsyncSQLiteDatabase,
-                metadata={
-                    "description": "SQLite database backend with Python-based vector support",
-                    "persistent": True,
-                    "requires_install": False,
-                    "vector_support": True,
-                    "config_options": {
-                        "path": "Path to database file (required)",
-                        "table": "Table name (default: records)",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "sqlite",
+            AsyncSQLiteDatabase,
+            metadata={
+                "description": "SQLite database backend with Python-based vector support",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": True,
+                "config_options": {
+                    "path": "Path to database file (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("sqlite3", AsyncSQLiteDatabase)  # Alias
-        except ImportError as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"AsyncSQLiteDatabase not available: {e}")
+            },
+        )
+        registry.register("sqlite3", AsyncSQLiteDatabase)  # Alias
+    except ImportError as e:
+        logger.debug("AsyncSQLiteDatabase not available: %s", e)
 
-        # PostgreSQL backend
-        try:
-            from .postgres import AsyncPostgresDatabase
+    # PostgreSQL backend
+    try:
+        from .postgres import AsyncPostgresDatabase
 
-            self.register(
-                "postgres",
-                AsyncPostgresDatabase,
-                metadata={
-                    "description": "PostgreSQL database backend with native vector support (pgvector)",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[postgres]",
-                    "vector_support": True,
-                    "config_options": {
-                        "host": "Database host (required)",
-                        "port": "Database port (default: 5432)",
-                        "database": "Database name (required)",
-                        "user": "Username (required)",
-                        "password": "Password (required)",
-                        "table": "Table name (default: records)",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "postgres",
+            AsyncPostgresDatabase,
+            metadata={
+                "description": "PostgreSQL database backend with native vector support (pgvector)",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[postgres]",
+                "vector_support": True,
+                "config_options": {
+                    "host": "Database host (required)",
+                    "port": "Database port (default: 5432)",
+                    "database": "Database name (required)",
+                    "user": "Username (required)",
+                    "password": "Password (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("postgresql", AsyncPostgresDatabase)  # Alias
-            self.register("pg", AsyncPostgresDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("postgresql", AsyncPostgresDatabase)  # Alias
+        registry.register("pg", AsyncPostgresDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # Elasticsearch backend
-        try:
-            from .elasticsearch_async import AsyncElasticsearchDatabase
+    # Elasticsearch backend
+    try:
+        from .elasticsearch_async import AsyncElasticsearchDatabase
 
-            self.register(
-                "elasticsearch",
-                AsyncElasticsearchDatabase,
-                metadata={
-                    "description": "Elasticsearch search engine backend with native KNN vector support",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[elasticsearch]",
-                    "vector_support": True,
-                    "config_options": {
-                        "hosts": "List of host URLs (required)",
-                        "index": "Index name (required)",
-                        "doc_type": "Document type (default: _doc)",
-                        "username": "Optional username",
-                        "password": "Optional password",
-                        "vector_enabled": "Enable vector support (default: False)",
-                        "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)",
-                    },
+        registry.register(
+            "elasticsearch",
+            AsyncElasticsearchDatabase,
+            metadata={
+                "description": "Elasticsearch search engine backend with native KNN vector support",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[elasticsearch]",
+                "vector_support": True,
+                "config_options": {
+                    "hosts": "List of host URLs (required)",
+                    "index": "Index name (required)",
+                    "doc_type": "Document type (default: _doc)",
+                    "username": "Optional username",
+                    "password": "Optional password",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
                 },
-            )
-            self.register("es", AsyncElasticsearchDatabase)  # Alias
-        except ImportError:
-            pass
+            },
+        )
+        registry.register("es", AsyncElasticsearchDatabase)  # Alias
+    except ImportError:
+        pass
 
-        # S3 backend
-        try:
-            from .s3_async import AsyncS3Database
+    # S3 backend
+    try:
+        from .s3_async import AsyncS3Database
 
-            self.register(
-                "s3",
-                AsyncS3Database,
-                metadata={
-                    "description": "AWS S3 object storage backend",
-                    "persistent": True,
-                    "requires_install": "pip install dataknobs-data[s3]",
-                    "vector_support": False,
-                    "config_options": {
-                        "bucket": "S3 bucket name (required)",
-                        "prefix": "Object key prefix (default: records/)",
-                        "region": "AWS region (default: us-east-1)",
-                        "endpoint_url": "Custom endpoint for S3-compatible services",
-                        "access_key_id": "AWS access key (or use IAM role)",
-                        "secret_access_key": "AWS secret key (or use IAM role)",
-                    },
+        registry.register(
+            "s3",
+            AsyncS3Database,
+            metadata={
+                "description": "AWS S3 object storage backend",
+                "persistent": True,
+                "requires_install": "pip install dataknobs-data[s3]",
+                "vector_support": False,
+                "config_options": {
+                    "bucket": "S3 bucket name (required)",
+                    "prefix": "Object key prefix (default: records/)",
+                    "region": "AWS region (default: us-east-1)",
+                    "endpoint_url": "Custom endpoint for S3-compatible services",
+                    "access_key_id": "AWS access key (or use IAM role)",
+                    "secret_access_key": "AWS secret key (or use IAM role)",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
-        # DuckDB backend
-        try:
-            from .duckdb import AsyncDuckDBDatabase
+    # DuckDB backend
+    try:
+        from .duckdb import AsyncDuckDBDatabase
 
-            self.register(
-                "duckdb",
-                AsyncDuckDBDatabase,
-                metadata={
-                    "description": "DuckDB database backend for analytical workloads with columnar storage",
-                    "persistent": True,
-                    "requires_install": "pip install duckdb",
-                    "vector_support": False,
-                    "config_options": {
-                        "path": "Path to database file (required, use :memory: for in-memory)",
-                        "table": "Table name (default: records)",
-                        "timeout": "Connection timeout in seconds (default: 5.0)",
-                        "max_workers": "Number of threads in pool (default: 4)",
-                        "read_only": "Open database in read-only mode (default: False)",
-                    },
+        registry.register(
+            "duckdb",
+            AsyncDuckDBDatabase,
+            metadata={
+                "description": "DuckDB database backend for analytical workloads with columnar storage",
+                "persistent": True,
+                "requires_install": "pip install duckdb",
+                "vector_support": False,
+                "config_options": {
+                    "path": "Path to database file (required, use :memory: for in-memory)",
+                    "table": "Table name (default: records)",
+                    "timeout": "Connection timeout in seconds (default: 5.0)",
+                    "max_workers": "Number of threads in pool (default: 4)",
+                    "read_only": "Open database in read-only mode (default: False)",
                 },
-            )
-        except ImportError:
-            pass
+            },
+        )
+    except ImportError:
+        pass
 
 
-# Create singleton instances
-sync_backends = BackendRegistry()
-async_backends = AsyncBackendRegistry()
+# ------------------------------------------------------------------
+# Singleton instances
+# ------------------------------------------------------------------
 
-# Backward compatibility: expose old dict-based API
-BACKEND_REGISTRY = {key: async_backends.get(key) for key in async_backends.list_keys()}
-SYNC_BACKEND_REGISTRY = {key: sync_backends.get(key) for key in sync_backends.list_keys()}
+sync_backends: PluginRegistry[Type[SyncDatabase]] = PluginRegistry(
+    "sync_backends",
+    canonicalize_keys=True,
+    on_first_access=_register_sync_backends,
+)
+
+async_backends: PluginRegistry[Type[AsyncDatabase]] = PluginRegistry(
+    "async_backends",
+    canonicalize_keys=True,
+    on_first_access=_register_async_backends,
+)
+
+
+# ------------------------------------------------------------------
+# Backward compatibility
+# ------------------------------------------------------------------
+
+# Lazily populated on first access — avoids importing all backends at
+# module load time.  Use sync_backends / async_backends directly instead.
+
+
+def _build_compat_dict(
+    registry: PluginRegistry[Any],
+) -> dict[str, Any]:
+    """Build a backward-compat dict from a PluginRegistry."""
+    return {key: registry.get_factory(key) for key in registry.list_keys()}
+
+
+class _LazyBackendDict(dict):  # type: ignore[type-arg]
+    """Dict that populates itself on first access for backward compat."""
+
+    def __init__(self, registry: PluginRegistry[Any]) -> None:
+        super().__init__()
+        self._registry = registry
+        self._populated = False
+
+    def _ensure_populated(self) -> None:
+        if not self._populated:
+            self._populated = True
+            self.update(_build_compat_dict(self._registry))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._ensure_populated()
+        return super().get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        self._ensure_populated()
+        return super().__getitem__(key)
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure_populated()
+        return super().__contains__(key)
+
+    def __iter__(self):  # type: ignore[override]
+        self._ensure_populated()
+        return super().__iter__()
+
+    def keys(self):  # type: ignore[override]
+        self._ensure_populated()
+        return super().keys()
+
+    def values(self):  # type: ignore[override]
+        self._ensure_populated()
+        return super().values()
+
+    def items(self):  # type: ignore[override]
+        self._ensure_populated()
+        return super().items()
+
+    def __len__(self) -> int:
+        self._ensure_populated()
+        return super().__len__()
+
+
+BACKEND_REGISTRY: dict[str, Type[AsyncDatabase]] = _LazyBackendDict(async_backends)  # type: ignore[assignment]
+SYNC_BACKEND_REGISTRY: dict[str, Type[SyncDatabase]] = _LazyBackendDict(sync_backends)  # type: ignore[assignment]
 
 
 def register_backend(
@@ -412,19 +478,23 @@ def register_backend(
         sync_class: Sync database class
     """
     if async_class:
-        async_backends.register(name, async_class, allow_overwrite=True)
+        async_backends.register(name, async_class, override=True)
     if sync_class:
-        sync_backends.register(name, sync_class, allow_overwrite=True)
+        sync_backends.register(name, sync_class, override=True)
 
+
+# Keep BackendRegistry and AsyncBackendRegistry as aliases for type compat
+BackendRegistry = PluginRegistry[Type[SyncDatabase]]
+AsyncBackendRegistry = PluginRegistry[Type[AsyncDatabase]]
 
 __all__ = [
     "BackendRegistry",
     "AsyncBackendRegistry",
     "sync_backends",
     "async_backends",
-    "BACKEND_REGISTRY",  # Backward compatibility
-    "SYNC_BACKEND_REGISTRY",  # Backward compatibility
-    "register_backend",  # Backward compatibility
-    "AsyncMemoryDatabase",  # Backward compatibility
-    "SyncMemoryDatabase",  # Backward compatibility
+    "BACKEND_REGISTRY",
+    "SYNC_BACKEND_REGISTRY",
+    "register_backend",
+    "AsyncMemoryDatabase",
+    "SyncMemoryDatabase",
 ]
