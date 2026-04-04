@@ -534,7 +534,7 @@ def _resolve_name(data: dict[str, Any], config: dict[str, Any]) -> str:
     """
     name_template = config.get("name_template")
     if name_template:
-        from jinja2 import UndefinedError
+        from jinja2 import TemplateError
 
         from dataknobs_bots.utils.template_env import create_template_env
 
@@ -542,7 +542,7 @@ def _resolve_name(data: dict[str, Any], config: dict[str, Any]) -> str:
             env = create_template_env()
             template = env.from_string(name_template)
             return template.render(**data)
-        except UndefinedError:
+        except TemplateError:
             logger.warning(
                 "Name template rendering failed, falling back to name_field"
             )

@@ -1,6 +1,6 @@
 """Sandboxed Jinja2 environment factory.
 
-All template rendering in the reasoning package MUST use this factory
+All template rendering in the bots package MUST use this factory
 to ensure user-supplied data cannot exploit server-side template
 injection (SSTI).  ``SandboxedEnvironment`` blocks access to dangerous
 attributes (``__class__``, ``__subclasses__``, ``__globals__``, etc.)

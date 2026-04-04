@@ -1073,6 +1073,12 @@ class WizardReasoning(ReasoningStrategy):
         # by generate() after response to delegate to _execute_restart.
         self._tool_restart_requested: bool = False
 
+        # Sandboxed Jinja2 environment — reused across all template
+        # renders to avoid recreating per call.
+        from dataknobs_bots.utils.template_env import create_template_env
+
+        self._jinja_env = create_template_env()
+
         # Per-turn context delivered to transforms via the context factory.
         # Set at the start of each FSM step, cleared after.
         self._current_turn: TurnContext | None = None
@@ -5010,10 +5016,7 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Rendered response string
         """
-        from dataknobs_bots.utils.template_env import create_template_env
-
-        env = create_template_env()
-        template = env.from_string(template_str)
+        template = self._jinja_env.from_string(template_str)
 
         # Non-internal keys for backward-compatible "collected_data" dict
         collected_data = {
@@ -5106,11 +5109,8 @@ class WizardReasoning(ReasoningStrategy):
             return {}
 
         # Render the prompt template with current state data
-        from dataknobs_bots.utils.template_env import create_template_env
-
         try:
-            env = create_template_env()
-            rendered_prompt = env.from_string(prompt_template).render(
+            rendered_prompt = self._jinja_env.from_string(prompt_template).render(
                 **{k: v for k, v in state.data.items() if not k.startswith("_")}
             )
         except Exception as e:
@@ -5179,9 +5179,6 @@ class WizardReasoning(ReasoningStrategy):
         if not any("{%" in s or "{{" in s for s in suggestions):
             return suggestions
 
-        from dataknobs_bots.utils.template_env import create_template_env
-
-        env = create_template_env()
         collected_data = {
             k: v for k, v in state.data.items() if not k.startswith("_")
         }
@@ -5192,7 +5189,7 @@ class WizardReasoning(ReasoningStrategy):
                 rendered.append(suggestion)
                 continue
             try:
-                rendered.append(env.from_string(suggestion).render(**collected_data))
+                rendered.append(self._jinja_env.from_string(suggestion).render(**collected_data))
             except Exception:
                 rendered.append(suggestion)
         return rendered
@@ -6002,9 +5999,6 @@ class WizardReasoning(ReasoningStrategy):
         if not transitions:
             return
 
-        from dataknobs_bots.utils.template_env import create_template_env
-
-        env = create_template_env()
         collected_data = {
             k: v for k, v in state.data.items() if not k.startswith("_")
         }
@@ -6021,7 +6015,7 @@ class WizardReasoning(ReasoningStrategy):
 
                 if isinstance(value, str) and "{{" in value:
                     try:
-                        resolved = env.from_string(value).render(**collected_data)
+                        resolved = self._jinja_env.from_string(value).render(**collected_data)
                         # Skip empty renders (template variable was undefined)
                         if resolved.strip():
                             state.data[key] = resolved.strip()
@@ -7268,12 +7262,7 @@ Be concise and helpful.
                         try:
                             from jinja2 import TemplateError
 
-                            from dataknobs_bots.utils.template_env import (
-                                create_template_env,
-                            )
-
-                            env = create_template_env()
-                            template = env.from_string(
+                            template = self._jinja_env.from_string(
                                 self._clarification_template,
                             )
                             issue_list = template.render(

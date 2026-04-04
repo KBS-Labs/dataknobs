@@ -1982,9 +1982,9 @@ class TestDefaultProvenanceTemplate:
 
     def test_renders_with_results(self) -> None:
         """Template renders results grouped by source."""
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         tmpl = env.from_string(DEFAULT_PROVENANCE_TEMPLATE)
 
         result = tmpl.render(
@@ -2018,9 +2018,9 @@ class TestDefaultProvenanceTemplate:
 
     def test_renders_empty(self) -> None:
         """Template shows 'no results' when empty."""
-        import jinja2
+        from dataknobs_bots.utils.template_env import create_template_env
 
-        env = jinja2.Environment(undefined=jinja2.Undefined)
+        env = create_template_env()
         tmpl = env.from_string(DEFAULT_PROVENANCE_TEMPLATE)
 
         result = tmpl.render(
