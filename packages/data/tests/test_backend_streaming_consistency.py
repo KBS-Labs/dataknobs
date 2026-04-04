@@ -1,13 +1,19 @@
 """Test that all backends have consistent streaming support."""
 
+from __future__ import annotations
+
 import inspect
+from collections.abc import Generator
 
 import pytest
 
+from dataknobs_common.registry import PluginRegistry
 from dataknobs_data.backends import async_backends, sync_backends
 
 
-def _backend_items(registry):
+def _backend_items(
+    registry: "PluginRegistry[type]",
+) -> "Generator[tuple[str, type], None, None]":
     """Yield (name, class) pairs from a PluginRegistry."""
     for key in registry.list_keys():
         yield key, registry.get_factory(key)

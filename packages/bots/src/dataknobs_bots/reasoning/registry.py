@@ -90,6 +90,12 @@ def register_strategy(
         factory: ``ReasoningStrategy`` subclass or factory callable.
         override: Replace existing registration if ``True``.
 
+    Raises:
+        OperationError: If ``name`` is already registered and
+            ``override`` is ``False``.
+        TypeError: If ``factory`` is not a ``ReasoningStrategy``
+            subclass or callable.
+
     Example::
 
         from dataknobs_bots.reasoning.registry import register_strategy
@@ -114,7 +120,7 @@ def is_strategy_registered(name: str) -> bool:
 
 def list_strategies() -> list[str]:
     """Return sorted list of all registered strategy names."""
-    return _registry.list_keys()
+    return sorted(_registry.list_keys())
 
 
 def get_registry() -> PluginRegistry[ReasoningStrategy]:

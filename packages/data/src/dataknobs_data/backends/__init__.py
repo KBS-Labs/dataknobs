@@ -1,4 +1,10 @@
-"""Database backend implementations."""
+"""Database backend implementations.
+
+Migration note (v0.5.0):
+    The deprecated ``BACKEND_REGISTRY`` and ``SYNC_BACKEND_REGISTRY``
+    backward-compatibility shims have been removed.  Use
+    ``sync_backends`` and ``async_backends`` directly instead.
+"""
 
 from __future__ import annotations
 

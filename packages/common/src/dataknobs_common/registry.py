@@ -815,7 +815,17 @@ class PluginRegistry(Generic[T]):
         return key.lower() if self._canonicalize_keys else key
 
     def _ensure_initialized(self) -> None:
-        """Run on_first_access callback if configured and not yet run."""
+        """Run on_first_access callback if configured and not yet run.
+
+        Thread safety: uses double-checked locking with ``self._lock``.
+        ``_initialized`` is set to ``True`` *before* calling the
+        initializer so that re-entrant calls from within the callback
+        (e.g. ``register()`` → ``_ensure_initialized()``) see the flag
+        and return immediately instead of deadlocking.  Concurrent
+        threads are safe because every public method that reads or
+        writes ``_factories`` / ``_instances`` also acquires
+        ``self._lock``, serialising access with the initializer.
+        """
         if self._initialized:
             return
         with self._lock:
@@ -856,8 +866,13 @@ class PluginRegistry(Generic[T]):
             # Register a class
             registry.register("handler1", MyHandler)
 
-            # Register a factory function
+            # Register a factory function (for use with get())
+            # get() calls factories with (key, config) signature
             registry.register("handler2", lambda name, config: create_handler(name, config))
+
+            # For use with create(), factories should accept (config, **kwargs)
+            # or define a from_config(config, **kwargs) classmethod.
+            # See create() docstring for details.
             ```
         """
         self._ensure_initialized()
@@ -987,10 +1002,7 @@ class PluginRegistry(Generic[T]):
 
             # Create instance
             try:
-                if isinstance(factory, type):
-                    instance = factory(key, config or {})
-                else:
-                    instance = factory(key, config or {})
+                instance = factory(key, config or {})
 
                 # Validate instance type if specified
                 if self._validate_type and not isinstance(instance, self._validate_type):
