@@ -14,7 +14,7 @@ from dataknobs_llm.tools import ToolExecutionContext
 
 from dataknobs_bots.bot.turn import ToolExecution
 
-from .base import ReasoningStrategy
+from .base import ReasoningStrategy, StrategyCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,11 @@ class ReActReasoning(ReasoningStrategy):
         )
         ```
     """
+
+    @classmethod
+    def capabilities(cls) -> StrategyCapabilities:
+        """ReAct manages its own tool execution loop."""
+        return StrategyCapabilities(manages_tools=True)
 
     @classmethod
     def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> ReActReasoning:  # type: ignore[override]

@@ -227,45 +227,36 @@ class TestStrategyStageResponse:
         assert response.content == "Echoed: hello"
 
     @pytest.mark.asyncio
-    async def test_tools_gating_falls_back_to_single(
+    async def test_react_without_tools_still_dispatches(
         self,
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
-        """Even with reasoning: react, no tools → single call path.
+        """Strategy dispatches even without tools.
 
-        This tests the dispatch in _generate_stage_response, not
-        _strategy_stage_response directly, but validates the gating
-        logic that preserves backward compat.
+        ReAct handles the no-tools case internally by falling back to
+        simple completion — the wizard dispatch does not gate on tools.
         """
         manager, provider = conversation_manager_pair
         await manager.add_message(role="user", content="hello")
 
         provider.set_responses([text_response("Hi there")])
 
-        config = _make_wizard_config(stages=[
-            {
-                "name": "greet",
-                "is_start": True,
-                "prompt": "Greet the user",
-                "reasoning": "react",
-                "transitions": [{"target": "done"}],
-            },
-            {"name": "done", "is_end": True, "prompt": "Done"},
-        ])
+        config = _make_wizard_config()
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
-        # No tools passed → even though stage says "react",
-        # _resolve_stage_strategy returns ReAct but dispatch condition
-        # (strategy and stage_tools) won't be true, so falls back to
-        # manager.complete().
-        strategy = reasoning._resolve_stage_strategy(
-            {"reasoning": "react"},
+        stage = {"name": "greet", "reasoning": "react"}
+        strategy = reasoning._resolve_stage_strategy(stage)
+        assert strategy is not None
+
+        # Dispatch with no tools — strategy still runs, ReAct falls
+        # back to simple completion internally
+        state = WizardState(current_stage="greet", data={})
+        response = await reasoning._strategy_stage_response(
+            strategy, manager, "Test prompt", stage, state, tools=[],
         )
-        assert strategy is not None  # Strategy IS resolved
-        # But with empty tools, the dispatch skips it — tested via
-        # the full generate path in behavioral tests.
+        assert response.content == "Hi there"
 
 
 # ---------------------------------------------------------------------------

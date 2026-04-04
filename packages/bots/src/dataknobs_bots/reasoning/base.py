@@ -32,9 +32,14 @@ class StrategyCapabilities:
             (grounded/hybrid).  When ``True``, ``DynaBot`` performs
             config-driven source construction after factory creation
             and disables redundant ``auto_context``.
+        manages_tools: Strategy manages its own tool execution loop
+            (react/hybrid).  When ``True``, wizard stages pre-inject
+            collected artifact context so the LLM doesn't need tool
+            calls to discover what data has been collected.
     """
 
     manages_sources: bool = False
+    manages_tools: bool = False
 
 
 @runtime_checkable

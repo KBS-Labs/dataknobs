@@ -536,6 +536,10 @@ class GroundedReasoning(ReasoningStrategy):
         from dataknobs_llm import LLMResponse
 
         context, provenance = await self.retrieve_context(manager, llm)
+
+        # Expose retrieved context for composed pipelines (same as generate).
+        self._set_pipeline_context(context)
+
         plan = self.resolve_synthesis(context, manager, provenance)
 
         if plan.effective_style == "structured":

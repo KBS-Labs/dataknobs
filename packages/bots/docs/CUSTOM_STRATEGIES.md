@@ -169,14 +169,15 @@ Override `capabilities()` to tell DynaBot what your strategy manages. This contr
 ```python
 @classmethod
 def capabilities(cls) -> StrategyCapabilities:
-    return StrategyCapabilities(manages_sources=True)
+    return StrategyCapabilities(manages_sources=True, manages_tools=True)
 ```
 
 | Field | Default | Effect When `True` |
 |-------|---------|-------------------|
 | `manages_sources` | `False` | DynaBot performs config-driven source construction via `add_source()`, and disables redundant `auto_context` on the knowledge base. |
+| `manages_tools` | `False` | Strategy runs its own tool execution loop. In wizard stages, collected artifact context is pre-injected into the system prompt so the LLM can see collected data without making tool calls. |
 
-Only set `manages_sources=True` if your strategy uses retrieval sources (like grounded/hybrid). Most custom strategies leave this at the default.
+Set `manages_sources=True` if your strategy uses retrieval sources (like grounded/hybrid). Set `manages_tools=True` if your strategy manages its own tool execution loop (like ReAct/hybrid). Most custom strategies leave both at the default.
 
 ### `get_source_configs()` — Custom Source Config Layout
 

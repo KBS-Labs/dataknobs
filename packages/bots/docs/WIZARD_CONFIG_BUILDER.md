@@ -176,7 +176,7 @@ builder.set_settings(
 | `skip_builtin_grounding` | `bool` | `False` | When `True` and a `merge_filter` is set, bypass the built-in grounding check entirely — only the custom filter runs. |
 | `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. `reject_unmatched` (default `true`): reject enum values that don't match any entry. `boolean_recovery` (default `true`): enable signal-word recovery for boolean fields that extraction fails to fill; only active when `"boolean_recovery"` is in the recovery pipeline. |
 
-See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) and [Enum Normalization](CONTEXT_AWARE_WIZARDS.md#enum-normalization) for full documentation.
+See [Extraction Grounding](context-aware-wizards.md#extraction-grounding) and [Enum Normalization](context-aware-wizards.md#enum-normalization) for full documentation.
 
 ### Stage Methods
 
@@ -487,7 +487,7 @@ All fields available on `StageConfig`:
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
-| `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](CONTEXT_AWARE_WIZARDS.md#message-stages) |
+| `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](context-aware-wizards.md#message-stages) |
 | `confirm_first_render` | `bool` | `True` | Whether to pause for confirmation on first render. Set to `false` to skip and evaluate transitions immediately |
 | `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |

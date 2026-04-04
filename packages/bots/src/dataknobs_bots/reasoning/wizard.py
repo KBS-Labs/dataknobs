@@ -5396,6 +5396,29 @@ class WizardReasoning(ReasoningStrategy):
                 context={"stage": stage_name, "strategy": name},
             ) from e
 
+    def _stage_manages_tools(self, stage: dict[str, Any]) -> bool:
+        """Check if the stage's strategy declares manages_tools capability.
+
+        Looks up the strategy class in the registry and calls its
+        class-level ``capabilities()`` — no instance creation needed.
+
+        Returns ``False`` for ``"single"`` or unregistered strategies.
+        """
+        from .registry import get_registry
+
+        name = stage.get("reasoning") or self._default_tool_reasoning
+        name = name.lower()
+        if name == "single":
+            return False
+
+        registry = get_registry()
+        factory = registry.get_factory(name)
+        if factory is None:
+            return False
+
+        caps = factory.capabilities() if hasattr(factory, "capabilities") else None
+        return bool(caps and caps.manages_tools)
+
     def _get_max_iterations(self, stage: dict[str, Any]) -> int:
         """Get maximum ReAct iterations for a stage.
 
@@ -5533,21 +5556,22 @@ class WizardReasoning(ReasoningStrategy):
             fresh_context = self._build_stage_context(stage, state)
             return f"{manager.system_prompt}\n\n{fresh_context}"
 
-        # Wire wizard-owned objects for strategies that accept them.
-        # ReActReasoning reads these from instance attributes rather than
-        # kwargs, so we inject them directly when the attribute exists.
-        for attr in ("artifact_registry", "review_executor", "context_builder"):
-            wizard_val = getattr(self, f"_{attr}", None)
-            if wizard_val is not None and hasattr(strategy, attr):
-                setattr(strategy, attr, wizard_val)
-
-        # Inject extra_context and prompt_refresher as instance attributes
-        # for strategies that consume them (e.g. ReActReasoning uses
-        # self._extra_context and self._prompt_refresher internally).
-        if hasattr(strategy, "_extra_context"):
-            strategy._extra_context = extra_context
-        if hasattr(strategy, "_prompt_refresher"):
-            strategy._prompt_refresher = prompt_refresher
+        # Inject wizard-owned runtime objects into strategies that store
+        # them as private instance attributes.  ReActReasoning accepts
+        # these as constructor args, but strategies created via the
+        # registry's from_config() path receive only serializable config.
+        # We inject post-construction by targeting the private attributes
+        # directly — strategies that don't have these attrs are skipped.
+        _injections: dict[str, Any] = {
+            "_artifact_registry": self._artifact_registry,
+            "_review_executor": self._review_executor,
+            "_context_builder": self._context_builder,
+            "_extra_context": extra_context,
+            "_prompt_refresher": prompt_refresher,
+        }
+        for attr, value in _injections.items():
+            if value is not None and hasattr(strategy, attr):
+                setattr(strategy, attr, value)
 
         response = await strategy.generate(
             manager=manager,
@@ -5704,12 +5728,13 @@ class WizardReasoning(ReasoningStrategy):
                 lines.append("")
 
         # CD-3: Inject compiled artifact snapshot at guided-to-dynamic boundary
-        # When transitioning to a ReAct review stage, provide the full artifact
-        # overview so the LLM doesn't need tool calls to see collected data.
-        stage_reasoning = (
-            stage.get("reasoning") or self._default_tool_reasoning
-        ).lower()
-        if stage_reasoning != "single" and self._artifact:
+        # When transitioning to a tool-managing review stage, provide the
+        # full artifact overview so the LLM doesn't need tool calls to see
+        # collected data.  Uses the strategy's manages_tools capability to
+        # determine eligibility — custom tool-using strategies opt in by
+        # declaring manages_tools=True in their capabilities().
+        stage_manages_tools = self._stage_manages_tools(stage)
+        if stage_manages_tools and self._artifact:
             has_data = (
                 self._artifact.fields
                 or any(

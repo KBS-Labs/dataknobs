@@ -63,8 +63,8 @@ class HybridReasoning(ReasoningStrategy):
 
     @classmethod
     def capabilities(cls) -> StrategyCapabilities:
-        """Hybrid manages its own retrieval sources (via grounded child)."""
-        return StrategyCapabilities(manages_sources=True)
+        """Hybrid manages sources (grounded) and tools (react)."""
+        return StrategyCapabilities(manages_sources=True, manages_tools=True)
 
     @classmethod
     def get_source_configs(cls, config: dict[str, Any]) -> list[dict[str, Any]]:
