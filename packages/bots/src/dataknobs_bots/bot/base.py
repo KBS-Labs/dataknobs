@@ -207,8 +207,8 @@ class DynaBot:
                 bounded by the remaining budget via
                 ``asyncio.wait_for()``.  For ``stream_chat()``, a
                 streaming re-call that starts within budget runs to
-                completion (streams cannot be cancelled mid-chunk in
-                Python 3.10).  Individual tool executions are always
+                completion (async generators cannot be reliably
+                cancelled mid-chunk).  Individual tool executions are always
                 bounded by ``tool_timeout``.
         """
         self.llm = llm

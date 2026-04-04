@@ -359,7 +359,7 @@ pip install dataknobs-bots[dev]
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.12+
 - dataknobs-config (automatically installed)
 - dataknobs-llm (automatically installed)
 - dataknobs-data (automatically installed)

@@ -2,7 +2,7 @@
 
 ## System Requirements
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - pip or uv package manager
 - Operating System: Linux, macOS, or Windows
 
@@ -214,7 +214,7 @@ Each package has its own dependencies automatically installed:
 
 If you encounter import errors after installation:
 
-1. **Check Python version**: `python --version` (must be 3.10+)
+1. **Check Python version**: `python --version` (must be 3.12+)
 2. **Verify installation**: `pip list | grep dataknobs`
 3. **Check for naming**: Use `dataknobs_package` not `dataknobs.package`
 4. **Clear pip cache**: `pip cache purge`

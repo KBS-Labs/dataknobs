@@ -100,7 +100,7 @@ dataknobs/
 
 ### Prerequisites
 
-- **Python**: 3.10 or higher
+- **Python**: 3.12 or higher
 - **Package Manager**: UV (fast Python package manager)
 - **Version Control**: Git
 - **Docker**: For running PostgreSQL, Elasticsearch, and LocalStack services
@@ -299,7 +299,7 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 - Run integration tests with real services (PostgreSQL, Elasticsearch)
 - Ensure all tests pass with `./bin/run-quality-checks.sh`
 - Achieve minimum code coverage targets (70% overall, 90% for new code)
-- Test across supported Python versions (3.10+)
+- Test across supported Python versions (3.12+)
 
 ### 5. Review Process
 - Create pull request with detailed description

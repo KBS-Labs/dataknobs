@@ -4,7 +4,7 @@ Get up and running with Dataknobs packages quickly.
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - pip or uv package manager
 
 ## Installation

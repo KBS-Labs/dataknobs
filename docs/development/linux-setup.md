@@ -6,7 +6,7 @@ This guide covers Linux-specific setup instructions and troubleshooting for deve
 
 Before starting, ensure you have:
 
-- **Python 3.10+**: `python3 --version`
+- **Python 3.12+**: `python3 --version`
 - **Docker & Docker Compose**: `docker --version` and `docker compose version`
 - **UV Package Manager**: `uv --version` (or install with `pip install uv`)
 - **Git**: `git --version`

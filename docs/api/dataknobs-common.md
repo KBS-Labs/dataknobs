@@ -793,8 +793,7 @@ Minimal dependencies to avoid conflicts across packages:
 
 ```txt
 # Core dependencies
-python>=3.8
-typing-extensions>=4.0.0  # For Python <3.10 compatibility
+python>=3.12
 ```
 
 > **Philosophy**: Keep dependencies minimal to avoid version conflicts when using multiple dataknobs packages together.

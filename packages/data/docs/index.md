@@ -5,7 +5,7 @@ The DataKnobs Data Package provides a unified data abstraction layer for consist
 
 **Version**: 0.1.0  
 **Status**: Released to PyPI  
-**Python**: 3.10+
+**Python**: 3.12+
 
 ## Quick Links
 

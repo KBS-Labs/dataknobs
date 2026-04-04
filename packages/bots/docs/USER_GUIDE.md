@@ -27,7 +27,7 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - Basic understanding of async/await in Python
 - (Optional) Ollama installed for local LLM testing
 
@@ -1413,7 +1413,7 @@ middleware:
 
 ```dockerfile
 # Dockerfile
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
