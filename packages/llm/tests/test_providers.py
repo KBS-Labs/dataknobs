@@ -281,6 +281,7 @@ class TestSyncProviderAdapter:
 
         sync_adapter.close()
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_adapter_function_call(self, sync_adapter):
         """Test adapter function_call method."""
         sync_adapter.initialize()

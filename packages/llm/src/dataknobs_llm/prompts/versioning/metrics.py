@@ -8,7 +8,7 @@ This module provides:
 """
 
 from typing import Any, Dict, List
-from datetime import datetime
+from datetime import UTC, datetime
 
 from .types import (
     PromptMetrics,
@@ -89,7 +89,7 @@ class MetricsCollector:
         # Create event
         event = MetricEvent(
             version_id=version_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             success=success,
             response_time=response_time,
             tokens=tokens,

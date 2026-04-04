@@ -274,6 +274,7 @@ async def test_echo_embed_custom_dim(echo_provider_custom):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_basic(echo_provider):
     """Test EchoProvider function_call basic usage."""
     messages = [
@@ -309,6 +310,7 @@ async def test_echo_function_call_basic(echo_provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_mock_arguments(echo_provider):
     """Test EchoProvider generates mock arguments by type."""
     messages = [LLMMessage(role="user", content="Test function call")]
@@ -342,6 +344,7 @@ async def test_echo_function_call_mock_arguments(echo_provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_deterministic(echo_provider):
     """Test EchoProvider function calls are deterministic."""
     messages = [LLMMessage(role="user", content="Same message")]
@@ -365,6 +368,7 @@ async def test_echo_function_call_deterministic(echo_provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_no_functions(echo_provider):
     """Test EchoProvider function_call with no functions falls back to complete."""
     messages = [LLMMessage(role="user", content="Hello")]
@@ -376,6 +380,7 @@ async def test_echo_function_call_no_functions(echo_provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_function_call_multiple_functions(echo_provider):
     """Test EchoProvider uses first function when multiple provided."""
     messages = [LLMMessage(role="user", content="Test")]
@@ -480,6 +485,7 @@ async def test_echo_system_prompt_disabled_by_default(echo_config):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_echo_usage_in_integration():
     """Test EchoProvider in integration scenario."""
     # Simulate a complete workflow

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ class ChangeEvent:
     field_name: str
     old_value: Any
     new_value: Any
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     event_type: str = "update"  # create, update, delete
 
     def __repr__(self) -> str:
@@ -45,7 +45,7 @@ class UpdateTask:
     vector_fields: set[str]
     source_fields: dict[str, Any]  # source field -> new value
     priority: int = 0
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     attempts: int = 0
     last_error: str | None = None
 

@@ -541,7 +541,7 @@ class SensorDashboard:
     def interpolate_missing_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Interpolate missing sensor data in DataFrame."""
         # Infer object types to proper dtypes before interpolating
-        df = df.infer_objects(copy=False)
+        df = df.infer_objects()
         
         # Get numeric columns for interpolation
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
