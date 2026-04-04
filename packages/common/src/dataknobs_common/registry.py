@@ -772,6 +772,12 @@ class PluginRegistry(Generic[T]):
         name: str,
         default_factory: type[T] | Callable[..., T] | None = None,
         validate_type: type | None = None,
+        *,
+        canonicalize_keys: bool = False,
+        config_key: str | None = None,
+        config_key_default: str | None = None,
+        strip_config_key: bool = False,
+        on_first_access: Callable[["PluginRegistry[T]"], None] | None = None,
     ):
         """Initialize plugin registry.
 
@@ -779,6 +785,16 @@ class PluginRegistry(Generic[T]):
             name: Registry name for identification
             default_factory: Default class or factory to use when key not found
             validate_type: Optional base type to validate registrations against
+            canonicalize_keys: When True, all keys are lowercased
+            config_key: Field name to extract lookup key from config dict in
+                ``create()`` when ``key`` is ``None``
+            config_key_default: Fallback value when ``config_key`` field is
+                absent from config dict
+            strip_config_key: When True and key is extracted from config,
+                remove the key field from config before passing to the factory
+            on_first_access: Callback invoked once before first public method
+                access. Receives the registry instance. Supports re-entrant
+                calls (e.g. callback calling ``register()``).
         """
         self._name = name
         self._factories: Dict[str, type[T] | Callable[..., T]] = {}
@@ -786,6 +802,41 @@ class PluginRegistry(Generic[T]):
         self._lock = threading.RLock()
         self._default_factory = default_factory
         self._validate_type = validate_type
+        self._canonicalize_keys = canonicalize_keys
+        self._config_key = config_key
+        self._config_key_default = config_key_default
+        self._strip_config_key = strip_config_key
+        self._initializer = on_first_access
+        self._initialized = on_first_access is None
+        self._metadata: Dict[str, Dict[str, Any]] = {}
+
+    def _canon(self, key: str) -> str:
+        """Canonicalize a key if configured."""
+        return key.lower() if self._canonicalize_keys else key
+
+    def _ensure_initialized(self) -> None:
+        """Run on_first_access callback if configured and not yet run.
+
+        Thread safety: uses double-checked locking with ``self._lock``.
+        ``_initialized`` is set to ``True`` *before* calling the
+        initializer so that re-entrant calls from within the callback
+        (e.g. ``register()`` → ``_ensure_initialized()``) see the flag
+        and return immediately instead of deadlocking.  Concurrent
+        threads are safe because every public method that reads or
+        writes ``_factories`` / ``_instances`` also acquires
+        ``self._lock``, serialising access with the initializer.
+        """
+        if self._initialized:
+            return
+        with self._lock:
+            if self._initialized:
+                return
+            self._initialized = True
+            try:
+                self._initializer(self)  # type: ignore[misc]
+            except Exception:
+                self._initialized = False
+                raise
 
     @property
     def name(self) -> str:
@@ -797,6 +848,7 @@ class PluginRegistry(Generic[T]):
         key: str,
         factory: type[T] | Callable[..., T],
         override: bool = False,
+        metadata: Dict[str, Any] | None = None,
     ) -> None:
         """Register a plugin class or factory.
 
@@ -814,10 +866,18 @@ class PluginRegistry(Generic[T]):
             # Register a class
             registry.register("handler1", MyHandler)
 
-            # Register a factory function
+            # Register a factory function (for use with get())
+            # get() calls factories with (key, config) signature
             registry.register("handler2", lambda name, config: create_handler(name, config))
+
+            # For use with create(), factories should accept (config, **kwargs)
+            # or define a from_config(config, **kwargs) classmethod.
+            # See create() docstring for details.
             ```
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             # Check for existing registration
             if not override and key in self._factories:
@@ -841,6 +901,8 @@ class PluginRegistry(Generic[T]):
 
             # Register
             self._factories[key] = factory
+            if metadata is not None:
+                self._metadata[key] = metadata
 
             # Clear cached instance if overriding
             if key in self._instances:
@@ -855,6 +917,9 @@ class PluginRegistry(Generic[T]):
         Raises:
             NotFoundError: If key not registered
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             if key not in self._factories:
                 raise NotFoundError(
@@ -863,6 +928,7 @@ class PluginRegistry(Generic[T]):
                 )
 
             del self._factories[key]
+            self._metadata.pop(key, None)
 
             # Clear cached instance
             if key in self._instances:
@@ -877,6 +943,9 @@ class PluginRegistry(Generic[T]):
         Returns:
             True if registered
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             return key in self._factories
 
@@ -908,6 +977,9 @@ class PluginRegistry(Generic[T]):
             handler = registry.get("custom", config={"timeout": 30})
             ```
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             # Check cache
             if use_cache and key in self._instances:
@@ -930,10 +1002,7 @@ class PluginRegistry(Generic[T]):
 
             # Create instance
             try:
-                if isinstance(factory, type):
-                    instance = factory(key, config or {})
-                else:
-                    instance = factory(key, config or {})
+                instance = factory(key, config or {})
 
                 # Validate instance type if specified
                 if self._validate_type and not isinstance(instance, self._validate_type):
@@ -979,6 +1048,9 @@ class PluginRegistry(Generic[T]):
             handler = await registry.get_async("async-handler", config={"url": "..."})
             ```
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             # Check cache
             if use_cache and key in self._instances:
@@ -1031,12 +1103,134 @@ class PluginRegistry(Generic[T]):
 
         return instance
 
+    def create(
+        self,
+        key: str | None = None,
+        config: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> T:
+        """Create a fresh instance without caching.
+
+        Unlike ``get()``, this method:
+
+        - Never returns or stores cached instances
+        - Uses ``(config, **kwargs)`` factory signature instead of
+          ``(key, config)``
+        - Detects ``from_config`` classmethods on class factories
+
+        Factory invocation:
+
+        - If factory is a class with a ``from_config`` classmethod:
+          ``factory.from_config(config, **kwargs)``
+        - Otherwise: ``factory(config, **kwargs)``
+
+        Key resolution:
+
+        - If ``key`` is provided, use it directly.
+        - If ``key`` is ``None`` and ``config_key`` was set at init,
+          extract from ``config[config_key]`` (falling back to
+          ``config_key_default``).
+        - If neither, raise ``ValueError``.
+
+        When ``strip_config_key`` is ``True`` and the key was extracted
+        from config, a shallow copy of config is made with the key field
+        removed before passing to the factory.
+
+        Args:
+            key: Plugin identifier. Optional when ``config_key`` is
+                configured on the registry.
+            config: Configuration dictionary passed to factory.  ``None``
+                is treated as ``{}`` for both key resolution and factory
+                invocation.
+            **kwargs: Additional keyword arguments forwarded to factory.
+
+        Returns:
+            Fresh plugin instance.
+
+        Raises:
+            ValueError: If ``key`` is ``None`` and cannot be resolved.
+            NotFoundError: If resolved key is not registered.
+            OperationError: If factory raises an exception (including
+                type validation failures from ``validate_type``).
+
+        Note:
+            Type validation errors from ``register()`` raise ``TypeError``
+            directly (caught at registration time), while type validation
+            errors from ``create()`` are wrapped in ``OperationError``
+            (caught at creation time).  This asymmetry is intentional:
+            registration errors are programming mistakes caught immediately,
+            while creation errors may arise from dynamic factory behavior.
+        """
+        self._ensure_initialized()
+
+        # Resolve key
+        if key is None:
+            if self._config_key is None:
+                raise ValueError(
+                    "key is required when config_key is not configured"
+                )
+            resolved = (config or {}).get(
+                self._config_key, self._config_key_default
+            )
+            if resolved is None:
+                raise ValueError(
+                    f"config must contain '{self._config_key}' "
+                    f"(no default configured)"
+                )
+            key = resolved
+
+            # Strip the routing key from config before passing to factory
+            if self._strip_config_key and config is not None:
+                config = {k: v for k, v in config.items()
+                          if k != self._config_key}
+
+        key = self._canon(key)
+
+        with self._lock:
+            if key not in self._factories:
+                raise NotFoundError(
+                    f"Plugin '{key}' not registered",
+                    context={
+                        "key": key,
+                        "registry": self._name,
+                        "available": list(self._factories.keys()),
+                    },
+                )
+            factory = self._factories[key]
+
+        try:
+            if isinstance(factory, type) and hasattr(factory, "from_config"):
+                instance = factory.from_config(config or {}, **kwargs)
+            else:
+                instance = factory(config or {}, **kwargs)
+
+            if self._validate_type and not isinstance(
+                instance, self._validate_type
+            ):
+                raise TypeError(
+                    f"Factory must return a "
+                    f"{self._validate_type.__name__} instance, "
+                    f"got {type(instance).__name__}"
+                )
+
+        except (NotFoundError, OperationError):
+            raise
+        except Exception as e:
+            raise OperationError(
+                f"Failed to create plugin '{key}': {e}",
+                context={"key": key, "registry": self._name},
+            ) from e
+
+        return instance
+
     def list_keys(self) -> List[str]:
         """List all registered plugin keys.
 
         Returns:
             List of registered keys
         """
+        self._ensure_initialized()
+
         with self._lock:
             return list(self._factories.keys())
 
@@ -1046,8 +1240,11 @@ class PluginRegistry(Generic[T]):
         Args:
             key: Specific key to clear, or None for all
         """
+        self._ensure_initialized()
+
         with self._lock:
             if key:
+                key = self._canon(key)
                 if key in self._instances:
                     del self._instances[key]
             else:
@@ -1062,8 +1259,26 @@ class PluginRegistry(Generic[T]):
         Returns:
             Factory class or function, or None if not registered
         """
+        self._ensure_initialized()
+        key = self._canon(key)
+
         with self._lock:
             return self._factories.get(key)
+
+    def get_metadata(self, key: str) -> Dict[str, Any]:
+        """Get metadata for a registered plugin.
+
+        Args:
+            key: Plugin identifier.
+
+        Returns:
+            Metadata dict, or empty dict if no metadata stored.
+        """
+        self._ensure_initialized()
+        key = self._canon(key)
+
+        with self._lock:
+            return dict(self._metadata.get(key, {}))
 
     @property
     def cached_instances(self) -> Dict[str, T]:
@@ -1076,6 +1291,7 @@ class PluginRegistry(Generic[T]):
             This returns the internal cache dictionary. Modifications
             will affect the cache directly.
         """
+        self._ensure_initialized()
         return self._instances
 
     def set_default_factory(self, factory: type[T] | Callable[..., T]) -> None:
@@ -1123,16 +1339,19 @@ class PluginRegistry(Generic[T]):
         Returns:
             Dictionary of key to factory mappings
         """
+        self._ensure_initialized()
+
         with self._lock:
             return dict(self._factories)
 
     def __len__(self) -> int:
         """Get number of registered plugins."""
+        self._ensure_initialized()
         return len(self._factories)
 
     def __contains__(self, key: str) -> bool:
         """Check if plugin is registered using 'in' operator."""
-        return self.is_registered(key)
+        return self.is_registered(key)  # delegates _ensure_initialized + _canon
 
     def __repr__(self) -> str:
         """Get string representation."""

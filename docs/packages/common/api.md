@@ -557,6 +557,149 @@ resource = await registry.get("db")
 count = await registry.count()
 ```
 
+### Plugin Registry
+
+#### `PluginRegistry[T]`
+
+Registry with factory support for creating fresh instances on demand, lazy initialization, and configuration-driven key resolution.
+
+```python
+class PluginRegistry(Generic[T]):
+    """Registry with factory support and lazy initialization."""
+```
+
+**Type Parameter:**
+- `T`: Type of items produced by factories
+
+**Constructor:**
+```python
+PluginRegistry(
+    name: str,
+    default_factory: type[T] | Callable[..., T] | None = None,
+    validate_type: type | None = None,
+    *,
+    canonicalize_keys: bool = False,
+    config_key: str | None = None,
+    config_key_default: str | None = None,
+    strip_config_key: bool = False,
+    on_first_access: Callable[[PluginRegistry[T]], None] | None = None,
+)
+```
+
+**Parameters:**
+- `name` (str): Registry name for identification
+- `default_factory` (type[T] | Callable | None): Default factory when key not found
+- `validate_type` (type[T] | None): Base type to validate registrations against
+- `canonicalize_keys` (bool): Lowercase all keys for case-insensitive lookup
+- `config_key` (str | None): Field name to extract lookup key from config dicts in `create()`
+- `config_key_default` (str | None): Fallback value when `config_key` field is absent
+- `strip_config_key` (bool): Remove the config key field from config before passing to factory
+- `on_first_access` (Callable | None): Callback invoked once before first public method access. Supports re-entrant calls (e.g., callback can call `register()`)
+
+**Methods:**
+
+##### `register(key, factory, override=False, metadata=None) -> None`
+
+Register a plugin class or factory function.
+
+**Parameters:**
+- `key` (str): Unique identifier
+- `factory` (type[T] | Callable[..., T]): Plugin class or factory
+- `override` (bool): Allow replacing existing registration
+- `metadata` (dict[str, Any] | None): Optional metadata for the registration
+
+**Raises:**
+- `OperationError`: If key already registered and `override=False`
+- `TypeError`: If factory doesn't match `validate_type`
+
+##### `get(key, config=None, use_cache=True, use_default=True) -> T`
+
+Get or create a cached plugin instance. Factories are called with `(key, config)` signature.
+
+**Parameters:**
+- `key` (str): Plugin identifier
+- `config` (dict | None): Configuration passed to factory
+- `use_cache` (bool): Return cached instance if available
+- `use_default` (bool): Use default factory if key not registered
+
+**Returns:** Plugin instance
+
+**Raises:** `NotFoundError` if key not registered and no default
+
+##### `create(key=None, config=None, **kwargs) -> T`
+
+Create a fresh instance without caching. Uses `(config, **kwargs)` factory signature. Detects `from_config` classmethods on class factories.
+
+**Parameters:**
+- `key` (str | None): Plugin identifier. Optional when `config_key` is configured.
+- `config` (dict | None): Configuration passed to factory
+- `**kwargs`: Additional keyword arguments forwarded to factory
+
+**Returns:** Fresh plugin instance
+
+**Raises:**
+- `ValueError`: If `key` is None and cannot be resolved
+- `NotFoundError`: If resolved key is not registered
+- `OperationError`: If factory raises an exception
+
+##### `get_factory(key) -> type[T] | Callable[..., T] | None`
+
+Get the raw factory for a key without creating an instance.
+
+##### `is_registered(key) -> bool`
+
+Check whether a key is registered.
+
+##### `list_keys() -> list[str]`
+
+List all registered plugin keys (insertion order).
+
+##### `get_metadata(key) -> dict[str, Any]`
+
+Get metadata for a registration (returns empty dict if no metadata stored).
+
+**Example:**
+```python
+from dataknobs_common.registry import PluginRegistry
+
+# Define a registry with lazy initialization
+def _register_builtins(registry):
+    registry.register("default", DefaultHandler)
+    registry.register("custom", CustomHandler)
+
+handlers = PluginRegistry[Handler](
+    "handlers",
+    validate_type=Handler,
+    canonicalize_keys=True,
+    config_key="handler_type",
+    config_key_default="default",
+    on_first_access=_register_builtins,
+)
+
+# create() resolves key from config and calls from_config()
+handler = handlers.create(config={"handler_type": "custom", "timeout": 30})
+
+# get() returns cached instances with (key, config) signature
+handler = handlers.get("custom", config={"timeout": 30})
+
+# get_factory() returns the raw class/callable
+handler_cls = handlers.get_factory("custom")
+```
+
+**Additional methods** (see auto-generated API reference for full details):
+
+- `get_async(key, config, use_cache, use_default)` — Async version of `get()`, awaits coroutine factories
+- `unregister(key)` — Remove a registration (raises `NotFoundError` if not found)
+- `clear_cache(key=None)` — Clear cached instances (specific key or all)
+- `set_default_factory(factory)` — Set/change the default factory
+- `bulk_register(factories, override)` — Register multiple plugins at once
+- `copy()` — Get a copy of the factories dict
+- `name` (property) — Registry name
+- `cached_instances` (property) — Direct access to instance cache dict
+- Supports `len()`, `in` operator, and `repr()`
+
+---
+
 ## Serialization Module
 
 ### Protocol
@@ -1118,6 +1261,7 @@ from dataknobs_common import (
     CachedRegistry,
     AsyncRegistry,
 )
+from dataknobs_common.registry import PluginRegistry
 
 # Serialization
 from dataknobs_common import (
@@ -1403,6 +1547,14 @@ The Common package has minimal dependencies:
 - **Standard library only**: No external dependencies
 
 ## Changelog
+
+### Version 1.4.0
+- Enhanced `PluginRegistry` with configuration-driven factory mode:
+  - `canonicalize_keys` for case-insensitive key lookup
+  - `config_key` / `config_key_default` / `strip_config_key` for config-driven key resolution
+  - `on_first_access` callback for lazy initialization with re-entrancy support
+  - `create()` method for fresh-instance factory invocation (uses `from_config` classmethods)
+  - `metadata` parameter on `register()` with `get_metadata()` accessor
 
 ### Version 1.3.0
 - Added `dataknobs_common.retry` module (BackoffStrategy, RetryConfig, RetryExecutor)

@@ -7,7 +7,7 @@ import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -444,7 +444,7 @@ class VectorTextSynchronizer:
         Returns:
             Synchronization status
         """
-        status = SyncStatus(start_time=datetime.utcnow())
+        status = SyncStatus(start_time=datetime.now(UTC))
 
         try:
             # Get records if not provided
@@ -483,7 +483,7 @@ class VectorTextSynchronizer:
                     progress_callback(status)
 
         finally:
-            status.end_time = datetime.utcnow()
+            status.end_time = datetime.now(UTC)
 
         logger.info(
             f"Sync completed: {status.updated_records} updated, "

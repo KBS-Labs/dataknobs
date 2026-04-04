@@ -2,6 +2,16 @@
 
 DynaBot's reasoning strategies are modular and extensible. You can implement, register, and select custom strategies entirely through configuration — no modifications to core DynaBot code required.
 
+> **Migration note:** The strategy registry now uses `PluginRegistry` from
+> `dataknobs-common`. Exception types have changed:
+>
+> - **Duplicate registration** now raises `OperationError` (was `ValueError`)
+> - **Unknown strategy** now raises `NotFoundError` (was `ValueError`)
+>
+> Both are subclasses of `DataknobsError` from `dataknobs_common.exceptions`.
+> Code that catches `ValueError` from `register_strategy()` or
+> `create_reasoning_from_config()` should be updated.
+
 ## Built-in Strategies
 
 | Strategy | Key | Use Case |
@@ -241,10 +251,10 @@ from dataknobs_bots.reasoning import (
     list_strategies,         # List all registered strategy names
     get_strategy_factory,    # Get the factory for a strategy name
     is_strategy_registered,  # Check if a name is registered
-    get_registry,            # Access the StrategyRegistry singleton
+    get_registry,            # Access the PluginRegistry singleton
 )
 
-# Register (raises ValueError if already registered)
+# Register (raises OperationError if already registered)
 register_strategy("my_strategy", MyStrategy)
 
 # Register with override
@@ -277,9 +287,18 @@ from dataknobs_llm.testing import text_response
 def _register(monkeypatch):
     """Register custom strategy in an isolated registry."""
     import dataknobs_bots.reasoning.registry as reg_module
-    from dataknobs_bots.reasoning.registry import StrategyRegistry
+    from dataknobs_common.registry import PluginRegistry
+    from dataknobs_bots.reasoning import ReasoningStrategy
+    from dataknobs_bots.reasoning.registry import _register_builtins
 
-    fresh = StrategyRegistry()
+    fresh = PluginRegistry[ReasoningStrategy](
+        "test_strategies",
+        validate_type=ReasoningStrategy,
+        canonicalize_keys=True,
+        config_key="strategy",
+        config_key_default="simple",
+        on_first_access=_register_builtins,
+    )
     fresh.register("summarize", SummarizeReasoning)
     monkeypatch.setattr(reg_module, "_registry", fresh)
 

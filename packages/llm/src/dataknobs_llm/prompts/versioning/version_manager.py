@@ -10,7 +10,7 @@ This module provides version control capabilities including:
 import re
 import uuid
 from typing import Any, Dict, List
-from datetime import datetime
+from datetime import UTC, datetime
 
 from dataknobs_llm.exceptions import VersioningError
 
@@ -135,7 +135,7 @@ class VersionManager:
             defaults=defaults or {},
             validation=validation,
             metadata=metadata or {},
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
             created_by=created_by,
             parent_version=parent_version,
             tags=tags or [],

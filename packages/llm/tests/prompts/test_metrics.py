@@ -1,7 +1,7 @@
 """Tests for metrics tracking functionality."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from dataknobs_llm.prompts.versioning import (
     MetricsCollector,
@@ -143,11 +143,11 @@ class TestMetricsCollector:
     @pytest.mark.asyncio
     async def test_metrics_last_used(self, collector):
         """Test that last_used timestamp is updated."""
-        before = datetime.utcnow()
+        before = datetime.now(UTC)
 
         await collector.record_event(version_id="v1", success=True)
 
-        after = datetime.utcnow()
+        after = datetime.now(UTC)
 
         metrics = await collector.get_metrics("v1")
         assert metrics.last_used is not None
@@ -182,7 +182,7 @@ class TestMetricsCollector:
     @pytest.mark.asyncio
     async def test_get_events_with_time_filter(self, collector):
         """Test filtering events by time range."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         # Record event (this will have current time)
         await collector.record_event(version_id="v1", success=True)

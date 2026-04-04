@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING, cast, Callable, Awaitable
 
 from dataknobs_config import ConfigurableBase
@@ -107,7 +107,7 @@ class AsyncS3Database(  # type: ignore[misc]
         record_dict = record.to_dict(include_metadata=True, flatten=False)
 
         # Add timestamps
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         if "metadata" not in record_dict:
             record_dict["metadata"] = {}
         record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)

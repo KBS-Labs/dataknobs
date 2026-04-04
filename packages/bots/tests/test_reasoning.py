@@ -131,7 +131,9 @@ class TestReasoningFactory:
     def test_invalid_strategy(self):
         """Test error handling for invalid strategy."""
         config = {"strategy": "invalid"}
-        with pytest.raises(ValueError, match="Unknown reasoning strategy"):
+        from dataknobs_common import NotFoundError
+
+        with pytest.raises(NotFoundError, match="not registered"):
             create_reasoning_from_config(config)
 
     def test_create_wizard_reasoning(self):

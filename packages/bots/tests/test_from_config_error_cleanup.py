@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_llm import EchoProvider
@@ -51,7 +51,7 @@ class TestFromConfigErrorCleanup:
         }
 
         with EchoProvider.track_instances() as instances:
-            with pytest.raises(ValueError, match="Unknown reasoning strategy"):
+            with pytest.raises(NotFoundError, match="not registered"):
                 await DynaBot.from_config(config)
 
         assert len(instances) == 1
@@ -93,7 +93,7 @@ class TestFromConfigErrorCleanup:
         async def attempt_from_config() -> None:
             await DynaBot.from_config(config)
 
-        with pytest.raises(ValueError, match="Unknown reasoning strategy"):
+        with pytest.raises(NotFoundError, match="not registered"):
             await asyncio.wait_for(attempt_from_config(), timeout=5.0)
 
 

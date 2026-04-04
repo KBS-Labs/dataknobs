@@ -17,14 +17,14 @@ logger = logging.getLogger(__name__)
 
 class DatabaseFactory(FactoryBase):
     """Factory for creating database backends dynamically.
-    
+
     This factory allows creating different database implementations
     based on configuration, supporting all available backends.
-    
+
     Configuration Options:
         backend (str): Backend type (memory, file, postgres, elasticsearch, s3)
         **kwargs: Backend-specific configuration options
-        
+
     Example Configuration:
         databases:
           - name: main
@@ -32,11 +32,11 @@ class DatabaseFactory(FactoryBase):
             backend: postgres
             host: localhost
             database: myapp
-            
+
           - name: cache
             factory: database
             backend: memory
-            
+
           - name: archive
             factory: database
             backend: s3
@@ -58,29 +58,26 @@ class DatabaseFactory(FactoryBase):
         """
         backend_type = config.pop("backend", "memory").lower()
 
-        logger.info(f"Creating database with backend: {backend_type}")
+        logger.info("Creating database with backend: %s", backend_type)
 
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
 
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)
-            logger.debug(f"Vector support enabled for backend: {backend_type}")
+            logger.debug("Vector support enabled for backend: %s", backend_type)
 
         # Get backend class from registry
-        try:
-            backend_class = sync_backends.get(backend_type)
-        except Exception as e:
-            # Backend not found - provide helpful error message
+        backend_class = sync_backends.get_factory(backend_type)
+        if not backend_class:
             available = sync_backends.list_keys()
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
                 f"Available backends: {', '.join(sorted(set(available)))}"
-            ) from e
+            )
 
         # Create and return backend instance
         return backend_class.from_config(config)
-
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -91,24 +88,19 @@ class DatabaseFactory(FactoryBase):
         Returns:
             Dictionary with backend information from registry metadata
         """
-        # Normalize to lowercase for case-insensitive lookup
-        backend_type = backend_type.lower()
-
-        # Check if backend exists first
-        if not sync_backends.has(backend_type):
+        # PluginRegistry handles case normalization via canonicalize_keys
+        if not sync_backends.is_registered(backend_type):
             return {
                 "description": "Unknown backend",
                 "error": f"Backend '{backend_type}' not recognized",
             }
 
-        # Get metadata from registry
-        metrics = sync_backends.get_metrics(backend_type)
-        return metrics.get("metadata", {})
+        return sync_backends.get_metadata(backend_type)
 
 
 class AsyncDatabaseFactory(FactoryBase):
     """Factory for creating async database backends.
-    
+
     Note: Currently only some backends support async operations.
     """
 
@@ -131,25 +123,23 @@ class AsyncDatabaseFactory(FactoryBase):
 
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)
-            logger.debug(f"Vector support enabled for async backend: {backend_type}")
+            logger.debug("Vector support enabled for async backend: %s", backend_type)
 
         # Get backend class from registry
-        try:
-            backend_class = async_backends.get(backend_type)
-        except Exception as e:
-            # Backend not found - provide helpful error message
+        backend_class = async_backends.get_factory(backend_type)
+        if not backend_class:
             available = async_backends.list_keys()
             raise ValueError(
                 f"Backend '{backend_type}' does not support async operations yet. "
                 f"Available async backends: {', '.join(sorted(set(available)))}"
-            ) from e
+            )
 
         # Create and return backend instance
         return backend_class.from_config(config)
 
 
 # TODO: Add AsyncVectorStoreFactory when async vector stores are implemented
-# The async vector store implementations (AsyncFaissVectorStore, AsyncChromaVectorStore, 
+# The async vector store implementations (AsyncFaissVectorStore, AsyncChromaVectorStore,
 # AsyncMemoryVectorStore) and base class (AsyncVectorStore) need to be created first.
 
 

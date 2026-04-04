@@ -10,6 +10,9 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common import NotFoundError, OperationError
+from dataknobs_common.registry import PluginRegistry
+
 from dataknobs_bots.reasoning import (
     GroundedReasoning,
     HybridReasoning,
@@ -17,7 +20,6 @@ from dataknobs_bots.reasoning import (
     ReasoningStrategy,
     SimpleReasoning,
     StrategyCapabilities,
-    StrategyRegistry,
     WizardReasoning,
     create_reasoning_from_config,
     get_registry,
@@ -26,6 +28,7 @@ from dataknobs_bots.reasoning import (
     list_strategies,
     register_strategy,
 )
+from dataknobs_bots.reasoning.registry import _register_builtins
 
 
 # ------------------------------------------------------------------
@@ -67,11 +70,16 @@ class _CustomStrategy(ReasoningStrategy):
 
 
 @pytest.fixture()
-def fresh_registry() -> StrategyRegistry:
-    """Return a fresh registry with builtins pre-loaded."""
-    registry = StrategyRegistry()
-    # Trigger lazy builtin registration via a public API call.
-    registry.list_keys()
+def fresh_registry() -> PluginRegistry[ReasoningStrategy]:
+    """Return a fresh registry matching production configuration."""
+    registry = PluginRegistry[ReasoningStrategy](
+        "test_strategies",
+        validate_type=ReasoningStrategy,
+        canonicalize_keys=True,
+        config_key="strategy",
+        config_key_default="simple",
+        on_first_access=_register_builtins,
+    )
     return registry
 
 
@@ -83,61 +91,61 @@ def fresh_registry() -> StrategyRegistry:
 class TestRegistryBasics:
     """Core registration and creation behavior."""
 
-    def test_register_custom_factory(self, fresh_registry: StrategyRegistry) -> None:
+    def test_register_custom_factory(self, fresh_registry: PluginRegistry[ReasoningStrategy]) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         assert fresh_registry.is_registered("custom")
 
-    def test_create_from_config(self, fresh_registry: StrategyRegistry) -> None:
+    def test_create_from_config(self, fresh_registry: PluginRegistry[ReasoningStrategy]) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         strategy = fresh_registry.create(
-            {"strategy": "custom", "custom_param": "hello"},
+            config={"strategy": "custom", "custom_param": "hello"},
         )
         assert isinstance(strategy, _CustomStrategy)
         assert strategy.custom_param == "hello"
 
     def test_create_with_callable_factory(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         def factory(config: dict[str, Any], **kwargs: Any) -> _CustomStrategy:
             return _CustomStrategy(custom_param=config.get("custom_param", "fn"))
 
         fresh_registry.register("fn_strategy", factory)
-        strategy = fresh_registry.create({"strategy": "fn_strategy"})
+        strategy = fresh_registry.create(config={"strategy": "fn_strategy"})
         assert isinstance(strategy, _CustomStrategy)
         assert strategy.custom_param == "fn"
 
     def test_duplicate_registration_raises(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
-        with pytest.raises(ValueError, match="already registered"):
+        with pytest.raises(OperationError, match="already registered"):
             fresh_registry.register("custom", _CustomStrategy)
 
     def test_duplicate_with_override(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         fresh_registry.register("custom", _CustomStrategy, override=True)
         assert fresh_registry.is_registered("custom")
 
     def test_unknown_strategy_error(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
-        with pytest.raises(ValueError, match="Unknown reasoning strategy.*'nope'"):
-            fresh_registry.create({"strategy": "nope"})
+        with pytest.raises(NotFoundError, match="'nope' not registered"):
+            fresh_registry.create(config={"strategy": "nope"})
 
     def test_unknown_strategy_lists_available(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
-        with pytest.raises(ValueError, match="simple") as exc_info:
-            fresh_registry.create({"strategy": "nope"})
-        # Error message should list available strategies
-        msg = str(exc_info.value)
+        with pytest.raises(NotFoundError) as exc_info:
+            fresh_registry.create(config={"strategy": "nope"})
+        # Error context should list available strategies
+        available = exc_info.value.context.get("available", [])
         for name in ("simple", "react", "wizard", "grounded", "hybrid"):
-            assert name in msg
+            assert name in available
 
-    def test_case_insensitive(self, fresh_registry: StrategyRegistry) -> None:
-        strategy = fresh_registry.create({"strategy": "SIMPLE"})
+    def test_case_insensitive(self, fresh_registry: PluginRegistry[ReasoningStrategy]) -> None:
+        strategy = fresh_registry.create(config={"strategy": "SIMPLE"})
         assert isinstance(strategy, SimpleReasoning)
 
 
@@ -150,27 +158,27 @@ class TestListAndGet:
     """Public API: list_strategies, get_strategy_factory."""
 
     def test_list_includes_builtins(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         keys = fresh_registry.list_keys()
         for name in ("simple", "react", "wizard", "grounded", "hybrid"):
             assert name in keys
 
     def test_list_includes_custom(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         fresh_registry.register("custom", _CustomStrategy)
         keys = fresh_registry.list_keys()
         assert "custom" in keys
 
     def test_get_factory_returns_class(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         factory = fresh_registry.get_factory("simple")
         assert factory is SimpleReasoning
 
     def test_get_factory_returns_none(
-        self, fresh_registry: StrategyRegistry,
+        self, fresh_registry: PluginRegistry[ReasoningStrategy],
     ) -> None:
         assert fresh_registry.get_factory("nonexistent") is None
 
@@ -375,7 +383,7 @@ class TestBackwardCompat:
         assert isinstance(strategy, SimpleReasoning)
 
     def test_unknown_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown reasoning strategy"):
+        with pytest.raises(NotFoundError, match="not registered"):
             create_reasoning_from_config({"strategy": "does_not_exist"})
 
 
@@ -405,7 +413,7 @@ class TestPublicAPI:
 
     def test_get_registry(self) -> None:
         registry = get_registry()
-        assert isinstance(registry, StrategyRegistry)
+        assert isinstance(registry, PluginRegistry)
 
 
 # ------------------------------------------------------------------
@@ -425,7 +433,14 @@ class TestThirdPartyEndToEnd:
         """
         import dataknobs_bots.reasoning.registry as reg_module
 
-        fresh = StrategyRegistry()
+        fresh: PluginRegistry[ReasoningStrategy] = PluginRegistry(
+            "test_strategies",
+            validate_type=ReasoningStrategy,
+            canonicalize_keys=True,
+            config_key="strategy",
+            config_key_default="simple",
+            on_first_access=_register_builtins,
+        )
         fresh.register("test_custom", _CustomStrategy)
         monkeypatch.setattr(reg_module, "_registry", fresh)
 

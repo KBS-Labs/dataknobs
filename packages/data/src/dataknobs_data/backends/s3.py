@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
@@ -194,7 +194,7 @@ class SyncS3Database(  # type: ignore[misc]
         # Set metadata
         record_copy.metadata = record_copy.metadata or {}
         record_copy.metadata["id"] = storage_id
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         record_copy.metadata["created_at"] = now.isoformat()
         record_copy.metadata["updated_at"] = now.isoformat()
 
@@ -253,8 +253,8 @@ class SyncS3Database(  # type: ignore[misc]
         # Preserve and update metadata
         record.metadata = record.metadata or {}
         record.metadata["id"] = id
-        record.metadata["created_at"] = existing_metadata.get("created_at", datetime.utcnow().isoformat())
-        record.metadata["updated_at"] = datetime.utcnow().isoformat()
+        record.metadata["created_at"] = existing_metadata.get("created_at", datetime.now(UTC).isoformat())
+        record.metadata["updated_at"] = datetime.now(UTC).isoformat()
 
         # Update the object
         obj_data = self._record_to_s3_object(record)
@@ -567,7 +567,7 @@ class SyncS3Database(  # type: ignore[misc]
         # Set metadata
         record.metadata = record.metadata or {}
         record.metadata["id"] = record_id
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         record.metadata["created_at"] = now.isoformat()
         record.metadata["updated_at"] = now.isoformat()
 
