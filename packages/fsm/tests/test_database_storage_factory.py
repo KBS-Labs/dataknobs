@@ -433,12 +433,13 @@ class TestDatabaseStorageFactory:
 
 
 class TestInMemoryStorageIsolation:
-    """Bug B3: InMemoryStorage shared-DB collision.
+    """InMemoryStorage record-type isolation.
 
-    When no databases are injected, history and step records share the same
-    AsyncMemoryDatabase instance. load_steps() queries by execution_id and
-    finds both history records (which lack 'step_data') and step records,
-    crashing with KeyError on the history record.
+    When history and step records share a single database instance,
+    ``UnifiedDatabaseStorage`` adds EXISTS filters on the type-specific
+    field (``history_data`` / ``step_data``) to prevent record-type
+    collisions.  These tests verify the isolation works for
+    ``InMemoryStorage`` specifically.
     """
 
     @pytest.fixture
@@ -451,7 +452,7 @@ class TestInMemoryStorageIsolation:
 
     @pytest.mark.asyncio
     async def test_load_steps_does_not_collide_with_history(self, memory_config):
-        """Steps and history with same execution_id must not collide."""
+        """Steps and history with same execution_id are isolated by EXISTS filter."""
         storage = InMemoryStorage(memory_config)
         await storage.initialize()
 

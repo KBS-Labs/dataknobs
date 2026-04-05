@@ -369,13 +369,44 @@ class TestStorageFactoryInjection:
         assert storage._db is main_db  # type: ignore[attr-defined]
         assert storage._steps_db is steps_db  # type: ignore[attr-defined]
 
-    def test_factory_create_backward_compatible(self) -> None:
-        """Factory without kwargs creates isolated databases for InMemoryStorage."""
+    @pytest.mark.asyncio
+    async def test_factory_create_backward_compatible(self) -> None:
+        """Factory-created InMemoryStorage isolates history and step records.
+
+        Record-type isolation is handled by EXISTS filters in the base
+        class, not by separate database instances.  This test verifies
+        end-to-end: save both record types, load each back without
+        cross-type pollution.
+        """
         config = StorageConfig(backend=StorageBackend.MEMORY)
         storage = StorageFactory.create(config)
+        assert isinstance(storage, InMemoryStorage)
+        await storage.initialize()
 
-        # InMemoryStorage eagerly creates separate databases to avoid
-        # history/step namespace collisions (Bug B3 fix).
-        assert storage._db is not None  # type: ignore[attr-defined]
-        assert storage._steps_db is not None  # type: ignore[attr-defined]
-        assert storage._db is not storage._steps_db  # type: ignore[attr-defined]
+        exec_id = "exec_factory"
+        history = ExecutionHistory(
+            fsm_name="test_fsm",
+            execution_id=exec_id,
+            data_mode=DataHandlingMode.DIRECT,
+        )
+        history.start_time = 1000.0
+        history.add_step(state_name="state_a", network_name="main", data=None)
+        history.end_time = 1001.0
+
+        step = ExecutionStep(
+            step_id="factory-step-1",
+            state_name="state_a",
+            network_name="main",
+            timestamp=1000.5,
+        )
+
+        await storage.save_history(history)
+        await storage.save_step(exec_id, step)
+
+        loaded_history = await storage.load_history(exec_id)
+        assert loaded_history is not None
+        assert loaded_history.fsm_name == "test_fsm"
+
+        steps = await storage.load_steps(exec_id)
+        assert len(steps) == 1
+        assert steps[0].step_id == "factory-step-1"

@@ -109,10 +109,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             await self._db.connect()
         
         # Use the same database for steps unless one was injected.
-        # Sharing is safe for SQL backends because history and step records
-        # use different schemas/tables. Memory backends (flat namespace)
-        # override __init__ to create separate instances — see
-        # InMemoryStorage (Bug B3).
+        # When shared, read methods filter by field existence
+        # (history_data / step_data) to isolate record types —
+        # see _history_query() and _steps_query().
         if self._steps_db is None:
             self._steps_db = self._db
     
@@ -178,6 +177,12 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             default=0
         ))
         
+        # Record type (informational; isolation uses EXISTS on history_data/step_data)
+        schema.add_field(FieldSchema(
+            name='record_type',
+            type=FieldType.TEXT,
+            metadata={'indexed': True}
+        ))
         # JSON data fields
         schema.add_field(FieldSchema(
             name='history_data',
@@ -192,9 +197,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             name='updated_at',
             type=FieldType.FLOAT
         ))
-        
+
         return schema
-    
+
     def _create_steps_schema(self) -> DatabaseSchema:
         """Create schema for step records."""
         from dataknobs_data.fields import FieldType
@@ -241,12 +246,53 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             metadata={'indexed': True}
         ))
         schema.add_field(FieldSchema(
+            name='record_type',
+            type=FieldType.TEXT,
+            metadata={'indexed': True}
+        ))
+        schema.add_field(FieldSchema(
             name='step_data',
             type=FieldType.JSON
         ))
-        
+
         return schema
-    
+
+    @property
+    def _uses_shared_db(self) -> bool:
+        """True when history and step records share one database namespace.
+
+        This covers both the injected-shared-DB path (caller passes one
+        ``database``) and the factory path (``_setup_backend()`` assigns
+        ``_steps_db = _db``).  The ``_db is not None`` guard avoids a
+        false positive when neither database has been set yet.
+        """
+        return self._db is not None and self._db is self._steps_db
+
+    def _history_query(self, base_query: Query | None = None) -> Query:
+        """Build a query scoped to history records.
+
+        When history and step records share a database, adds an
+        ``EXISTS`` filter on ``history_data`` to exclude step records.
+        This is backward compatible with legacy records that lack the
+        ``record_type`` discriminator — any record with ``history_data``
+        is a history record regardless of when it was written.
+        """
+        query = base_query or Query()
+        if self._uses_shared_db:
+            query = query.filter('history_data', 'exists')
+        return query
+
+    def _steps_query(self, base_query: Query | None = None) -> Query:
+        """Build a query scoped to step records.
+
+        Mirror of :meth:`_history_query` — filters on ``step_data``
+        existence to exclude history records from shared databases.
+        """
+        query = base_query or Query()
+        if self._uses_shared_db:
+            query = query.filter('step_data', 'exists')
+        return query
+
     async def save_history(
         self,
         history: ExecutionHistory,
@@ -278,6 +324,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 'total_steps': history.total_steps,
                 'failed_steps': history.failed_steps,
                 'skipped_steps': history.skipped_steps,
+                'record_type': 'history',
                 'history_data': history_data,
                 'created_at': time.time(),
                 'updated_at': time.time(),
@@ -296,8 +343,10 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             await self.initialize()
         
         # Query using dataknobs_data Query builder
-        query = Query().filter('execution_id', '=', history_id)
-        
+        query = self._history_query(
+            Query().filter('execution_id', '=', history_id)
+        )
+
         # Find record
         results = await self._db.search(query)
         record = results[0] if results else None
@@ -334,6 +383,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             'network_name': step.network_name,
             'status': step.status.value,
             'timestamp': step.timestamp,
+            'record_type': 'step',
             'step_data': step.to_dict()
         })
         
@@ -349,13 +399,15 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if not self._steps_db:
             await self.initialize()
         
-        # Build query
-        query = Query().filter('execution_id', '=', execution_id)
-        
+        # Build query — filter to step records when sharing a database
+        query = self._steps_query(
+            Query().filter('execution_id', '=', execution_id)
+        )
+
         if filters:
             for key, value in filters.items():
                 query = query.filter(key, '=', value)
-        
+
         # Load and reconstruct steps
         steps = []
         results = await self._steps_db.search(query)
@@ -395,9 +447,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if not self._db:
             await self.initialize()
         
-        # Build query using dataknobs_data Query
-        query = Query()
-        
+        # Build query using dataknobs_data Query — scope to history records
+        query = self._history_query()
+
         # Map filter keys to database fields
         for key, value in filters.items():
             if key in ['fsm_name', 'data_mode', 'status']:
@@ -457,20 +509,24 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if not self._db:
             await self.initialize()
         
-        # Find and delete history records
-        query = Query().filter('execution_id', '=', history_id)
+        # Find and delete history records only (not step records)
+        query = self._history_query(
+            Query().filter('execution_id', '=', history_id)
+        )
         records = await self._db.search(query)
-        
+
         deleted_count = 0
         for record in records:
             # Get the storage ID from the record
             record_id = record.storage_id or record.get_value('id')
             if record_id and await self._db.delete(record_id):
                 deleted_count += 1
-        
+
         # Delete associated steps
         if self._steps_db:
-            step_query = Query().filter('execution_id', '=', history_id)
+            step_query = self._steps_query(
+                Query().filter('execution_id', '=', history_id)
+            )
             step_records = await self._steps_db.search(step_query)
             for step_record in step_records:
                 step_id = step_record.storage_id or step_record.get_value('id')
@@ -489,8 +545,10 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         
         if execution_id:
             # Specific execution stats
-            query = Query().filter('execution_id', '=', execution_id)
-            
+            query = self._history_query(
+                Query().filter('execution_id', '=', execution_id)
+            )
+
             search_results = await self._db.search(query)
             for record in search_results:
                 return {
@@ -513,7 +571,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 'backend_type': self.config.connection_params.get('type', 'unknown')
             }
             
-            all_records = await self._db.search(Query())
+            all_records = await self._db.search(self._history_query())
             for record in all_records:
                 stats['total_histories'] += 1
                 
@@ -537,9 +595,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if before_timestamp is None:
             before_timestamp = time.time() - (7 * 86400)  # 7 days
         
-        # Build query
-        query = Query().filter('start_time', '<', before_timestamp)
-        
+        # Build query — scope to history records only
+        query = self._history_query(
+            Query().filter('start_time', '<', before_timestamp)
+        )
+
         if keep_failed:
             query = query.filter('failed_steps', '=', 0)
         
