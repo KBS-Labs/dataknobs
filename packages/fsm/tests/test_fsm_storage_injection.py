@@ -370,12 +370,12 @@ class TestStorageFactoryInjection:
         assert storage._steps_db is steps_db  # type: ignore[attr-defined]
 
     def test_factory_create_backward_compatible(self) -> None:
-        """Factory without kwargs creates isolated databases for InMemoryStorage."""
+        """Factory without kwargs creates InMemoryStorage with deferred DB init."""
         config = StorageConfig(backend=StorageBackend.MEMORY)
         storage = StorageFactory.create(config)
 
-        # InMemoryStorage eagerly creates separate databases to avoid
-        # history/step namespace collisions (Bug B3 fix).
-        assert storage._db is not None  # type: ignore[attr-defined]
-        assert storage._steps_db is not None  # type: ignore[attr-defined]
-        assert storage._db is not storage._steps_db  # type: ignore[attr-defined]
+        # InMemoryStorage defers database creation to initialize().
+        # Record-type isolation is handled by EXISTS filters in the
+        # base class (_history_query / _steps_query), not by separate
+        # database instances.
+        assert isinstance(storage, InMemoryStorage)
