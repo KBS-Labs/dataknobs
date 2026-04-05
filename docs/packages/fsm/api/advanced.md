@@ -351,10 +351,10 @@ The `database` and `steps_database` parameters are keyword-only:
 | `steps_database` | `None` | Separate `AsyncDatabase` for step records. Defaults to `database` when omitted. |
 
 When both parameters are `None` (the default), the storage creates its own
-database(s) via the factory. `InMemoryStorage` creates two separate
-`AsyncMemoryDatabase` instances (one for history, one for steps) to avoid
-namespace collisions in the flat memory backend. SQL-backed storages share
-a single database since tables provide natural isolation.
+database via the factory. When history and step records share a single
+database instance, `UnifiedDatabaseStorage` automatically adds an `EXISTS`
+filter on the type-specific field (`history_data` or `step_data`) to each
+query, preventing record-type collisions. This works across all backends.
 
 The factory also supports injection via keyword arguments:
 

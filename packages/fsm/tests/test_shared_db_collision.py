@@ -89,10 +89,16 @@ class TestSharedDatabaseCollision:
     async def test_load_history_does_not_return_steps(
         self, shared_storage: UnifiedDatabaseStorage
     ) -> None:
-        """Symmetric: load_history() must not find step records."""
+        """Symmetric: load_history() must not find step records.
+
+        The step is saved BEFORE the history so that without filtering
+        the step record would be returned first by the query, crashing
+        on the missing ``history_data`` field.
+        """
         exec_id = "exec-1"
-        await shared_storage.save_history(_make_history(exec_id))
+        # Step saved first — would be returned first without filter
         await shared_storage.save_step(exec_id, _make_step("step-1"))
+        await shared_storage.save_history(_make_history(exec_id))
 
         history = await shared_storage.load_history(exec_id)
 
@@ -134,10 +140,10 @@ class TestSharedDatabaseCollision:
         assert exec_stats["fsm_name"] == "test_fsm"
 
     @pytest.mark.asyncio
-    async def test_delete_history_scoped_correctly(
+    async def test_delete_history_removes_history_and_steps(
         self, shared_storage: UnifiedDatabaseStorage
     ) -> None:
-        """delete_history() must delete both history and step records."""
+        """delete_history() removes both the history record and its steps."""
         exec_id = "exec-1"
         await shared_storage.save_history(_make_history(exec_id))
         await shared_storage.save_step(exec_id, _make_step("step-1"))
@@ -149,22 +155,20 @@ class TestSharedDatabaseCollision:
         assert await shared_storage.load_steps(exec_id) == []
 
     @pytest.mark.asyncio
-    async def test_cleanup_only_removes_histories(
+    async def test_cleanup_removes_old_histories_and_cascades(
         self, shared_storage: UnifiedDatabaseStorage
     ) -> None:
-        """cleanup() must only target history records for deletion."""
+        """cleanup() finds old histories and cascades deletion to steps."""
         exec_id = "exec-1"
         await shared_storage.save_history(_make_history(exec_id))
         await shared_storage.save_step(exec_id, _make_step("step-1"))
 
-        # cleanup with a future timestamp to match everything
         deleted = await shared_storage.cleanup(
             before_timestamp=time.time() + 9999,
             keep_failed=False,
         )
 
         assert deleted == 1
-        # Verify both history and associated steps were removed
         assert await shared_storage.load_history(exec_id) is None
         assert await shared_storage.load_steps(exec_id) == []
 

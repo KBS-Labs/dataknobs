@@ -177,7 +177,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             default=0
         ))
         
-        # Record type discriminator (for shared-DB isolation)
+        # Record type (informational; isolation uses EXISTS on history_data/step_data)
         schema.add_field(FieldSchema(
             name='record_type',
             type=FieldType.TEXT,
