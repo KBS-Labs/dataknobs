@@ -5,6 +5,64 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-04-04
+
+### dataknobs-bots [0.6.10]
+
+#### Added
+- added modular reasoning strategy registry with plugin-based discovery (PR #233)
+- added per-stage reasoning strategy injection for wizard states (PR #235)
+
+#### Fixed
+- fixed Jinja2 template rendering to use sandboxed environment across all template sites (PR #236)
+
+### dataknobs-common [1.3.9]
+
+#### Added
+- generalized PluginRegistry with lazy loading, dependency ordering, and config-driven instantiation (PR #234)
+
+### dataknobs-data [0.4.14]
+
+#### Fixed
+- refactored backend and vector store registries to leverage enhanced common PluginRegistry (PR #234)
+- fixed deprecation warnings from Python 3.12 upgrade
+
+### dataknobs-fsm [0.1.15]
+
+#### Fixed
+- fixed shared database collisions when history and step storage use the same backing database (PR #237)
+
+### dataknobs-llm [0.5.6]
+
+#### Fixed
+- refactored LLM provider registry to leverage enhanced common PluginRegistry (PR #234)
+- fixed deprecation warnings from Python 3.12 upgrade
+
+### dataknobs-utils [1.2.6]
+
+#### Fixed
+- modernized type hints to Python 3.12 syntax (PR #232)
+
+### dataknobs-config [0.3.9]
+
+#### Changed
+- bumped minimum Python version to 3.12
+
+### dataknobs-structures [1.0.6]
+
+#### Changed
+- bumped minimum Python version to 3.12
+
+### dataknobs-xization [1.3.1]
+
+#### Changed
+- bumped minimum Python version to 3.12
+
+### Infrastructure
+
+- bumped minimum Python version to 3.12 across all packages (PR #232)
+
+
 ## Release - 2026-04-03
 
 ### dataknobs-common [1.3.8]
