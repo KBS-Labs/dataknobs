@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-06T17:26:31Z",
+  "timestamp": "2026-04-06T17:32:35Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/add-chunker-abstraction",
-  "git_commit": "4d2a2416beda32ab004b956e4bddea2ef7eb7378",
+  "git_branch": "update-dependencies",
+  "git_commit": "0a6b5ceb0e04fdfaaa7593a1cc4b168bd3b86b6d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
