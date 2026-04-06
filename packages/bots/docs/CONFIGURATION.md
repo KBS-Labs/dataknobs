@@ -1200,8 +1200,10 @@ knowledge_base:
 
   # Document chunking
   chunking:
-    max_chunk_size: 500    # Max characters per chunk
-    separator: "\n\n"      # Chunk separator
+    chunker: markdown_tree  # Chunker implementation (default: markdown_tree)
+    max_chunk_size: 500     # Max characters per chunk
+    combine_under_heading: true
+    generate_embeddings: true
 
   # File processing
   file_types:
@@ -1216,6 +1218,36 @@ knowledge_base:
     - created_at
     - source
 ```
+
+### Custom Chunkers
+
+The `chunker` key in the chunking section selects the chunker implementation.
+The default is `"markdown_tree"`, which wraps the existing `MarkdownChunker`.
+
+You can use a custom chunker by specifying a dotted import path:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: my_project.chunkers.RFCChunker
+    max_chunk_size: 1200
+```
+
+Or by registering a chunker under a short name and referencing it:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: rfc
+    max_chunk_size: 1200
+```
+
+Custom chunkers must subclass `dataknobs_xization.chunking.Chunker` and
+implement the `chunk(content, document_info)` method.  A `from_config(config)`
+classmethod is detected automatically for config-driven construction.
+
+See the [Chunking Abstraction](https://kbs-labs.github.io/dataknobs/packages/xization/chunking-abstraction/)
+documentation in `dataknobs-xization` for full details.
 
 ### Vector Store Backends
 

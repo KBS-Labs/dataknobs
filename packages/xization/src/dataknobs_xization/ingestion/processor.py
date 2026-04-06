@@ -12,17 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+from dataknobs_xization.chunking import create_chunker
+from dataknobs_xization.chunking.base import DocumentInfo
 from dataknobs_xization.ingestion.config import (
     FilePatternConfig,
     KnowledgeBaseConfig,
 )
 from dataknobs_xization.json import JSONChunk, JSONChunkConfig, JSONChunker
-from dataknobs_xization.markdown import (
-    ChunkQualityConfig,
-    HeadingInclusion,
-    chunk_markdown_tree,
-    parse_markdown,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +82,25 @@ class DirectoryProcessor:
         """
         self.config = config
         self.root_dir = Path(root_dir)
+
+        # Build the default chunker once for markdown files.  Per-file
+        # chunkers are only created when a pattern overrides the default.
+        self._default_chunking_config = self._build_effective_config(
+            config.default_chunking
+        )
+        self._default_chunker = create_chunker(self._default_chunking_config)
+
+    def _build_effective_config(
+        self, chunking_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Merge default quality filter into a chunking config dict."""
+        effective = dict(chunking_config)
+        if (
+            self.config.default_quality_filter
+            and "quality_filter" not in effective
+        ):
+            effective["quality_filter"] = self.config.default_quality_filter
+        return effective
 
     def process(self) -> Iterator[ProcessedDocument]:
         """Process all documents in the directory.
@@ -178,26 +193,24 @@ class DirectoryProcessor:
             with open(filepath, encoding="utf-8") as f:
                 content = f.read()
 
-            # Get chunking config
+            # Get chunking config — reuse the default chunker when config
+            # matches to avoid per-file construction overhead.
             chunking_config = self.config.get_chunking_config(
                 filepath.relative_to(self.root_dir)
             )
+            effective_config = self._build_effective_config(chunking_config)
 
-            # Build quality filter if configured
-            quality_filter = None
-            if self.config.default_quality_filter:
-                quality_filter = ChunkQualityConfig(**self.config.default_quality_filter)
+            if effective_config == self._default_chunking_config:
+                chunker = self._default_chunker
+            else:
+                chunker = create_chunker(effective_config)
 
-            # Parse and chunk
-            tree = parse_markdown(content)
-            md_chunks = chunk_markdown_tree(
-                tree,
-                max_chunk_size=chunking_config.get("max_chunk_size", 500),
-                heading_inclusion=HeadingInclusion.IN_METADATA,
-                combine_under_heading=chunking_config.get("combine_under_heading", True),
-                quality_filter=quality_filter,
-                generate_embeddings=True,
+            # Chunk the document
+            doc_info = DocumentInfo(
+                source=str(filepath),
+                content_type="text/markdown",
             )
+            md_chunks = chunker.chunk(content, doc_info)
 
             # Convert to dictionaries
             for i, chunk in enumerate(md_chunks):

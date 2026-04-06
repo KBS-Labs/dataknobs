@@ -45,6 +45,14 @@ from dataknobs_xization.markdown import (
     stream_markdown_file,
     stream_markdown_string,
 )
+from dataknobs_xization.chunking import (
+    Chunker,
+    DocumentInfo,
+    MarkdownTreeChunker,
+    chunker_registry,
+    create_chunker,
+    register_chunker,
+)
 from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 from dataknobs_xization.json import (
     JSONChunk,
@@ -110,6 +118,13 @@ __all__ = [
     "parse_markdown",
     "stream_markdown_file",
     "stream_markdown_string",
+    # Chunking abstraction
+    "Chunker",
+    "DocumentInfo",
+    "MarkdownTreeChunker",
+    "chunker_registry",
+    "create_chunker",
+    "register_chunker",
     # Ingestion module
     "ingestion",
     "DirectoryProcessor",
