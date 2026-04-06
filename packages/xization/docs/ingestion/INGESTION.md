@@ -176,6 +176,7 @@ Create `knowledge_base.json` or `knowledge_base.yaml` in your docs directory:
 ```yaml
 name: product-docs
 default_chunking:
+  chunker: markdown_tree     # default, can be omitted
   max_chunk_size: 500
 
 patterns:
@@ -359,10 +360,12 @@ async def process_documents(directory: str):
 
 ### Markdown Files
 
+- Chunked via the pluggable `Chunker` abstraction (default: `MarkdownTreeChunker`)
 - Parsed into tree structure preserving heading hierarchy
 - Chunked with configurable size and smart boundary detection
 - Quality filtering available
 - Heading metadata preserved
+- Custom chunker selectable via the `chunker` key in chunking config
 
 ### JSON Files
 
@@ -382,6 +385,48 @@ async def process_documents(directory: str):
 cd packages/xization
 uv run pytest tests/test_ingestion.py -v
 ```
+
+## Custom Chunkers
+
+The `DirectoryProcessor` uses the pluggable `Chunker` abstraction for markdown
+files.  The `chunker` key in the chunking config selects the implementation:
+
+```yaml
+default_chunking:
+  chunker: markdown_tree          # built-in default
+  max_chunk_size: 500
+
+# Or use a custom chunker via dotted import path:
+default_chunking:
+  chunker: my_project.chunkers.RFCChunker
+  max_chunk_size: 1200
+```
+
+### Transform Pipeline
+
+Add a `transforms` key to apply post-processing after chunking:
+
+```yaml
+default_chunking:
+  chunker: markdown_tree
+  max_chunk_size: 800
+  transforms:
+    - merge_small:
+        min_size: 200
+    - split_large:
+        max_size: 1000
+```
+
+Built-in transforms: `merge_small`, `split_large`, `quality_filter`.
+
+### Source Positions
+
+Chunk metadata includes `char_start` and `char_end` — character offsets
+into the source document.  These are forwarded in each chunk dict's
+`metadata` field for use in citation and source highlighting.
+
+See [Markdown Chunking — Pluggable Chunker Abstraction](../markdown/MARKDOWN_CHUNKING.md#pluggable-chunker-abstraction)
+for how to write and register custom chunkers and transforms.
 
 ## Related
 

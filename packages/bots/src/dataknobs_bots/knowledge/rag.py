@@ -5,12 +5,10 @@ from pathlib import Path
 from typing import Any, Self
 
 from dataknobs_xization import (
-    ChunkQualityConfig,
     ContentTransformer,
-    HeadingInclusion,
-    chunk_markdown_tree,
-    parse_markdown,
+    create_chunker,
 )
+from dataknobs_xization.chunking.base import Chunker, DocumentInfo
 from dataknobs_xization.ingestion import (
     DirectoryProcessor,
     KnowledgeBaseConfig,
@@ -46,19 +44,23 @@ class RAGKnowledgeBase(KnowledgeBase):
         chunking_config: dict[str, Any] | None = None,
         merger_config: MergerConfig | None = None,
         formatter_config: FormatterConfig | None = None,
+        chunker: Chunker | None = None,
     ):
         """Initialize RAG knowledge base.
 
         Args:
             vector_store: Vector store backend instance
             embedding_provider: LLM provider with embed() method
-            chunking_config: Configuration for chunking:
-                - max_chunk_size: Maximum chunk size in characters
-                - combine_under_heading: Combine text under same heading
-                - quality_filter: ChunkQualityConfig for filtering
-                - generate_embeddings: Whether to generate enriched embedding text
+            chunking_config: Configuration for chunking.  The ``chunker``
+                key selects the chunker implementation (default:
+                ``"markdown_tree"``).  Remaining keys are forwarded to the
+                chunker's ``from_config()`` method.  Legacy keys
+                (``max_chunk_size``, ``combine_under_heading``, etc.) are
+                preserved for backward compatibility.
             merger_config: Configuration for chunk merging (optional)
             formatter_config: Configuration for context formatting (optional)
+            chunker: Pre-built chunker instance.  When provided, takes
+                precedence over ``chunking_config`` for chunker selection.
         """
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -66,6 +68,9 @@ class RAGKnowledgeBase(KnowledgeBase):
             "max_chunk_size": 500,
             "combine_under_heading": True,
         }
+
+        # Resolve chunker: explicit instance > config-driven > default
+        self._chunker = chunker or create_chunker(self.chunking_config)
 
         # Initialize merger and formatter
         self.merger = ChunkMerger(merger_config) if merger_config else ChunkMerger()
@@ -442,8 +447,10 @@ class RAGKnowledgeBase(KnowledgeBase):
         if config is None:
             config = KnowledgeBaseConfig.load(directory)
 
-        # Create processor
-        processor = DirectoryProcessor(config, directory)
+        # Create processor, passing through the injected chunker (if any)
+        # so that load_from_directory respects the same chunker as
+        # load_markdown_text.
+        processor = DirectoryProcessor(config, directory, chunker=self._chunker)
 
         # Track results
         results: dict[str, Any] = {
@@ -559,27 +566,12 @@ class RAGKnowledgeBase(KnowledgeBase):
         """
         import numpy as np
 
-        # Parse markdown
-        tree = parse_markdown(markdown_text)
-
-        # Build quality filter config if specified
-        quality_filter = None
-        if "quality_filter" in self.chunking_config:
-            qf_config = self.chunking_config["quality_filter"]
-            if isinstance(qf_config, ChunkQualityConfig):
-                quality_filter = qf_config
-            elif isinstance(qf_config, dict):
-                quality_filter = ChunkQualityConfig(**qf_config)
-
-        # Chunk the document with enhanced options
-        chunks = chunk_markdown_tree(
-            tree,
-            max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
-            heading_inclusion=HeadingInclusion.IN_METADATA,
-            combine_under_heading=self.chunking_config.get("combine_under_heading", True),
-            quality_filter=quality_filter,
-            generate_embeddings=self.chunking_config.get("generate_embeddings", True),
+        # Chunk using the configured chunker
+        doc_info = DocumentInfo(
+            source=source,
+            metadata=metadata or {},
         )
+        chunks = self._chunker.chunk(markdown_text, doc_info)
 
         # Process and store chunks
         vectors = []
@@ -610,6 +602,8 @@ class RAGKnowledgeBase(KnowledgeBase):
                 "headings": chunk.metadata.headings,
                 "heading_levels": chunk.metadata.heading_levels,
                 "line_number": chunk.metadata.line_number,
+                "char_start": chunk.metadata.char_start,
+                "char_end": chunk.metadata.char_end,
                 "chunk_size": chunk.metadata.chunk_size,
                 "content_length": chunk.metadata.content_length,
             }

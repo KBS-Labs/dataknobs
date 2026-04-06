@@ -240,6 +240,7 @@ nav:
       - packages/xization/masking.md
       - packages/xization/content-transformation.md
       - packages/xization/html-conversion.md
+      - packages/xization/chunking-abstraction.md
       - Markdown Chunking:
         - packages/xization/markdown-chunking.md
         - packages/xization/quality-filtering.md

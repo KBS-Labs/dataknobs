@@ -123,7 +123,10 @@ from dataknobs_bots.knowledge import KnowledgeBaseConfig, FilePatternConfig
 config = KnowledgeBaseConfig(
     name="api-docs",
     default_chunking={
+        "chunker": "markdown_tree",  # default, can be omitted
         "max_chunk_size": 500,
+        # Optional: post-processing pipeline
+        # "transforms": [{"merge_small": {"min_size": 200}}],
     },
     patterns=[
         FilePatternConfig(
@@ -134,6 +137,11 @@ config = KnowledgeBaseConfig(
             pattern="guides/**/*.md",
             chunking={"max_chunk_size": 800},  # Override for guides
         ),
+        # Custom chunker for specific file patterns:
+        # FilePatternConfig(
+        #     pattern="rfcs/**/*.md",
+        #     chunking={"chunker": "my_project.chunkers.RFCChunker", "max_chunk_size": 1200},
+        # ),
     ],
     exclude_patterns=[
         "**/drafts/**",

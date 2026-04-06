@@ -6,23 +6,20 @@ documents from a directory into chunks ready for embedding.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+from dataknobs_xization.chunking import create_chunker
+from dataknobs_xization.chunking.base import Chunker, DocumentInfo
 from dataknobs_xization.ingestion.config import (
     FilePatternConfig,
     KnowledgeBaseConfig,
 )
 from dataknobs_xization.json import JSONChunk, JSONChunkConfig, JSONChunker
-from dataknobs_xization.markdown import (
-    ChunkQualityConfig,
-    HeadingInclusion,
-    chunk_markdown_tree,
-    parse_markdown,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +74,57 @@ class DirectoryProcessor:
         root_dir: Root directory for processing
     """
 
-    def __init__(self, config: KnowledgeBaseConfig, root_dir: str | Path):
+    def __init__(
+        self,
+        config: KnowledgeBaseConfig,
+        root_dir: str | Path,
+        chunker: Chunker | None = None,
+    ):
         """Initialize the directory processor.
 
         Args:
             config: Knowledge base configuration
             root_dir: Root directory containing documents
+            chunker: Optional pre-built chunker for markdown files.
+                When provided, used as the default chunker instead of
+                creating one from ``config.default_chunking``.
         """
         self.config = config
         self.root_dir = Path(root_dir)
+
+        # Build the default chunker once for markdown files.  Per-file
+        # chunkers are only created when a pattern overrides the default.
+        self._default_chunking_config = self._build_effective_config(
+            config.default_chunking
+        )
+        self._default_config_key = self._config_cache_key(
+            self._default_chunking_config
+        )
+        self._default_chunker = chunker or create_chunker(
+            self._default_chunking_config
+        )
+
+    def _build_effective_config(
+        self, chunking_config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Merge default quality filter into a chunking config dict."""
+        effective = dict(chunking_config)
+        if (
+            self.config.default_quality_filter
+            and "quality_filter" not in effective
+        ):
+            effective["quality_filter"] = self.config.default_quality_filter
+        return effective
+
+    @staticmethod
+    def _config_cache_key(config: dict[str, Any]) -> str:
+        """Canonical JSON string for config comparison.
+
+        Using JSON serialization instead of dict equality handles
+        nested structures robustly and fails visibly if a non-
+        serializable object is placed in the config.
+        """
+        return json.dumps(config, sort_keys=True, default=str)
 
     def process(self) -> Iterator[ProcessedDocument]:
         """Process all documents in the directory.
@@ -104,12 +143,12 @@ class DirectoryProcessor:
 
             # Skip config files
             if filepath.name in CONFIG_FILE_NAMES:
-                logger.debug(f"Skipping config file: {rel_path}")
+                logger.debug("Skipping config file: %s", rel_path)
                 continue
 
             # Skip excluded files
             if self.config.is_excluded(rel_path):
-                logger.debug(f"Skipping excluded file: {rel_path}")
+                logger.debug("Skipping excluded file: %s", rel_path)
                 continue
 
             # Get pattern config if any
@@ -127,9 +166,9 @@ class DirectoryProcessor:
                 if inner_suffix in (".json", ".jsonl", ".ndjson"):
                     yield from self._process_json(filepath, pattern_config)
                 else:
-                    logger.debug(f"Skipping unsupported compressed file: {rel_path}")
+                    logger.debug("Skipping unsupported compressed file: %s", rel_path)
             else:
-                logger.debug(f"Skipping unsupported file type: {rel_path}")
+                logger.debug("Skipping unsupported file type: %s", rel_path)
 
     def _collect_files(self) -> list[Path]:
         """Collect all files to process from the directory.
@@ -178,26 +217,24 @@ class DirectoryProcessor:
             with open(filepath, encoding="utf-8") as f:
                 content = f.read()
 
-            # Get chunking config
+            # Get chunking config — reuse the default chunker when config
+            # matches to avoid per-file construction overhead.
             chunking_config = self.config.get_chunking_config(
                 filepath.relative_to(self.root_dir)
             )
+            effective_config = self._build_effective_config(chunking_config)
 
-            # Build quality filter if configured
-            quality_filter = None
-            if self.config.default_quality_filter:
-                quality_filter = ChunkQualityConfig(**self.config.default_quality_filter)
+            if self._config_cache_key(effective_config) == self._default_config_key:
+                chunker = self._default_chunker
+            else:
+                chunker = create_chunker(effective_config)
 
-            # Parse and chunk
-            tree = parse_markdown(content)
-            md_chunks = chunk_markdown_tree(
-                tree,
-                max_chunk_size=chunking_config.get("max_chunk_size", 500),
-                heading_inclusion=HeadingInclusion.IN_METADATA,
-                combine_under_heading=chunking_config.get("combine_under_heading", True),
-                quality_filter=quality_filter,
-                generate_embeddings=True,
+            # Chunk the document
+            doc_info = DocumentInfo(
+                source=str(filepath),
+                content_type="text/markdown",
             )
+            md_chunks = chunker.chunk(content, doc_info)
 
             # Convert to dictionaries
             for i, chunk in enumerate(md_chunks):
@@ -205,20 +242,23 @@ class DirectoryProcessor:
                     "text": chunk.text,
                     "embedding_text": chunk.metadata.embedding_text or chunk.text,
                     "chunk_index": i,
-                    "source_path": "",
+                    "source_path": str(filepath),
                     "metadata": {
                         "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
                         "headings": chunk.metadata.headings,
                         "heading_levels": chunk.metadata.heading_levels,
                         "line_number": chunk.metadata.line_number,
+                        "char_start": chunk.metadata.char_start,
+                        "char_end": chunk.metadata.char_end,
                         "chunk_size": chunk.metadata.chunk_size,
+                        "content_length": chunk.metadata.content_length,
                     },
                 }
                 chunks.append(chunk_dict)
 
         except Exception as e:
             errors.append(f"Failed to process markdown: {e}")
-            logger.error(f"Error processing {filepath}: {e}")
+            logger.exception("Error processing %s", filepath)
 
         # Build metadata
         metadata = self.config.get_metadata(filepath.relative_to(self.root_dir))
@@ -295,7 +335,7 @@ class DirectoryProcessor:
 
         except Exception as e:
             errors.append(f"Failed to process JSON: {e}")
-            logger.error(f"Error processing {filepath}: {e}")
+            logger.exception("Error processing %s", filepath)
 
         # Build metadata
         metadata = self.config.get_metadata(filepath.relative_to(self.root_dir))
@@ -347,12 +387,14 @@ class DirectoryProcessor:
 def process_directory(
     directory: str | Path,
     config: KnowledgeBaseConfig | None = None,
+    chunker: Chunker | None = None,
 ) -> Iterator[ProcessedDocument]:
     """Convenience function to process a directory.
 
     Args:
         directory: Directory to process
         config: Optional configuration (loads from directory if not provided)
+        chunker: Optional pre-built chunker for markdown files
 
     Yields:
         ProcessedDocument for each file
@@ -362,5 +404,5 @@ def process_directory(
     if config is None:
         config = KnowledgeBaseConfig.load(directory)
 
-    processor = DirectoryProcessor(config, directory)
+    processor = DirectoryProcessor(config, directory, chunker=chunker)
     yield from processor.process()

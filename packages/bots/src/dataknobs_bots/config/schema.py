@@ -422,6 +422,51 @@ class DynaBotConfigSchema:
                         "description": "Knowledge base type",
                         "enum": ["rag"],
                     },
+                    "chunking": {
+                        "type": "object",
+                        "description": (
+                            "Chunking configuration. The 'chunker' key "
+                            "selects the implementation (default: "
+                            "'markdown_tree'). Remaining keys are "
+                            "forwarded to the chunker."
+                        ),
+                        "properties": {
+                            "chunker": {
+                                "type": "string",
+                                "description": (
+                                    "Chunker implementation: a registry "
+                                    "key (e.g. 'markdown_tree') or a "
+                                    "dotted import path."
+                                ),
+                            },
+                            "max_chunk_size": {
+                                "type": "integer",
+                                "description": "Maximum chunk size in characters",
+                            },
+                            "combine_under_heading": {
+                                "type": "boolean",
+                                "description": "Combine text under same heading",
+                            },
+                            "generate_embeddings": {
+                                "type": "boolean",
+                                "description": (
+                                    "Generate heading-enriched embedding text"
+                                ),
+                            },
+                            "transforms": {
+                                "type": "array",
+                                "description": (
+                                    "Post-processing transform pipeline. "
+                                    "Each entry is a dict with one key "
+                                    "(registry key or dotted path) mapping "
+                                    "to the transform config. Built-in: "
+                                    "'merge_small', 'split_large', "
+                                    "'quality_filter'."
+                                ),
+                                "items": {"type": "object"},
+                            },
+                        },
+                    },
                     "vector_store": {
                         "type": "object",
                         "description": "Vector store configuration",

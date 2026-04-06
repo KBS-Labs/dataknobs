@@ -17,6 +17,15 @@ pip install dataknobs-xization
 
 The Xization package specializes in text preprocessing and includes:
 
+- **Pluggable Chunking Abstraction**: Config-driven chunker selection via `PluginRegistry`
+  - `Chunker` ABC for custom implementations
+  - `ChunkTransform` ABC for composable post-processing (merge, split, filter, enrich)
+  - `CompositeChunker` pipeline: chunker + ordered transforms via `transforms` config key
+  - `MarkdownTreeChunker` default wrapping the markdown chunker
+  - Built-in transforms: `merge_small`, `split_large`, `quality_filter`
+  - Source positions: `char_start`/`char_end` on `ChunkMetadata` for citation and highlighting
+  - Dotted import path support for custom chunkers and transforms in YAML configs
+  - `create_chunker()` factory + `register_chunker()` / `register_transform()` for extensions
 - **Markdown Chunking**: Parse and chunk markdown documents for RAG applications
   - Preserves heading hierarchy and semantic structure
   - Supports code blocks, tables, lists, and other markdown constructs
@@ -47,6 +56,10 @@ dataknobs-xization/
 ├── src/
 │   └── dataknobs_xization/
 │       ├── __init__.py
+│       ├── chunking/
+│       │   ├── base.py            # Chunker ABC, DocumentInfo
+│       │   ├── markdown.py        # MarkdownTreeChunker (default)
+│       │   └── registry.py        # PluginRegistry singleton, create_chunker()
 │       ├── html/
 │       │   ├── html_converter.py  # HTML to markdown conversion
 │       │   └── __init__.py
@@ -502,6 +515,7 @@ For complete API documentation, see the [Xization API Reference](api.md).
 
 ## Module Documentation
 
+- [Chunking Abstraction](chunking-abstraction.md) - Pluggable chunker selection
 - [HTML Conversion](html-conversion.md) - Convert HTML documents to markdown
 - [Markdown Chunking](markdown-chunking.md) - Parse and chunk markdown for RAG
 - [JSON Chunking](json-chunking.md) - Chunk JSON and JSONL documents
