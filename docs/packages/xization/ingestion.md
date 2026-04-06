@@ -134,13 +134,41 @@ print(f"Loaded {results['total_chunks']} chunks")
 
 | Type | Extension | Processing |
 |------|-----------|------------|
-| Markdown | `.md` | Tree-based chunking with heading preservation |
+| Markdown | `.md` | Pluggable chunker (default: `MarkdownTreeChunker`) with heading preservation |
 | JSON | `.json` | Template or field-based text generation |
 | JSONL | `.jsonl`, `.ndjson` | Streaming line-by-line processing |
 | Compressed | `.json.gz`, `.jsonl.gz` | Automatic decompression |
 
+## Custom Chunkers
+
+The `DirectoryProcessor` uses the pluggable `Chunker` abstraction for markdown
+files.  Add a `chunker` key to select the implementation:
+
+```yaml
+default_chunking:
+  chunker: my_project.chunkers.RFCChunker
+  max_chunk_size: 1200
+```
+
+Add a `transforms` key to apply post-processing (merge, split, filter):
+
+```yaml
+default_chunking:
+  chunker: markdown_tree
+  max_chunk_size: 800
+  transforms:
+    - merge_small:
+        min_size: 200
+```
+
+Chunk metadata includes `char_start`/`char_end` source positions, forwarded
+in each chunk dict for citation and highlighting.
+
+See [Chunking Abstraction](chunking-abstraction.md) for full details.
+
 ## Related
 
+- [Chunking Abstraction](chunking-abstraction.md) - Pluggable chunker selection
 - [JSON Chunking](json-chunking.md) - JSON-specific chunking
 - [Markdown Chunking](markdown-chunking.md) - Markdown-specific chunking
 - [Quality Filtering](quality-filtering.md) - Filtering low-quality chunks

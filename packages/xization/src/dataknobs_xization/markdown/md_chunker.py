@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from dataknobs_structures.tree import Tree
 
+from dataknobs_xization.chunking.utils import split_text as _split_text_util
 from dataknobs_xization.markdown.md_parser import MarkdownNode
 from dataknobs_xization.markdown.enrichment import build_enriched_text
 from dataknobs_xization.markdown.filters import ChunkQualityConfig, ChunkQualityFilter
@@ -41,18 +42,32 @@ class ChunkMetadata:
     Attributes:
         headings: List of heading texts from root to chunk
         heading_levels: List of heading levels corresponding to headings
-        line_number: Starting line number in source document
+        line_number: Starting line number in source document (1-indexed)
+        char_start: Character offset of source span start (0-indexed).
+            For chunks produced with ``combine_under_heading=True``,
+            positions are linearly interpolated when body nodes are
+            split and may be approximate if the source nodes were
+            non-contiguous (e.g., separated by a code block).
+            ``0`` indicates position is unknown.
+        char_end: Character offset of source span end (exclusive).
+            Same interpolation note as ``char_start``.
+            ``0`` indicates position is unknown.
         chunk_index: Index of this chunk in the sequence
         chunk_size: Size of chunk text in characters
         content_length: Size of content without headings (for quality decisions)
         heading_display: Formatted heading path for display
-        embedding_text: Heading-enriched text for embedding (optional)
+        embedding_text: Heading-enriched text for embedding (optional).
+            Cleared to ``""`` by transforms that merge or split chunks,
+            since the heading-enriched text is no longer valid for the
+            modified content.
         custom: Additional custom metadata
     """
 
     headings: list[str] = field(default_factory=list)
     heading_levels: list[int] = field(default_factory=list)
     line_number: int = 0
+    char_start: int = 0
+    char_end: int = 0
     chunk_index: int = 0
     chunk_size: int = 0
     content_length: int = 0
@@ -66,6 +81,8 @@ class ChunkMetadata:
             "headings": self.headings,
             "heading_levels": self.heading_levels,
             "line_number": self.line_number,
+            "char_start": self.char_start,
+            "char_end": self.char_end,
             "chunk_index": self.chunk_index,
             "chunk_size": self.chunk_size,
             "content_length": self.content_length,
@@ -233,17 +250,35 @@ class MarkdownChunker:
 
             # Process body text nodes (can be combined and split)
             if body_nodes:
+                active_nodes = [n for n in body_nodes if n.data.text.strip()]
                 combined_text = "\n".join(
-                    node.data.text for node in body_nodes if node.data.text.strip()
+                    node.data.text for node in active_nodes
                 )
 
                 if combined_text.strip():
-                    for chunk_text in self._split_text(combined_text):
+                    # Source span covers first to last contributing node
+                    group_char_start = active_nodes[0].data.char_start
+                    group_char_end = active_nodes[-1].data.char_end
+
+                    for chunk_text, rel_start, rel_end in self._split_text(combined_text):
+                        # Map relative offsets to absolute source positions.
+                        # The combined text is a join of node texts; we
+                        # approximate by interpolating within the group span.
+                        group_len = group_char_end - group_char_start
+                        combined_len = len(combined_text) or 1
+                        abs_start = group_char_start + int(
+                            rel_start * group_len / combined_len
+                        )
+                        abs_end = group_char_start + int(
+                            rel_end * group_len / combined_len
+                        )
                         yield self._create_chunk(
                             text=chunk_text,
                             headings=headings,
                             heading_levels=levels,
-                            line_number=body_nodes[0].data.line_number if body_nodes else 0,
+                            line_number=active_nodes[0].data.line_number,
+                            char_start=abs_start,
+                            char_end=abs_end,
                         )
 
             # Process atomic constructs (keep as complete units)
@@ -254,6 +289,8 @@ class MarkdownChunker:
                     headings=headings,
                     heading_levels=levels,
                     line_number=atomic_node.data.line_number,
+                    char_start=atomic_node.data.char_start,
+                    char_end=atomic_node.data.char_end,
                     metadata=atomic_node.data.metadata,
                     node_type=atomic_node.data.node_type,
                 )
@@ -280,17 +317,21 @@ class MarkdownChunker:
                     headings=headings,
                     heading_levels=levels,
                     line_number=node.data.line_number,
+                    char_start=node.data.char_start,
+                    char_end=node.data.char_end,
                     metadata=node.data.metadata,
                     node_type=node.data.node_type,
                 )
             else:
                 # Regular body text can be split
-                for chunk_text in self._split_text(node.data.text):
+                for chunk_text, rel_start, rel_end in self._split_text(node.data.text):
                     yield self._create_chunk(
                         text=chunk_text,
                         headings=headings,
                         heading_levels=levels,
                         line_number=node.data.line_number,
+                        char_start=node.data.char_start + rel_start,
+                        char_end=node.data.char_start + rel_end,
                     )
 
     def _get_heading_path(self, node: Tree | None) -> tuple[list[str], list[int]]:
@@ -315,62 +356,18 @@ class MarkdownChunker:
 
         return headings, levels
 
-    def _split_text(self, text: str) -> list[str]:
+    def _split_text(self, text: str) -> list[tuple[str, int, int]]:
         """Split text into chunks respecting max_chunk_size.
 
-        When text exceeds max_chunk_size, splits are placed at the best
-        available boundary using a priority-based strategy. Within the
-        current window (start to start + max_chunk_size), the method
-        searches backward (via rfind) for the highest-priority boundary:
-
-        1. Paragraph break (double newline) — preserves paragraph-level coherence
-        2. Sentence end (period/exclamation/question followed by space or newline)
-           — keeps sentences intact
-        3. Word break (space) — avoids splitting mid-word
-        4. Hard cut at max_chunk_size — used only when no boundary exists
-
-        The backward search ensures each chunk is as large as possible
-        while still ending at a clean boundary.
+        Delegates to :func:`~dataknobs_xization.chunking.utils.split_text`.
 
         Args:
             text: Text to split
 
         Returns:
-            List of text chunks
+            List of ``(chunk_text, rel_start, rel_end)`` tuples.
         """
-        if len(text) <= self.max_chunk_size:
-            return [text]
-
-        chunks = []
-        start = 0
-
-        while start < len(text):
-            end = start + self.max_chunk_size
-
-            # If not at the end, try to break at a good boundary
-            if end < len(text):
-                # Try to break at paragraph boundary (double newline)
-                break_pos = text.rfind("\n\n", start, end)
-                if break_pos > start:
-                    end = break_pos + 2
-                else:
-                    # Try to break at sentence boundary
-                    for punct in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
-                        break_pos = text.rfind(punct, start, end)
-                        if break_pos > start:
-                            end = break_pos + len(punct)
-                            break
-                    else:
-                        # Try to break at word boundary
-                        break_pos = text.rfind(" ", start, end)
-                        if break_pos > start:
-                            end = break_pos + 1
-
-            chunks.append(text[start:end].strip())
-
-            start = end
-
-        return [c for c in chunks if c]  # Filter out empty chunks
+        return _split_text_util(text, self.max_chunk_size)
 
     def _create_chunk(
         self,
@@ -378,6 +375,8 @@ class MarkdownChunker:
         headings: list[str],
         heading_levels: list[int],
         line_number: int,
+        char_start: int = 0,
+        char_end: int = 0,
         metadata: dict[str, Any] | None = None,
         node_type: str = "body",
     ) -> Chunk:
@@ -388,6 +387,8 @@ class MarkdownChunker:
             headings: List of heading texts
             heading_levels: List of heading levels
             line_number: Source line number
+            char_start: Character offset of source span start
+            char_end: Character offset of source span end (exclusive)
             metadata: Optional metadata from the source node
             node_type: Type of node ('body', 'code', 'list', 'table', etc.)
 
@@ -436,6 +437,8 @@ class MarkdownChunker:
             headings=headings if include_headings else [],
             heading_levels=heading_levels if include_headings else [],
             line_number=line_number,
+            char_start=char_start,
+            char_end=char_end,
             chunk_index=self._chunk_index,
             chunk_size=len(chunk_text),
             content_length=content_length,

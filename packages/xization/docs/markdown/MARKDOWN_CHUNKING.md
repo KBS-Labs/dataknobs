@@ -416,24 +416,135 @@ uv run pytest tests/test_md_parser.py tests/test_md_chunker.py tests/test_md_str
 
 See `example_document.md` for a sample markdown file demonstrating various heading levels and structures.
 
+## Pluggable Chunker Abstraction
+
+The `dataknobs_xization.chunking` module provides a pluggable abstraction over
+chunking implementations.  Instead of calling `chunk_markdown_tree()` directly,
+consuming code (RAGKnowledgeBase, DirectoryProcessor, custom pipelines) can use
+`create_chunker()` to resolve the implementation from configuration.
+
+### Quick Start
+
+```python
+from dataknobs_xization.chunking import create_chunker
+
+# Default — wraps MarkdownChunker with content-level interface
+chunker = create_chunker({"max_chunk_size": 800})
+chunks = chunker.chunk("# Title\nBody text.")
+
+# Explicit selection
+chunker = create_chunker({"chunker": "markdown_tree", "max_chunk_size": 800})
+
+# Custom implementation via dotted import path
+chunker = create_chunker({"chunker": "my_project.chunkers.RFCChunker"})
+```
+
+### Writing a Custom Chunker
+
+Subclass `Chunker` and implement the `chunk()` method:
+
+```python
+from dataknobs_xization.chunking import Chunker, DocumentInfo, register_chunker
+from dataknobs_xization.markdown.md_chunker import Chunk, ChunkMetadata
+
+class PlaintextChunker(Chunker):
+    """Simple chunker that splits on double newlines."""
+
+    def __init__(self, max_chunk_size: int = 1000):
+        self.max_chunk_size = max_chunk_size
+
+    def chunk(self, content: str, document_info: DocumentInfo | None = None) -> list[Chunk]:
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        return [
+            Chunk(
+                text=para,
+                metadata=ChunkMetadata(chunk_index=i, chunk_size=len(para), content_length=len(para)),
+            )
+            for i, para in enumerate(paragraphs)
+        ]
+
+    @classmethod
+    def from_config(cls, config: dict) -> "PlaintextChunker":
+        return cls(max_chunk_size=config.get("max_chunk_size", 1000))
+
+# Register for use in YAML configs
+register_chunker("plaintext", PlaintextChunker)
+```
+
+### Using in Bot YAML Configuration
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: markdown_tree    # default, can be omitted
+    max_chunk_size: 800
+
+# Or with a custom chunker:
+knowledge_base:
+  chunking:
+    chunker: my_project.chunkers.RFCChunker
+    max_chunk_size: 1200
+```
+
+### Transform Pipeline
+
+Transforms are composable post-processing steps applied after chunking.
+Add a `transforms` key to the config to build a pipeline:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: markdown_tree
+    max_chunk_size: 800
+    transforms:
+      - merge_small:
+          min_size: 200
+          max_size: 800
+      - quality_filter:
+          min_content_chars: 50
+```
+
+Built-in transforms: `merge_small`, `split_large`, `quality_filter`.
+Custom transforms subclass `ChunkTransform` and implement `transform()`.
+
+### Source Positions
+
+Each chunk carries `char_start`/`char_end` on its metadata — character
+offsets into the original source document (exclusive end, Python slice
+semantics).  These enable citation, source highlighting, and "show in
+context" features.
+
+### Key Classes
+
+| Class | Module | Role |
+|-------|--------|------|
+| `Chunker` | `chunking.base` | ABC — subclass to create custom chunkers |
+| `ChunkTransform` | `chunking.base` | ABC — subclass to create custom transforms |
+| `CompositeChunker` | `chunking.composite` | Pipeline: chunker + ordered transforms |
+| `DocumentInfo` | `chunking.base` | Document metadata passed to `chunk()` |
+| `MarkdownTreeChunker` | `chunking.markdown` | Default — wraps `MarkdownChunker` |
+| `MergeSmallChunks` | `chunking.transforms` | Merge adjacent small chunks |
+| `SplitLargeChunks` | `chunking.transforms` | Re-split oversized chunks |
+| `QualityFilterTransform` | `chunking.transforms` | Quality filter as pipeline stage |
+| `chunker_registry` | `chunking.registry` | `PluginRegistry[Chunker]` singleton |
+| `transform_registry` | `chunking.registry` | `PluginRegistry[ChunkTransform]` singleton |
+| `create_chunker()` | `chunking.registry` | Config-driven factory function |
+| `register_chunker()` | `chunking.registry` | Register custom chunkers |
+| `register_transform()` | `chunking.registry` | Register custom transforms |
+| `split_text()` | `chunking.utils` | Boundary-aware splitting with positions |
+
+The registries use `PluginRegistry` from `dataknobs-common` with `from_config`
+classmethod detection and dotted import path support.
+
 ## Integration with Other Dataknobs Packages
 
 The markdown chunking utilities integrate seamlessly with other dataknobs packages:
 
 - Uses `Tree` from `dataknobs-structures` for representing document hierarchy
-- Can be combined with `dataknobs-utils` for additional text processing
-- Chunk metadata can be stored in `dataknobs-kv` stores
+- `PluginRegistry` from `dataknobs-common` for chunker registration and resolution
+- `RAGKnowledgeBase` from `dataknobs-bots` resolves chunkers from config automatically
+- `DirectoryProcessor` from `dataknobs-xization` uses the same chunker abstraction
 - Compatible with `dataknobs-data` for data pipeline integration
-
-## Future Enhancements
-
-Potential areas for future development:
-
-- Support for additional markdown features (tables, code blocks, etc.)
-- Semantic chunking based on content similarity
-- Support for other document formats (HTML, reStructuredText, etc.)
-- Chunk boundary optimization using NLP techniques
-- Parallel processing for very large document sets
 
 ## Contributing
 

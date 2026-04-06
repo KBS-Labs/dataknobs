@@ -19,6 +19,16 @@ from dataknobs_xization import (
     normalize
 )
 
+# Import pluggable chunking abstraction
+from dataknobs_xization import (
+    Chunker,
+    DocumentInfo,
+    MarkdownTreeChunker,
+    create_chunker,
+    register_chunker,
+    chunker_registry,
+)
+
 # Import markdown chunking utilities
 from dataknobs_xization import (
     parse_markdown,
@@ -38,6 +48,7 @@ from dataknobs_xization.markdown.md_streaming import StreamingMarkdownProcessor
 ## Module Index
 
 ### Core Modules
+- [chunking](chunking-abstraction.md) - Pluggable chunker abstraction and registry
 - [markdown](markdown-chunking.md) - Markdown parsing and chunking for RAG
 - [normalize](normalization.md) - Text normalization and standardization
 - [masking_tokenizer](masking.md) - Character-level features and masking
@@ -146,6 +157,84 @@ trigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 3)
 ```
 
 ## Detailed Module APIs
+
+### chunking Module
+
+**Factory Functions:**
+- `create_chunker(config: dict | None = None) -> Chunker`
+  - Create a chunker from config dict. The `chunker` key selects the implementation
+    (default: `"markdown_tree"`). The `transforms` key adds a post-processing pipeline.
+    Supports registry keys and dotted import paths.
+- `register_chunker(key: str, factory: type[Chunker], override: bool = False) -> None`
+  - Register a custom chunker implementation.
+- `register_transform(key: str, factory: type[ChunkTransform], override: bool = False) -> None`
+  - Register a custom transform implementation.
+- `split_text(text: str, max_size: int, boundaries: list[str] | None = None) -> list[tuple[str, int, int]]`
+  - Boundary-aware text splitting with position tracking.
+
+**Classes:**
+
+`Chunker` (ABC)
+```python
+class Chunker(ABC):
+    @abstractmethod
+    def chunk(self, content: str, document_info: DocumentInfo | None = None) -> list[Chunk]:
+        """Chunk raw document content into retrieval-sized pieces."""
+        ...
+```
+
+`ChunkTransform` (ABC)
+```python
+class ChunkTransform(ABC):
+    @abstractmethod
+    def transform(self, chunks: list[Chunk], document_info: DocumentInfo | None = None) -> list[Chunk]:
+        """Apply post-processing to chunks (merge, split, filter, enrich)."""
+        ...
+```
+
+`CompositeChunker` — Wraps an inner `Chunker` + ordered `ChunkTransform` list.
+Re-numbers `chunk_index` after all transforms complete.
+
+`DocumentInfo`
+```python
+@dataclass
+class DocumentInfo:
+    source: str = ""                          # Source identifier
+    content_type: str = "text/markdown"       # MIME-ish content type hint
+    metadata: dict[str, Any] = field(...)     # Additional metadata
+```
+
+`MarkdownTreeChunker` (default `Chunker` implementation)
+```python
+class MarkdownTreeChunker(Chunker):
+    def __init__(
+        self,
+        max_chunk_size: int = 500,
+        heading_inclusion: HeadingInclusion = HeadingInclusion.IN_METADATA,
+        combine_under_heading: bool = True,
+        quality_filter: ChunkQualityConfig | dict | None = None,
+        generate_embeddings: bool = True,
+    ): ...
+
+    @classmethod
+    def from_config(cls, config: dict) -> MarkdownTreeChunker: ...
+```
+
+**Built-in Transforms:**
+- `MergeSmallChunks` — Merge adjacent small chunks (same heading path). Config: `min_size`, `max_size`.
+- `SplitLargeChunks` — Re-split oversized chunks. Config: `max_size`.
+- `QualityFilterTransform` — Wraps `ChunkQualityFilter` as a pipeline stage.
+
+**Registries:**
+- `chunker_registry` — `PluginRegistry[Chunker]` singleton
+- `transform_registry` — `PluginRegistry[ChunkTransform]` singleton
+
+**Position Tracking:**
+`ChunkMetadata` includes `char_start` and `char_end` (character offsets into
+the source document, exclusive end, Python slice semantics).  `0` indicates
+unknown.  Transforms that merge or split chunks maintain position invariants.
+
+For full documentation, see the [Chunking Abstraction Guide](chunking-abstraction.md).
 
 ### markdown Module
 
