@@ -308,10 +308,10 @@ dataknobs-config>=0.3.9
 dataknobs-data>=0.4.14
 dataknobs-fsm>=0.1.15
 dataknobs-llm>=0.5.6
-dataknobs-bots>=0.6.10
+dataknobs-bots>=0.6.11
 dataknobs-structures>=1.0.6
 dataknobs-utils>=1.2.6
-dataknobs-xization>=1.3.1
+dataknobs-xization>=1.3.2
 
 # Optional dependencies
 psycopg2-binary>=2.9.0

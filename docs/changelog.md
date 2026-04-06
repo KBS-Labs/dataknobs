@@ -5,6 +5,20 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-04-06
+
+### dataknobs-xization [1.3.2]
+
+#### Added
+- added chunker abstraction
+- added chunk character position tracking and chunk transform pipeline
+
+### dataknobs-bots [0.6.11]
+
+#### Added
+- updated to leverage the plugable chunker abstraction through configs
+
+
 ## Release - 2026-04-04
 
 ### dataknobs-bots [0.6.10]
