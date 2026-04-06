@@ -6,6 +6,7 @@ documents from a directory into chunks ready for embedding.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -88,6 +89,9 @@ class DirectoryProcessor:
         self._default_chunking_config = self._build_effective_config(
             config.default_chunking
         )
+        self._default_config_key = self._config_cache_key(
+            self._default_chunking_config
+        )
         self._default_chunker = create_chunker(self._default_chunking_config)
 
     def _build_effective_config(
@@ -101,6 +105,16 @@ class DirectoryProcessor:
         ):
             effective["quality_filter"] = self.config.default_quality_filter
         return effective
+
+    @staticmethod
+    def _config_cache_key(config: dict[str, Any]) -> str:
+        """Canonical JSON string for config comparison.
+
+        Using JSON serialization instead of dict equality handles
+        nested structures robustly and fails visibly if a non-
+        serializable object is placed in the config.
+        """
+        return json.dumps(config, sort_keys=True, default=str)
 
     def process(self) -> Iterator[ProcessedDocument]:
         """Process all documents in the directory.
@@ -200,7 +214,7 @@ class DirectoryProcessor:
             )
             effective_config = self._build_effective_config(chunking_config)
 
-            if effective_config == self._default_chunking_config:
+            if self._config_cache_key(effective_config) == self._default_config_key:
                 chunker = self._default_chunker
             else:
                 chunker = create_chunker(effective_config)
@@ -224,6 +238,8 @@ class DirectoryProcessor:
                         "headings": chunk.metadata.headings,
                         "heading_levels": chunk.metadata.heading_levels,
                         "line_number": chunk.metadata.line_number,
+                        "char_start": chunk.metadata.char_start,
+                        "char_end": chunk.metadata.char_end,
                         "chunk_size": chunk.metadata.chunk_size,
                     },
                 }

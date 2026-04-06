@@ -600,6 +600,8 @@ class RAGKnowledgeBase(KnowledgeBase):
                 "headings": chunk.metadata.headings,
                 "heading_levels": chunk.metadata.heading_levels,
                 "line_number": chunk.metadata.line_number,
+                "char_start": chunk.metadata.char_start,
+                "char_end": chunk.metadata.char_end,
                 "chunk_size": chunk.metadata.chunk_size,
                 "content_length": chunk.metadata.content_length,
             }

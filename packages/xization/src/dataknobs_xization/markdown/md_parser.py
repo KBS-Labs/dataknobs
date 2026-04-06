@@ -24,7 +24,9 @@ class MarkdownNode:
         level: Heading level (1-6) or 0 for non-headings
         node_type: Type of node ('heading', 'body', 'code', 'list', 'table',
                    'blockquote', 'horizontal_rule')
-        line_number: Line number in source document (for debugging)
+        line_number: Line number in source document (1-indexed)
+        char_start: Character offset of the source span start (0-indexed)
+        char_end: Character offset of the source span end (exclusive)
         metadata: Additional metadata about the node (e.g., language for code blocks,
                   list type, etc.)
     """
@@ -33,6 +35,8 @@ class MarkdownNode:
     level: int = 0  # 0 for body text, 1-6 for headings
     node_type: str = "body"
     line_number: int = 0
+    char_start: int = 0  # Character offset of source span start
+    char_end: int = 0  # Character offset of source span end (exclusive)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
@@ -115,7 +119,10 @@ class MarkdownParser:
         """Initialize the markdown parser.
 
         Args:
-            max_line_length: Maximum length for body text lines (None for unlimited)
+            max_line_length: Maximum length for body text lines (None for
+                unlimited).  When set, long body lines are split into
+                multiple nodes; all sub-nodes share the parent line's
+                ``char_start``/``char_end`` span.
             preserve_empty_lines: Whether to preserve empty lines in output
         """
         self.max_line_length = max_line_length
@@ -134,8 +141,26 @@ class MarkdownParser:
         # Create root node
         root = Tree(MarkdownNode(text="ROOT", level=0, node_type="root", line_number=0))
 
-        # Convert source to list for lookahead capability
-        lines = list(self._get_line_iterator(source))
+        # Convert source to list for lookahead capability.
+        # When source is a string, use splitlines(keepends=True) to
+        # compute accurate character offsets that handle \r\n, \r, and \n.
+        if isinstance(source, str):
+            lines_with_endings = source.splitlines(keepends=True)
+            lines = [ln.rstrip("\r\n") for ln in lines_with_endings]
+            self._line_starts = []
+            offset = 0
+            for ln in lines_with_endings:
+                self._line_starts.append(offset)
+                offset += len(ln)
+        else:
+            lines = list(self._get_line_iterator(source))
+            # For file/iterator sources, lines may or may not include
+            # endings. Assume +1 per line (LF) as best-effort.
+            self._line_starts = []
+            offset = 0
+            for line in lines:
+                self._line_starts.append(offset)
+                offset += len(line) + 1
 
         # Track current position in tree
         current_parent = root
@@ -150,11 +175,14 @@ class MarkdownParser:
             # Skip empty lines unless preserving them
             if not line.strip():
                 if self.preserve_empty_lines:
+                    cs, ce = self._char_span(i, i, lines)
                     node_data = MarkdownNode(
                         text="",
                         level=0,
                         node_type="body",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                     )
                     current_parent.add_child(node_data)
                 i += 1
@@ -165,12 +193,15 @@ class MarkdownParser:
             if heading_match:
                 level = len(heading_match.group(1))
                 text = heading_match.group(2).strip()
+                cs, ce = self._char_span(i, i, lines)
 
                 node_data = MarkdownNode(
                     text=text,
                     level=level,
                     node_type="heading",
                     line_number=self._current_line,
+                    char_start=cs,
+                    char_end=ce,
                 )
 
                 current_parent, _ = self._find_heading_parent(
@@ -184,11 +215,14 @@ class MarkdownParser:
 
             # Check for horizontal rule
             if self.HORIZONTAL_RULE.match(line):
+                cs, ce = self._char_span(i, i, lines)
                 node_data = MarkdownNode(
                     text=line.strip(),
                     level=0,
                     node_type="horizontal_rule",
                     line_number=self._current_line,
+                    char_start=cs,
+                    char_end=ce,
                 )
                 current_parent.add_child(node_data)
                 i += 1
@@ -200,11 +234,14 @@ class MarkdownParser:
                 code_lines, lines_consumed = self._parse_fenced_code_block(lines, i)
                 if code_lines:
                     language = code_match.group(1) or ""
+                    cs, ce = self._char_span(i, i + lines_consumed - 1, lines)
                     node_data = MarkdownNode(
                         text="\n".join(code_lines),
                         level=0,
                         node_type="code",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                         metadata={"language": language, "fence_type": "```"},
                     )
                     current_parent.add_child(node_data)
@@ -216,11 +253,14 @@ class MarkdownParser:
                 if self.TABLE_SEPARATOR.match(lines[i + 1]):
                     table_lines, lines_consumed = self._parse_table(lines, i)
                     if table_lines:
+                        cs, ce = self._char_span(i, i + lines_consumed - 1, lines)
                         node_data = MarkdownNode(
                             text="\n".join(table_lines),
                             level=0,
                             node_type="table",
                             line_number=self._current_line,
+                            char_start=cs,
+                            char_end=ce,
                             metadata={"rows": len(table_lines)},
                         )
                         current_parent.add_child(node_data)
@@ -232,11 +272,14 @@ class MarkdownParser:
             if list_match:
                 list_lines, lines_consumed, list_type = self._parse_list(lines, i)
                 if list_lines:
+                    cs, ce = self._char_span(i, i + lines_consumed - 1, lines)
                     node_data = MarkdownNode(
                         text="\n".join(list_lines),
                         level=0,
                         node_type="list",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                         metadata={"list_type": list_type, "items": len(list_lines)},
                     )
                     current_parent.add_child(node_data)
@@ -247,11 +290,14 @@ class MarkdownParser:
             if self.BLOCKQUOTE.match(line):
                 quote_lines, lines_consumed = self._parse_blockquote(lines, i)
                 if quote_lines:
+                    cs, ce = self._char_span(i, i + lines_consumed - 1, lines)
                     node_data = MarkdownNode(
                         text="\n".join(quote_lines),
                         level=0,
                         node_type="blockquote",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                     )
                     current_parent.add_child(node_data)
                 i += lines_consumed
@@ -261,11 +307,14 @@ class MarkdownParser:
             if self.INDENTED_CODE.match(line):
                 code_lines, lines_consumed = self._parse_indented_code_block(lines, i)
                 if code_lines:
+                    cs, ce = self._char_span(i, i + lines_consumed - 1, lines)
                     node_data = MarkdownNode(
                         text="\n".join(code_lines),
                         level=0,
                         node_type="code",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                         metadata={"language": "", "fence_type": "indent"},
                     )
                     current_parent.add_child(node_data)
@@ -274,6 +323,7 @@ class MarkdownParser:
 
             # Default: body text
             text = line.rstrip('\n')
+            cs, ce = self._char_span(i, i, lines)
 
             if self.max_line_length and len(text) > self.max_line_length:
                 for chunk in self._split_text_intelligently(text):
@@ -282,6 +332,8 @@ class MarkdownParser:
                         level=0,
                         node_type="body",
                         line_number=self._current_line,
+                        char_start=cs,
+                        char_end=ce,
                     )
                     current_parent.add_child(node_data)
             else:
@@ -290,12 +342,29 @@ class MarkdownParser:
                     level=0,
                     node_type="body",
                     line_number=self._current_line,
+                    char_start=cs,
+                    char_end=ce,
                 )
                 current_parent.add_child(node_data)
 
             i += 1
 
         return root
+
+    def _char_span(self, start_idx: int, end_idx: int, lines: list[str]) -> tuple[int, int]:
+        """Compute character span for lines[start_idx..end_idx] (inclusive).
+
+        Args:
+            start_idx: First line index (0-based)
+            end_idx: Last line index (inclusive, 0-based)
+            lines: All document lines
+
+        Returns:
+            (char_start, char_end) with char_end exclusive
+        """
+        char_start = self._line_starts[start_idx]
+        char_end = self._line_starts[end_idx] + len(lines[end_idx])
+        return char_start, char_end
 
     def _get_line_iterator(self, source: str | TextIO | Iterator[str]) -> Iterator[str]:
         """Convert various source types to line iterator.

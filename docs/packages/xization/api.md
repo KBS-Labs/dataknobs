@@ -163,9 +163,14 @@ trigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 3)
 **Factory Functions:**
 - `create_chunker(config: dict | None = None) -> Chunker`
   - Create a chunker from config dict. The `chunker` key selects the implementation
-    (default: `"markdown_tree"`). Supports registry keys and dotted import paths.
+    (default: `"markdown_tree"`). The `transforms` key adds a post-processing pipeline.
+    Supports registry keys and dotted import paths.
 - `register_chunker(key: str, factory: type[Chunker], override: bool = False) -> None`
   - Register a custom chunker implementation.
+- `register_transform(key: str, factory: type[ChunkTransform], override: bool = False) -> None`
+  - Register a custom transform implementation.
+- `split_text(text: str, max_size: int, boundaries: list[str] | None = None) -> list[tuple[str, int, int]]`
+  - Boundary-aware text splitting with position tracking.
 
 **Classes:**
 
@@ -177,6 +182,18 @@ class Chunker(ABC):
         """Chunk raw document content into retrieval-sized pieces."""
         ...
 ```
+
+`ChunkTransform` (ABC)
+```python
+class ChunkTransform(ABC):
+    @abstractmethod
+    def transform(self, chunks: list[Chunk], document_info: DocumentInfo | None = None) -> list[Chunk]:
+        """Apply post-processing to chunks (merge, split, filter, enrich)."""
+        ...
+```
+
+`CompositeChunker` — Wraps an inner `Chunker` + ordered `ChunkTransform` list.
+Re-numbers `chunk_index` after all transforms complete.
 
 `DocumentInfo`
 ```python
@@ -203,7 +220,19 @@ class MarkdownTreeChunker(Chunker):
     def from_config(cls, config: dict) -> MarkdownTreeChunker: ...
 ```
 
-`chunker_registry` — `PluginRegistry[Chunker]` singleton
+**Built-in Transforms:**
+- `MergeSmallChunks` — Merge adjacent small chunks (same heading path). Config: `min_size`, `max_size`.
+- `SplitLargeChunks` — Re-split oversized chunks. Config: `max_size`.
+- `QualityFilterTransform` — Wraps `ChunkQualityFilter` as a pipeline stage.
+
+**Registries:**
+- `chunker_registry` — `PluginRegistry[Chunker]` singleton
+- `transform_registry` — `PluginRegistry[ChunkTransform]` singleton
+
+**Position Tracking:**
+`ChunkMetadata` includes `char_start` and `char_end` (character offsets into
+the source document, exclusive end, Python slice semantics).  `0` indicates
+unknown.  Transforms that merge or split chunks maintain position invariants.
 
 For full documentation, see the [Chunking Abstraction Guide](chunking-abstraction.md).
 

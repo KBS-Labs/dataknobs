@@ -402,8 +402,31 @@ default_chunking:
   max_chunk_size: 1200
 ```
 
+### Transform Pipeline
+
+Add a `transforms` key to apply post-processing after chunking:
+
+```yaml
+default_chunking:
+  chunker: markdown_tree
+  max_chunk_size: 800
+  transforms:
+    - merge_small:
+        min_size: 200
+    - split_large:
+        max_size: 1000
+```
+
+Built-in transforms: `merge_small`, `split_large`, `quality_filter`.
+
+### Source Positions
+
+Chunk metadata includes `char_start` and `char_end` — character offsets
+into the source document.  These are forwarded in each chunk dict's
+`metadata` field for use in citation and source highlighting.
+
 See [Markdown Chunking — Pluggable Chunker Abstraction](../markdown/MARKDOWN_CHUNKING.md#pluggable-chunker-abstraction)
-for how to write and register custom chunkers.
+for how to write and register custom chunkers and transforms.
 
 ## Related
 

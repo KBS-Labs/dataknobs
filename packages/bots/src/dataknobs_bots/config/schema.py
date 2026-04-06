@@ -453,6 +453,18 @@ class DynaBotConfigSchema:
                                     "Generate heading-enriched embedding text"
                                 ),
                             },
+                            "transforms": {
+                                "type": "array",
+                                "description": (
+                                    "Post-processing transform pipeline. "
+                                    "Each entry is a dict with one key "
+                                    "(registry key or dotted path) mapping "
+                                    "to the transform config. Built-in: "
+                                    "'merge_small', 'split_large', "
+                                    "'quality_filter'."
+                                ),
+                                "items": {"type": "object"},
+                            },
                         },
                     },
                     "vector_store": {

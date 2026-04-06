@@ -150,6 +150,20 @@ default_chunking:
   max_chunk_size: 1200
 ```
 
+Add a `transforms` key to apply post-processing (merge, split, filter):
+
+```yaml
+default_chunking:
+  chunker: markdown_tree
+  max_chunk_size: 800
+  transforms:
+    - merge_small:
+        min_size: 200
+```
+
+Chunk metadata includes `char_start`/`char_end` source positions, forwarded
+in each chunk dict for citation and highlighting.
+
 See [Chunking Abstraction](chunking-abstraction.md) for full details.
 
 ## Related

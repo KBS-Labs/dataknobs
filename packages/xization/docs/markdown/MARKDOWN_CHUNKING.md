@@ -486,19 +486,55 @@ knowledge_base:
     max_chunk_size: 1200
 ```
 
+### Transform Pipeline
+
+Transforms are composable post-processing steps applied after chunking.
+Add a `transforms` key to the config to build a pipeline:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: markdown_tree
+    max_chunk_size: 800
+    transforms:
+      - merge_small:
+          min_size: 200
+          max_size: 800
+      - quality_filter:
+          min_content_chars: 50
+```
+
+Built-in transforms: `merge_small`, `split_large`, `quality_filter`.
+Custom transforms subclass `ChunkTransform` and implement `transform()`.
+
+### Source Positions
+
+Each chunk carries `char_start`/`char_end` on its metadata — character
+offsets into the original source document (exclusive end, Python slice
+semantics).  These enable citation, source highlighting, and "show in
+context" features.
+
 ### Key Classes
 
 | Class | Module | Role |
 |-------|--------|------|
 | `Chunker` | `chunking.base` | ABC — subclass to create custom chunkers |
+| `ChunkTransform` | `chunking.base` | ABC — subclass to create custom transforms |
+| `CompositeChunker` | `chunking.composite` | Pipeline: chunker + ordered transforms |
 | `DocumentInfo` | `chunking.base` | Document metadata passed to `chunk()` |
 | `MarkdownTreeChunker` | `chunking.markdown` | Default — wraps `MarkdownChunker` |
+| `MergeSmallChunks` | `chunking.transforms` | Merge adjacent small chunks |
+| `SplitLargeChunks` | `chunking.transforms` | Re-split oversized chunks |
+| `QualityFilterTransform` | `chunking.transforms` | Quality filter as pipeline stage |
 | `chunker_registry` | `chunking.registry` | `PluginRegistry[Chunker]` singleton |
+| `transform_registry` | `chunking.registry` | `PluginRegistry[ChunkTransform]` singleton |
 | `create_chunker()` | `chunking.registry` | Config-driven factory function |
-| `register_chunker()` | `chunking.registry` | Register custom implementations |
+| `register_chunker()` | `chunking.registry` | Register custom chunkers |
+| `register_transform()` | `chunking.registry` | Register custom transforms |
+| `split_text()` | `chunking.utils` | Boundary-aware splitting with positions |
 
-The registry uses `PluginRegistry` from `dataknobs-common` with `config_key="chunker"`,
-`config_key_default="markdown_tree"`, and `from_config` classmethod detection.
+The registries use `PluginRegistry` from `dataknobs-common` with `from_config`
+classmethod detection and dotted import path support.
 
 ## Integration with Other Dataknobs Packages
 

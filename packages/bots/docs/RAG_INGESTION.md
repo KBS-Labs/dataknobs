@@ -125,6 +125,8 @@ config = KnowledgeBaseConfig(
     default_chunking={
         "chunker": "markdown_tree",  # default, can be omitted
         "max_chunk_size": 500,
+        # Optional: post-processing pipeline
+        # "transforms": [{"merge_small": {"min_size": 200}}],
     },
     patterns=[
         FilePatternConfig(
