@@ -48,7 +48,10 @@ class Chunker(ABC):
     - ``chunk.text`` — *required*; the chunk content.
     - ``chunk.metadata.embedding_text`` — if non-empty, used as the text
       to embed; otherwise ``chunk.text`` is used.
-    - ``chunk.metadata.chunk_index`` — sequential index (for chunk IDs).
+    - ``chunk.metadata.chunk_index`` — sequential index.  Note:
+      consumers (``RAGKnowledgeBase``, ``DirectoryProcessor``,
+      ``CompositeChunker``) re-number this to ``0..N`` in their
+      output, so the chunker-assigned value is not preserved.
     - ``chunk.metadata.chunk_size`` — size of ``chunk.text`` in chars.
     - ``chunk.metadata.content_length`` — content size excluding headings.
     - ``chunk.metadata.headings`` — heading path list (may be empty).

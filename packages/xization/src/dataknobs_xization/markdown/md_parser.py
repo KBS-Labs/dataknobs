@@ -153,14 +153,16 @@ class MarkdownParser:
                 self._line_starts.append(offset)
                 offset += len(ln)
         else:
-            lines = list(self._get_line_iterator(source))
-            # For file/iterator sources, lines may or may not include
-            # endings. Assume +1 per line (LF) as best-effort.
+            raw_lines = list(self._get_line_iterator(source))
+            # File objects yield lines with endings; iterators may or
+            # may not.  Use the raw length for offset computation,
+            # then strip for content.
             self._line_starts = []
             offset = 0
-            for line in lines:
+            for raw in raw_lines:
                 self._line_starts.append(offset)
-                offset += len(line) + 1
+                offset += len(raw)
+            lines = [ln.rstrip("\r\n") for ln in raw_lines]
 
         # Track current position in tree
         current_parent = root

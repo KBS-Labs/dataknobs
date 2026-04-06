@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal
 
 from dataknobs_xization.chunking import create_chunker
-from dataknobs_xization.chunking.base import DocumentInfo
+from dataknobs_xization.chunking.base import Chunker, DocumentInfo
 from dataknobs_xization.ingestion.config import (
     FilePatternConfig,
     KnowledgeBaseConfig,
@@ -74,12 +74,20 @@ class DirectoryProcessor:
         root_dir: Root directory for processing
     """
 
-    def __init__(self, config: KnowledgeBaseConfig, root_dir: str | Path):
+    def __init__(
+        self,
+        config: KnowledgeBaseConfig,
+        root_dir: str | Path,
+        chunker: Chunker | None = None,
+    ):
         """Initialize the directory processor.
 
         Args:
             config: Knowledge base configuration
             root_dir: Root directory containing documents
+            chunker: Optional pre-built chunker for markdown files.
+                When provided, used as the default chunker instead of
+                creating one from ``config.default_chunking``.
         """
         self.config = config
         self.root_dir = Path(root_dir)
@@ -92,7 +100,9 @@ class DirectoryProcessor:
         self._default_config_key = self._config_cache_key(
             self._default_chunking_config
         )
-        self._default_chunker = create_chunker(self._default_chunking_config)
+        self._default_chunker = chunker or create_chunker(
+            self._default_chunking_config
+        )
 
     def _build_effective_config(
         self, chunking_config: dict[str, Any]
@@ -133,12 +143,12 @@ class DirectoryProcessor:
 
             # Skip config files
             if filepath.name in CONFIG_FILE_NAMES:
-                logger.debug(f"Skipping config file: {rel_path}")
+                logger.debug("Skipping config file: %s", rel_path)
                 continue
 
             # Skip excluded files
             if self.config.is_excluded(rel_path):
-                logger.debug(f"Skipping excluded file: {rel_path}")
+                logger.debug("Skipping excluded file: %s", rel_path)
                 continue
 
             # Get pattern config if any
@@ -156,9 +166,9 @@ class DirectoryProcessor:
                 if inner_suffix in (".json", ".jsonl", ".ndjson"):
                     yield from self._process_json(filepath, pattern_config)
                 else:
-                    logger.debug(f"Skipping unsupported compressed file: {rel_path}")
+                    logger.debug("Skipping unsupported compressed file: %s", rel_path)
             else:
-                logger.debug(f"Skipping unsupported file type: {rel_path}")
+                logger.debug("Skipping unsupported file type: %s", rel_path)
 
     def _collect_files(self) -> list[Path]:
         """Collect all files to process from the directory.
@@ -232,7 +242,7 @@ class DirectoryProcessor:
                     "text": chunk.text,
                     "embedding_text": chunk.metadata.embedding_text or chunk.text,
                     "chunk_index": i,
-                    "source_path": "",
+                    "source_path": str(filepath),
                     "metadata": {
                         "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
                         "headings": chunk.metadata.headings,
@@ -241,13 +251,14 @@ class DirectoryProcessor:
                         "char_start": chunk.metadata.char_start,
                         "char_end": chunk.metadata.char_end,
                         "chunk_size": chunk.metadata.chunk_size,
+                        "content_length": chunk.metadata.content_length,
                     },
                 }
                 chunks.append(chunk_dict)
 
         except Exception as e:
             errors.append(f"Failed to process markdown: {e}")
-            logger.error(f"Error processing {filepath}: {e}")
+            logger.exception("Error processing %s", filepath)
 
         # Build metadata
         metadata = self.config.get_metadata(filepath.relative_to(self.root_dir))
@@ -324,7 +335,7 @@ class DirectoryProcessor:
 
         except Exception as e:
             errors.append(f"Failed to process JSON: {e}")
-            logger.error(f"Error processing {filepath}: {e}")
+            logger.exception("Error processing %s", filepath)
 
         # Build metadata
         metadata = self.config.get_metadata(filepath.relative_to(self.root_dir))
@@ -376,12 +387,14 @@ class DirectoryProcessor:
 def process_directory(
     directory: str | Path,
     config: KnowledgeBaseConfig | None = None,
+    chunker: Chunker | None = None,
 ) -> Iterator[ProcessedDocument]:
     """Convenience function to process a directory.
 
     Args:
         directory: Directory to process
         config: Optional configuration (loads from directory if not provided)
+        chunker: Optional pre-built chunker for markdown files
 
     Yields:
         ProcessedDocument for each file
@@ -391,5 +404,5 @@ def process_directory(
     if config is None:
         config = KnowledgeBaseConfig.load(directory)
 
-    processor = DirectoryProcessor(config, directory)
+    processor = DirectoryProcessor(config, directory, chunker=chunker)
     yield from processor.process()

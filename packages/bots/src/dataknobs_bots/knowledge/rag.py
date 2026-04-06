@@ -447,8 +447,10 @@ class RAGKnowledgeBase(KnowledgeBase):
         if config is None:
             config = KnowledgeBaseConfig.load(directory)
 
-        # Create processor
-        processor = DirectoryProcessor(config, directory)
+        # Create processor, passing through the injected chunker (if any)
+        # so that load_from_directory respects the same chunker as
+        # load_markdown_text.
+        processor = DirectoryProcessor(config, directory, chunker=self._chunker)
 
         # Track results
         results: dict[str, Any] = {
