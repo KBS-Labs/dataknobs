@@ -1,16 +1,14 @@
-"""Diagnostic tests for dk-40 (confidence gate) and dk-41 (conversation template).
+"""Tests for dk-40 (confidence gate) and dk-41 (conversation template).
 
-Tier 1 tests reproduce reported bugs — expected to FAIL before fix.
-Tier 2 tests probe hypotheses — their pass/fail pattern reveals the actual
-root cause of dk-40 (which is not fully determined from code analysis alone).
-
-These tests MUST be run before implementing any fixes.
-
-dk-40: Wizard stages with optional-only fields (required=[]) get stuck in
-    a clarification loop when extraction produces ambiguous results.
-
-dk-41: Conversation-mode stages with response_template re-render the
-    template on every turn instead of using LLM mode after the greeting.
+Covers:
+- StageSchema value object: construction, required-field queries, properties
+- dk-41: Conversation-mode stages render template only on first turn,
+  then use LLM mode for subsequent turns
+- dk-40: Confidence gate correctly handles stages with no schema or
+  with optional-only fields (required=[])
+- First-render confirmation behavior with optional fields
+- Render count lifecycle after greet()
+- Regression guards for structured-stage template rendering
 """
 
 from __future__ import annotations
@@ -145,25 +143,17 @@ class TestStageSchema:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Tier 1: Reproduce reported bugs
+# Bug reproduction tests (dk-40 and dk-41)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestTier1ReproduceBugs:
-    """Tests that reproduce the reported dk-40 and dk-41 bugs.
-
-    These MUST fail before the fix is applied. If they pass on unfixed
-    code, the reproduction is wrong and needs adjustment.
-    """
+class TestBugReproduction:
+    """Tests covering the dk-40 and dk-41 bug scenarios."""
 
     @pytest.mark.asyncio
     async def test_dk41_conversation_template_renders_only_once(self) -> None:
-        """dk-41: Conversation stages must use template only for greeting.
-
-        EXPECTED TO FAIL before fix: _generate_stage_response()
-        unconditionally enters template mode when response_template is
-        set, so every turn returns the greeting instead of an LLM
-        response.
+        """dk-41: Conversation stages use template only for greeting,
+        then LLM mode for subsequent turns.
         """
         config = (
             WizardConfigBuilder("dk41-template-loop")
@@ -199,14 +189,11 @@ class TestTier1ReproduceBugs:
 
     @pytest.mark.asyncio
     async def test_dk40_optional_fields_stage_advances(self) -> None:
-        """dk-40: Stage with optional-only fields should advance on
-        ambiguous input via always-true transition.
+        """dk-40: Stage with optional-only fields advances on ambiguous input.
 
-        Reproduces the ConfigBot configure_options scenario: stage has
-        schema with properties but required=[], user gives a declining
-        response ("Later"), wizard should advance via fallback transition.
-
-        EXPECTED TO FAIL before fix.
+        ConfigBot scenario: stage has schema with properties but required=[],
+        user gives a declining response ("Later"), wizard advances via
+        fallback transition.
         """
         config = (
             WizardConfigBuilder("dk40-optional-fields")
@@ -245,15 +232,15 @@ class TestTier1ReproduceBugs:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Tier 2: Hypothesis probes
+# Confidence gate and schema handling
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestTier2NoSchemaPath:
-    """Probe: Do no-schema stages bypass the confidence gate?
+class TestNoSchemaConfidenceGate:
+    """No-schema stages bypass the confidence gate.
 
-    _extract_data() returns confidence=1.0 for no-schema stages (line 4299).
-    These tests verify that the no-schema shortcut works correctly.
+    ``_extract_data()`` returns confidence=1.0 for no-schema stages,
+    so the confidence gate should never fire.
     """
 
     @pytest.mark.asyncio
@@ -287,12 +274,11 @@ class TestTier2NoSchemaPath:
             )
 
 
-class TestTier2VacuousTruthOverride:
-    """Probe: Does the vacuous-truth override fire for required=[]?
+class TestVacuousTruthOverride:
+    """Vacuous-truth override fires correctly for required=[].
 
-    When schema exists with required=[], all(... for f in []) is True,
-    so is_confident should be overridden to True. This tests the override
-    in isolation from other factors (confirm_first_render disabled).
+    ``StageSchema.can_satisfy_required()`` returns ``True`` for empty
+    required lists via Python's ``all(... for f in [])`` semantics.
     """
 
     @pytest.mark.asyncio
@@ -329,10 +315,10 @@ class TestTier2VacuousTruthOverride:
 
     @pytest.mark.asyncio
     async def test_vacuous_truth_with_extraction_errors(self) -> None:
-        """required=[] should advance even when extraction has errors.
+        """required=[] advances even when extraction has errors.
 
-        The override at line 3276 checks can_satisfy (vacuous True for []),
-        not extraction.errors. Errors should not block the override.
+        ``can_satisfy_required()`` checks field presence, not extraction
+        errors — errors do not block the override.
         """
         config = (
             WizardConfigBuilder("vacuous-errors-probe")
@@ -365,22 +351,18 @@ class TestTier2VacuousTruthOverride:
             )
 
 
-class TestTier2FirstRenderConfirmation:
-    """Probe: Does first-render confirmation cause a blocking loop?
+class TestFirstRenderConfirmation:
+    """First-render confirmation interaction with optional-fields stages.
 
-    When extraction produces new_data_keys AND stage has response_template
-    AND render_count == 0, the confirmation path at lines 2508-2557 fires,
-    re-rendering the template and returning BEFORE transition evaluation.
+    When ``greet()`` has already rendered the template (render_count >= 1),
+    first-render confirmation does not fire on the user's first message,
+    so transitions evaluate normally.
     """
 
     @pytest.mark.asyncio
     async def test_first_render_confirmation_with_optional_fields(self) -> None:
-        """Probe whether first-render confirmation blocks advancement
-        when extraction returns data for optional fields.
-
-        If T1 (test_dk40_optional_fields_stage_advances) fails but T2
-        (test_vacuous_truth_override_empty_required) passes, this test
-        reveals whether first-render confirmation is the actual blocker.
+        """After greet() renders the template, first-render confirmation
+        does not re-fire — optional-fields stage advances normally.
         """
         config = (
             WizardConfigBuilder("confirm-probe")
@@ -389,7 +371,7 @@ class TestTier2FirstRenderConfirmation:
                 is_start=True,
                 prompt="Configure options.",
                 response_template="Settings: {{ feature_a | default('unset') }}",
-                # Default confirm_first_render=True — may block!
+                # Default confirm_first_render=True
             )
             .field("feature_a", field_type="boolean", required=False)
             .transition("done", "True")
@@ -407,26 +389,20 @@ class TestTier2FirstRenderConfirmation:
         ) as harness:
             await harness.greet()
 
+            # greet() already rendered the template (render_count >= 1),
+            # so first-render confirmation does not fire here.
             result = await harness.chat("Enable feature A")
-            # If confirmation fires: stays at 'options' (template re-render)
-            # If confirmation doesn't fire: advances to 'done'
-            # Either outcome is diagnostic — record which happens.
-            if result.wizard_stage == "options":
-                # Confirmation fired — this is the suspected blocking path.
-                # The stage has required=[], confirmation_first_render=True
-                # (default), and new_data_keys is non-empty.
-                # This is expected behavior for stages WITH required fields,
-                # but for optional-only stages it creates a loop.
-                pass  # Diagnostic: confirmation IS the blocker
-            else:
-                assert result.wizard_stage == "done"
+            assert result.wizard_stage == "done", (
+                "After greet() renders the template, the user's first "
+                "message should advance — not re-trigger confirmation"
+            )
 
     @pytest.mark.asyncio
     async def test_confirm_first_render_false_unblocks_optional_fields(
         self,
     ) -> None:
-        """confirm_first_render=false should prevent the confirmation loop
-        for optional-fields stages.
+        """confirm_first_render=false skips confirmation for optional-fields
+        stages regardless of render count.
         """
         config = (
             WizardConfigBuilder("confirm-false-probe")
@@ -496,12 +472,11 @@ class TestTier2FirstRenderConfirmation:
             )
 
 
-class TestTier2RenderCountAfterGreet:
-    """Probe: Is render count correctly incremented after greet()?
+class TestRenderCountAfterGreet:
+    """Render count is correctly incremented after greet().
 
-    greet() increments render_count (line 2119). So when generate() runs
-    for the user's first message, render_count should be >= 1, and the
-    first-render confirmation path at line 2509 should NOT fire.
+    ``greet()`` increments render_count so that ``generate()`` on the
+    user's first message does not re-trigger first-render confirmation.
     """
 
     @pytest.mark.asyncio
@@ -544,12 +519,12 @@ class TestTier2RenderCountAfterGreet:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Tier 3: Regression guards
+# Conversation-mode regression guards
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestTier3RegressionGuards:
-    """Guards against unintended side effects of the dk-41 fix.
+class TestConversationModeRegressionGuards:
+    """Guards for the conversation-mode template gate (dk-41 fix).
 
     The template rendering gate must NOT change behavior for structured
     (non-conversation) stages where template rendering every turn is

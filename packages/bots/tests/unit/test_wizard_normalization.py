@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_bots.reasoning.wizard import StageSchema, WizardReasoning
 
 
 class TestNormalizeExtractedData:
@@ -24,7 +24,7 @@ class TestNormalizeExtractedData:
             "properties": {"flag": {"type": "boolean"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"flag": input_val}, schema
+            {"flag": input_val}, StageSchema.from_dict(schema)
         )
         assert result["flag"] is True
 
@@ -40,7 +40,7 @@ class TestNormalizeExtractedData:
             "properties": {"flag": {"type": "boolean"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"flag": input_val}, schema
+            {"flag": input_val}, StageSchema.from_dict(schema)
         )
         assert result["flag"] is False
 
@@ -53,7 +53,7 @@ class TestNormalizeExtractedData:
         }
         for val in (True, False):
             result = wizard_reasoning._normalize_extracted_data(
-                {"flag": val}, schema
+                {"flag": val}, StageSchema.from_dict(schema)
             )
             assert result["flag"] is val
 
@@ -67,7 +67,7 @@ class TestNormalizeExtractedData:
             "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"tags": "python"}, schema
+            {"tags": "python"}, StageSchema.from_dict(schema)
         )
         assert result["tags"] == ["python"]
 
@@ -84,7 +84,7 @@ class TestNormalizeExtractedData:
             },
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"tools": ["all"]}, schema
+            {"tools": ["all"]}, StageSchema.from_dict(schema)
         )
         assert result["tools"] == ["hammer", "saw", "drill"]
 
@@ -101,7 +101,7 @@ class TestNormalizeExtractedData:
             },
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"tools": ["none"]}, schema
+            {"tools": ["none"]}, StageSchema.from_dict(schema)
         )
         assert result["tools"] == []
 
@@ -115,7 +115,7 @@ class TestNormalizeExtractedData:
             "properties": {"count": {"type": "integer"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"count": "42"}, schema
+            {"count": "42"}, StageSchema.from_dict(schema)
         )
         assert result["count"] == 42
         assert isinstance(result["count"], int)
@@ -128,7 +128,7 @@ class TestNormalizeExtractedData:
             "properties": {"offset": {"type": "integer"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"offset": "-5"}, schema
+            {"offset": "-5"}, StageSchema.from_dict(schema)
         )
         assert result["offset"] == -5
 
@@ -140,7 +140,7 @@ class TestNormalizeExtractedData:
             "properties": {"price": {"type": "number"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"price": "3.14"}, schema
+            {"price": "3.14"}, StageSchema.from_dict(schema)
         )
         assert result["price"] == pytest.approx(3.14)
         assert isinstance(result["price"], float)
@@ -153,7 +153,7 @@ class TestNormalizeExtractedData:
             "properties": {"price": {"type": "number"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"price": "not-a-number"}, schema
+            {"price": "not-a-number"}, StageSchema.from_dict(schema)
         )
         assert result["price"] == "not-a-number"
 
@@ -167,7 +167,7 @@ class TestNormalizeExtractedData:
             "properties": {"_internal": {"type": "boolean"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"_internal": "yes"}, schema
+            {"_internal": "yes"}, StageSchema.from_dict(schema)
         )
         # Should remain as string, not coerced to True
         assert result["_internal"] == "yes"
@@ -180,7 +180,7 @@ class TestNormalizeExtractedData:
             "properties": {"known": {"type": "boolean"}},
         }
         result = wizard_reasoning._normalize_extracted_data(
-            {"known": "yes", "unknown": "yes"}, schema
+            {"known": "yes", "unknown": "yes"}, StageSchema.from_dict(schema)
         )
         assert result["known"] is True
         assert result["unknown"] == "yes"
@@ -191,5 +191,5 @@ class TestNormalizeExtractedData:
         """Schema without 'properties' returns data unchanged."""
         schema: dict[str, Any] = {"type": "object"}
         data = {"flag": "yes", "count": "42"}
-        result = wizard_reasoning._normalize_extracted_data(data, schema)
+        result = wizard_reasoning._normalize_extracted_data(data, StageSchema.from_dict(schema))
         assert result == data

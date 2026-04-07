@@ -66,7 +66,7 @@ class TestNeedsLlmExtraction:
             "required": ["instruction"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is False
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_multi_field_requires_llm(self) -> None:
         """Multiple fields → LLM extraction needed."""
@@ -80,7 +80,7 @@ class TestNeedsLlmExtraction:
             "required": ["name", "amount"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_enum_requires_llm(self) -> None:
         """Single string field with enum constraint → LLM extraction."""
@@ -96,7 +96,7 @@ class TestNeedsLlmExtraction:
             "required": ["difficulty"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_pattern_requires_llm(self) -> None:
         """Single string field with pattern constraint → LLM extraction."""
@@ -109,7 +109,7 @@ class TestNeedsLlmExtraction:
             "required": ["email"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_format_requires_llm(self) -> None:
         """Single string field with format constraint → LLM extraction."""
@@ -122,7 +122,7 @@ class TestNeedsLlmExtraction:
             "required": ["date"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_integer_field_requires_llm(self) -> None:
         """Single non-string field → LLM extraction."""
@@ -133,7 +133,7 @@ class TestNeedsLlmExtraction:
             "required": ["count"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_capture_mode_verbatim_overrides_auto(self) -> None:
         """capture_mode='verbatim' forces verbatim even for complex schemas."""
@@ -150,7 +150,7 @@ class TestNeedsLlmExtraction:
             "name": "test",
             "collection_config": {"capture_mode": "verbatim"},
         }
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is False
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_capture_mode_extract_overrides_auto(self) -> None:
         """capture_mode='extract' forces LLM even for trivial schemas."""
@@ -164,7 +164,7 @@ class TestNeedsLlmExtraction:
             "name": "test",
             "collection_config": {"capture_mode": "extract"},
         }
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_capture_mode_auto_is_default(self) -> None:
         """Without capture_mode config, auto-detection is used."""
@@ -176,7 +176,7 @@ class TestNeedsLlmExtraction:
         }
         # No collection_config at all
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is False
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_optional_field_only_requires_llm(self) -> None:
         """Single property with no required fields → LLM extraction."""
@@ -187,7 +187,7 @@ class TestNeedsLlmExtraction:
             "required": [],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_extra_optional_property_requires_llm(self) -> None:
         """One required string + one optional → LLM extraction."""
@@ -202,7 +202,7 @@ class TestNeedsLlmExtraction:
         }
         stage: dict[str, Any] = {"name": "test"}
         # 2 properties, even though only 1 required → needs LLM
-        assert wizard._needs_llm_extraction(StageSchema(_raw=schema), stage) is True
+        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
 
 # =====================================================================

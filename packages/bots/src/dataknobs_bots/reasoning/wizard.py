@@ -694,13 +694,22 @@ class ExtractionPipelineResult:
 class StageSchema:
     """Normalized view of a wizard stage's JSON Schema.
 
-    Centralises schema access to eliminate inconsistent None-handling
-    patterns scattered across wizard.py.  All properties return safe
+    Centralises schema access so that every site in wizard.py uses
+    the same None-handling semantics.  All properties return safe
     defaults (empty list, empty dict) when the schema is absent or
-    incomplete.
+    incomplete — callers never need to guard against ``None``.
 
-    Phase 1 migration covers confidence/required paths.  Properties
-    and field-type access will be migrated in a follow-up.
+    The canonical way to obtain a ``StageSchema`` is
+    ``StageSchema.from_stage(stage)``; no other code in wizard.py
+    should call ``stage.get("schema")`` directly.
+
+    .. note::
+
+       ``frozen=True`` prevents re-assigning ``_raw`` but does **not**
+       prevent mutation of the underlying dict.  The ``raw`` property
+       returns the same dict reference, so callers that need a mutable
+       copy (e.g. ``_strip_schema_defaults``) must ``copy.deepcopy``
+       it themselves — which they already do.
     """
 
     _raw: dict[str, Any]
@@ -718,9 +727,30 @@ class StageSchema:
         """
         return cls(_raw=stage.get("schema") or {})
 
+    @classmethod
+    def from_dict(cls, schema: dict[str, Any]) -> StageSchema:
+        """Create from a raw JSON Schema dict.
+
+        Use this when you have the schema dict directly (e.g. a
+        constructed focused or amendment schema) rather than a stage
+        metadata dict.
+
+        Args:
+            schema: JSON Schema dict.
+
+        Returns:
+            ``StageSchema`` wrapping the provided dict.
+        """
+        return cls(_raw=schema)
+
     @property
     def exists(self) -> bool:
-        """Whether the stage has a schema defined."""
+        """Whether the stage has a non-empty schema.
+
+        Returns ``False`` for both missing schemas (``None``) and
+        empty schemas (``{}``), since neither defines extractable
+        fields.
+        """
         return bool(self._raw)
 
     @property
@@ -4624,7 +4654,7 @@ class WizardReasoning(ReasoningStrategy):
     def _normalize_extracted_data(
         self,
         data: dict[str, Any],
-        schema: dict[str, Any] | StageSchema,
+        ss: StageSchema,
     ) -> dict[str, Any]:
         """Normalize extracted data to match schema types.
 
@@ -4652,14 +4682,13 @@ class WizardReasoning(ReasoningStrategy):
           stored in wizard state.  Works independently of normalization.
 
         Args:
-            data:   Extracted data dict (will be shallow-copied).
-            schema: JSON Schema dict or ``StageSchema`` for the current stage.
+            data: Extracted data dict (will be shallow-copied).
+            ss:   ``StageSchema`` for the current stage.
 
         Returns:
             New dict with normalized values.  Fields set to ``None``
             indicate rejected values that should not be merged.
         """
-        ss = schema if isinstance(schema, StageSchema) else StageSchema(_raw=schema)
         properties = ss.properties
         if not properties:
             return data
@@ -4790,18 +4819,17 @@ class WizardReasoning(ReasoningStrategy):
         return normalized
 
     def _validate_data(
-        self, data: dict[str, Any], schema: dict[str, Any] | StageSchema
+        self, data: dict[str, Any], ss: StageSchema
     ) -> list[str]:
-        """Validate extracted data against JSON schema.
+        """Validate extracted data against stage schema.
 
         Args:
             data: Extracted data to validate
-            schema: JSON Schema dict or ``StageSchema`` to validate against
+            ss: ``StageSchema`` to validate against
 
         Returns:
             List of validation error messages
         """
-        ss = schema if isinstance(schema, StageSchema) else StageSchema(_raw=schema)
         errors: list[str] = []
         required = ss.required_fields
         properties = ss.properties
@@ -6438,8 +6466,8 @@ class WizardReasoning(ReasoningStrategy):
         """A field has been provided if its value is not None.
 
         Centralises the "field presence" semantic used by the
-        ``has()`` condition helper and the ``can_satisfy`` confidence
-        gate.
+        ``has()`` condition helper.  The confidence gate uses the
+        equivalent logic via ``StageSchema.can_satisfy_required()``.
 
         Note: ``_can_auto_advance`` uses stricter logic — it
         additionally rejects empty strings because auto-advance
@@ -6707,7 +6735,7 @@ class WizardReasoning(ReasoningStrategy):
                 continue
 
             retry_result.data = self._normalize_extracted_data(
-                retry_result.data, focused_schema,
+                retry_result.data, StageSchema.from_dict(focused_schema),
             )
             retry_keys = self._merge_extraction_result(
                 retry_result.data, wizard_state, stage, user_message,
