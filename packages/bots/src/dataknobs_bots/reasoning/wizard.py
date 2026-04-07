@@ -3266,17 +3266,31 @@ class WizardReasoning(ReasoningStrategy):
             missing = self._check_required_fields_missing(state, stage)
 
         # Confidence assessment
+        #
+        # When extraction reports low confidence, check whether all
+        # required fields are already satisfied.  This covers:
+        #   - No schema (no required fields → vacuous satisfaction)
+        #   - Schema with required: [] (same vacuous result)
+        #   - Schema where all required fields are present in state.data
+        #
+        # This mirrors _check_required_fields_missing(), which returns
+        # set() for no-schema stages — the confidence override must
+        # agree.
         is_confident = extraction.is_confident
-        if not is_confident and schema:
-            required_fields = schema.get("required", [])
-            can_satisfy = all(
-                self._field_is_present(state.data.get(f))
-                for f in required_fields
-            )
-            if can_satisfy:
-                # All required fields present despite low confidence —
-                # treat as confident for decision purposes.
+        if not is_confident:
+            if not schema:
+                # No schema → no required fields → vacuously confident.
                 is_confident = True
+            else:
+                required_fields = schema.get("required", [])
+                can_satisfy = all(
+                    self._field_is_present(state.data.get(f))
+                    for f in required_fields
+                )
+                if can_satisfy:
+                    # All required fields present despite low confidence —
+                    # treat as confident for decision purposes.
+                    is_confident = True
 
         return ExtractionPipelineResult(
             extraction=extraction,
@@ -4892,7 +4906,18 @@ class WizardReasoning(ReasoningStrategy):
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        if response_template:
+        # Conversation-mode stages use the template only for the initial
+        # greeting (first render).  After that, subsequent turns fall
+        # through to LLM mode so the bot can actually converse.
+        # Structured stages (the default) render the template on every
+        # turn — the template IS the response (e.g. review summaries).
+        is_conversation_mode = stage.get("mode") == "conversation"
+        is_first_render = state.get_render_count(stage_name) == 0
+        use_template = response_template and (
+            not is_conversation_mode or is_first_render
+        )
+
+        if use_template:
             # Generate LLM context variables if configured
             extra_context = await self._generate_context_variables(
                 stage, state, llm
