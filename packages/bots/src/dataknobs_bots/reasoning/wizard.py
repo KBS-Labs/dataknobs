@@ -3341,7 +3341,7 @@ class WizardReasoning(ReasoningStrategy):
         missing = self._check_required_fields_missing(state, stage)
         if missing:
             new_data_keys, extraction = await self._run_recovery_pipeline(
-                extraction, state, stage, ss.raw if ss.exists else None,
+                extraction, state, stage,
                 message, llm, manager, new_data_keys,
             )
             # Re-check after recovery
@@ -6552,7 +6552,6 @@ class WizardReasoning(ReasoningStrategy):
         extraction: Any,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6626,9 +6625,10 @@ class WizardReasoning(ReasoningStrategy):
         if not escalated.data:
             return set(), extraction
 
-        if schema:
+        ss_esc = StageSchema.from_stage(stage)
+        if ss_esc.exists:
             escalated.data = self._normalize_extracted_data(
-                escalated.data, schema,
+                escalated.data, ss_esc,
             )
         escalated_keys = self._merge_extraction_result(
             escalated.data, wizard_state, stage, user_message,
@@ -6641,7 +6641,6 @@ class WizardReasoning(ReasoningStrategy):
         self,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6863,7 +6862,6 @@ class WizardReasoning(ReasoningStrategy):
         extraction: Any,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6880,7 +6878,6 @@ class WizardReasoning(ReasoningStrategy):
                 an escalated/retried result for the confidence gate).
             wizard_state: Wizard state (modified in-place during merges).
             stage: Current stage metadata.
-            schema: Stage schema (for field enumeration).
             user_message: Raw user message for grounding.
             llm: LLM provider.
             manager: Optional conversation manager (``None`` when called
@@ -6928,7 +6925,7 @@ class WizardReasoning(ReasoningStrategy):
             elif strategy == RECOVERY_SCOPE_ESCALATION:
                 escalated_keys, escalated_extraction = (
                     await self._run_scope_escalation(
-                        extraction, wizard_state, stage, schema,
+                        extraction, wizard_state, stage,
                         user_message, llm, manager,
                     )
                 )
@@ -6940,7 +6937,7 @@ class WizardReasoning(ReasoningStrategy):
                 if self._focused_retry_enabled:
                     retry_keys, retry_extraction = (
                         await self._run_focused_retry(
-                            wizard_state, stage, schema,
+                            wizard_state, stage,
                             user_message, llm, manager,
                         )
                     )
