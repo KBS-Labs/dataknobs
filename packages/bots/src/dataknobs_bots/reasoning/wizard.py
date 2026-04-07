@@ -686,6 +686,97 @@ class ExtractionPipelineResult:
 
 
 # ---------------------------------------------------------------------------
+# StageSchema — normalized view of a wizard stage's JSON Schema
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StageSchema:
+    """Normalized view of a wizard stage's JSON Schema.
+
+    Centralises schema access to eliminate inconsistent None-handling
+    patterns scattered across wizard.py.  All properties return safe
+    defaults (empty list, empty dict) when the schema is absent or
+    incomplete.
+
+    Phase 1 migration covers confidence/required paths.  Properties
+    and field-type access will be migrated in a follow-up.
+    """
+
+    _raw: dict[str, Any]
+
+    @classmethod
+    def from_stage(cls, stage: dict[str, Any]) -> StageSchema:
+        """Create from a stage metadata dict.
+
+        Args:
+            stage: Stage configuration dict, optionally containing a
+                ``"schema"`` key.
+
+        Returns:
+            ``StageSchema`` wrapping the raw schema (or empty dict).
+        """
+        return cls(_raw=stage.get("schema") or {})
+
+    @property
+    def exists(self) -> bool:
+        """Whether the stage has a schema defined."""
+        return bool(self._raw)
+
+    @property
+    def required_fields(self) -> list[str]:
+        """Required field names (empty list if none or no schema)."""
+        return self._raw.get("required", [])
+
+    @property
+    def has_required_fields(self) -> bool:
+        """Whether there are any required fields."""
+        return bool(self.required_fields)
+
+    @property
+    def properties(self) -> dict[str, Any]:
+        """Schema properties dict (empty if none or no schema)."""
+        return self._raw.get("properties", {})
+
+    @property
+    def property_names(self) -> set[str]:
+        """Set of all property names."""
+        return set(self.properties.keys())
+
+    def get_property(self, name: str) -> dict[str, Any]:
+        """Get a single property definition (empty dict if not found)."""
+        return self.properties.get(name, {})
+
+    def field_type(self, name: str) -> str | None:
+        """Get the declared type of a field (None if not found)."""
+        return self.get_property(name).get("type")
+
+    @property
+    def raw(self) -> dict[str, Any]:
+        """Raw schema dict for passing to extractor/validator.
+
+        Returns the underlying dict (empty dict if no schema was
+        defined).  Use ``exists`` to distinguish "no schema" from
+        "empty schema" when the distinction matters.
+        """
+        return self._raw
+
+    def can_satisfy_required(self, data: dict[str, Any]) -> bool:
+        """Check if all required fields are present in data.
+
+        Returns ``True`` (vacuous satisfaction) for:
+        - No schema (no required fields)
+        - Schema with ``required: []``
+        - All required fields present in *data* (value is not ``None``)
+        """
+        return all(data.get(f) is not None for f in self.required_fields)
+
+    def missing_required(self, data: dict[str, Any]) -> set[str]:
+        """Required field names not yet present in data."""
+        return {f for f in self.required_fields if data.get(f) is None}
+
+
+# ---------------------------------------------------------------------------
 # Navigation keyword configuration
 # ---------------------------------------------------------------------------
 
@@ -3268,29 +3359,15 @@ class WizardReasoning(ReasoningStrategy):
         # Confidence assessment
         #
         # When extraction reports low confidence, check whether all
-        # required fields are already satisfied.  This covers:
-        #   - No schema (no required fields → vacuous satisfaction)
-        #   - Schema with required: [] (same vacuous result)
-        #   - Schema where all required fields are present in state.data
-        #
-        # This mirrors _check_required_fields_missing(), which returns
-        # set() for no-schema stages — the confidence override must
-        # agree.
+        # required fields are already satisfied.  StageSchema handles
+        # all three cases uniformly via can_satisfy_required():
+        #   - No schema → no required fields → vacuous True
+        #   - Schema with required: [] → vacuous True
+        #   - Schema with required fields → True only if all present
+        ss = StageSchema.from_stage(stage)
         is_confident = extraction.is_confident
-        if not is_confident:
-            if not schema:
-                # No schema → no required fields → vacuously confident.
-                is_confident = True
-            else:
-                required_fields = schema.get("required", [])
-                can_satisfy = all(
-                    self._field_is_present(state.data.get(f))
-                    for f in required_fields
-                )
-                if can_satisfy:
-                    # All required fields present despite low confidence —
-                    # treat as confident for decision purposes.
-                    is_confident = True
+        if not is_confident and ss.can_satisfy_required(state.data):
+            is_confident = True
 
         return ExtractionPipelineResult(
             extraction=extraction,
@@ -4292,19 +4369,20 @@ class WizardReasoning(ReasoningStrategy):
             def is_confident(self) -> bool:
                 return self.confidence >= 0.8 and not self.errors
 
-        schema = stage.get("schema")
+        ss = StageSchema.from_stage(stage)
+        schema = ss.raw if ss.exists else None
         stage_name = stage.get("name", "unknown")
 
         logger.debug(
             "Extraction start: stage='%s', has_schema=%s, "
             "has_extractor=%s, input_len=%d",
             stage_name,
-            schema is not None,
+            ss.exists,
             self._extractor is not None,
             len(message),
         )
 
-        if not schema:
+        if not ss.exists:
             # No schema defined - pass through any data
             logger.debug(
                 "Extraction skip: stage='%s' has no schema, returning raw input",
@@ -5918,12 +5996,12 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of property names whose defaults were applied.
         """
-        schema = stage.get("schema")
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set()
 
         applied: set[str] = set()
-        for prop_name, prop_def in schema.get("properties", {}).items():
+        for prop_name, prop_def in ss.properties.items():
             if "default" not in prop_def:
                 continue
             current = wizard_state.data.get(prop_name)
@@ -6385,8 +6463,9 @@ class WizardReasoning(ReasoningStrategy):
     ) -> set[str]:
         """Return required field names not yet present in wizard_state.data.
 
-        Uses ``_field_is_present`` semantics (value is not None) to match
-        the ``can_satisfy`` confidence gate check.
+        Delegates to :meth:`StageSchema.missing_required` so that
+        the "field presence" semantic is consistent with the confidence
+        gate's ``can_satisfy_required()`` check.
 
         Args:
             wizard_state: Current wizard state with accumulated data
@@ -6395,16 +6474,9 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of required field names whose values are absent or None
         """
-        schema = stage.get("schema")
-        if not schema:
-            return set()
-        required_fields = schema.get("required", [])
-        if not required_fields:
-            return set()
-        return {
-            f for f in required_fields
-            if not self._field_is_present(wizard_state.data.get(f))
-        }
+        return StageSchema.from_stage(stage).missing_required(
+            wizard_state.data,
+        )
 
     def _merge_extraction_result(
         self,
@@ -6593,17 +6665,16 @@ class WizardReasoning(ReasoningStrategy):
             Tuple of (new keys from retry, extraction result).
             Empty set and None if retry didn't produce data.
         """
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set(), None
 
-        missing = self._check_required_fields_missing(
-            wizard_state, stage,
-        )
+        missing = ss.missing_required(wizard_state.data)
         if not missing:
             return set(), None
 
         # Build focused schema with only the missing fields
-        properties = schema.get("properties", {})
+        properties = ss.properties
         focused_properties = {
             f: properties[f]
             for f in missing
@@ -6696,11 +6767,11 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of field names that were filled by recovery.
         """
-        schema = stage.get("schema")
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set()
-        properties = schema.get("properties", {})
-        required_fields = set(schema.get("required", []))
+        properties = ss.properties
+        required_fields = set(ss.required_fields)
 
         msg_lower = user_message.lower()
 

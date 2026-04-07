@@ -17,8 +17,131 @@ from __future__ import annotations
 
 import pytest
 
+from dataknobs_bots.reasoning.wizard import StageSchema
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.testing import text_response
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# StageSchema unit tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestStageSchema:
+    """Unit tests for the StageSchema value object."""
+
+    def test_from_stage_no_schema(self) -> None:
+        """Stage without schema key → empty StageSchema."""
+        ss = StageSchema.from_stage({"name": "test"})
+        assert not ss.exists
+        assert ss.required_fields == []
+        assert not ss.has_required_fields
+        assert ss.properties == {}
+        assert ss.raw == {}
+
+    def test_from_stage_none_schema(self) -> None:
+        """Stage with schema=None → same as no schema."""
+        ss = StageSchema.from_stage({"name": "test", "schema": None})
+        assert not ss.exists
+
+    def test_from_stage_empty_schema(self) -> None:
+        """Stage with empty schema dict → exists but empty."""
+        ss = StageSchema.from_stage({"name": "test", "schema": {}})
+        assert not ss.exists  # Empty dict is falsy
+        assert ss.required_fields == []
+        assert ss.properties == {}
+
+    def test_from_stage_with_properties(self) -> None:
+        """Stage with populated schema."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name"],
+            },
+        })
+        assert ss.exists
+        assert ss.required_fields == ["name"]
+        assert ss.has_required_fields
+        assert ss.property_names == {"name", "age"}
+        assert ss.field_type("name") == "string"
+        assert ss.field_type("age") == "integer"
+        assert ss.field_type("missing") is None
+
+    def test_can_satisfy_required_no_schema(self) -> None:
+        """No schema → vacuously True."""
+        ss = StageSchema.from_stage({})
+        assert ss.can_satisfy_required({}) is True
+        assert ss.can_satisfy_required({"anything": "value"}) is True
+
+    def test_can_satisfy_required_empty_required(self) -> None:
+        """required: [] → vacuously True."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {"opt": {"type": "string"}},
+                "required": [],
+            },
+        })
+        assert ss.can_satisfy_required({}) is True
+
+    def test_can_satisfy_required_all_present(self) -> None:
+        """All required fields present → True."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        })
+        assert ss.can_satisfy_required({"name": "Alice"}) is True
+
+    def test_can_satisfy_required_missing(self) -> None:
+        """Required field missing → False."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        })
+        assert ss.can_satisfy_required({}) is False
+        assert ss.can_satisfy_required({"name": None}) is False
+
+    def test_missing_required_no_schema(self) -> None:
+        """No schema → empty set."""
+        ss = StageSchema.from_stage({})
+        assert ss.missing_required({}) == set()
+
+    def test_missing_required_some_missing(self) -> None:
+        """Some required fields missing."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "string"},
+                    "b": {"type": "string"},
+                },
+                "required": ["a", "b"],
+            },
+        })
+        assert ss.missing_required({"a": "val"}) == {"b"}
+        assert ss.missing_required({"a": "v", "b": "v"}) == set()
+        assert ss.missing_required({}) == {"a", "b"}
+
+    def test_get_property_returns_empty_for_missing(self) -> None:
+        """get_property for unknown field → empty dict."""
+        ss = StageSchema.from_stage({
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        })
+        assert ss.get_property("name") == {"type": "string"}
+        assert ss.get_property("missing") == {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
