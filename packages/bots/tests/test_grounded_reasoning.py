@@ -2969,3 +2969,204 @@ class TestTopicIndexIntegration:
         assert "standard" in results
         assert len(results["indexed"]) > 0
         assert len(results["standard"]) > 0
+
+
+# ------------------------------------------------------------------
+# Public API for composition tests (Item 71)
+# ------------------------------------------------------------------
+
+
+class TestPublicCompositionAPI:
+    """Tests for the public API additions enabling clean composition."""
+
+    def test_build_synthesis_system_prompt_with_config_override(self) -> None:
+        """Config override changes citation behavior without mutating strategy config."""
+        config = GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(require_citations=True),
+        )
+        strategy = GroundedReasoning(config=config)
+
+        # Default: includes citation instructions
+        default_prompt = strategy.build_synthesis_system_prompt(
+            "KB content", "You are a bot.",
+        )
+        assert "Cite" in default_prompt
+
+        # Override: no citations
+        override = GroundedSynthesisConfig(require_citations=False)
+        override_prompt = strategy.build_synthesis_system_prompt(
+            "KB content", "You are a bot.", synthesis_config=override,
+        )
+        assert "Cite" not in override_prompt
+
+        # Original config unchanged
+        assert config.synthesis.require_citations is True
+
+    def test_build_synthesis_system_prompt_override_instruction(self) -> None:
+        """Config override can inject a custom instruction."""
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+
+        override = GroundedSynthesisConfig(
+            instruction="Focus on security implications.",
+        )
+        prompt = strategy.build_synthesis_system_prompt(
+            "KB content", "Base prompt.", synthesis_config=override,
+        )
+        assert "Focus on security implications." in prompt
+
+    def test_build_synthesis_system_prompt_override_parametric(self) -> None:
+        """Config override can switch parametric knowledge policy."""
+        strategy = GroundedReasoning(config=GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(allow_parametric=False),
+        ))
+
+        # Default: strict grounding
+        default_prompt = strategy.build_synthesis_system_prompt("KB", "Prompt.")
+        assert "Do not fill gaps" in default_prompt
+
+        # Override: bridge mode
+        bridge = GroundedSynthesisConfig(allow_parametric="bridge")
+        bridge_prompt = strategy.build_synthesis_system_prompt(
+            "KB", "Prompt.", synthesis_config=bridge,
+        )
+        assert "connect and synthesize" in bridge_prompt
+
+    def test_store_provenance_public_api(self) -> None:
+        """store_provenance() is callable as a public static method."""
+        from dataknobs_bots.testing import StubManager
+
+        manager = StubManager()
+        provenance1 = {"intent": {"text_queries": ["q1"]}, "total_results": 3}
+
+        GroundedReasoning.store_provenance(manager, provenance1)
+
+        assert manager.metadata["retrieval_provenance"] == provenance1
+        assert manager.metadata["retrieval_provenance_history"] == [provenance1]
+
+        # Second call appends to history
+        provenance2 = {"intent": {"text_queries": ["q2"]}, "total_results": 1}
+        GroundedReasoning.store_provenance(manager, provenance2)
+
+        assert manager.metadata["retrieval_provenance"] == provenance2
+        assert len(manager.metadata["retrieval_provenance_history"]) == 2
+        assert manager.metadata["retrieval_provenance_history"][0] == provenance1
+        assert manager.metadata["retrieval_provenance_history"][1] == provenance2
+
+    def test_resolve_synthesis_with_pre_built_prompt(self) -> None:
+        """Pre-built prompt is used directly, not rebuilt internally."""
+        from dataknobs_bots.testing import StubManager
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(style="conversational"),
+        ))
+        manager = StubManager(
+            system_prompt="Base.",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        pre_built = "THIS IS MY PRE-BUILT PROMPT"
+        plan = strategy.resolve_synthesis(
+            "KB context", manager, {},
+            system_prompt=pre_built,
+        )
+
+        assert plan.system_prompt == pre_built
+        assert plan.effective_style == "conversational"
+
+    def test_resolve_synthesis_without_pre_built_prompt_builds_internally(self) -> None:
+        """Without pre-built prompt, resolve_synthesis builds one."""
+        from dataknobs_bots.testing import StubManager
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(
+                style="conversational",
+                require_citations=True,
+            ),
+        ))
+        manager = StubManager(
+            system_prompt="Base.",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        plan = strategy.resolve_synthesis("KB context", manager, {})
+
+        assert plan.system_prompt is not None
+        assert "knowledge_base" in plan.system_prompt
+        assert "Cite" in plan.system_prompt
+
+    def test_resolve_synthesis_with_config_override(self) -> None:
+        """synthesis_config override is forwarded to prompt construction."""
+        from dataknobs_bots.testing import StubManager
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig(
+            synthesis=GroundedSynthesisConfig(
+                style="conversational",
+                require_citations=True,
+            ),
+        ))
+        manager = StubManager(
+            system_prompt="Base.",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        override = GroundedSynthesisConfig(require_citations=False)
+        plan = strategy.resolve_synthesis(
+            "KB context", manager, {}, synthesis_config=override,
+        )
+
+        assert plan.system_prompt is not None
+        assert "Cite" not in plan.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_with_pre_resolved_intent(self) -> None:
+        """Pre-resolved intent skips intent resolution phase."""
+        from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
+        from dataknobs_bots.testing import StubManager
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        source = VectorKnowledgeSource(kb, name="test_kb")
+
+        strategy = GroundedReasoning(config=GroundedReasoningConfig())
+        strategy.add_source(source)
+
+        manager = StubManager(
+            messages=[{"role": "user", "content": "Tell me about tokens"}],
+        )
+
+        pre_intent = RetrievalIntent(text_queries=["pre-resolved query"])
+
+        context, provenance = await strategy.retrieve_context(
+            manager, None, intent=pre_intent,
+        )
+
+        # The pre-resolved query should be what was used for retrieval
+        assert "pre-resolved query" in kb.queries
+        # Provenance should reflect the pre-resolved intent
+        assert provenance["intent"]["text_queries"] == ["pre-resolved query"]
+        # Intent resolution time should be 0 (skipped)
+        assert provenance["intent_resolution_time_ms"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_without_intent_resolves_normally(self) -> None:
+        """Without pre-resolved intent, intent resolution runs normally."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_grounded_bot_config(),
+            main_responses=[
+                text_response("search query"),
+                text_response("Synthesis response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("Tell me about tokens")
+
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
+            prov = manager.metadata["retrieval_provenance"]
+            # Intent resolution time is recorded (may be 0.0 with EchoProvider)
+            assert "intent_resolution_time_ms" in prov
+            # Intent was resolved (has text_queries from LLM extraction)
+            assert "intent" in prov
+            assert "text_queries" in prov["intent"]

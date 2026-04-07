@@ -672,16 +672,67 @@ reasoning:
     What would you like to explore?
 ```
 
-## Hybrid Composition (Future)
+## Composition API
 
-The `retrieve_context()` method is public, designed for future hybrid strategy composition:
+`GroundedReasoning` exposes a public API designed for composition by other strategies (e.g., `HybridReasoning`) and pipeline consumers. These methods allow composing grounded retrieval and synthesis without reaching into private internals.
+
+### `retrieve_context()` — Retrieval with Optional Pre-Resolved Intent
 
 ```python
-# A future HybridReasoning could call this first
-context, provenance = await grounded_strategy.retrieve_context(manager, llm)
+context, provenance = await grounded.retrieve_context(manager, llm)
 
-# Then enter a ReAct loop with the grounded context available
+# Or skip intent resolution by passing a pre-resolved intent:
+from dataknobs_data.sources.base import RetrievalIntent
+
+intent = RetrievalIntent(text_queries=["specific query"], scope="focused")
+context, provenance = await grounded.retrieve_context(manager, llm, intent=intent)
 ```
+
+When `intent` is provided, the intent resolution phase is skipped entirely — useful for pipeline consumers that resolve intent separately (e.g., with an extended schema or profile-specific classification step between intent and retrieval).
+
+### `build_synthesis_system_prompt()` — Prompt with Config Override
+
+```python
+prompt = grounded.build_synthesis_system_prompt(kb_context, base_prompt)
+
+# Or override synthesis settings per-turn without mutating strategy config:
+from dataknobs_bots.reasoning.grounded_config import GroundedSynthesisConfig
+
+override = GroundedSynthesisConfig(require_citations=False, allow_parametric="bridge")
+prompt = grounded.build_synthesis_system_prompt(
+    kb_context, base_prompt, synthesis_config=override,
+)
+```
+
+### `resolve_synthesis()` — Pre-Built Prompt and Config Override
+
+```python
+plan = grounded.resolve_synthesis(context, manager, provenance)
+
+# Pass a pre-built prompt to avoid rebuilding it internally:
+plan = grounded.resolve_synthesis(
+    context, manager, provenance, system_prompt=augmented_prompt,
+)
+
+# Or pass a config override (forwarded to build_synthesis_system_prompt):
+plan = grounded.resolve_synthesis(
+    context, manager, provenance, synthesis_config=override,
+)
+```
+
+When `system_prompt` is provided, `resolve_synthesis()` skips internal prompt construction. This eliminates double prompt construction when the caller has already built the prompt (e.g., `HybridReasoning` builds it for context injection, then passes it through to post-ReAct synthesis).
+
+### `store_provenance()` — Public Static Method
+
+```python
+# Store provenance using the standard metadata key convention:
+GroundedReasoning.store_provenance(manager, provenance)
+
+# Sets manager.metadata["retrieval_provenance"] (current turn)
+# Appends to manager.metadata["retrieval_provenance_history"] (all turns)
+```
+
+This is a `@staticmethod` — callable from any consumer without a strategy instance. `HybridReasoning` uses this to store merged provenance (KB results + tool executions) through a single code path.
 
 ## Full Configuration Reference
 

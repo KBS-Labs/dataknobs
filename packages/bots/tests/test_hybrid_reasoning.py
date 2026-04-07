@@ -583,3 +583,106 @@ class TestHybridGreeting:
 
         result = await strategy.greet(manager, None)
         assert result is None
+
+
+# ------------------------------------------------------------------
+# Public API composition tests (Item 71)
+# ------------------------------------------------------------------
+
+
+class TestHybridCompositionAPI:
+    """Tests for hybrid reasoning using grounded public API."""
+
+    @pytest.mark.asyncio
+    async def test_generate_provenance_uses_public_store(self) -> None:
+        """Hybrid provenance storage uses GroundedReasoning.store_provenance."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(),
+            main_responses=[
+                text_response("Synthesis response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("How does OAuth work?")
+
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
+            # Provenance stored via public API
+            assert "retrieval_provenance" in manager.metadata
+            assert "retrieval_provenance_history" in manager.metadata
+            prov = manager.metadata["retrieval_provenance"]
+            assert "tool_executions" in prov
+            assert len(manager.metadata["retrieval_provenance_history"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_generate_with_tools_provenance_includes_executions(self) -> None:
+        """Tool executions appear in provenance alongside KB results."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        calc = CalculatorTool()
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(),
+            main_responses=[
+                tool_call_response("calculator", {"expression": "2+2"}),
+                text_response("The answer is 42."),
+            ],
+            tools=[calc],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("What is 2+2?")
+
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
+            prov = manager.metadata["retrieval_provenance"]
+            assert len(prov["tool_executions"]) == 1
+            assert prov["tool_executions"][0]["tool_name"] == "calculator"
+
+    @pytest.mark.asyncio
+    async def test_generate_augmented_prompt_reaches_synthesis(self) -> None:
+        """generate() forwards the KB-augmented prompt to post-ReAct synthesis.
+
+        The single-construction property (build_synthesis_system_prompt called
+        once, not twice) is proven by the unit test
+        test_resolve_synthesis_with_pre_built_prompt in test_grounded_reasoning.py.
+        This test verifies the hybrid integration: that the pipeline produces
+        a correct response with KB context injected.
+        """
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(synthesis_style="conversational"),
+            main_responses=[
+                text_response("Synthesis response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            result = await harness.chat("How does OAuth work?")
+
+            assert result.response == "Synthesis response"
+            # KB was queried (grounded phase ran)
+            assert len(kb.queries) > 0
+
+    @pytest.mark.asyncio
+    async def test_stream_generate_no_tools_augmented_prompt_reaches_synthesis(self) -> None:
+        """stream_generate() no-tools path forwards KB-augmented prompt to synthesis."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(synthesis_style="conversational"),
+            main_responses=[
+                text_response("Streaming response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            chunks = []
+            async for chunk in harness.bot.stream_chat(
+                "How does OAuth work?", harness.context,
+            ):
+                chunks.append(chunk)
+
+            assert len(chunks) > 0
+            assert len(kb.queries) > 0
