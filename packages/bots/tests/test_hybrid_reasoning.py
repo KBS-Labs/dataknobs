@@ -583,3 +583,136 @@ class TestHybridGreeting:
 
         result = await strategy.greet(manager, None)
         assert result is None
+
+
+# ------------------------------------------------------------------
+# Public API composition tests (Item 71)
+# ------------------------------------------------------------------
+
+
+class TestHybridCompositionAPI:
+    """Tests for hybrid reasoning using grounded public API."""
+
+    @pytest.mark.asyncio
+    async def test_generate_provenance_uses_public_store(self) -> None:
+        """Hybrid provenance storage uses GroundedReasoning.store_provenance."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(),
+            main_responses=[
+                text_response("Synthesis response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("How does OAuth work?")
+
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
+            # Provenance stored via public API
+            assert "retrieval_provenance" in manager.metadata
+            assert "retrieval_provenance_history" in manager.metadata
+            prov = manager.metadata["retrieval_provenance"]
+            assert "tool_executions" in prov
+            assert len(manager.metadata["retrieval_provenance_history"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_generate_with_tools_provenance_includes_executions(self) -> None:
+        """Tool executions appear in provenance alongside KB results."""
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+        calc = CalculatorTool()
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(),
+            main_responses=[
+                tool_call_response("calculator", {"expression": "2+2"}),
+                text_response("The answer is 42."),
+            ],
+            tools=[calc],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            await harness.chat("What is 2+2?")
+
+            manager = harness.bot.get_conversation_manager(
+                harness.context.conversation_id,
+            )
+            prov = manager.metadata["retrieval_provenance"]
+            assert len(prov["tool_executions"]) == 1
+            assert prov["tool_executions"][0]["tool_name"] == "calculator"
+
+    @pytest.mark.asyncio
+    async def test_generate_prompt_built_once(self) -> None:
+        """generate() builds the synthesis prompt once, not twice.
+
+        The augmented prompt built in _build_augmented_prompt is forwarded
+        through _apply_post_react_synthesis → resolve_synthesis(system_prompt=...),
+        so resolve_synthesis does NOT rebuild it internally.
+        """
+        from unittest.mock import patch
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(synthesis_style="conversational"),
+            main_responses=[
+                text_response("Synthesis response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            grounded = harness.bot.reasoning_strategy._grounded
+
+            original = grounded.build_synthesis_system_prompt
+            call_count = 0
+
+            def counting_build(*args: Any, **kwargs: Any) -> str:
+                nonlocal call_count
+                call_count += 1
+                return original(*args, **kwargs)
+
+            with patch.object(grounded, "build_synthesis_system_prompt", counting_build):
+                await harness.chat("How does OAuth work?")
+
+            # Prompt built exactly once (in _build_augmented_prompt),
+            # not a second time inside resolve_synthesis.
+            assert call_count == 1, (
+                f"build_synthesis_system_prompt called {call_count} times, expected 1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_stream_generate_no_tools_prompt_built_once(self) -> None:
+        """stream_generate() no-tools path builds the prompt once."""
+        from unittest.mock import patch
+
+        kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
+
+        async with await BotTestHarness.create(
+            bot_config=_build_hybrid_bot_config(synthesis_style="conversational"),
+            main_responses=[
+                text_response("Streaming response"),
+            ],
+        ) as harness:
+            harness.bot.reasoning_strategy.set_knowledge_base(kb)
+            grounded = harness.bot.reasoning_strategy._grounded
+
+            original = grounded.build_synthesis_system_prompt
+            call_count = 0
+
+            def counting_build(*args: Any, **kwargs: Any) -> str:
+                nonlocal call_count
+                call_count += 1
+                return original(*args, **kwargs)
+
+            with patch.object(grounded, "build_synthesis_system_prompt", counting_build):
+                chunks = []
+                async for chunk in harness.bot.stream_chat(
+                    "How does OAuth work?", harness.context,
+                ):
+                    chunks.append(chunk)
+
+            assert len(chunks) > 0
+            # Prompt built exactly once (in _build_augmented_prompt),
+            # not a second time inside resolve_synthesis.
+            assert call_count == 1, (
+                f"build_synthesis_system_prompt called {call_count} times, expected 1"
+            )

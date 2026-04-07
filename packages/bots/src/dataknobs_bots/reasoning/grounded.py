@@ -50,7 +50,10 @@ from dataknobs_bots.knowledge.retrieval.formatter import (
 )
 from dataknobs_bots.knowledge.retrieval.merger import ChunkMerger, MergerConfig
 from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
-from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
+from dataknobs_bots.reasoning.grounded_config import (
+    GroundedReasoningConfig,
+    GroundedSynthesisConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -505,7 +508,7 @@ class GroundedReasoning(ReasoningStrategy):
         result = await self._synthesize(context, manager, provenance, **kwargs)
 
         if self._config.store_provenance:
-            self._store_provenance(manager, provenance)
+            self.store_provenance(manager, provenance)
 
         return result
 
@@ -563,7 +566,7 @@ class GroundedReasoning(ReasoningStrategy):
                 )
 
         if self._config.store_provenance:
-            self._store_provenance(manager, provenance)
+            self.store_provenance(manager, provenance)
 
     # ------------------------------------------------------------------
     # Public retrieval pipeline (used by HybridReasoning)
@@ -573,6 +576,8 @@ class GroundedReasoning(ReasoningStrategy):
         self,
         manager: Any,
         llm: Any,
+        *,
+        intent: RetrievalIntent | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Run intent resolution + multi-source retrieval + processing.
 
@@ -583,6 +588,10 @@ class GroundedReasoning(ReasoningStrategy):
         Args:
             manager: Conversation manager.
             llm: LLM provider for query generation (extract mode only).
+            intent: Pre-resolved retrieval intent.  When provided,
+                skips the intent resolution phase — useful for pipeline
+                consumers that resolve intent separately (e.g. with an
+                extended schema or profile-specific classification).
 
         Returns:
             ``(formatted_context, provenance_dict)``
@@ -591,9 +600,14 @@ class GroundedReasoning(ReasoningStrategy):
         user_message = self._extract_user_message(messages)
 
         # Phase 1: Intent resolution
-        t0 = time.monotonic()
-        intent = await self._resolve_intent(user_message, messages, llm, manager.metadata)
-        intent_ms = (time.monotonic() - t0) * 1000
+        if intent is None:
+            t0 = time.monotonic()
+            intent = await self._resolve_intent(
+                user_message, messages, llm, manager.metadata,
+            )
+            intent_ms = (time.monotonic() - t0) * 1000
+        else:
+            intent_ms = 0.0
 
         # Phase 2: Deterministic retrieval across all sources
         t0 = time.monotonic()
@@ -1178,17 +1192,31 @@ class GroundedReasoning(ReasoningStrategy):
         context: str,
         manager: Any,
         provenance: dict[str, Any],
+        *,
+        system_prompt: str | None = None,
+        synthesis_config: GroundedSynthesisConfig | None = None,
     ) -> SynthesisPlan:
         """Resolve the effective synthesis style and pre-compute artifacts.
 
         This is the single shared code path consumed by both
         :meth:`_synthesize` (buffered) and :meth:`stream_generate`
         (streaming).  Only the delivery mechanism differs.
+
+        Args:
+            context: Formatted knowledge base context string.
+            manager: Conversation manager.
+            provenance: Retrieval provenance dict.
+            system_prompt: Pre-built synthesis system prompt.  When
+                provided, skips internal prompt construction — useful
+                when the caller has already built the prompt (e.g.
+                :class:`HybridReasoning` builds it for context injection).
+            synthesis_config: Optional override for synthesis settings,
+                forwarded to :meth:`build_synthesis_system_prompt` when
+                the prompt is built internally.
         """
         style = self._resolve_effective_style(manager, provenance)
 
         template_text: str | None = None
-        system_prompt: str | None = None
 
         if style in ("structured", "hybrid"):
             messages = manager.get_messages()
@@ -1207,9 +1235,11 @@ class GroundedReasoning(ReasoningStrategy):
                 template_text = None
 
         if style in ("conversational", "hybrid"):
-            system_prompt = self.build_synthesis_system_prompt(
-                context, manager.system_prompt,
-            )
+            if system_prompt is None:
+                system_prompt = self.build_synthesis_system_prompt(
+                    context, manager.system_prompt,
+                    synthesis_config=synthesis_config,
+                )
 
         return SynthesisPlan(
             effective_style=style,
@@ -1306,9 +1336,17 @@ class GroundedReasoning(ReasoningStrategy):
         self,
         kb_context: str,
         original_system_prompt: str,
+        synthesis_config: GroundedSynthesisConfig | None = None,
     ) -> str:
-        """Build the system prompt for the synthesis LLM call."""
-        cfg = self._config.synthesis
+        """Build the system prompt for the synthesis LLM call.
+
+        Args:
+            kb_context: Formatted knowledge base context string.
+            original_system_prompt: The base system prompt to augment.
+            synthesis_config: Optional override for synthesis settings.
+                When ``None``, uses ``self._config.synthesis``.
+        """
+        cfg = synthesis_config or self._config.synthesis
         parts = [original_system_prompt]
 
         if kb_context:
@@ -1421,7 +1459,7 @@ class GroundedReasoning(ReasoningStrategy):
         }
 
     @staticmethod
-    def _store_provenance(
+    def store_provenance(
         manager: Any,
         provenance: dict[str, Any],
     ) -> None:

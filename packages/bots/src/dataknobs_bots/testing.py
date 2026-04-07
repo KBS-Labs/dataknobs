@@ -1274,11 +1274,12 @@ class StubManager:
         *,
         system_prompt: str = "",
         metadata: dict[str, Any] | None = None,
+        messages: list[dict[str, Any]] | None = None,
         conversation_id: str = "stub-conversation",
     ) -> None:
         self._system_prompt = system_prompt
         self._metadata: dict[str, Any] = metadata if metadata is not None else {}
-        self._messages: list[dict[str, Any]] = []
+        self._messages: list[dict[str, Any]] = list(messages) if messages else []
         self.conversation_id = conversation_id
 
     @property

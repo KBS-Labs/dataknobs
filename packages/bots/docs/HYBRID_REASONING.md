@@ -215,7 +215,11 @@ Neither child is visible to `DynaBot` -- `HybridReasoning` is the sole registere
 
 ### Context Injection
 
-Retrieved KB context is injected into the system prompt via `GroundedReasoning.build_synthesis_system_prompt()`, which includes grounding instructions (citation format, parametric knowledge policy, custom instructions) from the grounded config.
+Retrieved KB context is injected into the system prompt via `GroundedReasoning.build_synthesis_system_prompt()`, which includes grounding instructions (citation format, parametric knowledge policy, custom instructions) from the grounded config. The resulting prompt is passed through to post-ReAct synthesis via `resolve_synthesis(system_prompt=...)` to avoid rebuilding it.
+
+### Provenance Storage
+
+Provenance is stored via `GroundedReasoning.store_provenance()` — a public static method that maintains the `retrieval_provenance` and `retrieval_provenance_history` metadata keys. `HybridReasoning` enriches the provenance dict with `tool_executions` records before calling `store_provenance()`, keeping the metadata key convention in a single place.
 
 ### Tool Execution Forwarding
 

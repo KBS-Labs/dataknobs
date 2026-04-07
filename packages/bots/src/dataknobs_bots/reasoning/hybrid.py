@@ -27,6 +27,7 @@ from typing import Any
 
 from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
+from dataknobs_bots.reasoning.grounded_config import GroundedSynthesisConfig
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.react import ReActReasoning
 
@@ -212,6 +213,7 @@ class HybridReasoning(ReasoningStrategy):
         # Phase 6: Post-ReAct synthesis formatting
         response = self._apply_post_react_synthesis(
             response, context, manager, provenance,
+            system_prompt=augmented_prompt,
         )
 
         return response
@@ -261,12 +263,16 @@ class HybridReasoning(ReasoningStrategy):
 
             response = self._apply_post_react_synthesis(
                 response, context, manager, provenance,
+                system_prompt=augmented_prompt,
             )
             yield response
         else:
             # No tools — resolve synthesis style to decide streaming approach
             self._merge_provenance(manager, provenance, [])
-            plan = self._grounded.resolve_synthesis(context, manager, provenance)
+            plan = self._grounded.resolve_synthesis(
+                context, manager, provenance,
+                system_prompt=augmented_prompt,
+            )
 
             if plan.effective_style == "structured":
                 # Structured: template IS the response — yield as single chunk
@@ -337,10 +343,9 @@ class HybridReasoning(ReasoningStrategy):
     ) -> None:
         """Extend provenance with tool executions and store in metadata.
 
-        Uses the same schema as :meth:`GroundedReasoning._store_provenance`:
-
-        - ``retrieval_provenance``: current turn's provenance (latest).
-        - ``retrieval_provenance_history``: append-only list of all turns.
+        Enriches the provenance dict with tool execution records, then
+        delegates storage to :meth:`GroundedReasoning.store_provenance`
+        to keep the metadata key convention in a single place.
         """
         if not self._config.store_provenance:
             return
@@ -355,11 +360,7 @@ class HybridReasoning(ReasoningStrategy):
             }
             for te in react_executions
         ]
-        manager.metadata["retrieval_provenance"] = provenance
-        history = manager.metadata.setdefault(
-            "retrieval_provenance_history", [],
-        )
-        history.append(provenance)
+        GroundedReasoning.store_provenance(manager, provenance)
 
     def _apply_post_react_synthesis(
         self,
@@ -367,6 +368,9 @@ class HybridReasoning(ReasoningStrategy):
         context: str,
         manager: Any,
         provenance: dict[str, Any],
+        *,
+        system_prompt: str | None = None,
+        synthesis_config: GroundedSynthesisConfig | None = None,
     ) -> Any:
         """Apply post-ReAct synthesis formatting if configured.
 
@@ -374,6 +378,21 @@ class HybridReasoning(ReasoningStrategy):
         shared dispatch logic that handles all three synthesis styles.
         The provenance dict at this point includes ``tool_executions``,
         so templates can format both KB results and tool outputs.
+
+        Args:
+            response: LLM response to format.
+            context: KB context string.
+            manager: Conversation manager.
+            provenance: Retrieval provenance dict.
+            system_prompt: Pre-built synthesis system prompt.  When
+                provided, avoids rebuilding the prompt inside
+                :meth:`GroundedReasoning.resolve_synthesis`.
+            synthesis_config: Optional override for synthesis settings,
+                forwarded to :meth:`GroundedReasoning.resolve_synthesis`.
         """
-        plan = self._grounded.resolve_synthesis(context, manager, provenance)
+        plan = self._grounded.resolve_synthesis(
+            context, manager, provenance,
+            system_prompt=system_prompt,
+            synthesis_config=synthesis_config,
+        )
         return plan.apply_to_response(response)
