@@ -17,7 +17,6 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MAX_AGE_HOURS=${MAX_AGE_HOURS:-24}  # Maximum age of artifacts in hours
 REQUIRED_COVERAGE=${REQUIRED_COVERAGE:-70}  # Minimum coverage percentage
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
@@ -78,33 +77,41 @@ if [ $VALIDATION_FAILED -eq 1 ]; then
     exit 1
 fi
 
-# Check artifact age
-print_check "Artifact freshness"
-if [ -f "$ARTIFACTS_DIR/quality-summary.json" ]; then
-    # Extract timestamp from JSON (works on both Linux and macOS)
-    ARTIFACT_TIMESTAMP=$(grep -o '"timestamp": *"[^"]*"' "$ARTIFACTS_DIR/quality-summary.json" | cut -d'"' -f4)
-    
-    if [ -n "$ARTIFACT_TIMESTAMP" ]; then
-        # Convert to seconds since epoch (portable)
-        if command -v python3 >/dev/null 2>&1; then
-            ARTIFACT_EPOCH=$(python3 -c "from datetime import datetime; print(int(datetime.fromisoformat('${ARTIFACT_TIMESTAMP}'.replace('Z', '+00:00')).timestamp()))")
-            CURRENT_EPOCH=$(date +%s)
-            AGE_HOURS=$(( (CURRENT_EPOCH - ARTIFACT_EPOCH) / 3600 ))
-            
-            if [ $AGE_HOURS -gt $MAX_AGE_HOURS ]; then
-                print_fail "Artifacts are $AGE_HOURS hours old (max: $MAX_AGE_HOURS hours)"
-                print_fail "Please run: ./bin/run-quality-checks.sh"
-                VALIDATION_FAILED=1
-            else
-                print_pass "Artifacts are $AGE_HOURS hours old (within $MAX_AGE_HOURS hour limit)"
-            fi
+# Check package content hashes
+print_check "Package content hashes"
+HASH_RESULT=$(uv run python "$SCRIPT_DIR/package-hashes.py" validate --json 2>/dev/null) || true
+
+if [ -n "$HASH_RESULT" ]; then
+    HASH_VALID=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))")
+    HASH_ERROR=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', ''))")
+
+    if [ -n "$HASH_ERROR" ]; then
+        print_fail "Hash validation error: $HASH_ERROR"
+        VALIDATION_FAILED=1
+    elif [ "$HASH_VALID" = "True" ]; then
+        DIRTY_COUNT=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('dirty_packages', [])))")
+        if [ "$DIRTY_COUNT" = "0" ]; then
+            print_pass "All packages unchanged since last quality run"
         else
-            print_info "Could not verify timestamp (Python not available)"
+            print_pass "All dirty packages have been tested"
         fi
     else
-        print_fail "Could not extract timestamp from artifacts"
+        CHANGED=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_packages', [])))")
+        DIRTY=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('dirty_packages', [])))")
+        print_fail "Package content has changed since quality checks were run"
+        if [ -n "$CHANGED" ]; then
+            print_info "Changed packages: $CHANGED"
+        fi
+        if [ -n "$DIRTY" ]; then
+            print_fail "Packages needing re-validation: $DIRTY"
+        fi
+        print_fail "Please run: ./bin/run-quality-checks.sh"
         VALIDATION_FAILED=1
     fi
+else
+    print_fail "Could not validate package content hashes"
+    print_info "Ensure uv and Python are available"
+    VALIDATION_FAILED=1
 fi
 
 # Validate test results

@@ -686,6 +686,127 @@ class ExtractionPipelineResult:
 
 
 # ---------------------------------------------------------------------------
+# StageSchema — normalized view of a wizard stage's JSON Schema
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StageSchema:
+    """Normalized view of a wizard stage's JSON Schema.
+
+    Centralises schema access so that every site in wizard.py uses
+    the same None-handling semantics.  All properties return safe
+    defaults (empty list, empty dict) when the schema is absent or
+    incomplete — callers never need to guard against ``None``.
+
+    The canonical way to obtain a ``StageSchema`` is
+    ``StageSchema.from_stage(stage)``; no other code in wizard.py
+    should call ``stage.get("schema")`` directly.
+
+    .. note::
+
+       ``frozen=True`` prevents re-assigning ``_raw`` but does **not**
+       prevent mutation of the underlying dict.  The ``raw`` property
+       returns the same dict reference, so callers that need a mutable
+       copy (e.g. ``_strip_schema_defaults``) must ``copy.deepcopy``
+       it themselves — which they already do.
+    """
+
+    _raw: dict[str, Any]
+
+    @classmethod
+    def from_stage(cls, stage: dict[str, Any]) -> StageSchema:
+        """Create from a stage metadata dict.
+
+        Args:
+            stage: Stage configuration dict, optionally containing a
+                ``"schema"`` key.
+
+        Returns:
+            ``StageSchema`` wrapping the raw schema (or empty dict).
+        """
+        return cls(_raw=stage.get("schema") or {})
+
+    @classmethod
+    def from_dict(cls, schema: dict[str, Any]) -> StageSchema:
+        """Create from a raw JSON Schema dict.
+
+        Use this when you have the schema dict directly (e.g. a
+        constructed focused or amendment schema) rather than a stage
+        metadata dict.
+
+        Args:
+            schema: JSON Schema dict.
+
+        Returns:
+            ``StageSchema`` wrapping the provided dict.
+        """
+        return cls(_raw=schema)
+
+    @property
+    def exists(self) -> bool:
+        """Whether the stage has a non-empty schema.
+
+        Returns ``False`` for both missing schemas (``None``) and
+        empty schemas (``{}``), since neither defines extractable
+        fields.
+        """
+        return bool(self._raw)
+
+    @property
+    def required_fields(self) -> list[str]:
+        """Required field names (empty list if none or no schema)."""
+        return self._raw.get("required", [])
+
+    @property
+    def has_required_fields(self) -> bool:
+        """Whether there are any required fields."""
+        return bool(self.required_fields)
+
+    @property
+    def properties(self) -> dict[str, Any]:
+        """Schema properties dict (empty if none or no schema)."""
+        return self._raw.get("properties", {})
+
+    @property
+    def property_names(self) -> set[str]:
+        """Set of all property names."""
+        return set(self.properties.keys())
+
+    def get_property(self, name: str) -> dict[str, Any]:
+        """Get a single property definition (empty dict if not found)."""
+        return self.properties.get(name, {})
+
+    def field_type(self, name: str) -> str | None:
+        """Get the declared type of a field (None if not found)."""
+        return self.get_property(name).get("type")
+
+    @property
+    def raw(self) -> dict[str, Any]:
+        """Raw schema dict for passing to extractor/validator.
+
+        Returns the underlying dict (empty dict if no schema was
+        defined).  Use ``exists`` to distinguish "no schema" from
+        "empty schema" when the distinction matters.
+        """
+        return self._raw
+
+    def can_satisfy_required(self, data: dict[str, Any]) -> bool:
+        """Check if all required fields are present in data.
+
+        Returns ``True`` (vacuous satisfaction) for:
+        - No schema (no required fields)
+        - Schema with ``required: []``
+        - All required fields present in *data* (value is not ``None``)
+        """
+        return all(data.get(f) is not None for f in self.required_fields)
+
+    def missing_required(self, data: dict[str, Any]) -> set[str]:
+        """Required field names not yet present in data."""
+        return {f for f in self.required_fields if data.get(f) is None}
+
+
+# ---------------------------------------------------------------------------
 # Navigation keyword configuration
 # ---------------------------------------------------------------------------
 
@@ -1521,9 +1642,7 @@ class WizardReasoning(ReasoningStrategy):
         bank = bank_accessor(bank_name)
 
         # Filter to only schema-defined fields
-        schema_props = set(
-            stage.get("schema", {}).get("properties", {}).keys()
-        )
+        schema_props = StageSchema.from_stage(stage).property_names
         record_data = {
             k: v for k, v in extracted_data.items()
             if k in schema_props and v is not None
@@ -2512,14 +2631,10 @@ class WizardReasoning(ReasoningStrategy):
                             should_confirm = True
                     elif stage.get("confirm_on_new_data"):
                         # Re-confirm when schema property values changed
-                        schema_props = set(
-                            stage.get("schema", {})
-                            .get("properties", {})
-                            .keys()
-                        )
+                        ss_props = StageSchema.from_stage(stage).property_names
                         current_snapshot = {
                             k: wizard_state.data[k]
-                            for k in schema_props
+                            for k in ss_props
                             if k in wizard_state.data
                             and wizard_state.data[k] is not None
                         }
@@ -2535,13 +2650,9 @@ class WizardReasoning(ReasoningStrategy):
                     )
                     # Save snapshot for confirm_on_new_data comparison
                     if stage.get("confirm_on_new_data"):
-                        schema_props = set(
-                            stage.get("schema", {})
-                            .get("properties", {})
-                            .keys()
-                        )
                         wizard_state.save_stage_snapshot(
-                            stage_name, schema_props
+                            stage_name,
+                            StageSchema.from_stage(stage).property_names,
                         )
                     logger.debug(
                         "New data extracted (%s) at stage '%s' — "
@@ -2557,9 +2668,10 @@ class WizardReasoning(ReasoningStrategy):
                     return response
 
                 # Validate against stage schema
-                if stage.get("schema") and self._strict_validation:
+                ss_validate = StageSchema.from_stage(stage)
+                if ss_validate.exists and self._strict_validation:
                     validation_errors = self._validate_data(
-                        wizard_state.data, stage["schema"]
+                        wizard_state.data, ss_validate
                     )
                     if validation_errors:
                         # Save state before returning validation error
@@ -2870,7 +2982,7 @@ class WizardReasoning(ReasoningStrategy):
             state=state,
             stage_name=state.current_stage,
             stage_prompt=active_fsm.get_stage_prompt(),
-            stage_schema=stage_meta.get("schema"),
+            stage_schema=StageSchema.from_stage(stage_meta).raw or None,
             suggestions=active_fsm.get_stage_suggestions(),
             can_skip=active_fsm.can_skip(),
             can_go_back=active_fsm.can_go_back() and len(state.history) > 1,
@@ -3228,12 +3340,12 @@ class WizardReasoning(ReasoningStrategy):
                     )
 
         new_data_keys: set[str] = set()
-        schema = stage.get("schema")
+        ss = StageSchema.from_stage(stage)
 
         # 2. Normalize extracted data (type coercion)
-        if schema and extraction.data:
+        if ss.exists and extraction.data:
             extraction.data = self._normalize_extracted_data(
-                extraction.data, schema
+                extraction.data, ss
             )
 
         # 3. Merge into wizard state (grounded merge)
@@ -3259,24 +3371,23 @@ class WizardReasoning(ReasoningStrategy):
         missing = self._check_required_fields_missing(state, stage)
         if missing:
             new_data_keys, extraction = await self._run_recovery_pipeline(
-                extraction, state, stage, schema,
+                extraction, state, stage,
                 message, llm, manager, new_data_keys,
             )
             # Re-check after recovery
             missing = self._check_required_fields_missing(state, stage)
 
         # Confidence assessment
+        #
+        # When extraction reports low confidence, check whether all
+        # required fields are already satisfied.  StageSchema handles
+        # all three cases uniformly via can_satisfy_required():
+        #   - No schema → no required fields → vacuous True
+        #   - Schema with required: [] → vacuous True
+        #   - Schema with required fields → True only if all present
         is_confident = extraction.is_confident
-        if not is_confident and schema:
-            required_fields = schema.get("required", [])
-            can_satisfy = all(
-                self._field_is_present(state.data.get(f))
-                for f in required_fields
-            )
-            if can_satisfy:
-                # All required fields present despite low confidence —
-                # treat as confident for decision purposes.
-                is_confident = True
+        if not is_confident and ss.can_satisfy_required(state.data):
+            is_confident = True
 
         return ExtractionPipelineResult(
             extraction=extraction,
@@ -4278,19 +4389,19 @@ class WizardReasoning(ReasoningStrategy):
             def is_confident(self) -> bool:
                 return self.confidence >= 0.8 and not self.errors
 
-        schema = stage.get("schema")
+        ss = StageSchema.from_stage(stage)
         stage_name = stage.get("name", "unknown")
 
         logger.debug(
             "Extraction start: stage='%s', has_schema=%s, "
             "has_extractor=%s, input_len=%d",
             stage_name,
-            schema is not None,
+            ss.exists,
             self._extractor is not None,
             len(message),
         )
 
-        if not schema:
+        if not ss.exists:
             # No schema defined - pass through any data
             logger.debug(
                 "Extraction skip: stage='%s' has no schema, returning raw input",
@@ -4314,8 +4425,8 @@ class WizardReasoning(ReasoningStrategy):
         if manager is not None:
             has_bot_response = bool(self._get_last_bot_response(manager))
 
-        if not self._needs_llm_extraction(schema, stage) and not has_bot_response:
-            field_name = next(iter(schema.get("properties", {})))
+        if not self._needs_llm_extraction(ss, stage) and not has_bot_response:
+            field_name = next(iter(ss.properties))
             logger.debug(
                 "Verbatim capture: stage='%s', field='%s'",
                 stage_name,
@@ -4376,7 +4487,7 @@ class WizardReasoning(ReasoningStrategy):
                 )
 
         # Strip defaults to prevent extraction LLM from auto-filling them
-        extraction_schema = self._strip_schema_defaults(schema)
+        extraction_schema = self._strip_schema_defaults(ss.raw)
 
         if self._extractor:
             # Use schema extractor
@@ -4543,7 +4654,7 @@ class WizardReasoning(ReasoningStrategy):
     def _normalize_extracted_data(
         self,
         data: dict[str, Any],
-        schema: dict[str, Any],
+        ss: StageSchema,
     ) -> dict[str, Any]:
         """Normalize extracted data to match schema types.
 
@@ -4571,14 +4682,14 @@ class WizardReasoning(ReasoningStrategy):
           stored in wizard state.  Works independently of normalization.
 
         Args:
-            data:   Extracted data dict (will be shallow-copied).
-            schema: JSON Schema for the current stage.
+            data: Extracted data dict (will be shallow-copied).
+            ss:   ``StageSchema`` for the current stage.
 
         Returns:
             New dict with normalized values.  Fields set to ``None``
             indicate rejected values that should not be merged.
         """
-        properties = schema.get("properties", {})
+        properties = ss.properties
         if not properties:
             return data
 
@@ -4708,20 +4819,20 @@ class WizardReasoning(ReasoningStrategy):
         return normalized
 
     def _validate_data(
-        self, data: dict[str, Any], schema: dict[str, Any]
+        self, data: dict[str, Any], ss: StageSchema
     ) -> list[str]:
-        """Validate extracted data against JSON schema.
+        """Validate extracted data against stage schema.
 
         Args:
             data: Extracted data to validate
-            schema: JSON Schema to validate against
+            ss: ``StageSchema`` to validate against
 
         Returns:
             List of validation error messages
         """
-        errors = []
-        required = schema.get("required", [])
-        properties = schema.get("properties", {})
+        errors: list[str] = []
+        required = ss.required_fields
+        properties = ss.properties
 
         # Check required fields
         for field_name in required:
@@ -4863,16 +4974,25 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response appropriate for current stage.
 
-        Supports two modes:
+        Supports three response paths:
 
-        1. **Template mode** (when stage has ``response_template``):
+        1. **Template mode** (structured stages with ``response_template``):
            Renders the template with Jinja2 using wizard state data,
-           bypassing the LLM entirely. If the stage also has
-           ``llm_assist: true`` and the user's last message is a
-           question, the LLM is invoked with a scoped assist prompt.
+           bypassing the LLM entirely.  Template is rendered on every
+           turn — the template IS the response (e.g. review summaries).
+           If the stage also has ``llm_assist: true`` and the user's
+           last message is a question, the LLM is invoked with a
+           scoped assist prompt.
 
-        2. **LLM mode** (default): Calls the LLM with stage context
-           injected into the system prompt, as before.
+        2. **Conversation greeting** (``mode: conversation`` with
+           ``response_template``): The template is rendered only on
+           the first turn (render count == 0) as a greeting.
+           Subsequent turns fall through to LLM mode so the bot
+           can actually converse.
+
+        3. **LLM mode** (default, or conversation stages after first
+           render): Calls the LLM with stage context injected into
+           the system prompt.
 
         Args:
             manager: ConversationManager instance
@@ -4892,7 +5012,18 @@ class WizardReasoning(ReasoningStrategy):
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        if response_template:
+        # Conversation-mode stages use the template only for the initial
+        # greeting (first render).  After that, subsequent turns fall
+        # through to LLM mode so the bot can actually converse.
+        # Structured stages (the default) render the template on every
+        # turn — the template IS the response (e.g. review summaries).
+        is_conversation_mode = stage.get("mode") == "conversation"
+        is_first_render = state.get_render_count(stage_name) == 0
+        use_template = response_template and (
+            not is_conversation_mode or is_first_render
+        )
+
+        if use_template:
             # Generate LLM context variables if configured
             extra_context = await self._generate_context_variables(
                 stage, state, llm
@@ -5441,7 +5572,7 @@ class WizardReasoning(ReasoningStrategy):
         return stage.get("extraction_scope") or self._extraction_scope
 
     def _needs_llm_extraction(
-        self, schema: dict[str, Any], stage: dict[str, Any],
+        self, ss: StageSchema, stage: dict[str, Any],
     ) -> bool:
         """Determine whether LLM extraction is needed for a schema.
 
@@ -5456,7 +5587,7 @@ class WizardReasoning(ReasoningStrategy):
         - ``"extract"``: always use LLM extraction.
 
         Args:
-            schema: JSON Schema dict for the current stage.
+            ss: ``StageSchema`` for the current stage.
             stage: Current stage metadata dict.
 
         Returns:
@@ -5476,12 +5607,12 @@ class WizardReasoning(ReasoningStrategy):
             return True
 
         # Auto-detect: single required string field with no constraints
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
+        properties = ss.properties
+        required = ss.required_fields
 
         if len(required) == 1 and len(properties) == 1:
             field_name = required[0]
-            field_def = properties.get(field_name, {})
+            field_def = ss.get_property(field_name)
             if (
                 field_def.get("type") == "string"
                 and "enum" not in field_def
@@ -5893,12 +6024,12 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of property names whose defaults were applied.
         """
-        schema = stage.get("schema")
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set()
 
         applied: set[str] = set()
-        for prop_name, prop_def in schema.get("properties", {}).items():
+        for prop_name, prop_def in ss.properties.items():
             if "default" not in prop_def:
                 continue
             current = wizard_state.data.get(prop_name)
@@ -6146,9 +6277,9 @@ class WizardReasoning(ReasoningStrategy):
             return False
 
         # Get schema to check required fields
-        schema = stage.get("schema") or {}
-        properties = schema.get("properties", {})
-        required_fields = schema.get("required", [])
+        ss = StageSchema.from_stage(stage)
+        properties = ss.properties
+        required_fields = ss.required_fields
 
         # If no required fields specified, treat all properties as required
         if not required_fields:
@@ -6344,8 +6475,8 @@ class WizardReasoning(ReasoningStrategy):
         """A field has been provided if its value is not None.
 
         Centralises the "field presence" semantic used by the
-        ``has()`` condition helper and the ``can_satisfy`` confidence
-        gate.
+        ``has()`` condition helper.  The confidence gate uses the
+        equivalent logic via ``StageSchema.can_satisfy_required()``.
 
         Note: ``_can_auto_advance`` uses stricter logic — it
         additionally rejects empty strings because auto-advance
@@ -6360,8 +6491,9 @@ class WizardReasoning(ReasoningStrategy):
     ) -> set[str]:
         """Return required field names not yet present in wizard_state.data.
 
-        Uses ``_field_is_present`` semantics (value is not None) to match
-        the ``can_satisfy`` confidence gate check.
+        Delegates to :meth:`StageSchema.missing_required` so that
+        the "field presence" semantic is consistent with the confidence
+        gate's ``can_satisfy_required()`` check.
 
         Args:
             wizard_state: Current wizard state with accumulated data
@@ -6370,16 +6502,9 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of required field names whose values are absent or None
         """
-        schema = stage.get("schema")
-        if not schema:
-            return set()
-        required_fields = schema.get("required", [])
-        if not required_fields:
-            return set()
-        return {
-            f for f in required_fields
-            if not self._field_is_present(wizard_state.data.get(f))
-        }
+        return StageSchema.from_stage(stage).missing_required(
+            wizard_state.data,
+        )
 
     def _merge_extraction_result(
         self,
@@ -6403,8 +6528,8 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of keys that were newly added or changed
         """
-        schema = stage.get("schema")
-        schema_props = schema.get("properties", {}) if schema else {}
+        ss = StageSchema.from_stage(stage)
+        schema_props = ss.properties
 
         # Resolve merge filter: per-stage grounding override, then
         # fall back to wizard-level filter.
@@ -6464,7 +6589,6 @@ class WizardReasoning(ReasoningStrategy):
         extraction: Any,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6538,9 +6662,10 @@ class WizardReasoning(ReasoningStrategy):
         if not escalated.data:
             return set(), extraction
 
-        if schema:
+        ss_esc = StageSchema.from_stage(stage)
+        if ss_esc.exists:
             escalated.data = self._normalize_extracted_data(
-                escalated.data, schema,
+                escalated.data, ss_esc,
             )
         escalated_keys = self._merge_extraction_result(
             escalated.data, wizard_state, stage, user_message,
@@ -6553,7 +6678,6 @@ class WizardReasoning(ReasoningStrategy):
         self,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6568,17 +6692,16 @@ class WizardReasoning(ReasoningStrategy):
             Tuple of (new keys from retry, extraction result).
             Empty set and None if retry didn't produce data.
         """
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set(), None
 
-        missing = self._check_required_fields_missing(
-            wizard_state, stage,
-        )
+        missing = ss.missing_required(wizard_state.data)
         if not missing:
             return set(), None
 
         # Build focused schema with only the missing fields
-        properties = schema.get("properties", {})
+        properties = ss.properties
         focused_properties = {
             f: properties[f]
             for f in missing
@@ -6621,7 +6744,7 @@ class WizardReasoning(ReasoningStrategy):
                 continue
 
             retry_result.data = self._normalize_extracted_data(
-                retry_result.data, focused_schema,
+                retry_result.data, StageSchema.from_dict(focused_schema),
             )
             retry_keys = self._merge_extraction_result(
                 retry_result.data, wizard_state, stage, user_message,
@@ -6671,11 +6794,11 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Set of field names that were filled by recovery.
         """
-        schema = stage.get("schema")
-        if not schema:
+        ss = StageSchema.from_stage(stage)
+        if not ss.exists:
             return set()
-        properties = schema.get("properties", {})
-        required_fields = set(schema.get("required", []))
+        properties = ss.properties
+        required_fields = set(ss.required_fields)
 
         msg_lower = user_message.lower()
 
@@ -6776,7 +6899,6 @@ class WizardReasoning(ReasoningStrategy):
         extraction: Any,
         wizard_state: WizardState,
         stage: dict[str, Any],
-        schema: dict[str, Any] | None,
         user_message: str,
         llm: Any,
         manager: Any | None,
@@ -6793,7 +6915,6 @@ class WizardReasoning(ReasoningStrategy):
                 an escalated/retried result for the confidence gate).
             wizard_state: Wizard state (modified in-place during merges).
             stage: Current stage metadata.
-            schema: Stage schema (for field enumeration).
             user_message: Raw user message for grounding.
             llm: LLM provider.
             manager: Optional conversation manager (``None`` when called
@@ -6841,7 +6962,7 @@ class WizardReasoning(ReasoningStrategy):
             elif strategy == RECOVERY_SCOPE_ESCALATION:
                 escalated_keys, escalated_extraction = (
                     await self._run_scope_escalation(
-                        extraction, wizard_state, stage, schema,
+                        extraction, wizard_state, stage,
                         user_message, llm, manager,
                     )
                 )
@@ -6853,7 +6974,7 @@ class WizardReasoning(ReasoningStrategy):
                 if self._focused_retry_enabled:
                     retry_keys, retry_extraction = (
                         await self._run_focused_retry(
-                            wizard_state, stage, schema,
+                            wizard_state, stage,
                             user_message, llm, manager,
                         )
                     )
@@ -7165,8 +7286,7 @@ Be concise and helpful.
         if not missing_fields:
             return []
 
-        schema = stage.get("schema") or {}
-        properties = schema.get("properties", {})
+        properties = StageSchema.from_stage(stage).properties
 
         # Filter out derivable fields if configured
         effective_missing = set(missing_fields)
@@ -7247,12 +7367,9 @@ Be concise and helpful.
         # alone only affects group content, it doesn't replace the
         # generic issue list.
         if self._clarification_groups and wizard_state is not None:
-            schema = stage.get("schema") or {}
-            required = schema.get("required", [])
-            missing = {
-                f for f in required
-                if not self._field_is_present(wizard_state.data.get(f))
-            }
+            missing = StageSchema.from_stage(stage).missing_required(
+                wizard_state.data,
+            )
             if missing:
                 groups = self._build_clarification_groups(
                     missing, stage, wizard_state,

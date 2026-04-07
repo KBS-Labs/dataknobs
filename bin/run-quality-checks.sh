@@ -903,6 +903,9 @@ if [ "$PR_MODE" = "yes" ]; then
     # Generate quality summary and signature immediately after coverage.xml is ready.
     # These are the files CI validates and that must be committed — they must not be
     # delayed by the slower per-package coverage reporting that follows.
+    print_status "Computing per-package content hashes..."
+    PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
+
     print_status "Generating quality summary..."
     OVERALL_STATUS="PASS"
     if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
@@ -919,6 +922,7 @@ if [ "$PR_MODE" = "yes" ]; then
   "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
   "tested_packages": $TESTED_PACKAGES_JSON,
+  "package_hashes": $PACKAGE_HASHES_JSON,
   "checks": {
     "documentation": {
       "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),

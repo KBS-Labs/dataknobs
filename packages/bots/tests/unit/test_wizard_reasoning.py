@@ -6,6 +6,7 @@ import pytest
 
 from dataknobs_bots.reasoning.observability import TransitionRecord
 from dataknobs_bots.reasoning.wizard import (
+    StageSchema,
     WizardReasoning,
     WizardStageContext,
     WizardState,
@@ -341,12 +342,12 @@ class TestWizardReasoning:
         }
 
         # Missing required field
-        errors = wizard_reasoning._validate_data({}, schema)
+        errors = wizard_reasoning._validate_data({}, StageSchema.from_dict(schema))
         assert len(errors) == 1
         assert "name" in errors[0]
 
         # With required field
-        errors = wizard_reasoning._validate_data({"name": "test"}, schema)
+        errors = wizard_reasoning._validate_data({"name": "test"}, StageSchema.from_dict(schema))
         assert len(errors) == 0
 
     def test_validate_data_enum_constraint(
@@ -359,12 +360,12 @@ class TestWizardReasoning:
         }
 
         # Invalid enum value
-        errors = wizard_reasoning._validate_data({"choice": "invalid"}, schema)
+        errors = wizard_reasoning._validate_data({"choice": "invalid"}, StageSchema.from_dict(schema))
         assert len(errors) == 1
         assert "choice" in errors[0]
 
         # Valid enum value
-        errors = wizard_reasoning._validate_data({"choice": "a"}, schema)
+        errors = wizard_reasoning._validate_data({"choice": "a"}, StageSchema.from_dict(schema))
         assert len(errors) == 0
 
     def test_calculate_progress(

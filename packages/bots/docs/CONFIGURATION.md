@@ -2354,7 +2354,9 @@ When `mode: conversation` is set on a stage:
 1. **Extraction is skipped** -- The user is conversing, not filling a form. No structured
    data extraction runs, even if a schema is present.
 2. **Response is generated via LLM** -- The stage prompt becomes part of the system prompt
-   context, and `manager.complete()` generates a response directly.
+   context, and `manager.complete()` generates a response directly.  If the stage also
+   has a `response_template`, it is rendered once as the initial greeting (first turn
+   only); subsequent turns use LLM mode for natural conversation.
 3. **No clarification loop** -- Clarification attempts are never incremented. The user
    isn't failing to provide data; they're having a conversation.
 4. **Transitions evaluate normally** -- Transition conditions are checked each turn. Use
