@@ -1262,7 +1262,10 @@ class StubManager:
 
             from dataknobs_bots.testing import StubManager
 
-            manager = StubManager(system_prompt="You are helpful.")
+            manager = StubManager(
+                system_prompt="You are helpful.",
+                messages=[{"role": "user", "content": "Hello"}],
+            )
             result = await strategy.greet(
                 manager, None, initial_context={"user": "Alice"},
             )

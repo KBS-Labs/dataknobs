@@ -123,6 +123,11 @@ class HybridReasoning(ReasoningStrategy):
             store_trace=config.react_store_trace,
         )
 
+    @property
+    def grounded_strategy(self) -> GroundedReasoning:
+        """The grounded child strategy used for KB retrieval."""
+        return self._grounded
+
     # ------------------------------------------------------------------
     # Source / knowledge base management (delegated to grounded)
     # ------------------------------------------------------------------
@@ -326,9 +331,11 @@ class HybridReasoning(ReasoningStrategy):
     def _build_augmented_prompt(self, manager: Any, context: str) -> str:
         """Build system prompt with KB context via grounded's prompt builder.
 
-        Delegates to :meth:`GroundedReasoning.build_synthesis_system_prompt`
-        so that grounding instructions (citation format, parametric knowledge
+        When ``context`` is non-empty, delegates to
+        :meth:`GroundedReasoning.build_synthesis_system_prompt` so that
+        grounding instructions (citation format, parametric knowledge
         policy, custom instructions) from the grounded config are honoured.
+        When ``context`` is empty, returns the base system prompt unchanged.
         """
         base_prompt = manager.system_prompt or ""
         if not context.strip():
