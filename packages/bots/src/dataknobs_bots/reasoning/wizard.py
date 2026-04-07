@@ -4974,16 +4974,25 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response appropriate for current stage.
 
-        Supports two modes:
+        Supports three response paths:
 
-        1. **Template mode** (when stage has ``response_template``):
+        1. **Template mode** (structured stages with ``response_template``):
            Renders the template with Jinja2 using wizard state data,
-           bypassing the LLM entirely. If the stage also has
-           ``llm_assist: true`` and the user's last message is a
-           question, the LLM is invoked with a scoped assist prompt.
+           bypassing the LLM entirely.  Template is rendered on every
+           turn — the template IS the response (e.g. review summaries).
+           If the stage also has ``llm_assist: true`` and the user's
+           last message is a question, the LLM is invoked with a
+           scoped assist prompt.
 
-        2. **LLM mode** (default): Calls the LLM with stage context
-           injected into the system prompt, as before.
+        2. **Conversation greeting** (``mode: conversation`` with
+           ``response_template``): The template is rendered only on
+           the first turn (render count == 0) as a greeting.
+           Subsequent turns fall through to LLM mode so the bot
+           can actually converse.
+
+        3. **LLM mode** (default, or conversation stages after first
+           render): Calls the LLM with stage context injected into
+           the system prompt.
 
         Args:
             manager: ConversationManager instance

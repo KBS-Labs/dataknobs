@@ -83,6 +83,7 @@ Wizard stages support several response modes. Choose the **simplest mode** that 
 | 3 | **Template + context** | `response_template` + `context_generation` | Dynamic flavor (personalized remarks, creative content) |
 | 4 | **Template + LLM assist** | `response_template` + `llm_assist: true` | User may ask help questions during a stage |
 | 5 | **LLM-driven** | `prompt` only (no template) | Open-ended conversation stages (`mode: conversation`) |
+| 6 | **Conversation + greeting** | `mode: conversation` + `response_template` | Conversation stages with a deterministic greeting — template renders once (first turn), then LLM mode |
 
 **Template-first is strongly recommended.** LLM-driven data-collection stages are unreliable — the LLM may ignore stage instructions, ask for different fields, or hallucinate data. The `response_template` produces consistent, deterministic output while the `schema` handles extraction.
 
