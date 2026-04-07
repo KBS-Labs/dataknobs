@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release - 2026-04-06
 
+### dataknobs-bots [0.6.12]
+
+#### Fixed
+- fixed hybrid reasoning strategy design defects
+
+
+## Release - 2026-04-06
+
 ### dataknobs-xization [1.3.2]
 
 #### Added
