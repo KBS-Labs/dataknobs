@@ -137,24 +137,39 @@ jobs:
     name: Build Documentation
     needs: check-changes
     if: needs.check-changes.outputs.docs-changed == 'true'
-    
+
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       with:
         fetch-depth: 0  # Full history for git revision date plugin
-    
+
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
       with:
         python-version: '3.12'
-    
+
+    - name: Check for quality-relevant changes
+      id: hash-check
+      run: |
+        RESULT=$(python3 bin/package-hashes.py validate --json 2>/dev/null) || true
+        VALID=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))" 2>/dev/null || echo "False")
+        DIRTY=$(echo "$RESULT" | python3 -c "import sys, json; print(','.join(json.load(sys.stdin).get('dirty_packages', [])))" 2>/dev/null || echo "")
+        if [ "$VALID" = "True" ] && [ -z "$DIRTY" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "ℹ️ No quality-relevant source changes — skipping docs build"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Install uv
+      if: steps.hash-check.outputs.skip != 'true'
       uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57  # v8.0.0
       with:
         enable-cache: true
         version: "latest"
-    
+
     - name: Install dependencies
+      if: steps.hash-check.outputs.skip != 'true'
       run: |
         uv pip install --system mkdocs mkdocs-material mkdocstrings[python] \
           mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
@@ -168,14 +183,15 @@ jobs:
         uv pip install --system -e packages/utils
         uv pip install --system -e packages/xization
         uv pip install --system -e packages/bots
-    
+
     - name: Build documentation
+      if: steps.hash-check.outputs.skip != 'true'
       run: mkdocs build --strict
       env:
         NO_MKDOCS_2_WARNING: "1"
-    
+
     - name: Upload documentation artifacts
-      if: always()
+      if: always() && steps.hash-check.outputs.skip != 'true'
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       with:
         name: documentation-build
