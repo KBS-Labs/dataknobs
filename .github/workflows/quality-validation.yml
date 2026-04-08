@@ -34,6 +34,9 @@ jobs:
               - 'tests/**'
             docs:
               - 'docs/**'
+              - '!docs/changelog.md'
+              - '!docs/index.md'
+              - '!docs/installation.md'
               - 'mkdocs.yml'
               - 'packages/*/src/**/*.py'
               - '.github/workflows/docs.yml'
@@ -200,8 +203,23 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --all-packages
-    
+
+    - name: Check for quality-relevant changes
+      id: hash-check
+      run: |
+        RESULT=$(uv run python bin/package-hashes.py validate --json 2>/dev/null) || true
+        VALID=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))" 2>/dev/null || echo "False")
+        DIRTY=$(echo "$RESULT" | python3 -c "import sys, json; print(','.join(json.load(sys.stdin).get('dirty_packages', [])))" 2>/dev/null || echo "")
+        if [ "$VALID" = "True" ] && [ -z "$DIRTY" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "ℹ️ No quality-relevant changes detected — skipping unit tests"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "🔍 Dirty packages: $DIRTY"
+        fi
+
     - name: Run quick unit tests
+      if: steps.hash-check.outputs.skip != 'true'
       run: |
         echo "🚀 Running quick unit tests (no external services)..."
         bin/dk testquick
