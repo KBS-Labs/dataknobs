@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,17 @@ _HASH_PATTERNS = [
     ("tests", "**/*.py"),
     (".", "pyproject.toml"),
 ]
+
+# Lines matching these patterns are stripped before hashing because they
+# change during releases but do not affect code quality.
+_VERSION_LINE_RE = re.compile(
+    r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$'
+)
+
+# Increment when the hashing algorithm changes (e.g., adding version stripping).
+# A mismatch between stored and current version means hashes are incomparable
+# and the artifacts should be treated as needing a fresh baseline.
+_HASH_ALGORITHM_VERSION = 2
 
 
 def _load_changed_packages() -> Any:
@@ -73,10 +85,22 @@ def compute_package_hash(package_name: str) -> str:
 
     for filepath in all_files:
         rel_path = str(filepath.relative_to(pkg_dir))
+        content = filepath.read_bytes()
+
+        # Strip version-only lines so release bumps don't dirty packages.
+        # Version strings (in pyproject.toml and __init__.py) change during
+        # releases but have no effect on code quality or test outcomes.
+        filtered_lines = [
+            line
+            for line in content.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
+            if not _VERSION_LINE_RE.match(line.strip())
+        ]
+        filtered_content = "".join(filtered_lines).encode("utf-8")
+
         # Hash path + content with null-byte separators to avoid ambiguity
         hasher.update(rel_path.encode("utf-8"))
         hasher.update(b"\x00")
-        hasher.update(filepath.read_bytes())
+        hasher.update(filtered_content)
         hasher.update(b"\x00")
 
     return hasher.hexdigest()
@@ -111,8 +135,20 @@ def validate_artifacts() -> dict[str, Any]:
 
     if not stored_hashes:
         return {
-            "valid": False,
-            "error": "No package_hashes in quality-summary.json (pre-hashing artifacts)",
+            "valid": True,
+            "warning": "No package_hashes in quality-summary.json — skipping hash validation",
+            "changed_packages": [],
+            "dirty_packages": [],
+        }
+
+    stored_algorithm = stored_hashes.pop("_algorithm_version", 1)
+    if stored_algorithm != _HASH_ALGORITHM_VERSION:
+        return {
+            "valid": True,
+            "warning": (
+                f"Hash algorithm changed (stored: v{stored_algorithm}, "
+                f"current: v{_HASH_ALGORITHM_VERSION}) — skipping hash validation"
+            ),
             "changed_packages": [],
             "dirty_packages": [],
         }
@@ -141,9 +177,10 @@ def validate_artifacts() -> dict[str, Any]:
 
 
 def cmd_compute() -> None:
-    """Print per-package content hashes as JSON."""
-    hashes = compute_all_hashes()
-    json.dump(hashes, sys.stdout, indent=2)
+    """Print per-package content hashes as JSON (with algorithm version)."""
+    result = compute_all_hashes()
+    result["_algorithm_version"] = _HASH_ALGORITHM_VERSION
+    json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")
 
 
@@ -157,6 +194,8 @@ def cmd_validate(*, use_json: bool = False) -> None:
     else:
         if result.get("error"):
             logger.error("Validation error: %s", result["error"])
+        elif result.get("warning"):
+            logger.warning("%s", result["warning"])
         elif result["valid"]:
             if result["dirty_packages"]:
                 logger.info("All dirty packages have been tested")

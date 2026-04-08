@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-07T21:36:24Z",
+  "timestamp": "2026-04-08T01:14:24Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fixes-E40-41",
-  "git_commit": "67f5fe8e1b78e167d8c5371ee21f5e733c2d4d78",
+  "git_branch": "sbk/create-release",
+  "git_commit": "36e6e6ff29ca570ad1e8cc8ec20b84f677735707",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

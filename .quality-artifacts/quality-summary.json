@@ -1,21 +1,22 @@
 {
-  "timestamp": "2026-04-07T21:36:24Z",
+  "timestamp": "2026-04-08T01:14:24Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
   "package_hashes": {
-  "bots": "d56d6266c6569c7895c6e3f01e79c45b766dff5a8b848fce733975041a6fde62",
-  "common": "a307e536de77c0c92de0019e5d8c5cefbf603efd02807240ae5cc78d06f8fd8b",
-  "config": "c8223f250e45252b19645ffdea292284f747d2e4b4ae01b924be11b27becc52c",
-  "data": "5af030958c967577dba7238a93332c44404d125273ff189bbac16f19e083e0ad",
-  "fsm": "9a48bfa9db02de87e7b8a98f9bd20752780025eeaa2e89b0915b4f6f7635a69f",
-  "legacy": "6888d95f0131e217591ec28dbe07ef4376b861a80fd0c6f2fb17c5c17f29693c",
-  "llm": "502eba413ea1c87c7df56cc4ab8de2fcb985e7153049c322e7307e3dc35ec913",
-  "structures": "294c965146509a9f58eec78ceb4d7afae71c03f6b723aa3f2b98f9c294dc6551",
-  "utils": "fd0f2aa44c7332a5d38239012900ce727a80b117ff371d052415b5929b9af319",
-  "xization": "66b51c0e16c8337bdf69c72111a2d8a230b8aa6a5f915a55530b4b9bd186b99b"
+  "bots": "9fd58a2bf822cfba9c3025c5e450ea0eb1446b8b98d089c1b6284204cc27e23b",
+  "common": "fb00bc8d957003bd77738ce7b585ff6c46c23c08eedb6fd72d508e0c2ae160ba",
+  "config": "137a7200403640278b6df0be35056ba3f5660b3376cb55faeeba17a9411e91a4",
+  "data": "07c0a6dff4e733233c757b73b5618e50a31bed91812cd39410d42bf81084abac",
+  "fsm": "c0cc96e8b4f5bbab406ba309a24d29d2e6d7eb8086b9026e7ae7fe2ed7df15ef",
+  "legacy": "ef679a218257d36c97b8cadd7cbbd02d6b19e93fe1b1265673ca935d0486c807",
+  "llm": "759322c09c4dbad10287e22da00352adc339c925bb37366fbfb8816f813eeb9c",
+  "structures": "5e106eae0a35d71e6bdf7152fc38fdd8b0ef8ff61831b5217a98811d7ab6ff00",
+  "utils": "dcd73c558de0fd1199f4b37260e36bf9e85fbb309092211444c87a20a0611a13",
+  "xization": "b70004cf5fcde78dc56869d62f658b229aa987f7b705b94bed2cd33ca2522257",
+  "_algorithm_version": 2
 },
   "checks": {
     "documentation": {
