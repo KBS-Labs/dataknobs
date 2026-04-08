@@ -85,9 +85,13 @@ if [ -n "$HASH_RESULT" ]; then
     HASH_VALID=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))")
     HASH_ERROR=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', ''))")
 
+    HASH_WARNING=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('warning', ''))")
+
     if [ -n "$HASH_ERROR" ]; then
         print_fail "Hash validation error: $HASH_ERROR"
         VALIDATION_FAILED=1
+    elif [ -n "$HASH_WARNING" ]; then
+        print_info "$HASH_WARNING"
     elif [ "$HASH_VALID" = "True" ]; then
         DIRTY_COUNT=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('dirty_packages', [])))")
         if [ "$DIRTY_COUNT" = "0" ]; then
