@@ -89,8 +89,8 @@ class WizardRenderer:
             "suggestions": stage.get("suggestions", []),
             "completed": state.completed,
             "history": state.history,
-            "can_skip": False,
-            "can_go_back": False,
+            "can_skip": stage.get("can_skip", False),
+            "can_go_back": stage.get("can_go_back", True),
         }
 
     def build_context(
