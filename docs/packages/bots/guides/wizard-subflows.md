@@ -103,11 +103,10 @@ data_mapping:
   user_id: owner_id           # parent's "user_id" -> subflow's "owner_id"
 ```
 
-Internally, `WizardReasoning._apply_data_mapping()` iterates the mapping and copies each matched field:
+Internally, `_apply_data_mapping()` (in `wizard_subflows.py`) iterates the mapping and copies each matched field:
 
 ```python
 def _apply_data_mapping(
-    self,
     source_data: dict[str, Any],
     mapping: dict[str, str],
 ) -> dict[str, Any]:
@@ -135,9 +134,9 @@ result_mapping:
 The parent's original data (captured at push time in `SubflowContext.parent_data`) is restored first, then the mapped results are merged on top via `dict.update()`. This means the subflow cannot accidentally overwrite parent fields that are not listed in `result_mapping`.
 
 ```python
-# In _handle_subflow_pop:
+# In SubflowManager.handle_pop:
 parent_data = dict(subflow_context.parent_data)
-result_data = self._apply_result_mapping(
+result_data = _apply_result_mapping(
     wizard_state.data, subflow_context.result_mapping
 )
 parent_data.update(result_data)
@@ -297,7 +296,7 @@ Because `WizardState.subflow_stack` is a list, subflows can trigger other subflo
 # subflow_depth = 2
 ```
 
-On pop, the `_handle_subflow_pop()` method checks whether additional subflows remain on the stack. If so, it restores the next subflow's FSM as the active FSM rather than the main flow:
+On pop, `SubflowManager.handle_pop()` checks whether additional subflows remain on the stack. If so, it restores the next subflow's FSM as the active FSM rather than the main flow:
 
 ```python
 # Switch back to parent FSM (or next subflow if nested)
@@ -308,10 +307,10 @@ else:
     self._active_subflow_fsm = None
 ```
 
-The `_get_active_fsm()` method always returns the correct FSM for the current nesting level:
+`SubflowManager.get_active_fsm()` always returns the correct FSM for the current nesting level:
 
 ```python
-def _get_active_fsm(self) -> WizardFSM:
+def get_active_fsm(self) -> WizardFSM:
     return self._active_subflow_fsm if self._active_subflow_fsm else self._fsm
 ```
 
@@ -420,8 +419,8 @@ stages:
    - `result_mapping = {"kb_url": "knowledge_base_url", "document_count": "kb_doc_count"}`
 3. `data_mapping` copies `bot_type` as `source_type` into the subflow's initial data.
 4. Subflow runs through `ask_source` -> `ingest` -> `done`.
-5. At `done` (end stage), `_should_pop_subflow()` returns `True`.
-6. `_handle_subflow_pop()` restores parent data and applies `result_mapping`:
+5. At `done` (end stage), `SubflowManager.should_pop()` returns `True`.
+6. `SubflowManager.handle_pop()` restores parent data and applies `result_mapping`:
    - Parent data `{"bot_type": "qa"}` is restored.
    - Subflow's `kb_url` is mapped to `knowledge_base_url`.
    - Subflow's `document_count` is mapped to `kb_doc_count`.

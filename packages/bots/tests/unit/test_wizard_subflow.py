@@ -22,6 +22,10 @@ from dataknobs_bots.reasoning.wizard import (
     WizardReasoning,
     WizardState,
 )
+from dataknobs_bots.reasoning.wizard_subflows import (
+    _apply_data_mapping,
+    _apply_result_mapping,
+)
 
 
 class TestSubflowContext:
@@ -465,11 +469,7 @@ class TestDataMapping:
             "kb_type": "type",
         }
 
-        # Simulate _apply_data_mapping logic
-        result: dict = {}
-        for parent_field, subflow_field in mapping.items():
-            if parent_field in source_data:
-                result[subflow_field] = source_data[parent_field]
+        result = _apply_data_mapping(source_data, mapping)
 
         assert result == {"domain": "my_domain", "type": "faq"}
         assert "other_field" not in result
@@ -479,10 +479,7 @@ class TestDataMapping:
         source_data = {"field1": "value1"}
         mapping: dict = {}
 
-        result: dict = {}
-        for parent_field, subflow_field in mapping.items():
-            if parent_field in source_data:
-                result[subflow_field] = source_data[parent_field]
+        result = _apply_data_mapping(source_data, mapping)
 
         assert result == {}
 
@@ -491,10 +488,7 @@ class TestDataMapping:
         source_data = {"field1": "value1"}
         mapping = {"missing_field": "target"}
 
-        result: dict = {}
-        for parent_field, subflow_field in mapping.items():
-            if parent_field in source_data:
-                result[subflow_field] = source_data[parent_field]
+        result = _apply_data_mapping(source_data, mapping)
 
         assert result == {}
 
@@ -510,11 +504,7 @@ class TestDataMapping:
             "kb_resources": "resource_count",
         }
 
-        # Simulate _apply_result_mapping logic
-        result: dict = {}
-        for subflow_field, parent_field in mapping.items():
-            if subflow_field in source_data:
-                result[parent_field] = source_data[subflow_field]
+        result = _apply_result_mapping(source_data, mapping)
 
         assert result == {
             "knowledge_config": {"sources": ["doc1", "doc2"]},
@@ -534,10 +524,7 @@ class TestDataMapping:
             "none_field": "output_none",
         }
 
-        result: dict = {}
-        for subflow_field, parent_field in mapping.items():
-            if subflow_field in source_data:
-                result[parent_field] = source_data[subflow_field]
+        result = _apply_result_mapping(source_data, mapping)
 
         assert result["output_list"] == [1, 2, 3]
         assert result["output_dict"] == {"nested": "value"}
