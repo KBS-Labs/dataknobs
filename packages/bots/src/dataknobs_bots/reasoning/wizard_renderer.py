@@ -177,6 +177,13 @@ class WizardRenderer:
 
         try:
             text = template_str
+            logger.debug(
+                "Template render: stage='%s', template_len=%d, "
+                "mixed_mode=%s",
+                stage.get("name", "unknown"),
+                len(template_str),
+                mixed_mode,
+            )
 
             if mixed_mode:
                 from dataknobs_llm.template_utils import (

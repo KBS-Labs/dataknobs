@@ -117,8 +117,8 @@ All template sites use the canonical context from `WizardRenderer.build_context(
 | `suggestions` | `list[str]` | Author | Quick-reply suggestions |
 | `completed` | `bool` | Author | Whether wizard is complete |
 | `history` | `list[str]` | Author | Visited stage names |
-| `can_skip` | `bool` | Author | Whether stage can be skipped |
-| `can_go_back` | `bool` | Author | Whether back navigation is allowed |
+| `can_skip` | `bool` | Author | Whether stage can be skipped. Accurate in `context_template`, `stage_prompt`, and `metadata`; defaults to `False` in other template sites unless the caller passes `extra_context`. |
+| `can_go_back` | `bool` | Author | Whether back navigation is allowed. Same accuracy note as `can_skip`. |
 | `collected_data` | `dict` | User | Non-internal state data (excludes `_` keys) |
 | `all_data` | `dict` | User | All state data including internal and transient |
 | `raw_data` | `dict` | User | Persistent state data including internal keys |

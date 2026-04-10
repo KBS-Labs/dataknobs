@@ -2981,12 +2981,19 @@ class WizardReasoning(ReasoningStrategy):
 
         raw_prompt = active_fsm.get_stage_prompt()
         raw_suggestions = active_fsm.get_stage_suggestions()
+        nav_context = {
+            "can_skip": active_fsm.can_skip(),
+            "can_go_back": (
+                active_fsm.can_go_back() and len(state.history) > 1
+            ),
+        }
 
         return WizardAdvanceResult(
             state=state,
             stage_name=state.current_stage,
             stage_prompt=self._renderer.render(
-                raw_prompt, stage_meta, state, fallback=raw_prompt,
+                raw_prompt, stage_meta, state,
+                extra_context=nav_context, fallback=raw_prompt,
             ),
             stage_schema=StageSchema.from_stage(stage_meta).raw or None,
             suggestions=self._renderer.render_list(
@@ -3158,6 +3165,13 @@ class WizardReasoning(ReasoningStrategy):
                 active_fsm.get_stage_prompt(),
                 active_fsm.current_metadata,
                 state,
+                extra_context={
+                    "can_skip": active_fsm.can_skip(),
+                    "can_go_back": (
+                        active_fsm.can_go_back()
+                        and len(state.history) > 1
+                    ),
+                },
                 fallback=active_fsm.get_stage_prompt(),
             ),
             "suggestions": self._render_suggestions(
@@ -5699,17 +5713,17 @@ class WizardReasoning(ReasoningStrategy):
     ) -> str:
         """Render context using custom Jinja2 template.
 
-        Template variables available:
-        - stage_name: Current stage name
-        - stage_prompt: Stage's goal/prompt text
-        - help_text: Additional help text (may be empty string)
-        - suggestions: List of quick-reply suggestions
-        - collected_data: Data collected so far (no _ prefixed keys)
-        - raw_data: All wizard data including internal keys
-        - completed: Whether wizard is complete
-        - history: List of visited stage names
-        - can_skip: Whether current stage can be skipped
-        - can_go_back: Whether back navigation is allowed
+        Template variables available (canonical context from
+        ``WizardRenderer.build_context()``):
+        - stage_name, stage_label, stage_prompt, help_text, suggestions
+        - collected_data: Data collected so far (no ``_`` prefixed keys)
+        - all_data: All state data including internal and transient keys
+        - raw_data: Persistent wizard data including internal keys
+        - completed, history, can_skip, can_go_back
+        - bank (None), artifact (None)
+        - Top-level keys from ``state.data`` and ``state.transient``
+
+        See ``TEMPLATE_SECURITY.md`` for the full variable table.
 
         Args:
             stage: Current stage metadata

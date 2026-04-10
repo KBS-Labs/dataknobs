@@ -2178,15 +2178,18 @@ Available template variables:
 | Variable | Type | Description |
 |----------|------|-------------|
 | `stage_name` | string | Current stage name |
+| `stage_label` | string | Stage display label (falls back to stage name) |
 | `stage_prompt` | string | Stage's goal/prompt text |
 | `help_text` | string | Additional help text (empty string if none) |
 | `suggestions` | list | Quick-reply suggestions |
 | `collected_data` | dict | User-facing data (excludes `_` prefixed keys) |
-| `raw_data` | dict | All wizard data including internal keys |
+| `all_data` | dict | All state data including internal and transient keys |
+| `raw_data` | dict | Persistent wizard data including internal keys |
 | `completed` | bool | Whether wizard is complete |
 | `history` | list | List of visited stage names |
 | `can_skip` | bool | Whether current stage can be skipped |
 | `can_go_back` | bool | Whether back navigation is allowed |
+| *(top-level keys)* | varies | Each key in `state.data` and `state.transient` is available as a top-level variable (e.g. `{{ topic }}`) |
 
 The `context_template` supports two syntaxes:
 - **Jinja2** (primary): `{{ var }}`, `{% if %}`, `{% for %}`, `{{ var | filter }}`
