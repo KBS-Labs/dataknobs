@@ -336,10 +336,16 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Try ' Bot'"]
 
-    def test_internal_keys_excluded(
+    def test_internal_keys_available(
         self, wizard_reasoning: WizardReasoning
     ) -> None:
-        """Internal keys (starting with _) are not available in suggestions."""
+        """All state keys including _-prefixed are available in suggestions.
+
+        The consolidated WizardRenderer uses the canonical context for all
+        rendering sites — matching _render_response_template behavior where
+        ALL state data (including _-prefixed transform outputs) is available
+        as top-level template variables.
+        """
         state = WizardState(
             current_stage="welcome",
             data={"subject": "Math", "_internal": "hidden"},
@@ -347,8 +353,7 @@ class TestRenderSuggestions:
         suggestions = ["{{ subject }} ({{ _internal }})"]
 
         result = wizard_reasoning._render_suggestions(suggestions, state)
-        # _internal should render as empty
-        assert result == ["Math ()"]
+        assert result == ["Math (hidden)"]
 
     def test_block_tag_if_else_rendered(
         self, wizard_reasoning: WizardReasoning

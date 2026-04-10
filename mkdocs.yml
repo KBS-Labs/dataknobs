@@ -222,6 +222,7 @@ nav:
           - packages/bots/guides/config-versioning.md
           - packages/bots/guides/config-toolkit.md
           - packages/bots/guides/wizard-config-builder.md
+          - packages/bots/guides/TEMPLATE_SECURITY.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:

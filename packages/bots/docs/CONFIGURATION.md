@@ -1511,7 +1511,7 @@ stages:
 | Property | Type | Description |
 |----------|------|-------------|
 | `name` | string | Unique stage identifier (required) |
-| `prompt` | string | User-facing message for this stage (required) |
+| `prompt` | string | User-facing message for this stage (required). Supports Jinja2 templates (e.g. `{{ topic \| default('your topic') }}`); rendered with state data before returning in `WizardAdvanceResult`. |
 | `is_start` | bool | Mark as wizard entry point |
 | `is_end` | bool | Mark as wizard completion point |
 | `schema` | object | JSON Schema for data validation |
@@ -2178,19 +2178,24 @@ Available template variables:
 | Variable | Type | Description |
 |----------|------|-------------|
 | `stage_name` | string | Current stage name |
+| `stage_label` | string | Stage display label (falls back to stage name) |
 | `stage_prompt` | string | Stage's goal/prompt text |
 | `help_text` | string | Additional help text (empty string if none) |
 | `suggestions` | list | Quick-reply suggestions |
 | `collected_data` | dict | User-facing data (excludes `_` prefixed keys) |
-| `raw_data` | dict | All wizard data including internal keys |
+| `all_data` | dict | All state data including internal and transient keys |
+| `raw_data` | dict | Persistent wizard data including internal keys |
 | `completed` | bool | Whether wizard is complete |
 | `history` | list | List of visited stage names |
 | `can_skip` | bool | Whether current stage can be skipped |
 | `can_go_back` | bool | Whether back navigation is allowed |
+| *(top-level keys)* | varies | Each key in `state.data` and `state.transient` is available as a top-level variable (e.g. `{{ topic }}`) |
 
-Special syntax:
-- `((content))` - Conditional section, removed if any variable inside is empty/falsy
-- Standard Jinja2: `{% if %}`, `{% for %}`, `{{ var | filter }}`
+The `context_template` supports two syntaxes:
+- **Jinja2** (primary): `{{ var }}`, `{% if %}`, `{% for %}`, `{{ var | filter }}`
+- **`(( ))` conditionals** (preprocessing): `((content with {{var}}))` — section removed if all variables inside are empty/missing; rendered if any variable has a value
+
+**Security note:** The `(( ))` preprocessor only receives author-controlled values (stage metadata, navigation flags). User-entered state data is only available as Jinja2 context variables. Use `{% if %}` for conditionals on user data, not `(( ))`. See [TEMPLATE_SECURITY.md](TEMPLATE_SECURITY.md) for details.
 
 If no `context_template` is specified, the wizard uses a default format that includes
 stage info, collected data, and navigation hints.

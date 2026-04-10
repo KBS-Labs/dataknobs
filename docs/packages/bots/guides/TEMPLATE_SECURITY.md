@@ -1,0 +1,1 @@
+../../../../packages/bots/docs/TEMPLATE_SECURITY.md

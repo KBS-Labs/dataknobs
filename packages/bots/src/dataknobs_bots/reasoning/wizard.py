@@ -1194,11 +1194,12 @@ class WizardReasoning(ReasoningStrategy):
         # by generate() after response to delegate to _execute_restart.
         self._tool_restart_requested: bool = False
 
-        # Sandboxed Jinja2 environment — reused across all template
-        # renders to avoid recreating per call.
-        from dataknobs_bots.utils.template_env import create_template_env
+        # Consolidated rendering layer — routes all template rendering
+        # through a single class with consistent context, sandboxing,
+        # and error handling.
+        from dataknobs_bots.reasoning.wizard_renderer import WizardRenderer
 
-        self._jinja_env = create_template_env()
+        self._renderer = WizardRenderer()
 
         # Per-turn context delivered to transforms via the context factory.
         # Set at the start of each FSM step, cleared after.
@@ -2978,12 +2979,26 @@ class WizardReasoning(ReasoningStrategy):
         stage_meta = active_fsm.current_metadata
         metadata = self._build_wizard_metadata(state)
 
+        raw_prompt = active_fsm.get_stage_prompt()
+        raw_suggestions = active_fsm.get_stage_suggestions()
+        nav_context = {
+            "can_skip": active_fsm.can_skip(),
+            "can_go_back": (
+                active_fsm.can_go_back() and len(state.history) > 1
+            ),
+        }
+
         return WizardAdvanceResult(
             state=state,
             stage_name=state.current_stage,
-            stage_prompt=active_fsm.get_stage_prompt(),
+            stage_prompt=self._renderer.render(
+                raw_prompt, stage_meta, state,
+                extra_context=nav_context, fallback=raw_prompt,
+            ),
             stage_schema=StageSchema.from_stage(stage_meta).raw or None,
-            suggestions=active_fsm.get_stage_suggestions(),
+            suggestions=self._renderer.render_list(
+                raw_suggestions, stage_meta, state,
+            ),
             can_skip=active_fsm.can_skip(),
             can_go_back=active_fsm.can_go_back() and len(state.history) > 1,
             completed=state.completed,
@@ -3146,7 +3161,19 @@ class WizardReasoning(ReasoningStrategy):
             "history": state.history,
             "can_skip": active_fsm.can_skip(),
             "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
-            "stage_prompt": active_fsm.get_stage_prompt(),
+            "stage_prompt": self._renderer.render(
+                active_fsm.get_stage_prompt(),
+                active_fsm.current_metadata,
+                state,
+                extra_context={
+                    "can_skip": active_fsm.can_skip(),
+                    "can_go_back": (
+                        active_fsm.can_go_back()
+                        and len(state.history) > 1
+                    ),
+                },
+                fallback=active_fsm.get_stage_prompt(),
+            ),
             "suggestions": self._render_suggestions(
                 active_fsm.get_stage_suggestions(), state
             ),
@@ -5131,9 +5158,8 @@ class WizardReasoning(ReasoningStrategy):
     ) -> str:
         """Render a stage response template with wizard state data.
 
-        Uses Jinja2 to render the template with collected wizard data,
-        stage metadata, and optional extra context variables (e.g. from
-        LLM context generation).
+        Delegates to :attr:`_renderer` with bank/artifact injected via
+        *extra_context*.
 
         Args:
             template_str: Jinja2 template string
@@ -5147,52 +5173,16 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Rendered response string
         """
-        template = self._jinja_env.from_string(template_str)
-
-        # Non-internal keys for backward-compatible "collected_data" dict
-        collected_data = {
-            k: v for k, v in state.data.items() if not k.startswith("_")
-        }
-
-        # Build template context — ALL state data is available as
-        # top-level variables so templates can reference both user-facing
-        # fields (topic, difficulty) and transform outputs (_questions,
-        # _bank_questions).  Both persistent (state.data) and transient
-        # (state.transient) keys are included so templates see everything
-        # even after partition.
-        all_data = {**state.data, **state.transient}
-        context: dict[str, Any] = {
-            # Stage metadata
-            "stage_name": stage.get("name", "unknown"),
-            "stage_label": stage.get("label", stage.get("name", "")),
-            # All data as top-level variables (including _-prefixed)
-            **all_data,
-            # Filtered dict (backward compatibility)
-            "collected_data": collected_data,
-            # Full data dict reference
-            "all_data": all_data,
-            # Wizard progress
-            "history": state.history,
-            "completed": state.completed,
-            # MemoryBank accessor for template expressions
+        merged_extra: dict[str, Any] = {
             "bank": self._make_bank_accessor(),
-            # ArtifactBank (None if not configured)
             "artifact": self._artifact,
         }
-
-        # Merge extra context (e.g. LLM-generated variables)
         if extra_context:
-            context.update(extra_context)
+            merged_extra.update(extra_context)
 
-        logger.debug(
-            "Template render: stage='%s', template_len=%d, "
-            "context_keys=%s",
-            stage.get("name", "unknown"),
-            len(template_str),
-            list(context.keys()),
+        return self._renderer.render(
+            template_str, stage, state, extra_context=merged_extra,
         )
-
-        return template.render(**context)
 
     async def _generate_context_variables(
         self,
@@ -5241,8 +5231,8 @@ class WizardReasoning(ReasoningStrategy):
 
         # Render the prompt template with current state data
         try:
-            rendered_prompt = self._jinja_env.from_string(prompt_template).render(
-                **{k: v for k, v in state.data.items() if not k.startswith("_")}
+            rendered_prompt = self._renderer.render(
+                prompt_template, stage, state,
             )
         except Exception as e:
             logger.warning(
@@ -5290,11 +5280,7 @@ class WizardReasoning(ReasoningStrategy):
     ) -> list[str]:
         """Render suggestion strings through Jinja2 with wizard state data.
 
-        Allows suggestions to reference collected data, e.g.
-        ``"Call it '{{ subject }} Ace'"`` becomes ``"Call it 'Chemistry Ace'"``.
-
-        Plain suggestions (no ``{{ }}``) pass through unchanged for
-        efficiency.
+        Delegates to :meth:`WizardRenderer.render_list`.
 
         Args:
             suggestions: List of suggestion template strings
@@ -5303,27 +5289,10 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             List of rendered suggestion strings
         """
-        if not suggestions:
-            return suggestions
-
-        # Quick check: if no templates, return as-is
-        if not any("{%" in s or "{{" in s for s in suggestions):
-            return suggestions
-
-        collected_data = {
-            k: v for k, v in state.data.items() if not k.startswith("_")
-        }
-
-        rendered = []
-        for suggestion in suggestions:
-            if "{%" not in suggestion and "{{" not in suggestion:
-                rendered.append(suggestion)
-                continue
-            try:
-                rendered.append(self._jinja_env.from_string(suggestion).render(**collected_data))
-            except Exception:
-                rendered.append(suggestion)
-        return rendered
+        active_fsm = self._get_active_fsm()
+        return self._renderer.render_list(
+            suggestions, active_fsm.current_metadata, state,
+        )
 
     @staticmethod
     def _create_template_response(content: str) -> Any:
@@ -5744,17 +5713,17 @@ class WizardReasoning(ReasoningStrategy):
     ) -> str:
         """Render context using custom Jinja2 template.
 
-        Template variables available:
-        - stage_name: Current stage name
-        - stage_prompt: Stage's goal/prompt text
-        - help_text: Additional help text (may be empty string)
-        - suggestions: List of quick-reply suggestions
-        - collected_data: Data collected so far (no _ prefixed keys)
-        - raw_data: All wizard data including internal keys
-        - completed: Whether wizard is complete
-        - history: List of visited stage names
-        - can_skip: Whether current stage can be skipped
-        - can_go_back: Whether back navigation is allowed
+        Template variables available (canonical context from
+        ``WizardRenderer.build_context()``):
+        - stage_name, stage_label, stage_prompt, help_text, suggestions
+        - collected_data: Data collected so far (no ``_`` prefixed keys)
+        - all_data: All state data including internal and transient keys
+        - raw_data: Persistent wizard data including internal keys
+        - completed, history, can_skip, can_go_back
+        - bank (None), artifact (None)
+        - Top-level keys from ``state.data`` and ``state.transient``
+
+        See ``TEMPLATE_SECURITY.md`` for the full variable table.
 
         Args:
             stage: Current stage metadata
@@ -5763,29 +5732,20 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Rendered context string
         """
-        from dataknobs_llm.prompts import render_template
-
-        # Filter out internal keys for display
-        collected_data = {
-            k: v for k, v in state.data.items() if not k.startswith("_")
-        }
-
-        params = {
-            "stage_name": stage.get("name", "unknown"),
-            "stage_prompt": stage.get("prompt", ""),
-            "help_text": stage.get("help_text") or "",
-            "suggestions": stage.get("suggestions", []),
-            "collected_data": collected_data,
-            "raw_data": state.data,
-            "completed": state.completed,
-            "history": state.history,
+        extra_context = {
             "can_skip": self._fsm.can_skip() if self._fsm else False,
             "can_go_back": (
                 self._fsm.can_go_back() if self._fsm else True
             ) and len(state.history) > 1,
         }
 
-        return render_template(self._context_template, params)
+        return self._renderer.render(
+            self._context_template,
+            stage,
+            state,
+            extra_context=extra_context,
+            mixed_mode=True,
+        )
 
     def _build_default_context(
         self, stage: dict[str, Any], state: WizardState
@@ -6130,9 +6090,7 @@ class WizardReasoning(ReasoningStrategy):
         if not transitions:
             return
 
-        collected_data = {
-            k: v for k, v in state.data.items() if not k.startswith("_")
-        }
+        collected_data = self._renderer.get_collected_data(state)
 
         for transition in transitions:
             derive = transition.get("derive")
@@ -6146,7 +6104,9 @@ class WizardReasoning(ReasoningStrategy):
 
                 if isinstance(value, str) and "{{" in value:
                     try:
-                        resolved = self._jinja_env.from_string(value).render(**collected_data)
+                        resolved = self._renderer.render_simple(
+                            value, collected_data,
+                        )
                         # Skip empty renders (template variable was undefined)
                         if resolved.strip():
                             state.data[key] = resolved.strip()
@@ -7376,24 +7336,14 @@ Be concise and helpful.
                 )
                 if groups:
                     if self._clarification_template:
-                        try:
-                            from jinja2 import TemplateError
-
-                            template = self._jinja_env.from_string(
-                                self._clarification_template,
-                            )
-                            issue_list = template.render(
-                                field_groups=groups,
-                            )
-                        except TemplateError:
-                            logger.warning(
-                                "Clarification template rendering "
-                                "failed — falling back to default",
-                                exc_info=True,
-                            )
-                            issue_list = "\n".join(
-                                f"- {g['question']}" for g in groups
-                            )
+                        default_list = "\n".join(
+                            f"- {g['question']}" for g in groups
+                        )
+                        issue_list = self._renderer.render_simple(
+                            self._clarification_template,
+                            {"field_groups": groups},
+                            fallback=default_list,
+                        )
                     else:
                         issue_list = "\n".join(
                             f"- {g['question']}" for g in groups
