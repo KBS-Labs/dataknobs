@@ -545,7 +545,7 @@ class TestDataMapping:
 
 
 class TestShouldPushSubflowGuard:
-    """Tests for _should_push_subflow guard against duplicate pushes.
+    """Tests for SubflowManager.should_push guard against duplicate pushes.
 
     This tests the fix for the subflow double-push bug where a subflow would
     be pushed twice when wizard state is restored after bot recreation
@@ -627,7 +627,7 @@ class TestShouldPushSubflowGuard:
     def test_returns_none_when_already_in_subflow(
         self, wizard_with_subflow: "WizardReasoning"
     ) -> None:
-        """Test that _should_push_subflow returns None when already in a subflow.
+        """Test that SubflowManager.should_push returns None when already in a subflow.
 
         This is the key guard that prevents duplicate subflow pushes after
         wizard state restoration (e.g., when bot is recreated due to cache
@@ -653,7 +653,7 @@ class TestShouldPushSubflowGuard:
         assert wizard_state.is_in_subflow is True
 
         # The guard should return None - no new subflow should be pushed
-        result = wizard_with_subflow._should_push_subflow(
+        result = wizard_with_subflow._subflows.should_push(
             wizard_state, "user message"
         )
 
@@ -662,7 +662,7 @@ class TestShouldPushSubflowGuard:
     def test_returns_config_when_not_in_subflow_and_condition_matches(
         self, wizard_with_subflow: "WizardReasoning"
     ) -> None:
-        """Test that _should_push_subflow returns config when conditions are met.
+        """Test that SubflowManager.should_push returns config when conditions are met.
 
         When not already in a subflow and the condition matches, the method
         should return the subflow configuration.
@@ -685,7 +685,7 @@ class TestShouldPushSubflowGuard:
         assert wizard_state.is_in_subflow is False
 
         # Should return the subflow config since condition matches
-        result = wizard_with_subflow._should_push_subflow(
+        result = wizard_with_subflow._subflows.should_push(
             wizard_state, "user message"
         )
 
@@ -696,7 +696,7 @@ class TestShouldPushSubflowGuard:
     def test_returns_none_when_condition_does_not_match(
         self, wizard_with_subflow: "WizardReasoning"
     ) -> None:
-        """Test that _should_push_subflow returns None when condition fails.
+        """Test that SubflowManager.should_push returns None when condition fails.
 
         When the subflow transition condition doesn't match, the method
         should return None even if not in a subflow.
@@ -717,7 +717,7 @@ class TestShouldPushSubflowGuard:
         assert wizard_state.is_in_subflow is False
 
         # Should return None since condition doesn't match
-        result = wizard_with_subflow._should_push_subflow(
+        result = wizard_with_subflow._subflows.should_push(
             wizard_state, "user message"
         )
 
@@ -732,7 +732,7 @@ class TestShouldPushSubflowGuard:
         1. User enters subflow (wizard_state.is_in_subflow = True)
         2. Bot is recreated (e.g., cache TTL expires)
         3. State is restored from conversation metadata
-        4. _should_push_subflow is called again with restored state
+        4. SubflowManager.should_push is called again with restored state
         5. Guard should prevent pushing the same subflow again
         """
         # Simulate restored state after bot recreation
@@ -764,7 +764,7 @@ class TestShouldPushSubflowGuard:
 
         # Even if called again (e.g., on next message after bot recreation),
         # the guard should prevent a duplicate push
-        result = wizard_with_subflow._should_push_subflow(
+        result = wizard_with_subflow._subflows.should_push(
             restored_state, "continue working"
         )
 
