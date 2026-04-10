@@ -43,6 +43,19 @@ class SubflowManager:
         self._evaluate_condition = evaluate_condition
         self._active_subflow_fsm: WizardFSM | None = None
 
+    def set_evaluate_condition(
+        self,
+        evaluate_condition: Callable[[str, dict[str, Any]], bool],
+    ) -> None:
+        """Replace the condition evaluator.
+
+        Used to resolve the circular dependency between SubflowManager
+        and WizardResponder: SubflowManager is created first with a
+        placeholder, then the real evaluator is injected once
+        WizardResponder is constructed.
+        """
+        self._evaluate_condition = evaluate_condition
+
     # -- Active FSM access ---------------------------------------------------
 
     def get_active_fsm(self) -> WizardFSM:

@@ -452,7 +452,7 @@ stages:
 
         try:
             reasoning = WizardReasoning.from_config({"wizard_config": str(config_path)})
-            assert reasoning._auto_advance_filled_stages is True
+            assert reasoning._response._auto_advance_filled_stages is True
         finally:
             config_path.unlink()
 

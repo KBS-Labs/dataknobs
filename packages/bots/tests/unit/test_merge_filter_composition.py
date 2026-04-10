@@ -382,7 +382,7 @@ class TestCompositionInit:
             BASIC_WIZARD_CONFIG,
             ConfigurableExtractor(results=[]),
         )
-        assert isinstance(reasoning._merge_filter, SchemaGroundingFilter)
+        assert isinstance(reasoning._extraction._merge_filter, SchemaGroundingFilter)
 
     def test_custom_only_grounding_disabled(self) -> None:
         config = {
@@ -394,7 +394,7 @@ class TestCompositionInit:
             config, ConfigurableExtractor(results=[]),
             merge_filter=custom,
         )
-        assert reasoning._merge_filter is custom
+        assert reasoning._extraction._merge_filter is custom
 
     def test_grounding_plus_custom_creates_composite(self) -> None:
         custom = _AcceptFilter()
@@ -403,7 +403,7 @@ class TestCompositionInit:
             ConfigurableExtractor(results=[]),
             merge_filter=custom,
         )
-        assert isinstance(reasoning._merge_filter, CompositeMergeFilter)
+        assert isinstance(reasoning._extraction._merge_filter, CompositeMergeFilter)
 
     def test_skip_builtin_grounding_with_custom(self) -> None:
         custom = _AcceptFilter()
@@ -413,7 +413,7 @@ class TestCompositionInit:
             merge_filter=custom,
             skip_builtin_grounding=True,
         )
-        assert reasoning._merge_filter is custom
+        assert reasoning._extraction._merge_filter is custom
 
     def test_skip_builtin_grounding_without_custom(self) -> None:
         """skip_builtin_grounding with no custom filter → no filter."""
@@ -422,7 +422,7 @@ class TestCompositionInit:
             ConfigurableExtractor(results=[]),
             skip_builtin_grounding=True,
         )
-        assert reasoning._merge_filter is None
+        assert reasoning._extraction._merge_filter is None
 
     def test_no_grounding_no_custom(self) -> None:
         config = {
@@ -432,7 +432,7 @@ class TestCompositionInit:
         reasoning = _build_reasoning(
             config, ConfigurableExtractor(results=[]),
         )
-        assert reasoning._merge_filter is None
+        assert reasoning._extraction._merge_filter is None
 
 
 # ---------------------------------------------------------------------------
@@ -621,8 +621,8 @@ class TestBuildClarificationGroups:
         # No groups configured → _build_clarification_groups returns
         # ungrouped individual questions, but the main method should
         # not even enter the grouping path without configured groups.
-        assert reasoning._clarification_groups == []
-        assert reasoning._clarification_exclude_derivable is True
+        assert reasoning._response._clarification_groups == []
+        assert reasoning._response._clarification_exclude_derivable is True
 
 
 class TestClarificationTemplate:
@@ -680,9 +680,9 @@ class TestFromConfigClarification:
         }
         config: dict[str, Any] = {"wizard_config": wizard_config}
         reasoning = WizardReasoning.from_config(config)
-        assert len(reasoning._clarification_groups) == 1
-        assert reasoning._clarification_exclude_derivable is True
-        assert reasoning._clarification_template == (
+        assert len(reasoning._response._clarification_groups) == 1
+        assert reasoning._response._clarification_exclude_derivable is True
+        assert reasoning._response._clarification_template == (
             "Custom: {{ field_groups }}"
         )
 
@@ -691,9 +691,9 @@ class TestFromConfigClarification:
             "wizard_config": BASIC_WIZARD_CONFIG,
         }
         reasoning = WizardReasoning.from_config(config)
-        assert reasoning._clarification_groups == []
-        assert reasoning._clarification_exclude_derivable is False
-        assert reasoning._clarification_template is None
+        assert reasoning._response._clarification_groups == []
+        assert reasoning._response._clarification_exclude_derivable is False
+        assert reasoning._response._clarification_template is None
 
 
 class TestFromConfigSkipBuiltinGrounding:
@@ -709,16 +709,16 @@ class TestFromConfigSkipBuiltinGrounding:
         }
         config: dict[str, Any] = {"wizard_config": wizard_config}
         reasoning = WizardReasoning.from_config(config)
-        # No custom filter + skip_builtin_grounding → no filter
-        assert reasoning._merge_filter is None
-        assert reasoning._skip_builtin_grounding is True
+        # No custom filter + skip_builtin_grounding → no filter at all
+        assert reasoning._extraction._merge_filter is None
 
     def test_from_config_skip_builtin_grounding_default_false(self) -> None:
         config: dict[str, Any] = {
             "wizard_config": BASIC_WIZARD_CONFIG,
         }
         reasoning = WizardReasoning.from_config(config)
-        assert reasoning._skip_builtin_grounding is False
+        # Default: grounding enabled → grounding filter is present
+        assert reasoning._extraction._merge_filter is not None
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ from .task_injection import (
     TaskInjector,
 )
 from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
+from .wizard_response import StageResponseResult
 from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
@@ -83,6 +84,7 @@ __all__ = [
     "WizardReasoning",
     "WizardStageContext",
     "WizardState",
+    "StageResponseResult",
     "WizardFSM",
     "WizardHooks",
     "WizardConfigLoader",

@@ -374,9 +374,9 @@ class TestScopeEscalationConfig:
             wizard_config=config,
         ) as harness:
             strategy = harness.bot.reasoning_strategy
-            assert strategy._scope_escalation_enabled is True
-            assert strategy._scope_escalation_scope == "recent_messages"
-            assert strategy._recent_messages_count == 5
+            assert strategy._extraction._scope_escalation_enabled is True
+            assert strategy._extraction._scope_escalation_scope == "recent_messages"
+            assert strategy._extraction._recent_messages_count == 5
 
     @pytest.mark.asyncio
     async def test_config_defaults(self) -> None:
@@ -385,9 +385,9 @@ class TestScopeEscalationConfig:
             wizard_config=_wizard_config(),
         ) as harness:
             strategy = harness.bot.reasoning_strategy
-            assert strategy._scope_escalation_enabled is False
-            assert strategy._scope_escalation_scope == "wizard_session"
-            assert strategy._recent_messages_count == 3
+            assert strategy._extraction._scope_escalation_enabled is False
+            assert strategy._extraction._scope_escalation_scope == "wizard_session"
+            assert strategy._extraction._recent_messages_count == 3
 
 
 # ---------------------------------------------------------------------------

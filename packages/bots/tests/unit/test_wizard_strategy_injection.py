@@ -196,9 +196,10 @@ class TestStrategyStageResponse:
         state = WizardState(
             current_stage=stage.get("name", "test"), data={},
         )
-        return await reasoning._strategy_stage_response(
+        response, *_ = await reasoning._strategy_stage_response(
             strategy, manager, "Test prompt", stage, state, tools,
         )
+        return response
 
     @pytest.mark.asyncio
     async def test_react_via_registry_executes_tool(
@@ -253,7 +254,7 @@ class TestStrategyStageResponse:
         # Dispatch with no tools — strategy still runs, ReAct falls
         # back to simple completion internally
         state = WizardState(current_stage="greet", data={})
-        response = await reasoning._strategy_stage_response(
+        response, *_ = await reasoning._strategy_stage_response(
             strategy, manager, "Test prompt", stage, state, tools=[],
         )
         assert response.content == "Hi there"

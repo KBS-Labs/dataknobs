@@ -250,9 +250,9 @@ stages:
 
         try:
             reasoning = WizardReasoning.from_config({"wizard_config": str(config_path)})
-            assert reasoning._context_template is not None
-            assert "{{stage_name}}" in reasoning._context_template
-            assert "{{stage_prompt}}" in reasoning._context_template
+            assert reasoning._response._context_template is not None
+            assert "{{stage_name}}" in reasoning._response._context_template
+            assert "{{stage_prompt}}" in reasoning._response._context_template
         finally:
             config_path.unlink()
 
@@ -344,7 +344,7 @@ class TestBackwardCompatibility:
         """Wizards without context_template use original default format."""
         reasoning = WizardReasoning(wizard_fsm=simple_fsm)
 
-        assert reasoning._context_template is None
+        assert reasoning._response._context_template is None
 
         stage = {"name": "test", "prompt": "Test prompt", "suggestions": ["a", "b"]}
         state = WizardState(current_stage="test", data={"field": "value"})
