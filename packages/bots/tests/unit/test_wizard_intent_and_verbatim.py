@@ -16,6 +16,7 @@ import pytest_asyncio
 from dataknobs_bots.reasoning.wizard import StageSchema
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
+from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
 
@@ -66,7 +67,7 @@ class TestNeedsLlmExtraction:
             "required": ["instruction"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_multi_field_requires_llm(self) -> None:
         """Multiple fields → LLM extraction needed."""
@@ -80,7 +81,7 @@ class TestNeedsLlmExtraction:
             "required": ["name", "amount"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_enum_requires_llm(self) -> None:
         """Single string field with enum constraint → LLM extraction."""
@@ -96,7 +97,7 @@ class TestNeedsLlmExtraction:
             "required": ["difficulty"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_pattern_requires_llm(self) -> None:
         """Single string field with pattern constraint → LLM extraction."""
@@ -109,7 +110,7 @@ class TestNeedsLlmExtraction:
             "required": ["email"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_field_with_format_requires_llm(self) -> None:
         """Single string field with format constraint → LLM extraction."""
@@ -122,7 +123,7 @@ class TestNeedsLlmExtraction:
             "required": ["date"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_single_integer_field_requires_llm(self) -> None:
         """Single non-string field → LLM extraction."""
@@ -133,7 +134,7 @@ class TestNeedsLlmExtraction:
             "required": ["count"],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_capture_mode_verbatim_overrides_auto(self) -> None:
         """capture_mode='verbatim' forces verbatim even for complex schemas."""
@@ -150,7 +151,7 @@ class TestNeedsLlmExtraction:
             "name": "test",
             "collection_config": {"capture_mode": "verbatim"},
         }
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_capture_mode_extract_overrides_auto(self) -> None:
         """capture_mode='extract' forces LLM even for trivial schemas."""
@@ -164,7 +165,7 @@ class TestNeedsLlmExtraction:
             "name": "test",
             "collection_config": {"capture_mode": "extract"},
         }
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_capture_mode_auto_is_default(self) -> None:
         """Without capture_mode config, auto-detection is used."""
@@ -176,7 +177,7 @@ class TestNeedsLlmExtraction:
         }
         # No collection_config at all
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is False
 
     def test_optional_field_only_requires_llm(self) -> None:
         """Single property with no required fields → LLM extraction."""
@@ -187,7 +188,7 @@ class TestNeedsLlmExtraction:
             "required": [],
         }
         stage: dict[str, Any] = {"name": "test"}
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
     def test_extra_optional_property_requires_llm(self) -> None:
         """One required string + one optional → LLM extraction."""
@@ -202,7 +203,7 @@ class TestNeedsLlmExtraction:
         }
         stage: dict[str, Any] = {"name": "test"}
         # 2 properties, even though only 1 required → needs LLM
-        assert wizard._needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
+        assert wizard._extraction.needs_llm_extraction(StageSchema.from_dict(schema), stage) is True
 
 
 # =====================================================================
@@ -215,49 +216,49 @@ class TestClassifyCollectionIntent:
     def test_data_input_default(self) -> None:
         """Regular data input returns 'data_input'."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "2 cups flour", stage
         ) == "data_input"
 
     def test_question_mark_is_help(self) -> None:
         """Messages ending with ? are classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "What goes here?", stage
         ) == "help"
 
     def test_help_keyword(self) -> None:
         """'help' alone is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "help", stage
         ) == "help"
 
     def test_what_should_i(self) -> None:
         """'what should i...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "what should I put here", stage
         ) == "help"
 
     def test_i_dont_understand(self) -> None:
         """'i don't understand' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "I don't understand what you need", stage
         ) == "help"
 
     def test_explain(self) -> None:
         """'explain...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "explain what this step is about", stage
         ) == "help"
 
     def test_what_format(self) -> None:
         """'what format...' is classified as help."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "what format should I use", stage
         ) == "help"
 
@@ -269,10 +270,10 @@ class TestClassifyCollectionIntent:
                 "help_keywords": ["info", "details"],
             },
         }
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "info", stage
         ) == "help"
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "details", stage
         ) == "help"
 
@@ -285,7 +286,7 @@ class TestClassifyCollectionIntent:
             },
         }
         # "information" should NOT match "info" (exact match)
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "information about cooking", stage
         ) == "data_input"
 
@@ -293,7 +294,7 @@ class TestClassifyCollectionIntent:
         """Data starting with 'what' but no ? is data_input."""
         stage: dict[str, Any] = {"name": "collect"}
         # "what should i" starts a help phrase, so this IS help
-        result = WizardReasoning._classify_collection_intent(
+        result = WizardExtractor.classify_collection_intent(
             "what should I", stage
         )
         assert result == "help"
@@ -301,17 +302,17 @@ class TestClassifyCollectionIntent:
     def test_regular_sentence_not_help(self) -> None:
         """Normal sentences are data_input."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "Mix the flour and sugar together", stage
         ) == "data_input"
 
     def test_case_insensitive(self) -> None:
         """Help detection is case-insensitive."""
         stage: dict[str, Any] = {"name": "collect"}
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "HELP", stage
         ) == "help"
-        assert WizardReasoning._classify_collection_intent(
+        assert WizardExtractor.classify_collection_intent(
             "What Should I Do?", stage
         ) == "help"
 
@@ -342,7 +343,7 @@ class TestVerbatimCaptureInExtraction:
             },
         }
 
-        result = await wizard._extract_data(
+        result = await wizard._extraction._extract_data(
             "Mix, bake, and enjoy!", stage, llm=None,
         )
 
@@ -367,7 +368,7 @@ class TestVerbatimCaptureInExtraction:
         }
 
         # No extractor configured → falls back to SimpleExtractionResult
-        result = await wizard._extract_data(
+        result = await wizard._extraction._extract_data(
             "2 cups flour", stage, llm=None,
         )
 
@@ -392,7 +393,7 @@ class TestVerbatimCaptureInExtraction:
             },
         }
 
-        result = await wizard._extract_data(
+        result = await wizard._extraction._extract_data(
             "flour", stage, llm=None,
         )
 
@@ -416,7 +417,7 @@ class TestVerbatimCaptureInExtraction:
         }
 
         # No extractor → falls back to SimpleExtractionResult (not verbatim)
-        result = await wizard._extract_data(
+        result = await wizard._extraction._extract_data(
             "Mix and bake", stage, llm=None,
         )
 
@@ -429,7 +430,7 @@ class TestVerbatimCaptureInExtraction:
         wizard = _make_wizard()
         stage: dict[str, Any] = {"name": "collect"}
 
-        result = await wizard._extract_data("hello", stage, llm=None)
+        result = await wizard._extraction._extract_data("hello", stage, llm=None)
 
         assert result.data == {"_raw_input": "hello"}
         assert result.confidence == 1.0

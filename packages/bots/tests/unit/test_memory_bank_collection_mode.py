@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
+from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm import EchoProvider
@@ -102,22 +103,22 @@ def _make_collection_wizard(
 class TestDoneSignalDetection:
 
     def test_exact_match(self) -> None:
-        assert WizardReasoning._is_done_signal("done", ["done", "finished"])
+        assert WizardExtractor.is_done_signal("done", ["done", "finished"])
 
     def test_case_insensitive(self) -> None:
-        assert WizardReasoning._is_done_signal("DONE", ["done"])
+        assert WizardExtractor.is_done_signal("DONE", ["done"])
 
     def test_whitespace_stripped(self) -> None:
-        assert WizardReasoning._is_done_signal("  done  ", ["done"])
+        assert WizardExtractor.is_done_signal("  done  ", ["done"])
 
     def test_no_match(self) -> None:
-        assert not WizardReasoning._is_done_signal("add flour", ["done"])
+        assert not WizardExtractor.is_done_signal("add flour", ["done"])
 
     def test_empty_keywords(self) -> None:
-        assert not WizardReasoning._is_done_signal("done", [])
+        assert not WizardExtractor.is_done_signal("done", [])
 
     def test_thats_all_keyword(self) -> None:
-        assert WizardReasoning._is_done_signal(
+        assert WizardExtractor.is_done_signal(
             "that's all", ["done", "that's all"]
         )
 

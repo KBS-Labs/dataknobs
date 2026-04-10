@@ -600,7 +600,7 @@ class TestGetLastBotResponse:
             role="user", content="Use the first suggestion"
         )
 
-        result = wizard_reasoning._get_last_bot_response(conversation_manager)
+        result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == "Great! Here are some names..."
 
     @pytest.mark.asyncio
@@ -612,7 +612,7 @@ class TestGetLastBotResponse:
         """Returns empty string when there are no assistant messages."""
         await conversation_manager.add_message(role="user", content="Hello")
 
-        result = wizard_reasoning._get_last_bot_response(conversation_manager)
+        result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == ""
 
     @pytest.mark.asyncio
@@ -623,7 +623,7 @@ class TestGetLastBotResponse:
     ) -> None:
         """Returns empty string when no assistant messages exist."""
         # Fresh CM has only the system message — no assistant messages
-        result = wizard_reasoning._get_last_bot_response(conversation_manager)
+        result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == ""
 
     @pytest.mark.asyncio
@@ -644,7 +644,7 @@ class TestGetLastBotResponse:
             role="user", content="Another thing"
         )
 
-        result = wizard_reasoning._get_last_bot_response(conversation_manager)
+        result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == "Second bot response"
 
 
@@ -689,7 +689,7 @@ class TestExtractionBotResponseContext:
 
         # No extractor configured, so this returns a SimpleExtractionResult.
         # The key assertion is that _extract_data builds the right input text.
-        result = await wizard_reasoning._extract_data(
+        result = await wizard_reasoning._extraction._extract_data(
             "Use the first suggestion",
             stage,
             _make_echo_llm(),
@@ -715,7 +715,7 @@ class TestExtractionBotResponseContext:
         }
 
         # Should not error when manager is None
-        result = await wizard_reasoning._extract_data(
+        result = await wizard_reasoning._extraction._extract_data(
             "I want a quiz bot", stage, _make_echo_llm(), None, state
         )
         assert result is not None
@@ -740,7 +740,7 @@ class TestExtractionBotResponseContext:
             },
         }
 
-        result = await wizard_reasoning._extract_data(
+        result = await wizard_reasoning._extraction._extract_data(
             "I want a quiz bot",
             stage,
             _make_echo_llm(),
@@ -772,7 +772,7 @@ class TestExtractionBotResponseContext:
         }
 
         # Should not error; truncation is handled internally
-        result = await wizard_reasoning._extract_data(
+        result = await wizard_reasoning._extraction._extract_data(
             "Yes", stage, _make_echo_llm(), conversation_manager, state
         )
         assert result is not None
@@ -834,7 +834,7 @@ class TestExtractionBotResponseContext:
             },
         }
 
-        result = await wizard_reasoning._extract_data(
+        result = await wizard_reasoning._extraction._extract_data(
             "The first one",
             stage,
             _make_echo_llm(),
@@ -888,7 +888,7 @@ class TestCaptureModeStageField:
         }
 
         # _needs_llm_extraction should return True due to capture_mode
-        assert wizard_reasoning._needs_llm_extraction(
+        assert wizard_reasoning._extraction.needs_llm_extraction(
             stage["schema"], stage,
         ) is True
 
@@ -911,7 +911,7 @@ class TestCaptureModeStageField:
         }
 
         # _needs_llm_extraction should return False due to capture_mode
-        assert wizard_reasoning._needs_llm_extraction(
+        assert wizard_reasoning._extraction.needs_llm_extraction(
             stage["schema"], stage,
         ) is False
 
@@ -934,7 +934,7 @@ class TestCaptureModeStageField:
         }
 
         # Stage-level "extract" should win over collection_config "verbatim"
-        assert wizard_reasoning._needs_llm_extraction(
+        assert wizard_reasoning._extraction.needs_llm_extraction(
             stage["schema"], stage,
         ) is True
 
