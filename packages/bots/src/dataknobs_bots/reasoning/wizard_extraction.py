@@ -3,9 +3,9 @@
 Handles schema-driven data extraction, normalization, merge, defaults,
 derivations, validation, recovery strategies, and related utilities.
 
-Extracted from :mod:`wizard` in item 77c.  The :class:`WizardExtractor`
-is constructed by :class:`WizardReasoning.__init__` and delegates to
-``self._extraction`` for all pipeline operations.
+Extracted from :mod:`wizard` in item 77c.  :class:`WizardReasoning`
+constructs a :class:`WizardExtractor` in ``__init__`` and delegates to
+it (via ``self._extraction``) for all pipeline operations.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ class WizardExtractor:
         5. **Derivations** -- deterministic field relationships
         6. **Recovery** -- scope escalation, focused retry, boolean recovery
         7. **Confidence** -- assess extraction confidence with
-           ``can_satisfy`` override
+           ``can_satisfy_required`` override
 
         Args:
             message: Raw user message text.

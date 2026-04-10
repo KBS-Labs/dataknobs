@@ -125,6 +125,8 @@ class WizardReasoning(ReasoningStrategy):
     Attributes:
         _fsm: WizardFSM instance managing state transitions
         _extractor: Optional SchemaExtractor for data extraction
+        _navigator: WizardNavigator handling navigation commands and amendments
+        _extraction: WizardExtractor handling the extraction pipeline
         _strict_validation: Whether to enforce schema validation
         _hooks: Optional WizardHooks for lifecycle events
     """
@@ -448,6 +450,7 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Track last wizard state for cleanup in close()
+        self._last_wizard_state: WizardState | None = None
 
         # Initialise MemoryBank instances from wizard-level ``banks`` config
         self._bank_configs: dict[str, dict[str, Any]] = dict(
@@ -957,9 +960,9 @@ class WizardReasoning(ReasoningStrategy):
         swaps the LLM provider *inside* an existing ``SchemaExtractor``),
         this replaces the extractor object entirely.
 
-        Also updates the navigator's extractor reference so amendment
-        detection sees the new extractor without requiring a separate
-        sync step.
+        Also updates the navigator's and extraction pipeline's extractor
+        references so amendment detection and data extraction see the new
+        extractor without requiring a separate sync step.
 
         Args:
             extractor: New extractor instance.
@@ -2665,8 +2668,9 @@ class WizardReasoning(ReasoningStrategy):
         """Extract the last user message from conversation.
 
         Prefers ``raw_content`` from message/node metadata (set by DynaBot
-        when knowledge-base or memory context is prepended) so that schema
-        extraction sees the user's original message without context noise.
+        when knowledge-base or memory context is prepended) so that
+        downstream consumers (including the extraction pipeline) see the
+        user's original message without context noise.
 
         Args:
             manager: ConversationManager instance
