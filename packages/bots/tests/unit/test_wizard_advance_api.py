@@ -865,7 +865,7 @@ class TestNavigationHookCoverage:
         hooks = WizardHooks()
         hooks.on_exit(lambda s, d: exit_calls.append(s))
         hooks.on_enter(lambda s, d: enter_calls.append(s))
-        reasoning._hooks = hooks
+        reasoning.set_hooks(hooks)
 
         await reasoning.advance({}, state, navigation="back")
 

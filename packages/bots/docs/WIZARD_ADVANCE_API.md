@@ -167,7 +167,7 @@ reasoning = WizardReasoning(wizard_fsm=wizard_fsm, hooks=hooks)
 - **Forward** fires exit before attempting the transition and full post-transition lifecycle (enter, auto-advance, subflow pop) when a transition occurs. No hooks fire when the FSM stays at the same stage.
 - **Back** fires only the enter hook — you are returning to a known previous stage, not completing the current one, so exit hooks do not apply. Auto-advance and subflow pop are not run because back navigation targets an explicit history entry.
 - **Skip** runs the full post-transition lifecycle (matching forward) because skipping moves forward through the wizard, just without user-provided data.
-- **Restart** fires only the restart hook via `_restart_cleanup()`. Enter/exit hooks do not fire because restart is a full state reset, not a stage-to-stage transition.
+- **Restart** fires only the restart hook via ``WizardNavigator.restart_cleanup()``. Enter/exit hooks do not fire because restart is a full state reset, not a stage-to-stage transition.
 
 ## Navigation Lifecycle Flag
 
