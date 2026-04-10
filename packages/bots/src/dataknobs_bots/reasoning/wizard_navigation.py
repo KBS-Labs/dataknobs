@@ -37,17 +37,21 @@ class WizardNavigator:
     - **FSM-level methods** (``navigate_back``, ``navigate_skip``,
       ``navigate_restart``) perform the FSM operation only.  Reusable by
       both ``generate()`` (conversational) and ``advance()`` (non-conversational).
-    - **Conversational methods** (``handle_navigation``, ``handle_amendment``)
-      add response generation and tree branching on top.  Used by
-      ``generate()`` only.
+    - **Conversational methods** (``handle_navigation``, ``handle_amendment``,
+      ``execute_restart``) add response generation and tree branching on
+      top.  Used by ``generate()`` only.
 
     Args:
         fsm: Main wizard FSM instance.
         subflows: Subflow manager (owns active subflow FSM).
         hooks: Lifecycle hooks (enter, exit, complete, restart).
         navigation_config: Wizard-level navigation keyword config.
-        consistent_lifecycle: When True, back/skip fire lifecycle hooks
-            and run auto-advance matching forward transitions.
+        consistent_lifecycle: When True, back fires the enter hook on
+            the destination stage, and skip runs the full post-transition
+            lifecycle (enter hook, auto-advance, subflow pop, complete
+            hook) matching forward transitions.  Back does NOT run
+            auto-advance or subflow pop — it targets an explicit history
+            entry.
         allow_amendments: Whether post-completion edits are enabled.
         section_to_stage_mapping: Custom section→stage mappings for amendments.
         extractor: Schema extractor for amendment detection (may be None).
@@ -617,6 +621,10 @@ class WizardNavigator:
         if auto_advance_messages:
             self._prepend_messages_to_response(response, auto_advance_messages)
         return response
+
+    # ------------------------------------------------------------------
+    # Public — full conversational restart (cleanup + response)
+    # ------------------------------------------------------------------
 
     async def execute_restart(
         self,

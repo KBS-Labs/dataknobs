@@ -1003,10 +1003,27 @@ class WizardReasoning(ReasoningStrategy):
         swaps the LLM provider *inside* an existing ``SchemaExtractor``),
         this replaces the extractor object entirely.
 
+        Also updates the navigator's extractor reference so amendment
+        detection sees the new extractor without requiring a separate
+        sync step.
+
         Args:
             extractor: New extractor instance.
         """
         self._extractor = extractor
+        self._navigator._extractor = extractor
+
+    def set_hooks(self, hooks: WizardHooks | None) -> None:
+        """Replace the hooks instance.
+
+        Also updates the navigator's hooks reference so lifecycle
+        events fire correctly through the new hooks.
+
+        Args:
+            hooks: New hooks instance, or None to disable hooks.
+        """
+        self._hooks = hooks
+        self._navigator._hooks = hooks
 
     def set_provider(self, role: str, provider: Any) -> bool:
         """Replace the extraction provider if the role matches."""
@@ -1537,10 +1554,6 @@ class WizardReasoning(ReasoningStrategy):
         """
         # Store LLM reference so transform context wrappers can access it
         self._current_llm = llm
-
-        # Sync navigator refs in case extractor/hooks/banks were replaced
-        # after construction (e.g. by inject_providers or test setup).
-        self._sync_navigator_refs()
 
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
@@ -2106,7 +2119,6 @@ class WizardReasoning(ReasoningStrategy):
         pipeline_result: ExtractionPipelineResult | None = None
 
         # Handle navigation
-        self._sync_navigator_refs()
         auto_advance_messages: list[str] = []
         if navigation == "back":
             transitioned = await self._navigator.navigate_back(state)
@@ -2757,60 +2769,40 @@ class WizardReasoning(ReasoningStrategy):
     # methods via the same interface as before the 77b extraction.
     # ------------------------------------------------------------------
 
-    def _sync_navigator_refs(self) -> None:
-        """Sync mutable references between orchestrator and navigator.
-
-        Tests may replace ``self._hooks``, ``self._extractor``, etc.
-        after construction.  This method ensures the navigator sees the
-        current references before each delegated call.
-        """
-        nav = self._navigator
-        nav._hooks = self._hooks
-        nav._extractor = self._extractor
-        nav._banks = self._banks
-        nav._artifact = self._artifact
-        nav._catalog = self._catalog
-
     async def _handle_navigation(
         self, message: str, state: WizardState, manager: Any, llm: Any,
     ) -> Any | None:
         """Delegate to navigator.  See :meth:`WizardNavigator.handle_navigation`."""
-        self._sync_navigator_refs()
         return await self._navigator.handle_navigation(message, state, manager, llm)
 
     async def _navigate_back(
         self, state: WizardState, *, user_message: str | None = None,
     ) -> bool:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_back`."""
-        self._sync_navigator_refs()
         return await self._navigator.navigate_back(state, user_message=user_message)
 
     async def _navigate_skip(
         self, state: WizardState, *, user_message: str | None = None,
     ) -> tuple[bool, list[str]]:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_skip`."""
-        self._sync_navigator_refs()
         return await self._navigator.navigate_skip(state, user_message=user_message)
 
     async def _navigate_restart(
         self, state: WizardState, user_message: str = "",
     ) -> None:
         """Delegate to navigator.  See :meth:`WizardNavigator.navigate_restart`."""
-        self._sync_navigator_refs()
         await self._navigator.navigate_restart(state, user_message=user_message)
 
     async def _restart_cleanup(
         self, state: WizardState, message: str, trigger: str = "restart",
     ) -> None:
         """Delegate to navigator.  See :meth:`WizardNavigator.restart_cleanup`."""
-        self._sync_navigator_refs()
         await self._navigator.restart_cleanup(state, message, trigger=trigger)
 
     async def _execute_restart(
         self, message: str, state: WizardState, manager: Any, llm: Any,
     ) -> Any:
         """Delegate to navigator.  See :meth:`WizardNavigator.execute_restart`."""
-        self._sync_navigator_refs()
         return await self._navigator.execute_restart(message, state, manager, llm)
 
     async def _branch_for_revisited_stage(
@@ -2823,7 +2815,6 @@ class WizardReasoning(ReasoningStrategy):
         self, message: str, state: WizardState, llm: Any,
     ) -> dict[str, Any] | None:
         """Delegate to navigator.  See :meth:`WizardNavigator.detect_amendment`."""
-        self._sync_navigator_refs()
         return await self._navigator.detect_amendment(message, state, llm)
 
     def _map_section_to_stage(self, section: str) -> str | None:
