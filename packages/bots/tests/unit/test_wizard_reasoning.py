@@ -342,12 +342,12 @@ class TestWizardReasoning:
         }
 
         # Missing required field
-        errors = wizard_reasoning._validate_data({}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data({}, StageSchema.from_dict(schema))
         assert len(errors) == 1
         assert "name" in errors[0]
 
         # With required field
-        errors = wizard_reasoning._validate_data({"name": "test"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data({"name": "test"}, StageSchema.from_dict(schema))
         assert len(errors) == 0
 
     def test_validate_data_enum_constraint(
@@ -360,12 +360,12 @@ class TestWizardReasoning:
         }
 
         # Invalid enum value
-        errors = wizard_reasoning._validate_data({"choice": "invalid"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data({"choice": "invalid"}, StageSchema.from_dict(schema))
         assert len(errors) == 1
         assert "choice" in errors[0]
 
         # Valid enum value
-        errors = wizard_reasoning._validate_data({"choice": "a"}, StageSchema.from_dict(schema))
+        errors = wizard_reasoning._extraction.validate_data({"choice": "a"}, StageSchema.from_dict(schema))
         assert len(errors) == 0
 
     def test_calculate_progress(
@@ -507,7 +507,7 @@ class TestWizardReasoning:
             metadata={"raw_content": "Enable hints please"},
         )
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, state
         )
 
@@ -549,7 +549,7 @@ class TestWizardReasoning:
             role="user", content="Done"
         )
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, state
         )
 

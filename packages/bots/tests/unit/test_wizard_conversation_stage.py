@@ -308,7 +308,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("Let's do a quiz!", stage, state, None)
+        await reasoning._extraction.detect_intent("Let's do a quiz!", stage, state, None)
         assert state.data["_intent"] == "quiz"
 
     @pytest.mark.asyncio
@@ -324,7 +324,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("HELLO there!", stage, state, None)
+        await reasoning._extraction.detect_intent("HELLO there!", stage, state, None)
         assert state.data["_intent"] == "greet"
 
     @pytest.mark.asyncio
@@ -340,7 +340,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("goodbye world", stage, state, None)
+        await reasoning._extraction.detect_intent("goodbye world", stage, state, None)
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
@@ -359,7 +359,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("test message", stage, state, None)
+        await reasoning._extraction.detect_intent("test message", stage, state, None)
         assert state.data["_intent"] == "first"
 
     @pytest.mark.asyncio
@@ -376,7 +376,7 @@ class TestIntentDetection:
         }
 
         # Message doesn't match - _intent should be cleared
-        await reasoning._detect_intent("no match", stage, state, None)
+        await reasoning._extraction.detect_intent("no match", stage, state, None)
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
@@ -387,7 +387,7 @@ class TestIntentDetection:
         state = WizardState(current_stage="chat", data={"existing": "data"})
         stage = {}
 
-        await reasoning._detect_intent("hello", stage, state, None)
+        await reasoning._extraction.detect_intent("hello", stage, state, None)
         assert "_intent" not in state.data
         assert state.data["existing"] == "data"
 
@@ -420,7 +420,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("quiz me", stage, state, llm)
+        await reasoning._extraction.detect_intent("quiz me", stage, state, llm)
         assert state.data["_intent"] == "start_quiz"
 
     @pytest.mark.asyncio
@@ -445,7 +445,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("quiz me", stage, state, llm)
+        await reasoning._extraction.detect_intent("quiz me", stage, state, llm)
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
@@ -470,7 +470,7 @@ class TestIntentDetection:
             },
         }
 
-        await reasoning._detect_intent("just chatting", stage, state, llm)
+        await reasoning._extraction.detect_intent("just chatting", stage, state, llm)
         assert "_intent" not in state.data
 
 

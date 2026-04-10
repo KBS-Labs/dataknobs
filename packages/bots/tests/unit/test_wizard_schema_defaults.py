@@ -52,7 +52,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["properties"]["provider"]
         assert result["properties"]["model"]["type"] == "string"
@@ -73,7 +73,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         nested_temp = result["properties"]["config"]["properties"]["temperature"]
         assert "default" not in nested_temp
@@ -97,7 +97,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         item_enabled = result["properties"]["items"]["items"]["properties"]["enabled"]
         assert "default" not in item_enabled
@@ -111,7 +111,7 @@ class TestStripSchemaDefaults:
             "properties": {"value": {"type": "string", "default": "test"}},
         }
 
-        wizard_reasoning._strip_schema_defaults(schema)
+        wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         # Original should be unchanged
         assert schema["properties"]["value"]["default"] == "test"
@@ -126,7 +126,7 @@ class TestStripSchemaDefaults:
             ]
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["allOf"][0]["properties"]["field"]
 
@@ -141,7 +141,7 @@ class TestStripSchemaDefaults:
             ]
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["anyOf"][0]["properties"]["a"]
         assert "default" not in result["anyOf"][1]["properties"]["b"]
@@ -156,7 +156,7 @@ class TestStripSchemaDefaults:
             ]
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["oneOf"][0]["properties"]["x"]
 
@@ -178,7 +178,7 @@ class TestStripSchemaDefaults:
             "required": ["name"],
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         prop = result["properties"]["name"]
         assert "default" not in prop
@@ -199,7 +199,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert result["properties"]["name"]["type"] == "string"
         assert result["properties"]["age"]["type"] == "integer"
@@ -212,7 +212,7 @@ class TestStripSchemaDefaults:
         """Test schema with empty properties dict."""
         schema: dict[str, Any] = {"type": "object", "properties": {}}
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert result["properties"] == {}
 
@@ -240,7 +240,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         level3 = result["properties"]["level1"]["properties"]["level2"][
             "properties"
@@ -261,7 +261,7 @@ class TestStripSchemaDefaults:
             },
         }
 
-        result = wizard_reasoning._strip_schema_defaults(schema)
+        result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["properties"]["a"]
         assert "default" not in result["properties"]["b"]
@@ -307,7 +307,7 @@ class TestSchemaDefaultsIntegration:
         )
 
         stage = wizard_fsm.current_metadata
-        await reasoning._extract_data("some message", stage, llm=None)
+        await reasoning._extraction._extract_data("some message", stage, llm=None)
 
         # Verify extractor received schema without default
         assert len(extractor.extract_calls) > 0
@@ -345,7 +345,7 @@ class TestSchemaDefaultsIntegration:
         )
 
         stage = wizard_fsm.current_metadata
-        result = await reasoning._extract_data(
+        result = await reasoning._extraction._extract_data(
             "I want to build a math tutor",  # No LLM info mentioned
             stage,
             llm=None,
@@ -383,7 +383,7 @@ class TestSchemaDefaultsIntegration:
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
         stage = wizard_fsm.current_metadata
-        result = await reasoning._extract_data("user message", stage, llm=None)
+        result = await reasoning._extraction._extract_data("user message", stage, llm=None)
 
         # Should return fallback result with raw input
         assert result.data == {"_raw_input": "user message"}
@@ -410,7 +410,7 @@ class TestSchemaDefaultsIntegration:
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
         stage = wizard_fsm.current_metadata
-        result = await reasoning._extract_data("hello", stage, llm=None)
+        result = await reasoning._extraction._extract_data("hello", stage, llm=None)
 
         assert result.data == {"_raw_input": "hello"}
         assert result.confidence == 1.0
@@ -441,7 +441,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == {"difficulty", "question_type"}
         assert state.data["difficulty"] == "medium"
@@ -466,7 +466,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == set()
         assert state.data["difficulty"] == "hard"
@@ -488,7 +488,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == {"difficulty"}
         assert state.data["difficulty"] == "medium"
@@ -500,7 +500,7 @@ class TestApplySchemaDefaults:
         state = WizardState(current_stage="start", data={})
         stage: dict[str, Any] = {}
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == set()
 
@@ -518,7 +518,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == set()
 
@@ -536,7 +536,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         assert applied == {"enabled"}
         assert state.data["enabled"] is False
@@ -555,7 +555,7 @@ class TestApplySchemaDefaults:
             }
         }
 
-        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+        applied = wizard_reasoning._extraction.apply_schema_defaults(state, stage)
 
         # 0 is falsy but not None — should still be applied since
         # the key is not in data at all

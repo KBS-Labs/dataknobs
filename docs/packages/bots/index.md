@@ -279,15 +279,24 @@ dataknobs_bots/
 │   ├── registry.py     # Strategy plugin registry
 │   ├── simple.py       # Simple reasoning
 │   ├── react.py        # ReAct reasoning
-│   ├── wizard.py       # Wizard reasoning
-│   ├── grounded.py     # Grounded reasoning (deterministic retrieval)
-│   ├── hybrid.py       # Hybrid reasoning (grounded + ReAct)
-│   ├── wizard_fsm.py   # FSM wrapper for wizards
-│   ├── wizard_loader.py # Config loader
-│   ├── wizard_hooks.py # Lifecycle hooks
-│   ├── observability.py # Task tracking & state snapshots
-│   ├── task_injection.py # Dynamic task injection
-│   └── focus_guard.py  # Drift detection & correction
+│   ├── wizard.py            # Wizard reasoning orchestrator
+│   ├── wizard_extraction.py # Extraction pipeline + recovery
+│   ├── wizard_navigation.py # Navigation commands + amendments
+│   ├── wizard_types.py      # Data types, constants, helpers
+│   ├── wizard_subflows.py   # Nested subflow lifecycle
+│   ├── wizard_tasks.py      # Task tracking utilities
+│   ├── wizard_fsm.py        # FSM wrapper for wizards
+│   ├── wizard_loader.py     # Config loader
+│   ├── wizard_hooks.py      # Lifecycle hooks
+│   ├── wizard_derivations.py # Field derivation rules
+│   ├── wizard_grounding.py  # Merge filters + grounding
+│   ├── wizard_renderer.py   # Template rendering
+│   ├── wizard_utils.py      # String helpers
+│   ├── grounded.py          # Grounded reasoning (deterministic retrieval)
+│   ├── hybrid.py            # Hybrid reasoning (grounded + ReAct)
+│   ├── observability.py     # Task tracking & state snapshots
+│   ├── task_injection.py    # Dynamic task injection
+│   └── focus_guard.py       # Drift detection & correction
 ├── tools/              # Built-in tools
 │   └── knowledge_search.py
 └── utils/              # Utilities

@@ -20,6 +20,7 @@ from dataknobs_bots.reasoning.wizard import (
     TurnContext,
     WizardReasoning,
 )
+from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor
 
 
 class TestTurnContextDataclass:
@@ -116,13 +117,13 @@ class TestPerTurnKeysConfig:
 
     def test_detect_conflicts_skips_per_turn_keys(self) -> None:
         """_detect_conflicts skips fields in per_turn_keys."""
-        reasoning = WizardReasoning.__new__(WizardReasoning)
-        reasoning._per_turn_keys = frozenset(["action"])
+        extractor = WizardExtractor.__new__(WizardExtractor)
+        extractor._per_turn_keys = frozenset(["action"])
 
         existing = {"action": "old_action", "topic": "old_topic"}
         new_data = {"action": "new_action", "topic": "new_topic"}
 
-        conflicts = reasoning._detect_conflicts(existing, new_data)
+        conflicts = extractor._detect_conflicts(existing, new_data)
 
         # "action" should be skipped (per-turn key), "topic" should be flagged
         field_names = [c["field"] for c in conflicts]

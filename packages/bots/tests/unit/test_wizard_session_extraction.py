@@ -27,7 +27,7 @@ class TestBuildWizardContext:
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, wizard_state
         )
 
@@ -53,7 +53,7 @@ class TestBuildWizardContext:
 
         wizard_state = WizardState(current_stage="configure_identity")
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, wizard_state
         )
 
@@ -83,7 +83,7 @@ class TestBuildWizardContext:
 
         wizard_state = WizardState(current_stage="configure_llm")
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, wizard_state
         )
 
@@ -106,7 +106,7 @@ class TestBuildWizardContext:
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, wizard_state
         )
 
@@ -130,7 +130,7 @@ class TestBuildWizardContext:
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(
+        context = wizard_reasoning._extraction._build_wizard_context(
             conversation_manager, wizard_state
         )
 
@@ -148,7 +148,7 @@ class TestDetectConflicts:
         existing = {"name": "Test Bot", "subject": "math"}
         new = {"llm_provider": "anthropic"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
 
@@ -159,7 +159,7 @@ class TestDetectConflicts:
         existing = {"name": "Old Name"}
         new = {"name": "New Name"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert len(conflicts) == 1
         assert conflicts[0]["field"] == "name"
@@ -173,7 +173,7 @@ class TestDetectConflicts:
         existing = {"name": "Old Name", "subject": "math", "llm": "openai"}
         new = {"name": "New Name", "llm": "anthropic"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert len(conflicts) == 2
         field_names = [c["field"] for c in conflicts]
@@ -185,7 +185,7 @@ class TestDetectConflicts:
         existing = {"name": "Test Bot"}
         new = {"name": None}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
 
@@ -196,7 +196,7 @@ class TestDetectConflicts:
         existing = {"_internal": "old"}
         new = {"_internal": "new"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
 
@@ -207,7 +207,7 @@ class TestDetectConflicts:
         existing = {"name": "Same Name"}
         new = {"name": "Same Name"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
 
@@ -218,7 +218,7 @@ class TestDetectConflicts:
         existing = {"enabled": True}
         new = {"enabled": False}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert len(conflicts) == 1
         assert conflicts[0]["field"] == "enabled"
@@ -396,7 +396,7 @@ class TestConflictLogging:
         existing = {"name": "Old", "subject": "Math"}
         new = {"name": "New", "subject": "Science"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert len(conflicts) == 2
         for conflict in conflicts:
@@ -411,7 +411,7 @@ class TestConflictLogging:
         existing: dict = {}
         new = {"name": "New Value"}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
 
@@ -422,6 +422,6 @@ class TestConflictLogging:
         existing = {"name": "Existing Value"}
         new: dict = {}
 
-        conflicts = wizard_reasoning._detect_conflicts(existing, new)
+        conflicts = wizard_reasoning._extraction._detect_conflicts(existing, new)
 
         assert conflicts == []
