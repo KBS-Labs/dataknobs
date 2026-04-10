@@ -83,9 +83,9 @@ async def advance(
 |-----------|------|-------------|
 | `state` | `WizardState` | Updated wizard state (caller should persist this). |
 | `stage_name` | `str` | Name of the current stage after advance. |
-| `stage_prompt` | `str` | Prompt text for the current stage. |
+| `stage_prompt` | `str` | Rendered prompt text for the current stage. Jinja2 expressions (e.g. `{{ topic }}`) are resolved with `state.data`. Falls back to raw text on template error. |
 | `stage_schema` | `dict \| None` | JSON Schema for the current stage (if any). |
-| `suggestions` | `list[str]` | Quick-reply suggestions for the current stage. |
+| `suggestions` | `list[str]` | Rendered quick-reply suggestions for the current stage. Jinja2 expressions are resolved per-item; broken items fall back to raw text. |
 | `can_skip` | `bool` | Whether the current stage can be skipped. |
 | `can_go_back` | `bool` | Whether back navigation is allowed. |
 | `completed` | `bool` | Whether the wizard has reached its end state. |

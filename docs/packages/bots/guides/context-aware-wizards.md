@@ -151,7 +151,17 @@ Render response_template with full context
 
 ### Prompt Rendering
 
-The `prompt` field is itself a Jinja2 template. It has access to all non-internal wizard state data (keys not starting with `_`):
+> **Security:** All template rendering uses Jinja2 `SandboxedEnvironment`. See [TEMPLATE_SECURITY.md](TEMPLATE_SECURITY.md) for the full security model and config authoring guidelines.
+
+The `prompt` field is itself a Jinja2 template rendered with wizard state data. All state data (including `_`-prefixed transform outputs) is available as top-level template variables. Stage prompts in `WizardAdvanceResult.stage_prompt` and `metadata["stage_prompt"]` are returned fully rendered.
+
+```yaml
+stages:
+  details:
+    prompt: "Tell me more about {{ topic | default('your chosen topic') }}."
+```
+
+The `context_generation.prompt` field is also a Jinja2 template with access to all wizard state data:
 
 ```yaml
 context_generation:
@@ -260,7 +270,9 @@ With `subject: "Chemistry"` in wizard state, these render as:
 
 Plain suggestions (no `{{ }}` markers) pass through unchanged — no Jinja2 processing overhead.
 
-Internal keys (starting with `_`) are excluded from the suggestion template context, consistent with how `response_template` rendering works.
+All state data (including `_`-prefixed keys) is available in the suggestion template context, matching the canonical context used by all rendering sites. Suggestions in `WizardAdvanceResult.suggestions` are returned fully rendered.
+
+See [TEMPLATE_SECURITY.md](TEMPLATE_SECURITY.md) for the full variable availability table and security model.
 
 ## Extraction Context
 
