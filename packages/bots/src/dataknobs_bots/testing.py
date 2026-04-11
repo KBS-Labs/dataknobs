@@ -102,6 +102,7 @@ class WizardConfigBuilder:
         self._version = version
         self._stages: list[dict[str, Any]] = []
         self._settings: dict[str, Any] = {}
+        self._subflows: dict[str, dict[str, Any]] = {}
         self._current_stage: dict[str, Any] | None = None
 
     def stage(
@@ -299,15 +300,32 @@ class WizardConfigBuilder:
         target: str,
         condition: str | None = None,
         priority: int | None = None,
+        *,
+        subflow_network: str | None = None,
+        return_stage: str | None = None,
+        data_mapping: dict[str, str] | None = None,
+        result_mapping: dict[str, str] | None = None,
     ) -> WizardConfigBuilder:
         """Add a transition from the current stage.
 
         Must be called after ``stage()``.
 
+        For subflow transitions, pass ``subflow_network`` to push a
+        subflow instead of transitioning directly.  The ``target`` is
+        used as the ``return_stage`` default (where to go after the
+        subflow completes).
+
         Args:
-            target: Target stage name.
+            target: Target stage name (or return stage for subflows).
             condition: Python expression evaluated against wizard state.
             priority: Transition evaluation priority (lower = first).
+            subflow_network: Name of the subflow network to push.
+                When set, this becomes a subflow transition with
+                ``target="_subflow"``.
+            return_stage: Stage to return to after subflow completes.
+                Defaults to ``target`` if not specified.
+            data_mapping: Parent → subflow data key mapping.
+            result_mapping: Subflow → parent data key mapping.
 
         Returns:
             Self for method chaining.
@@ -319,7 +337,21 @@ class WizardConfigBuilder:
             raise ValueError("transition() must be called after stage()")
 
         transitions = self._current_stage.setdefault("transitions", [])
-        t: dict[str, Any] = {"target": target}
+
+        if subflow_network is not None:
+            t: dict[str, Any] = {"target": "_subflow"}
+            subflow_config: dict[str, Any] = {
+                "network": subflow_network,
+                "return_stage": return_stage or target,
+            }
+            if data_mapping:
+                subflow_config["data_mapping"] = data_mapping
+            if result_mapping:
+                subflow_config["result_mapping"] = result_mapping
+            t["subflow"] = subflow_config
+        else:
+            t = {"target": target}
+
         if condition is not None:
             t["condition"] = condition
         if priority is not None:
@@ -339,6 +371,26 @@ class WizardConfigBuilder:
             Self for method chaining.
         """
         self._settings.update(kwargs)
+        return self
+
+    def subflow(
+        self, name: str, config: dict[str, Any]
+    ) -> WizardConfigBuilder:
+        """Register an inline subflow network.
+
+        The config should be a wizard config dict (with ``stages``,
+        ``name``, etc.) — typically built with another
+        ``WizardConfigBuilder``.
+
+        Args:
+            name: Subflow network name (referenced by
+                ``subflow_network`` in transitions).
+            config: Complete wizard config dict for the subflow.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._subflows[name] = config
         return self
 
     def build(self) -> dict[str, Any]:
@@ -361,6 +413,8 @@ class WizardConfigBuilder:
         }
         if self._settings:
             config["settings"] = dict(self._settings)
+        if self._subflows:
+            config["subflows"] = dict(self._subflows)
 
         self._validate(config)
         return config
@@ -387,7 +441,9 @@ class WizardConfigBuilder:
         for stage in stages:
             for t in stage.get("transitions", []):
                 target = t.get("target")
-                if target and target not in stage_names:
+                # "_subflow" is a sentinel for subflow transitions —
+                # not a real stage name.
+                if target and target != "_subflow" and target not in stage_names:
                     raise ValueError(
                         f"Stage {stage['name']!r} has transition to "
                         f"nonexistent stage {target!r}"
