@@ -7,9 +7,12 @@ Tests cover:
 - Data mapping (parent -> subflow) and result mapping (subflow -> parent)
 - TransitionRecord subflow fields
 - Subflow state serialization/deserialization
+- Integration: subflow push through finalize_turn (non-streaming)
+- Integration: subflow push through stream_finalize_turn (streaming)
 """
 
 import time
+from typing import Any
 
 import pytest
 
@@ -26,6 +29,8 @@ from dataknobs_bots.reasoning.wizard_subflows import (
     _apply_data_mapping,
     _apply_result_mapping,
 )
+from dataknobs_bots.testing import BotTestHarness
+from dataknobs_llm.testing import text_response
 
 
 class TestSubflowContext:
@@ -759,3 +764,136 @@ class TestShouldPushSubflowGuard:
             "Guard failed: would have pushed duplicate subflow after "
             "state restoration"
         )
+
+
+# =========================================================================
+# Integration: subflow push through finalize_turn / stream_finalize_turn
+# =========================================================================
+
+# Raw wizard config with a subflow — can't use WizardConfigBuilder
+# (it lacks subflow support), so the config is constructed as a dict.
+_SUBFLOW_WIZARD_CONFIG: dict[str, Any] = {
+    "name": "subflow-integration-test",
+    "version": "1.0",
+    "stages": [
+        {
+            "name": "configure",
+            "is_start": True,
+            "prompt": "Configure the feature. Say yes to enable it.",
+            "response_template": "Please configure the feature.",
+            "confirm_first_render": False,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "enable_feature": {"type": "boolean"},
+                },
+            },
+            "transitions": [
+                {
+                    "target": "_subflow",
+                    "condition": "data.get('enable_feature') == True",
+                    "subflow": {
+                        "network": "feature_setup",
+                        "return_stage": "complete",
+                        "data_mapping": {},
+                        "result_mapping": {"setup_done": "setup_done"},
+                    },
+                },
+                {"target": "complete"},
+            ],
+        },
+        {
+            "name": "complete",
+            "is_end": True,
+            "prompt": "All done!",
+            "response_template": "Setup complete.",
+        },
+    ],
+    "subflows": {
+        "feature_setup": {
+            "stages": [
+                {
+                    "name": "detail_gather",
+                    "is_start": True,
+                    "prompt": "Enter feature details.",
+                    "response_template": "Now entering feature setup.",
+                    "confirm_first_render": False,
+                    "transitions": [{"target": "subflow_done"}],
+                },
+                {
+                    "name": "subflow_done",
+                    "is_end": True,
+                    "prompt": "Feature configured!",
+                    "response_template": "Feature setup complete.",
+                },
+            ]
+        }
+    },
+}
+
+
+class TestSubflowPushIntegration:
+    """Integration tests for subflow push through finalize_turn.
+
+    Verifies the non-streaming subflow push path: when a transition
+    targets ``_subflow`` and the condition matches, the wizard pushes
+    the subflow and returns the subflow's first stage response.
+    """
+
+    @pytest.mark.asyncio
+    async def test_subflow_push_via_chat(self) -> None:
+        """Non-streaming: extraction triggers subflow push, response is
+        from subflow's start stage (finalize_turn path).
+        """
+        async with await BotTestHarness.create(
+            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            main_responses=[
+                text_response("Now entering feature setup."),
+            ],
+            extraction_results=[[{"enable_feature": True}]],
+        ) as harness:
+            # greet() renders the start stage template
+            await harness.greet()
+            # User message triggers extraction → subflow push
+            result = await harness.chat("Yes, enable it")
+
+        # The wizard should have pushed into the subflow
+        assert harness.wizard_stage == "detail_gather"
+        assert "feature setup" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_subflow_push_via_stream_chat(self) -> None:
+        """Streaming: extraction triggers subflow push, streamed response
+        is from subflow's start stage (stream_finalize_turn path).
+        """
+        async with await BotTestHarness.create(
+            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            main_responses=[
+                text_response("Now entering feature setup."),
+            ],
+            extraction_results=[[{"enable_feature": True}]],
+        ) as harness:
+            await harness.greet()
+            result = await harness.stream_chat("Yes, enable it")
+
+        # Same assertions as non-streaming
+        assert harness.wizard_stage == "detail_gather"
+        assert "feature setup" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_subflow_when_condition_not_met(self) -> None:
+        """When the subflow condition is not met, the wizard transitions
+        normally (to 'complete') and does not push a subflow.
+        """
+        async with await BotTestHarness.create(
+            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            main_responses=[
+                text_response("Setup complete."),
+            ],
+            extraction_results=[[{"enable_feature": False}]],
+        ) as harness:
+            await harness.greet()
+            result = await harness.chat("No, skip it")
+
+        assert harness.wizard_stage == "complete"
+        assert "complete" in result.response.lower()

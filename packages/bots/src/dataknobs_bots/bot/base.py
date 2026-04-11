@@ -938,6 +938,7 @@ class DynaBot:
         *,
         add_observations: bool = True,
         executions_out: list[ToolExecution] | None = None,
+        extra_context: dict[str, Any] | None = None,
     ) -> None:
         """Execute tool calls and optionally add observations to the conversation.
 
@@ -959,11 +960,17 @@ class DynaBot:
                 appended here instead of ``turn.tool_executions``.  Lets
                 the phased path collect results without coupling to
                 ``TurnState``.
+            extra_context: Extra key-value pairs merged into the
+                ``ToolExecutionContext`` via ``with_extra()``.  Used by
+                strategies (e.g. ReAct) that inject artifact registries,
+                review executors, or other infrastructure into tool calls.
         """
         target_list = executions_out if executions_out is not None else turn.tool_executions
         for tool_call in tool_calls:
             tool_name = tool_call.name
             tool_context = ToolExecutionContext.from_manager(turn.manager)
+            if extra_context:
+                tool_context = tool_context.with_extra(**extra_context)
             try:
                 tool = self.tool_registry.get_tool(tool_name)
             except NotFoundError:
@@ -1176,6 +1183,8 @@ class DynaBot:
         Returns:
             LLM response object.
         """
+        from ..reasoning.base import ProcessResult
+
         strategy = self.reasoning_strategy
         assert strategy is not None
 
@@ -1191,34 +1200,58 @@ class DynaBot:
         if handle.early_response:
             return handle.early_response
 
-        result = await strategy.process_input(handle)  # type: ignore[union-attr]
-
-        if result.early_response:
-            return result.early_response
-
-        # Tool execution interleaving point.
-        # When process_input signals needs_tool_execution, DynaBot runs
-        # strategy-requested tools here.  Results flow through wizard
-        # state (via tool_result_mapping in finalize_turn), not through
-        # conversation history — so add_observations=False.
+        # Iterative process_input loop.
+        # Wizard: iterate=False, runs once → finalize_turn.
+        # ReAct: iterate=True, loops until no more tool_calls.
+        #
+        # ReAct tool calls flow through conversation history (observations
+        # are added as role="tool" messages), so add_observations=True.
+        # Wizard tool calls flow through wizard state instead, so
+        # add_observations=False with executions_out.
+        #
+        # The iteration cap uses the strategy's declared max_iterations
+        # when set (e.g. ReActTurnHandle), falling back to DynaBot's
+        # _max_tool_iterations safety cap.  The +1 allows the strategy
+        # one final process_input call to detect its own cap and return
+        # cleanly (e.g. writing trace entries) rather than DynaBot
+        # silently truncating.
+        max_iters = (handle.max_iterations or self._max_tool_iterations) + 1
         tool_results: list[ToolExecution] | None = None
-        if result.needs_tool_execution:
-            if not self.tool_registry:
-                logger.warning(
-                    "Strategy requested tool execution (tool_result_mapping) "
-                    "but no tools are registered — skipping; wizard may not "
-                    "advance if transition conditions depend on tool results",
+        loop_start = time.monotonic()
+        result: ProcessResult | None = None
+        for _iteration in range(max_iters):
+            result = await strategy.process_input(handle)  # type: ignore[union-attr]
+
+            if result.early_response:
+                return result.early_response
+
+            if not result.needs_tool_execution or not self.tool_registry:
+                if result.needs_tool_execution and not self.tool_registry:
+                    logger.warning(
+                        "Strategy requested tool execution but no tools "
+                        "are registered — skipping",
+                    )
+                break
+
+            # Wall-clock timeout guard
+            if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                logger.warning("Phased tool loop exceeded timeout")
+                break
+
+            # Determine execution mode based on iterate flag.
+            # Iterative strategies (ReAct) add observations to
+            # conversation history; non-iterative (wizard) route results
+            # through state, not history.
+            if result.iterate:
+                # ReAct: observations go into conversation history
+                await self._execute_tools(
+                    turn,
+                    result.pending_tool_calls,
+                    extra_context=handle.tool_extra_context if handle.tool_extra_context else None,
                 )
             else:
-                tool_names = [s.name for s in result.pending_tool_calls]
-                logger.debug(
-                    "Phased tool execution: %d tool(s) requested: %s",
-                    len(result.pending_tool_calls),
-                    tool_names,
-                )
+                # Wizard: results flow through wizard state
                 tool_results = []
-                # ToolCallSpec shares .name/.parameters interface with
-                # ToolCall, so pass directly — no adapter needed.
                 await self._execute_tools(
                     turn,
                     result.pending_tool_calls,
@@ -1227,11 +1260,12 @@ class DynaBot:
                 )
                 if not tool_results:
                     tool_results = None
-                else:
-                    logger.debug(
-                        "Phased tool execution complete: %d result(s)",
-                        len(tool_results),
-                    )
+
+            if not result.iterate:
+                break
+        else:
+            if result is not None and result.needs_tool_execution:
+                logger.warning("Phased tool loop reached max iterations")
 
         response = await strategy.finalize_turn(  # type: ignore[union-attr]
             handle, tool_results
@@ -1921,43 +1955,80 @@ class DynaBot:
                         finish_reason="stop",
                     )
                 else:
-                    result = await strategy.process_input(handle)
-                    if result.early_response:
-                        content = self._extract_response_content(
-                            result.early_response
-                        )
-                        turn.stream_chunks.append(content)
-                        turn.populate_from_response(
-                            result.early_response, self.llm
-                        )
-                        yield LLMStreamResponse(
-                            delta=content,
-                            is_final=True,
-                            finish_reason="stop",
-                        )
-                    else:
-                        # Tool interleaving (same as _generate_phased_response)
-                        tool_results: list[ToolExecution] | None = None
-                        if result.needs_tool_execution:
-                            if not self.tool_registry:
+                    # Iterative process_input loop (mirrors
+                    # _generate_phased_response logic).
+                    max_iters = (
+                        (handle.max_iterations or self._max_tool_iterations)
+                        + 1
+                    )
+                    tool_results: list[ToolExecution] | None = None
+                    loop_start = time.monotonic()
+                    early_exit = False
+                    for _iteration in range(max_iters):
+                        result = await strategy.process_input(handle)
+                        if result.early_response:
+                            content = self._extract_response_content(
+                                result.early_response
+                            )
+                            turn.stream_chunks.append(content)
+                            turn.populate_from_response(
+                                result.early_response, self.llm
+                            )
+                            yield LLMStreamResponse(
+                                delta=content,
+                                is_final=True,
+                                finish_reason="stop",
+                            )
+                            early_exit = True
+                            break
+
+                        if (
+                            not result.needs_tool_execution
+                            or not self.tool_registry
+                        ):
+                            if (
+                                result.needs_tool_execution
+                                and not self.tool_registry
+                            ):
                                 logger.warning(
                                     "Strategy requested tool execution "
-                                    "(tool_result_mapping) but no tools "
-                                    "are registered — skipping; wizard "
-                                    "may not advance if transition "
-                                    "conditions depend on tool results",
+                                    "but no tools are registered — "
+                                    "skipping",
                                 )
-                            else:
-                                tool_results = []
-                                await self._execute_tools(
-                                    turn,
-                                    result.pending_tool_calls,
-                                    add_observations=False,
-                                    executions_out=tool_results,
-                                )
-                                if not tool_results:
-                                    tool_results = None
+                            break
 
+                        if (
+                            time.monotonic() - loop_start
+                            >= self._tool_loop_timeout
+                        ):
+                            logger.warning(
+                                "Phased tool loop exceeded timeout"
+                            )
+                            break
+
+                        if result.iterate:
+                            await self._execute_tools(
+                                turn,
+                                result.pending_tool_calls,
+                                extra_context=(
+                                    handle.tool_extra_context if handle.tool_extra_context else None
+                                ),
+                            )
+                        else:
+                            tool_results = []
+                            await self._execute_tools(
+                                turn,
+                                result.pending_tool_calls,
+                                add_observations=False,
+                                executions_out=tool_results,
+                            )
+                            if not tool_results:
+                                tool_results = None
+
+                        if not result.iterate:
+                            break
+
+                    if not early_exit:
                         # Stream finalize_turn
                         async for chunk in strategy.stream_finalize_turn(
                             handle, tool_results
