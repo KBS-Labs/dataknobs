@@ -1414,34 +1414,22 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             extra_context["catalog"] = catalog
         return extra_context
 
-    async def _strategy_stage_response(
+    def _prepare_strategy_stage(
         self,
         strategy: ReasoningStrategy,
         manager: Any,
-        enhanced_prompt: str,
         stage: dict[str, Any],
         state: WizardState,
-        tools: list[Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> tuple[Any, bool, str, bool]:
-        """Generate response by delegating to a registered strategy.
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Shared setup for strategy-based stage response generation.
 
-        Injects wizard context as kwargs that strategies may use or
-        ignore.  Lifecycle signals (completion / restart) are communicated
-        via mutable dicts inside ``extra_context``.
-
-        Args:
-            strategy: The resolved reasoning strategy instance.
-            manager: ConversationManager instance.
-            enhanced_prompt: Stage-aware system prompt.
-            stage: Stage metadata dict.
-            state: Current wizard state.
-            tools: Available tools for this stage.
-            metadata: Optional metadata to persist on conversation nodes.
+        Builds the extra context with lifecycle signal dicts, creates
+        the prompt refresher closure, and injects wizard-owned runtime
+        objects into the strategy instance.
 
         Returns:
-            Tuple of (response, completion_requested, completion_summary,
-            restart_requested).
+            Tuple of (completion_signal, restart_signal) — mutable dicts
+            that lifecycle tools populate during generation.
         """
         extra_context = self._build_extra_context()
 
@@ -1478,6 +1466,58 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             if value is not None and hasattr(strategy, attr):
                 setattr(strategy, attr, value)
 
+        return completion_signal, restart_signal
+
+    @staticmethod
+    def _read_lifecycle_signals(
+        completion_signal: dict[str, Any],
+        restart_signal: dict[str, Any],
+    ) -> tuple[bool, str, bool]:
+        """Read lifecycle tool signals after strategy execution.
+
+        Returns:
+            Tuple of (completion_requested, completion_summary,
+            restart_requested).
+        """
+        return (
+            bool(completion_signal.get("requested")),
+            completion_signal.get("summary", ""),
+            bool(restart_signal.get("requested")),
+        )
+
+    async def _strategy_stage_response(
+        self,
+        strategy: ReasoningStrategy,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[Any, bool, str, bool]:
+        """Generate response by delegating to a registered strategy.
+
+        Injects wizard context as kwargs that strategies may use or
+        ignore.  Lifecycle signals (completion / restart) are communicated
+        via mutable dicts inside ``extra_context``.
+
+        Args:
+            strategy: The resolved reasoning strategy instance.
+            manager: ConversationManager instance.
+            enhanced_prompt: Stage-aware system prompt.
+            stage: Stage metadata dict.
+            state: Current wizard state.
+            tools: Available tools for this stage.
+            metadata: Optional metadata to persist on conversation nodes.
+
+        Returns:
+            Tuple of (response, completion_requested, completion_summary,
+            restart_requested).
+        """
+        completion_signal, restart_signal = self._prepare_strategy_stage(
+            strategy, manager, stage, state,
+        )
+
         response = await strategy.generate(
             manager=manager,
             llm=None,
@@ -1486,12 +1526,10 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             metadata=metadata,
         )
 
-        # Check if lifecycle tools signaled completion or restart
-        tool_completion_requested = bool(completion_signal.get("requested"))
-        tool_completion_summary = completion_signal.get("summary", "")
-        tool_restart_requested = bool(restart_signal.get("requested"))
-
-        return response, tool_completion_requested, tool_completion_summary, tool_restart_requested
+        comp_req, comp_summary, restart_req = self._read_lifecycle_signals(
+            completion_signal, restart_signal,
+        )
+        return response, comp_req, comp_summary, restart_req
 
     # =================================================================
     # Streaming response generation
@@ -1634,9 +1672,9 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         """Stream response by delegating to a registered strategy.
 
         Streaming counterpart of :meth:`_strategy_stage_response`.
-        Injects wizard context and lifecycle signal dicts, then iterates
-        ``strategy.stream_generate()``.  After iteration completes,
-        reads lifecycle signals into ``stream_ctx``.
+        Uses the same :meth:`_prepare_strategy_stage` setup, then
+        iterates ``strategy.stream_generate()``.  After iteration
+        completes, reads lifecycle signals into ``stream_ctx``.
 
         Args:
             strategy: The resolved reasoning strategy instance.
@@ -1651,30 +1689,9 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         Yields:
             :class:`LLMStreamResponse` chunks.
         """
-        extra_context = self._build_extra_context()
-
-        completion_signal: dict[str, Any] = {"requested": False}
-        extra_context["_completion_signal"] = completion_signal
-        restart_signal: dict[str, Any] = {"requested": False}
-        extra_context["_restart_signal"] = restart_signal
-
-        def prompt_refresher() -> str:
-            fresh_context = self.build_stage_context(stage, state)
-            return f"{manager.system_prompt}\n\n{fresh_context}"
-
-        artifact_registry = self._get_artifact_registry()
-        review_executor = self._get_review_executor()
-        context_builder = self._get_context_builder()
-        _injections: dict[str, Any] = {
-            "_artifact_registry": artifact_registry,
-            "_review_executor": review_executor,
-            "_context_builder": context_builder,
-            "_extra_context": extra_context,
-            "_prompt_refresher": prompt_refresher,
-        }
-        for attr, value in _injections.items():
-            if value is not None and hasattr(strategy, attr):
-                setattr(strategy, attr, value)
+        completion_signal, restart_signal = self._prepare_strategy_stage(
+            strategy, manager, stage, state,
+        )
 
         async for chunk in strategy.stream_generate(
             manager=manager,
@@ -1695,14 +1712,12 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
                     metadata=getattr(chunk, "metadata", {}),
                 )
 
-        # Read lifecycle signals after stream completes
-        stream_ctx.tool_completion_requested = bool(
-            completion_signal.get("requested")
-        )
-        stream_ctx.tool_completion_summary = completion_signal.get("summary", "")
-        stream_ctx.tool_restart_requested = bool(
-            restart_signal.get("requested")
-        )
+        # Read lifecycle signals into the mutable stream context
+        (
+            stream_ctx.tool_completion_requested,
+            stream_ctx.tool_completion_summary,
+            stream_ctx.tool_restart_requested,
+        ) = self._read_lifecycle_signals(completion_signal, restart_signal)
 
     def _render_auto_advance_template(
         self, stage: dict[str, Any], state: WizardState

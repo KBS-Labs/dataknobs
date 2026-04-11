@@ -2356,18 +2356,16 @@ class WizardReasoning(ReasoningStrategy):
 
         # ── Post-stream work (only reached when fully consumed) ──
 
-        # Check for tool-initiated restart
+        # Check for tool-initiated restart.
+        # In the non-streaming path, execute_restart replaces the response
+        # entirely.  In streaming, the stage response has already been
+        # yielded — we can't un-yield it.  Instead, perform the restart
+        # cleanup (reset state, FSM back to start) without emitting a
+        # replacement response.  The consumer's next turn will see the
+        # restarted wizard and generate the first-stage greeting naturally.
         if stream_ctx.tool_restart_requested:
-            logger.info("Wizard restart signaled by restart_wizard tool")
-            response = await self._navigator.execute_restart(
-                user_message, wizard_state, manager, llm
-            )
-            content = getattr(response, "content", str(response))
-            yield LLMStreamResponse(
-                delta=content,
-                is_final=True,
-                finish_reason="stop",
-            )
+            logger.info("Wizard restart signaled by restart_wizard tool (streaming)")
+            await self._navigator.restart_cleanup(wizard_state, user_message)
 
         # Check for tool-initiated completion
         elif not completed_before and stream_ctx.tool_completion_requested:

@@ -22,7 +22,9 @@ from dataknobs_bots.reasoning.base import (
     StreamingPhasedProtocol,
 )
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+from dataknobs_bots.tools.bank_tools import RestartWizardTool
 from dataknobs_llm import LLMStreamResponse
+from dataknobs_llm.testing import text_response, tool_call_response
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +244,137 @@ class TestWizardStreamChat:
             result = await harness.greet()
             assert result.response is not None
             assert len(result.response) > 0
+
+
+# ---------------------------------------------------------------------------
+# Streaming with tool_result_mapping
+# ---------------------------------------------------------------------------
+
+
+class _ProductLookupTool:
+    """Minimal tool for testing tool_result_mapping in streaming path."""
+
+    name = "product_lookup"
+    description = "Look up a product by name"
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        }
+
+    async def execute(self, query: str = "", **_kwargs: Any) -> dict[str, Any]:
+        return {"product_id": "PROD-42", "category": "widgets"}
+
+
+class TestStreamingToolResultMapping:
+    """Streaming path with tool_result_mapping interleaving."""
+
+    @pytest.mark.asyncio
+    async def test_tool_result_mapping_via_stream_chat(self) -> None:
+        """extraction → tool execution → result mapping works in streaming."""
+        config = (
+            WizardConfigBuilder("tool-stream-test")
+            .stage(
+                "lookup",
+                is_start=True,
+                prompt="What product?",
+                tool_result_mapping=[
+                    {
+                        "tool": "product_lookup",
+                        "params": {"query": "product_name"},
+                        "mapping": {
+                            "product_id": "product_id",
+                            "category": "product_category",
+                        },
+                    },
+                ],
+            )
+            .field("product_name", field_type="string", required=True)
+            .transition("review", "has('product_id')")
+            .stage("review", is_end=True, prompt="Details below.")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Looking up...", "Here are the details."],
+            extraction_results=[[{"product_name": "Widget"}]],
+            tools=[_ProductLookupTool()],
+        ) as harness:
+            result = await harness.stream_chat("I want Widget")
+
+            # Tool result mapped into wizard state
+            assert harness.wizard_data.get("product_id") == "PROD-42"
+            assert harness.wizard_data.get("product_category") == "widgets"
+            assert harness.wizard_data.get("product_name") == "Widget"
+            # Transition fired
+            assert harness.wizard_stage == "review"
+            # Streamed response
+            assert len(result.chunks) > 0
+
+
+# ---------------------------------------------------------------------------
+# Streaming restart cleanup (finding 2 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingRestartCleanup:
+    """Tool-initiated restart in streaming performs cleanup without extra yield."""
+
+    @pytest.mark.asyncio
+    async def test_restart_tool_resets_wizard_state_in_streaming(self) -> None:
+        """RestartWizardTool during streaming cleans up state, FSM returns to start.
+
+        In the non-streaming path, execute_restart replaces the response.
+        In the streaming path, the stage response has already been yielded,
+        so restart_cleanup runs without emitting a replacement — the next
+        turn picks up the restarted wizard naturally.
+        """
+        config = (
+            WizardConfigBuilder("restart-stream-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+            )
+            .field("name", field_type="string", required=True)
+            .transition("review", "data.get('name')")
+            .stage(
+                "review",
+                prompt="Let me review that.",
+                reasoning="react",
+                max_iterations=3,
+                tools=["restart_wizard"],
+            )
+            .transition("done", "true")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                # Turn 1: extraction succeeds, transitions to "review"
+                # Review stage uses ReAct — EchoProvider produces tool call
+                # then text response
+                tool_call_response("restart_wizard", {}),
+                text_response("Restarting..."),
+            ],
+            extraction_results=[[{"name": "Alice"}]],
+            tools=[RestartWizardTool()],
+        ) as harness:
+            result = await harness.stream_chat("My name is Alice")
+
+            # After restart cleanup, wizard is back at start stage
+            assert harness.wizard_stage == "gather"
+            # State was cleared by restart_cleanup
+            assert harness.wizard_data.get("name") is None
+            # Streaming produced output (the review stage response,
+            # before restart was detected post-stream)
+            assert len(result.chunks) > 0
 
 
 # ---------------------------------------------------------------------------

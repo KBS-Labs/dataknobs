@@ -362,6 +362,33 @@ class MyPhasedStrategy(ReasoningStrategy):
 the phased protocol. Subclass `TurnHandle` to carry strategy-specific
 state between phases (see `WizardTurnHandle` for an example).
 
+#### Streaming Phased Execution (`StreamingPhasedProtocol`)
+
+Strategies that implement `StreamingPhasedProtocol` (extends
+`PhasedReasoningProtocol`) add `stream_finalize_turn()`, which yields
+`LLMStreamResponse` chunks instead of returning a complete response.
+`DynaBot.stream_chat()` detects this and streams the finalize phase
+token-by-token while keeping `begin_turn` and `process_input` blocking.
+
+```python
+from collections.abc import AsyncIterator
+from dataknobs_llm import LLMStreamResponse
+
+class MyStreamingPhasedStrategy(ReasoningStrategy):
+
+    # begin_turn and process_input are the same as above
+
+    async def stream_finalize_turn(self, handle, tool_results=None):
+        # Pre-stream work (transitions, state updates)
+        # ...
+        # Yield streaming chunks
+        async for chunk in manager.stream_complete(...):
+            yield chunk
+        # Post-stream work (save state — only if fully consumed)
+```
+
+`WizardReasoning` implements `StreamingPhasedProtocol`.
+
 ## Registry API
 
 ```python

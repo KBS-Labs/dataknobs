@@ -18,8 +18,8 @@ from ~50 lines of boilerplate to ~5 lines.
 
 `BotTestHarness` is the preferred way to test wizard bots. It wraps
 `DynaBot.from_config()`, `EchoProvider`, and `ConfigurableExtractor` into a
-single object with `chat()`/`greet()` methods and automatic wizard state
-capture.
+single object with `chat()`/`greet()`/`stream_chat()` methods and automatic
+wizard state capture.
 
 ### Basic Usage
 
@@ -45,6 +45,24 @@ async with await BotTestHarness.create(
     assert harness.wizard_data["name"] == "Alice"
     assert harness.wizard_data["topic"] == "math"
     assert harness.wizard_stage == "done"
+```
+
+### Streaming Tests
+
+Use `harness.stream_chat()` to exercise the `DynaBot.stream_chat()` code
+path.  It consumes the full stream, captures chunks on `TurnResult.chunks`,
+and snapshots wizard state — the same contract as `harness.chat()`:
+
+```python
+async with await BotTestHarness.create(
+    wizard_config=config,
+    main_responses=["Got it!"],
+    extraction_results=[[{"name": "Alice", "topic": "math"}]],
+) as harness:
+    result = await harness.stream_chat("I'm Alice and I like math")
+    assert harness.wizard_data["name"] == "Alice"
+    assert len(result.chunks) > 0   # streaming chunks captured
+    assert result.response == "".join(result.chunks)
 ```
 
 ### What `create()` Does

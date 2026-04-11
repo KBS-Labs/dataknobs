@@ -1939,7 +1939,15 @@ class DynaBot:
                         # Tool interleaving (same as _generate_phased_response)
                         tool_results: list[ToolExecution] | None = None
                         if result.needs_tool_execution:
-                            if self.tool_registry:
+                            if not self.tool_registry:
+                                logger.warning(
+                                    "Strategy requested tool execution "
+                                    "(tool_result_mapping) but no tools "
+                                    "are registered — skipping; wizard "
+                                    "may not advance if transition "
+                                    "conditions depend on tool results",
+                                )
+                            else:
                                 tool_results = []
                                 await self._execute_tools(
                                     turn,

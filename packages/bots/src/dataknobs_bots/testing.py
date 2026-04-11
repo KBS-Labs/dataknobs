@@ -909,8 +909,7 @@ class BotTestHarness:
         async for chunk in self._bot.stream_chat(
             message, self._context, **kwargs
         ):
-            if chunk.delta:
-                chunks.append(chunk.delta)
+            chunks.append(chunk.delta)
         self._turn_count += 1
 
         state = await self._bot.get_wizard_state(
