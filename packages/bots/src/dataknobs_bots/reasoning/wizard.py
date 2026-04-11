@@ -2010,17 +2010,17 @@ class WizardReasoning(ReasoningStrategy):
         if subflow_config and self._subflows.handle_push(
             wizard_state, subflow_config, user_message
         ):
-                # Generate response for subflow's first stage
-                active_fsm = self._subflows.get_active_fsm()
-                new_stage = active_fsm.current_metadata
-                await self._navigator.branch_for_revisited_stage(
-                    manager, new_stage.get("name", "")
-                )
-                stage_result = await self._response.generate_stage_response(
-                    manager, llm, new_stage, wizard_state, tools
-                )
-                await self._save_wizard_state(manager, wizard_state)
-                return stage_result.response
+            # Generate response for subflow's first stage
+            active_fsm = self._subflows.get_active_fsm()
+            new_stage = active_fsm.current_metadata
+            await self._navigator.branch_for_revisited_stage(
+                manager, new_stage.get("name", "")
+            )
+            stage_result = await self._response.generate_stage_response(
+                manager, llm, new_stage, wizard_state, tools
+            )
+            await self._save_wizard_state(manager, wizard_state)
+            return stage_result.response
 
         # Get current stage for transition derivations and routing
         active_fsm = self._subflows.get_active_fsm()

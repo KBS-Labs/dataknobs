@@ -462,9 +462,13 @@ inject_providers(bot, main_provider=echo, memory_embedding=embed_echo)
 │   │ [DynaBot tool execution]     │ │
 │   │ strategy.finalize_turn()     │ │
 │   └──────────────────────────────┘ │
+│ Elif reasoning_strategy:            │
+│   ┌──────────────────────────────┐ │
+│   │ strategy.generate()          │ │
+│   │ [DynaBot tool loop]          │ │
+│   └──────────────────────────────┘ │
 │ Else:                               │
 │   ┌──────────────────────────────┐ │
-│   │ strategy.generate() or       │ │
 │   │ manager.complete()           │ │
 │   │ [DynaBot tool loop]          │ │
 │   └──────────────────────────────┘ │

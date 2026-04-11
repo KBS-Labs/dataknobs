@@ -12,6 +12,8 @@ Types defined here:
 - :class:`WizardState` — central persistent state object
 - :class:`WizardAdvanceResult` — return type for ``advance()``
 - :class:`ExtractionPipelineResult` — return type for extraction pipeline
+- :class:`WizardTurnHandle` — wizard-specific turn handle for phased protocol
+- :class:`RecoveryResult` — typed result from recovery strategies
 - :class:`StageSchema` — JSON Schema wrapper for stage fields
 - :class:`NavigationCommandConfig` — single navigation command config
 - :class:`NavigationConfig` — full navigation configuration
@@ -502,8 +504,9 @@ class RecoveryResult:
     """Typed result from a recovery strategy execution.
 
     Replaces the informal ``tuple[set[str], Any | None]`` return from
-    ``_run_recovery_pipeline``, ``_run_scope_escalation``,
-    ``_run_focused_retry``, and ``_run_boolean_recovery``.
+    ``_run_recovery_pipeline``, ``_run_scope_escalation``, and
+    ``_run_focused_retry``.  (``_run_boolean_recovery`` still returns
+    ``set[str]`` — it does not produce an extraction result.)
 
     Attributes:
         new_data_keys: Keys that were newly set or changed in
