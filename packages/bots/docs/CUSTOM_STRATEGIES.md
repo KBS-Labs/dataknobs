@@ -280,9 +280,11 @@ saving), the `PhasedReasoningProtocol` splits the turn into three phases:
 DynaBot.chat()
   → strategy.begin_turn(manager, llm, tools, **kwargs)
       ← TurnHandle (or early_response for navigation/amendments)
-  → strategy.process_input(handle)
-      ← ProcessResult (or early_response for clarification/validation)
-  → [DynaBot tool execution — when ProcessResult.needs_tool_execution]
+  LOOP:
+    → strategy.process_input(handle)
+        ← ProcessResult (or early_response for clarification/validation)
+    → [DynaBot tool execution — when ProcessResult.needs_tool_execution]
+    → if ProcessResult.iterate: loop back to process_input
   → strategy.finalize_turn(handle, tool_results)
       ← LLM response
 ```
@@ -292,11 +294,22 @@ PhasedReasoningProtocol)` and uses the phased path automatically.
 Non-phased strategies continue using the single `generate()` call.
 
 When `process_input` sets `needs_tool_execution=True` and populates
-`pending_tool_calls` with `ToolCallSpec` objects, DynaBot executes those
-tools between `process_input` and `finalize_turn`. The tool results
-(as `list[ToolExecution]`) are passed to `finalize_turn`. This is used
-by wizard stages with `tool_result_mapping` to populate state from tool
-results before FSM transition evaluation.
+`pending_tool_calls`, DynaBot executes those tools.  The tool calls can
+be `ToolCallSpec` objects (wizard config-driven) or LLM `ToolCall` objects
+(ReAct LLM-driven) — both share `.name`/`.parameters` attributes.
+
+When `ProcessResult.iterate=True` (ReAct), DynaBot loops back to
+`process_input` after tool execution.  When `iterate=False` (wizard
+default), DynaBot proceeds directly to `finalize_turn`.  Tool results
+(as `list[ToolExecution]`) are passed to `finalize_turn`.
+
+**Built-in implementations:**
+
+- **WizardReasoning** — single iteration (`iterate=False`); tool results
+  flow through wizard state via `tool_result_mapping`
+- **ReActReasoning** — iterative (`iterate=True`); tool observations are
+  added to conversation history; DynaBot loops until the LLM stops
+  requesting tools
 
 **When to implement phased execution:**
 
@@ -306,12 +319,12 @@ results before FSM transition evaluation.
   lifecycle, not after the entire response is produced
 - Your strategy has multiple early-return paths (navigation, validation,
   clarification) that should bypass tool execution
+- You want per-tool middleware hooks (rate limiting, logging, abort) —
+  ReAct uses the phased protocol for this
 
 **When NOT to implement it:**
 
 - Simple strategies that just call `manager.complete()` — use `generate()`
-- Strategies with internal tool loops (like ReAct) — manage tools yourself
-  via `self._tool_executions`
 - Most custom strategies — the single `generate()` call is sufficient
 
 **Implementation:**
@@ -358,9 +371,10 @@ class MyPhasedStrategy(ReasoningStrategy):
         return await self.finalize_turn(handle)
 ```
 
-`WizardReasoning` is currently the only built-in strategy that implements
-the phased protocol. Subclass `TurnHandle` to carry strategy-specific
-state between phases (see `WizardTurnHandle` for an example).
+`WizardReasoning` and `ReActReasoning` are the built-in strategies that
+implement the phased protocol.  Subclass `TurnHandle` to carry
+strategy-specific state between phases (see `WizardTurnHandle` and
+`ReActTurnHandle` for examples).
 
 #### Streaming Phased Execution (`StreamingPhasedProtocol`)
 

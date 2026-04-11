@@ -736,6 +736,7 @@ class BotTestHarness:
         extraction_scope: str = "current_message",
         tools: list[Any] | None = None,
         middleware: list[Any] | None = None,
+        strategy: ReasoningStrategy | None = None,
         strict_tools: bool = True,
         strict: bool = False,
     ) -> BotTestHarness:
@@ -768,6 +769,11 @@ class BotTestHarness:
             middleware: Optional list of ``Middleware`` instances to append
                 to the bot. Useful for testing middleware hooks like
                 ``after_turn`` and ``on_tool_executed``.
+            strategy: Optional reasoning strategy instance to replace the
+                one created by ``from_config()``.  Useful for testing
+                custom strategy implementations (e.g. strategies that
+                implement ``StreamingPhasedProtocol`` with ``iterate=True``)
+                through the full DynaBot orchestration.
             strict_tools: If True (default), the EchoProvider raises
                 ValueError when a scripted response contains tool_calls
                 but no tools were provided to complete(). Set to False
@@ -870,6 +876,11 @@ class BotTestHarness:
         )
         if main_responses:
             provider.set_responses(main_responses)
+
+        # Replace reasoning strategy before inject_providers so that
+        # provider/extractor injection lands on the actual strategy.
+        if strategy is not None:
+            bot.reasoning_strategy = strategy
 
         # Inject fresh provider and extractor
         inject_providers(bot, main_provider=provider, extractor=extractor)

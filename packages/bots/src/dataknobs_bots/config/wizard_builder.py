@@ -232,6 +232,7 @@ class WizardConfig:
     settings: dict[str, Any]
     stages: tuple[StageConfig, ...]
     global_tasks: tuple[dict[str, Any], ...] = ()
+    subflows: dict[str, list[dict[str, Any]]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader.load_from_dict()."""
@@ -246,6 +247,11 @@ class WizardConfig:
         d["stages"] = [s.to_dict() for s in self.stages]
         if self.global_tasks:
             d["global_tasks"] = [dict(t) for t in self.global_tasks]
+        if self.subflows:
+            d["subflows"] = {
+                name: [dict(s) for s in stages]
+                for name, stages in self.subflows.items()
+            }
         return d
 
     def to_yaml(self) -> str:
@@ -297,6 +303,7 @@ class WizardConfigBuilder:
         self._pending_transitions: list[tuple[str, TransitionConfig]] = []
         self._pending_intents: list[tuple[str, IntentDetectionConfig]] = []
         self._global_tasks: list[dict[str, Any]] = []
+        self._subflows: dict[str, list[dict[str, Any]]] = {}
         self._tool_catalog: ToolCatalog | None = None
 
     # -- Metadata --
@@ -540,6 +547,7 @@ class WizardConfigBuilder:
         priority: int | None = None,
         derive: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        subflow: dict[str, Any] | None = None,
     ) -> Self:
         """Add a transition between stages.
 
@@ -547,14 +555,23 @@ class WizardConfigBuilder:
         is called. This allows stages and transitions to be added in
         any order.
 
+        For subflow transitions, set ``to_stage="_subflow"`` and provide
+        the ``subflow`` config dict.  The subflow network must be
+        registered via :meth:`add_subflow_network`.
+
         Args:
             from_stage: Source stage name.
-            to_stage: Target stage name.
+            to_stage: Target stage name (use ``"_subflow"`` for subflow
+                transitions).
             condition: Python expression evaluated with ``data`` in scope.
             transform: Transform function name(s).
             priority: Evaluation priority.
             derive: Data derivation rules.
             metadata: Custom metadata.
+            subflow: Subflow configuration dict with keys ``network``
+                (name of the subflow network), ``return_stage`` (stage
+                to return to in the parent after subflow completes),
+                and optional ``data_mapping`` / ``result_mapping``.
 
         Returns:
             self for method chaining.
@@ -566,8 +583,35 @@ class WizardConfigBuilder:
             priority=priority,
             derive=derive,
             metadata=metadata,
+            subflow=subflow,
         )
         self._pending_transitions.append((from_stage, transition))
+        return self
+
+    # -- Subflows --
+
+    def add_subflow_network(
+        self,
+        name: str,
+        stages: list[dict[str, Any]],
+    ) -> Self:
+        """Register a subflow network.
+
+        Subflow networks are separate stage graphs that can be pushed
+        onto the wizard's subflow stack via a ``_subflow`` transition.
+        Each network must have its own ``is_start`` and ``is_end``
+        stages.
+
+        Args:
+            name: Network identifier referenced by
+                ``transition(subflow={"network": name, ...})``.
+            stages: List of stage dicts (same format as top-level
+                stages).
+
+        Returns:
+            self for method chaining.
+        """
+        self._subflows[name] = [dict(s) for s in stages]
         return self
 
     # -- Intent detection --
@@ -679,6 +723,7 @@ class WizardConfigBuilder:
             settings=dict(self._settings),
             stages=tuple(assembled),
             global_tasks=tuple(self._global_tasks),
+            subflows=dict(self._subflows) if self._subflows else None,
         )
 
     # -- Roundtrip --
@@ -705,6 +750,9 @@ class WizardConfigBuilder:
         for stage_dict in config.get("stages", []):
             stage = _stage_from_dict(stage_dict)
             builder._stages.append(stage)
+
+        for name, stages in config.get("subflows", {}).items():
+            builder._subflows[name] = [dict(s) for s in stages]
 
         return builder
 

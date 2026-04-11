@@ -5,18 +5,53 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from typing import Any
 
+from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.exceptions import ToolsNotSupportedError
 from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.tools import ToolExecutionContext
 
 from dataknobs_bots.bot.turn import ToolExecution
 
-from .base import ReasoningStrategy, StrategyCapabilities
+from .base import ProcessResult, ReasoningStrategy, StrategyCapabilities, TurnHandle
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReActTurnHandle(TurnHandle):
+    """ReAct-specific turn handle carrying iteration state.
+
+    Extends :class:`TurnHandle` with fields needed to track the ReAct
+    loop across ``process_input`` calls.  Each call to ``process_input``
+    corresponds to one iteration of the ReAct loop.
+
+    Attributes:
+        iteration: Current iteration index (0-based).
+        max_iterations: Maximum number of ReAct iterations.
+        prev_tool_calls: Previous iteration's tool calls for duplicate
+            detection.  ``None`` on the first iteration.
+        trace: Reasoning trace accumulator (``None`` when tracing is
+            disabled).
+        final_response: Set by ``process_input`` when the LLM returns
+            no tool calls (final answer).  Left ``None`` on duplicate
+            detection and max iterations — ``finalize_turn`` then
+            performs a synthesis LLM call instead of returning directly.
+        store_trace: Whether to persist the trace to conversation
+            metadata after the loop completes.
+        verbose: Whether to use debug-level logging.
+    """
+
+    iteration: int = 0
+    max_iterations: int = 5
+    prev_tool_calls: list[tuple[str, str]] | None = None
+    trace: list[dict[str, Any]] | None = None
+    final_response: Any | None = None
+    store_trace: bool = False
+    verbose: bool = False
 
 
 class ReActReasoning(ReasoningStrategy):
@@ -132,6 +167,363 @@ class ReActReasoning(ReasoningStrategy):
     def context_builder(self) -> Any | None:
         """Get the context builder if configured."""
         return self._context_builder
+
+    # ------------------------------------------------------------------
+    # PhasedReasoningProtocol implementation
+    # ------------------------------------------------------------------
+
+    async def begin_turn(
+        self,
+        manager: Any,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> ReActTurnHandle:
+        """Phase A: Setup ReAct iteration state.
+
+        Clears stale tool executions, builds extra context for tool
+        execution, and returns a :class:`ReActTurnHandle`.  If no tools
+        are available, performs a direct LLM call and stores the result
+        as ``handle.early_response``.
+
+        Args:
+            manager: Conversation manager for this turn.
+            llm: LLM provider instance.
+            tools: Optional list of available tools.
+            **kwargs: Additional generation parameters.
+
+        Returns:
+            ReAct turn handle with iteration state initialized.
+        """
+        handle = ReActTurnHandle(
+            manager=manager,
+            llm=llm,
+            tools=tools,
+            kwargs=kwargs,
+            max_iterations=self.max_iterations,
+            trace=[] if self.store_trace else None,
+            store_trace=self.store_trace,
+            verbose=self.verbose,
+        )
+
+        # Clear stale executions from previous calls.
+        self._tool_executions.clear()
+
+        # No-tools fast path — check before building extra_context to
+        # avoid unnecessary I/O (context_builder.build may do async work).
+        if not tools:
+            logger.info(
+                "ReAct: No tools available, falling back to simple generation",
+                extra={"conversation_id": getattr(manager, "conversation_id", None)},
+            )
+            handle.early_response = await manager.complete(**kwargs)
+            return handle
+
+        # Build static extra_context for tool execution.  These don't
+        # change across iterations and are set once on the handle.
+        # context_builder is refreshed per-iteration in process_input
+        # so tools see updated state after mutations.
+        extra: dict[str, Any] = {}
+        if self._artifact_registry is not None:
+            extra["artifact_registry"] = self._artifact_registry
+        if self._review_executor is not None:
+            extra["review_executor"] = self._review_executor
+        if self._extra_context:
+            extra.update(self._extra_context)
+        handle.tool_extra_context = extra
+
+        log_level = logging.DEBUG if self.verbose else logging.INFO
+        logger.log(
+            log_level,
+            "ReAct: Starting phased reasoning loop",
+            extra={
+                "conversation_id": getattr(manager, "conversation_id", None),
+                "max_iterations": self.max_iterations,
+                "tools_available": len(tools),
+            },
+        )
+
+        return handle
+
+    async def process_input(
+        self,
+        handle: TurnHandle,
+    ) -> ProcessResult:
+        """Phase B: Execute one ReAct iteration.
+
+        Makes a single LLM call with tools.  If the LLM returns tool
+        calls, signals DynaBot to execute them and loop back
+        (``iterate=True``).  If the LLM returns a final answer,
+        stores it on ``handle.final_response``.  On duplicate detection,
+        leaves ``final_response`` as ``None`` so ``finalize_turn``
+        performs a synthesis call.
+
+        Args:
+            handle: ReAct turn handle from ``begin_turn``.
+
+        Returns:
+            Process result indicating the iteration outcome.
+        """
+        if not isinstance(handle, ReActTurnHandle):
+            raise TypeError(
+                f"Expected ReActTurnHandle, got {type(handle).__name__}"
+            )
+
+        log_level = logging.DEBUG if handle.verbose else logging.INFO
+
+        # Max iterations check
+        if handle.iteration >= handle.max_iterations:
+            logger.log(
+                log_level,
+                "ReAct: Max iterations reached, generating final response",
+                extra={
+                    "conversation_id": getattr(
+                        handle.manager, "conversation_id", None
+                    ),
+                    "iterations_used": handle.max_iterations,
+                },
+            )
+            if handle.trace is not None:
+                handle.trace.append({"status": "max_iterations_reached"})
+                await self._store_trace(handle.manager, handle.trace)
+            return ProcessResult(action="max_iterations")
+
+        # Prompt refresh for iterations > 0
+        if handle.iteration > 0 and self._prompt_refresher is not None:
+            handle.kwargs["system_prompt_override"] = self._prompt_refresher()
+
+        # Refresh conversation_context each iteration so tools see
+        # updated state after mutations (e.g. load_from_catalog changing
+        # artifact state mid-loop).  Matches generate() behavior.
+        if self._context_builder is not None:
+            try:
+                ctx = await self._context_builder.build(handle.manager)
+                handle.tool_extra_context["conversation_context"] = ctx
+            except Exception as e:
+                logger.warning("Failed to build conversation context: %s", e)
+                # Remove stale context from a previous iteration so tools
+                # don't silently operate on outdated state.
+                handle.tool_extra_context.pop("conversation_context", None)
+
+        iteration_trace: dict[str, Any] = {
+            "iteration": handle.iteration + 1,
+            "tool_calls": [],
+        }
+
+        logger.log(
+            log_level,
+            "ReAct: Starting iteration",
+            extra={
+                "conversation_id": getattr(
+                    handle.manager, "conversation_id", None
+                ),
+                "iteration": handle.iteration + 1,
+                "max_iterations": handle.max_iterations,
+            },
+        )
+
+        # LLM call with tools
+        try:
+            response = await handle.manager.complete(
+                tools=handle.tools, **handle.kwargs
+            )
+        except ToolsNotSupportedError as e:
+            logger.error(
+                "ReAct: Model '%s' does not support tools — "
+                "returning graceful response to user",
+                e.model,
+                extra={
+                    "conversation_id": getattr(
+                        handle.manager, "conversation_id", None
+                    ),
+                },
+            )
+            return ProcessResult(
+                early_response=LLMResponse(
+                    content=(
+                        "I'm configured to use tools for this task, but my "
+                        "current language model doesn't support tool calling. "
+                        "Please contact the administrator to update the model "
+                        "configuration."
+                    ),
+                    model=e.model,
+                    finish_reason="error",
+                ),
+                action="tools_not_supported",
+            )
+
+        # No tool_calls → final answer
+        if not getattr(response, "tool_calls", None):
+            logger.log(
+                log_level,
+                "ReAct: No tool calls in response, finishing",
+                extra={
+                    "conversation_id": getattr(
+                        handle.manager, "conversation_id", None
+                    ),
+                    "iteration": handle.iteration + 1,
+                },
+            )
+            handle.final_response = response
+            if handle.trace is not None:
+                iteration_trace["status"] = "completed"
+                handle.trace.append(iteration_trace)
+                await self._store_trace(handle.manager, handle.trace)
+            return ProcessResult(action="final_answer")
+
+        num_tool_calls = len(response.tool_calls)
+        logger.log(
+            log_level,
+            "ReAct: Tool calls requested",
+            extra={
+                "conversation_id": getattr(
+                    handle.manager, "conversation_id", None
+                ),
+                "iteration": handle.iteration + 1,
+                "num_tools": num_tool_calls,
+                "tools": [tc.name for tc in response.tool_calls],
+            },
+        )
+
+        # Duplicate detection
+        current_calls = [
+            (tc.name, json.dumps(tc.parameters, sort_keys=True))
+            for tc in response.tool_calls
+        ]
+
+        if (
+            handle.prev_tool_calls is not None
+            and current_calls == handle.prev_tool_calls
+        ):
+            logger.warning(
+                "ReAct: Duplicate tool calls detected, breaking loop",
+                extra={
+                    "conversation_id": getattr(
+                        handle.manager, "conversation_id", None
+                    ),
+                    "iteration": handle.iteration + 1,
+                    "duplicate_calls": [tc.name for tc in response.tool_calls],
+                },
+            )
+            tool_names = [tc.name for tc in response.tool_calls]
+            await handle.manager.add_message(
+                content=(
+                    f"System notice: The tools {tool_names} were already "
+                    "called with identical parameters in the previous step. "
+                    "Their results are already in the conversation above. "
+                    "Please use those results to respond to the user."
+                ),
+                role="system",
+            )
+            handle.final_response = None  # finalize_turn does synthesis
+            if handle.trace is not None:
+                iteration_trace["status"] = "duplicate_tool_calls_detected"
+                handle.trace.append(iteration_trace)
+                await self._store_trace(handle.manager, handle.trace)
+            return ProcessResult(action="duplicate_break")
+
+        handle.prev_tool_calls = current_calls
+        handle.iteration += 1
+
+        if handle.trace is not None:
+            iteration_trace["status"] = "continued"
+            iteration_trace["tool_calls"] = [
+                {"name": tc.name, "parameters": tc.parameters}
+                for tc in response.tool_calls
+            ]
+            handle.trace.append(iteration_trace)
+
+        # Signal DynaBot to execute tools, then call process_input again
+        return ProcessResult(
+            needs_tool_execution=True,
+            iterate=True,
+            pending_tool_calls=list(response.tool_calls),
+            action="tool_calls",
+        )
+
+    async def finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> Any:
+        """Phase C: Return final response or perform synthesis call.
+
+        If ``process_input`` stored a final response on the handle
+        (LLM returned no tool calls), returns it directly.  Otherwise
+        (max iterations or duplicate break), performs a final LLM call
+        without tools to synthesize a response.
+
+        Args:
+            handle: ReAct turn handle from ``begin_turn``.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (unused by ReAct — tool observations are already
+                in conversation history).
+
+        Returns:
+            LLM response object.
+        """
+        if not isinstance(handle, ReActTurnHandle):
+            raise TypeError(
+                f"Expected ReActTurnHandle, got {type(handle).__name__}"
+            )
+
+        # If process_input stored a final response, return it
+        if handle.final_response is not None:
+            return handle.final_response
+
+        # Otherwise: final synthesis (max iterations or duplicate break)
+        if self._prompt_refresher is not None:
+            handle.kwargs["system_prompt_override"] = self._prompt_refresher()
+
+        return await handle.manager.complete(**handle.kwargs)
+
+    def stream_finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Stream Phase C: Return stored response or stream synthesis.
+
+        Streaming counterpart of :meth:`finalize_turn`.  If
+        ``process_input`` stored a final response, yields it as a
+        single chunk.  Otherwise streams the synthesis call
+        token-by-token via ``manager.stream_complete()``.
+
+        Args:
+            handle: ReAct turn handle from ``begin_turn``.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (unused by ReAct).
+
+        Yields:
+            :class:`LLMStreamResponse` chunks.
+        """
+        if not isinstance(handle, ReActTurnHandle):
+            raise TypeError(
+                f"Expected ReActTurnHandle, got {type(handle).__name__}"
+            )
+        return self._stream_finalize(handle)
+
+    async def _stream_finalize(
+        self,
+        handle: ReActTurnHandle,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Inner async generator for stream_finalize_turn."""
+        # If process_input stored a final response (always LLMResponse
+        # from manager.complete), yield as single chunk.
+        if handle.final_response is not None:
+            yield LLMStreamResponse(
+                delta=handle.final_response.content,
+                is_final=True,
+                finish_reason="stop",
+            )
+            return
+
+        # Otherwise: stream synthesis (max iterations or duplicate break)
+        if self._prompt_refresher is not None:
+            handle.kwargs["system_prompt_override"] = self._prompt_refresher()
+
+        async for chunk in handle.manager.stream_complete(**handle.kwargs):
+            yield chunk
 
     async def generate(
         self,

@@ -259,13 +259,14 @@ DynaBot supports two execution paths for strategies:
 
 **Single-call path** (default): DynaBot calls `generate()`, then runs its
 own tool execution loop on any `tool_calls` in the response. Used by
-Simple, ReAct, Grounded, and Hybrid strategies.
+Simple, Grounded, and Hybrid strategies.
 
 **Phased path** (`PhasedReasoningProtocol`): DynaBot calls `begin_turn()` →
 `process_input()` → [tool execution] → `finalize_turn()`, enabling tool
 results to be reflected in strategy state before it is saved. Used by
-WizardReasoning. DynaBot detects phased support automatically via
-`isinstance` check.
+WizardReasoning (single iteration) and ReActReasoning (iterative — loops
+`process_input` until the LLM stops requesting tools). DynaBot detects
+phased support automatically via `isinstance` check.
 
 **Streaming phased path** (`StreamingPhasedProtocol`): Extends the phased
 path with `stream_finalize_turn()`, yielding `LLMStreamResponse` chunks
@@ -273,12 +274,17 @@ instead of returning a complete response. `stream_chat()` checks for this
 protocol first, falling back to single-chunk wrapping for non-streaming
 phased strategies. `begin_turn` and `process_input` remain non-streaming.
 
-**ReAct Loop** (single-call path):
+**ReAct Phased Flow** (implements both `PhasedReasoningProtocol` and
+`StreamingPhasedProtocol`):
 ```
-1. Thought: What should I do?
-2. Action: Use a tool
-3. Observation: Tool result
-4. [Repeat or Final Answer]
+begin_turn    → clear state, build extra_context, check for tools
+LOOP:
+  process_input → one LLM call (iterate=True, needs_tool_execution=True)
+                → [DynaBot executes tools — middleware fires per-tool!]
+                → loop back to process_input
+  (until: no tool_calls, max iterations, or duplicate detection)
+finalize_turn         → return stored response or final synthesis call
+stream_finalize_turn  → yield stored response as chunk or stream synthesis
 ```
 
 **Wizard Phased Flow**:

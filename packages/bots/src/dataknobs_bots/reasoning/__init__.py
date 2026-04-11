@@ -47,7 +47,7 @@ from .observability import (
     ExecutionStats,
     ExecutionTracker,
 )
-from .react import ReActReasoning
+from .react import ReActReasoning, ReActTurnHandle
 from .simple import SimpleReasoning
 from .task_injection import (
     TaskInjectionContext,
@@ -91,6 +91,7 @@ __all__ = [
     "get_registry",
     "SimpleReasoning",
     "ReActReasoning",
+    "ReActTurnHandle",
     "GroundedReasoning",
     "GroundedReasoningConfig",
     "GroundedIntentConfig",

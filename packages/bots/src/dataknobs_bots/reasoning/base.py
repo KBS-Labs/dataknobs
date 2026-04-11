@@ -60,6 +60,15 @@ class TurnHandle:
             skip ``process_input`` / ``finalize_turn`` and return this
             response directly.  Used for navigation and amendment
             early-return paths.
+        tool_extra_context: Extra key-value pairs merged into the
+            ``ToolExecutionContext`` for every tool call in this turn.
+            Strategies populate this in ``begin_turn`` (e.g. ReAct adds
+            ``artifact_registry``, ``review_executor``, etc.).
+        max_iterations: Strategy-declared iteration cap for the
+            ``process_input`` loop.  ``None`` (default) defers to
+            DynaBot's ``_max_tool_iterations`` setting.  Strategies
+            that iterate (e.g. ReAct) override this to reflect their
+            configured limit so DynaBot doesn't silently truncate.
     """
 
     manager: Any  # ReasoningManagerProtocol (can't reference yet)
@@ -67,6 +76,8 @@ class TurnHandle:
     tools: list[Any] | None = None
     kwargs: dict[str, Any] = field(default_factory=dict)
     early_response: Any | None = None
+    tool_extra_context: dict[str, Any] = field(default_factory=dict)
+    max_iterations: int | None = None
 
 
 @dataclass(frozen=True)
@@ -106,18 +117,26 @@ class ProcessResult:
         needs_tool_execution: When ``True``, DynaBot runs its tool loop
             between ``process_input`` and ``finalize_turn``.  Set by
             wizard stages with ``tool_result_mapping`` after successful
-            extraction.
+            extraction, or by ReAct when the LLM returns tool calls.
         pending_tool_calls: Tool calls to execute when
-            ``needs_tool_execution`` is ``True``.  Built from the
-            stage's ``tool_result_mapping`` config and extracted state.
+            ``needs_tool_execution`` is ``True``.  Contains
+            ``ToolCallSpec`` (wizard config-driven calls) or LLM
+            ``ToolCall`` objects (ReAct LLM-driven calls).  Both share
+            ``.name`` / ``.parameters`` attributes consumed by
+            ``_execute_tools``.
+        iterate: When ``True``, DynaBot calls ``process_input`` again
+            after executing tools (for iterative strategies like ReAct).
+            When ``False`` (default, used by wizard), DynaBot proceeds
+            directly to ``finalize_turn`` after tool execution.
         action: Informational label describing what ``process_input``
             did (e.g. ``"extracted"``, ``"clarification"``,
-            ``"collection_help"``).  For observability/debugging.
+            ``"tool_calls"``).  For observability/debugging.
     """
 
     early_response: Any | None = None
     needs_tool_execution: bool = False
-    pending_tool_calls: list[ToolCallSpec] = field(default_factory=list)
+    pending_tool_calls: list[Any] = field(default_factory=list)
+    iterate: bool = False
     action: str = ""
 
 
@@ -133,17 +152,26 @@ class PhasedReasoningProtocol(Protocol):
     phased flow when available.  Non-phased strategies continue to use
     the single ``generate()`` call.
 
-    The three phases correspond to the natural boundaries in a wizard
-    turn:
+    The three phases map naturally to different strategy types:
 
-    1. **begin_turn** — restore state, handle navigation/amendments
-    2. **process_input** — extract data, validate, prepare for transition
-    3. **finalize_turn** — transition FSM, generate response, save state
+    **Wizard** (single iteration):
+
+    1. ``begin_turn`` — restore state, handle navigation/amendments
+    2. ``process_input`` — extract data, validate (returns ``iterate=False``)
+    3. ``finalize_turn`` — transition FSM, generate response, save state
+
+    **ReAct** (iterative):
+
+    1. ``begin_turn`` — setup, build extra_context, check for tools
+    2. ``process_input`` — one LLM call (returns ``iterate=True`` with
+       tool calls); DynaBot executes tools, then loops back
+    3. ``finalize_turn`` — return stored response or synthesis call
 
     Between ``process_input`` and ``finalize_turn``, DynaBot can execute
-    tools (when ``ProcessResult.needs_tool_execution`` is ``True``),
-    enabling tool results to be reflected in wizard state before it is
-    saved.
+    tools (when ``ProcessResult.needs_tool_execution`` is ``True``).
+    When ``ProcessResult.iterate`` is ``True``, DynaBot loops back to
+    ``process_input`` after tool execution instead of proceeding to
+    ``finalize_turn``.
     """
 
     async def begin_turn(
@@ -174,11 +202,17 @@ class PhasedReasoningProtocol(Protocol):
         self,
         handle: TurnHandle,
     ) -> ProcessResult:
-        """Phase B: Extract data, validate, prepare for transition.
+        """Phase B: Process one turn iteration.
 
-        Processes the user's input (extraction, validation, collection
-        mode handling).  If the turn resolves to an early response
-        (clarification, validation error, etc.),
+        The semantics depend on the strategy:
+
+        - **Wizard**: Extract data, validate, handle collection modes.
+          Runs once (``iterate=False``).
+        - **ReAct**: Make one LLM call with tools, check for tool calls,
+          detect duplicates.  Runs iteratively (``iterate=True``).
+
+        If the turn resolves to an early response (clarification,
+        validation error, tools-not-supported, etc.),
         ``result.early_response`` is set.
 
         Args:
