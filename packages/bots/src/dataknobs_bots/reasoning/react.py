@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.exceptions import ToolsNotSupportedError
 from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.tools import ToolExecutionContext
@@ -475,6 +476,54 @@ class ReActReasoning(ReasoningStrategy):
             handle.kwargs["system_prompt_override"] = self._prompt_refresher()
 
         return await handle.manager.complete(**handle.kwargs)
+
+    def stream_finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Stream Phase C: Return stored response or stream synthesis.
+
+        Streaming counterpart of :meth:`finalize_turn`.  If
+        ``process_input`` stored a final response, yields it as a
+        single chunk.  Otherwise streams the synthesis call
+        token-by-token via ``manager.stream_complete()``.
+
+        Args:
+            handle: ReAct turn handle from ``begin_turn``.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (unused by ReAct).
+
+        Yields:
+            :class:`LLMStreamResponse` chunks.
+        """
+        if not isinstance(handle, ReActTurnHandle):
+            raise TypeError(
+                f"Expected ReActTurnHandle, got {type(handle).__name__}"
+            )
+        return self._stream_finalize(handle)
+
+    async def _stream_finalize(
+        self,
+        handle: ReActTurnHandle,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Inner async generator for stream_finalize_turn."""
+        # If process_input stored a final response (always LLMResponse
+        # from manager.complete), yield as single chunk.
+        if handle.final_response is not None:
+            yield LLMStreamResponse(
+                delta=handle.final_response.content,
+                is_final=True,
+                finish_reason="stop",
+            )
+            return
+
+        # Otherwise: stream synthesis (max iterations or duplicate break)
+        if self._prompt_refresher is not None:
+            handle.kwargs["system_prompt_override"] = self._prompt_refresher()
+
+        async for chunk in handle.manager.stream_complete(**handle.kwargs):
+            yield chunk
 
     async def generate(
         self,

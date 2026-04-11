@@ -551,6 +551,65 @@ class TestReActPhasedEndToEnd:
 
 
 # =========================================================================
+# End-to-end streaming via BotTestHarness (ReAct)
+# =========================================================================
+
+
+class TestReActStreamingEndToEnd:
+    """End-to-end: ReAct strategy streams via StreamingPhasedProtocol."""
+
+    @pytest.mark.asyncio
+    async def test_react_stream_chat_with_tools(self) -> None:
+        """stream_chat with ReAct: tool calls execute, response streams."""
+        tool = EchoTool()
+
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                tool_call_response("echo_tool", {"message": "hello"}),
+                text_response("The tool said hello back"),
+            ],
+            tools=[tool],
+        ) as harness:
+            result = await harness.stream_chat("Use the echo tool")
+
+        assert result.response == "The tool said hello back"
+        assert tool.call_count == 1
+        # Chunks list is populated (EchoProvider yields one chunk, but
+        # the streaming path is exercised — real providers yield many)
+        assert len(result.chunks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_react_stream_no_tools_fast_path(self) -> None:
+        """stream_chat with ReAct and no tools streams the direct response."""
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "react"},
+            },
+            main_responses=[
+                text_response("Simple streamed response"),
+            ],
+        ) as harness:
+            result = await harness.stream_chat("Hello")
+
+        assert result.response == "Simple streamed response"
+
+    @pytest.mark.asyncio
+    async def test_react_stream_protocol_detection(self) -> None:
+        """ReActReasoning satisfies StreamingPhasedProtocol."""
+        from dataknobs_bots.reasoning.base import StreamingPhasedProtocol
+
+        strategy = ReActReasoning()
+        assert isinstance(strategy, StreamingPhasedProtocol)
+
+
+# =========================================================================
 # Streaming iterative phased loop (StreamingPhasedProtocol + iterate=True)
 # =========================================================================
 

@@ -274,7 +274,8 @@ instead of returning a complete response. `stream_chat()` checks for this
 protocol first, falling back to single-chunk wrapping for non-streaming
 phased strategies. `begin_turn` and `process_input` remain non-streaming.
 
-**ReAct Phased Flow**:
+**ReAct Phased Flow** (implements both `PhasedReasoningProtocol` and
+`StreamingPhasedProtocol`):
 ```
 begin_turn    → clear state, build extra_context, check for tools
 LOOP:
@@ -282,7 +283,8 @@ LOOP:
                 → [DynaBot executes tools — middleware fires per-tool!]
                 → loop back to process_input
   (until: no tool_calls, max iterations, or duplicate detection)
-finalize_turn → return stored response or final synthesis call
+finalize_turn         → return stored response or final synthesis call
+stream_finalize_turn  → yield stored response as chunk or stream synthesis
 ```
 
 **Wizard Phased Flow**:

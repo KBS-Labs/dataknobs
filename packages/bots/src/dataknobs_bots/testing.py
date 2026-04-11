@@ -821,12 +821,13 @@ class BotTestHarness:
         if main_responses:
             provider.set_responses(main_responses)
 
-        # Inject fresh provider and extractor
-        inject_providers(bot, main_provider=provider, extractor=extractor)
-
-        # Replace reasoning strategy if provided
+        # Replace reasoning strategy before inject_providers so that
+        # provider/extractor injection lands on the actual strategy.
         if strategy is not None:
             bot.reasoning_strategy = strategy
+
+        # Inject fresh provider and extractor
+        inject_providers(bot, main_provider=provider, extractor=extractor)
 
         # Register tools if provided
         if tools:
