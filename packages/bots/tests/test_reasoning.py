@@ -334,12 +334,12 @@ class TestReActLoopBehavior:
         assert trace[0]["iteration"] == 1
         assert len(trace[0]["tool_calls"]) == 1
         assert trace[0]["tool_calls"][0]["name"] == "calculator"
-        # In the phased path, tool execution happens in DynaBot — the trace
-        # records the request (name + parameters), not the execution result.
-        # The generate() path (used by HybridReasoning) still records
-        # status/result in the trace.
-        if "status" in trace[0]["tool_calls"][0]:
-            assert trace[0]["tool_calls"][0]["status"] == "success"
+        # Phased path: trace records the tool call request (name +
+        # parameters) but not execution outcome — DynaBot executes tools
+        # externally.  The generate() path (HybridReasoning) records
+        # status/result, but bot.chat() routes through the phased path.
+        assert "parameters" in trace[0]["tool_calls"][0]
+        assert "status" not in trace[0]["tool_calls"][0]
 
         assert trace[1]["status"] == "duplicate_tool_calls_detected"
         assert trace[1]["iteration"] == 2
@@ -521,13 +521,12 @@ class TestReActLoopBehavior:
         tool_entry = trace[0]["tool_calls"][0]
         assert tool_entry["name"] == "calculator"
         assert tool_entry["parameters"] == {"expression": "7 * 6"}
-        # In the phased path, tool execution happens in DynaBot — the trace
-        # records the request (name + parameters), not the execution result.
-        # The generate() path (used by HybridReasoning) still records
-        # status/result in the trace.
-        if "status" in tool_entry:
-            assert tool_entry["status"] == "success"
-            assert tool_entry["result"] == "42"
+        # Phased path: trace records the tool call request (name +
+        # parameters) but not execution outcome — DynaBot executes tools
+        # externally.  The generate() path (HybridReasoning) records
+        # status/result, but bot.chat() routes through the phased path.
+        assert "status" not in tool_entry
+        assert "result" not in tool_entry
 
 
 class TestReActExtraContext:

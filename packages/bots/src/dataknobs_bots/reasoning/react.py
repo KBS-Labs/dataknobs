@@ -36,8 +36,9 @@ class ReActTurnHandle(TurnHandle):
         trace: Reasoning trace accumulator (``None`` when tracing is
             disabled).
         final_response: Set by ``process_input`` when the LLM returns
-            no tool calls or on duplicate detection.
-            ``finalize_turn`` returns this directly when set.
+            no tool calls (final answer).  Left ``None`` on duplicate
+            detection and max iterations — ``finalize_turn`` then
+            performs a synthesis LLM call instead of returning directly.
         store_trace: Whether to persist the trace to conversation
             metadata after the loop completes.
         verbose: Whether to use debug-level logging.
@@ -251,9 +252,10 @@ class ReActReasoning(ReasoningStrategy):
 
         Makes a single LLM call with tools.  If the LLM returns tool
         calls, signals DynaBot to execute them and loop back
-        (``iterate=True``).  If the LLM returns a final answer or
-        duplicates are detected, stores the response on the handle for
-        ``finalize_turn``.
+        (``iterate=True``).  If the LLM returns a final answer,
+        stores it on ``handle.final_response``.  On duplicate detection,
+        leaves ``final_response`` as ``None`` so ``finalize_turn``
+        performs a synthesis call.
 
         Args:
             handle: ReAct turn handle from ``begin_turn``.
@@ -298,6 +300,9 @@ class ReActReasoning(ReasoningStrategy):
                 handle.tool_extra_context["conversation_context"] = ctx
             except Exception as e:
                 logger.warning("Failed to build conversation context: %s", e)
+                # Remove stale context from a previous iteration so tools
+                # don't silently operate on outdated state.
+                handle.tool_extra_context.pop("conversation_context", None)
 
         iteration_trace: dict[str, Any] = {
             "iteration": handle.iteration + 1,

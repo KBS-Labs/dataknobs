@@ -202,11 +202,17 @@ class PhasedReasoningProtocol(Protocol):
         self,
         handle: TurnHandle,
     ) -> ProcessResult:
-        """Phase B: Extract data, validate, prepare for transition.
+        """Phase B: Process one turn iteration.
 
-        Processes the user's input (extraction, validation, collection
-        mode handling).  If the turn resolves to an early response
-        (clarification, validation error, etc.),
+        The semantics depend on the strategy:
+
+        - **Wizard**: Extract data, validate, handle collection modes.
+          Runs once (``iterate=False``).
+        - **ReAct**: Make one LLM call with tools, check for tool calls,
+          detect duplicates.  Runs iteratively (``iterate=True``).
+
+        If the turn resolves to an early response (clarification,
+        validation error, tools-not-supported, etc.),
         ``result.early_response`` is set.
 
         Args:

@@ -322,13 +322,15 @@ class TestReActProcessInput:
         from dataknobs_llm.exceptions import ToolsNotSupportedError
 
         provider = _make_provider()
-        manager = await _make_manager(provider)
 
-        # Make complete() raise ToolsNotSupportedError
-        async def raise_tools_error(**kwargs: Any) -> Any:
+        # Use set_response_function to make the provider raise
+        # ToolsNotSupportedError.  This propagates through
+        # ConversationManager.complete() → provider → raises.
+        def raise_tools_error(messages: Any) -> Any:
             raise ToolsNotSupportedError(model="test-model")
 
-        manager.complete = raise_tools_error  # type: ignore[assignment]
+        provider.set_response_function(raise_tools_error)
+        manager = await _make_manager(provider)
 
         tool = EchoTool()
         strategy = ReActReasoning()
@@ -559,7 +561,8 @@ class TestStreamingIterativePhasedLoop:
     The StreamingPhasedProtocol branch in stream_chat has an iterative
     process_input loop that supports iterate=True, but no built-in
     strategy currently uses both StreamingPhasedProtocol and iterate=True.
-    This test exercises that code path using a minimal inline strategy.
+    This test exercises that code path using a minimal inline strategy
+    injected via ``BotTestHarness(strategy=...)``.
     """
 
     @pytest.mark.asyncio
@@ -643,28 +646,18 @@ class TestStreamingIterativePhasedLoop:
                     finish_reason="stop",
                 )
 
-        from dataknobs_bots.bot.base import DynaBot
-        from dataknobs_bots.bot.context import BotContext
-
-        bot = await DynaBot.from_config({
-            "llm": {"provider": "echo", "model": "test"},
-            "conversation_storage": {"backend": "memory"},
-            "reasoning": {"strategy": "simple"},
-        })
-        # Replace strategy with our test strategy
-        strategy = _IterStreamStrategy()
-        bot.reasoning_strategy = strategy
-
         tool = EchoTool()
-        bot.tool_registry.register_tool(tool)
 
-        context = BotContext(
-            conversation_id="stream-iter-test", client_id="test"
-        )
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "simple"},
+            },
+            strategy=_IterStreamStrategy(),
+            tools=[tool],
+        ) as harness:
+            result = await harness.stream_chat("test")
 
-        chunks: list[str] = []
-        async for chunk in bot.stream_chat("test", context):
-            chunks.append(chunk.delta)
-
-        assert "".join(chunks) == "streamed done"
+        assert result.response == "streamed done"
         assert tool.call_count == 1
