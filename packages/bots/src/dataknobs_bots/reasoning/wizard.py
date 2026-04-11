@@ -2046,6 +2046,8 @@ class WizardReasoning(ReasoningStrategy):
         # state keys.  Index-based matching: trm_entries[i] corresponds to
         # tool_results[i] (process_input builds one ToolCallSpec per
         # trm_entry in order, and _execute_tools preserves order).
+        # This handles duplicate tool names correctly — each entry maps
+        # to its own execution result by position, not by name lookup.
         trm_entries = handle.tool_result_mapping
         if trm_entries and tool_results:
             for idx, trm_entry in enumerate(trm_entries):

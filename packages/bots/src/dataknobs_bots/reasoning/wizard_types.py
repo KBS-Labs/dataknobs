@@ -18,6 +18,7 @@ Types defined here:
 - :class:`StageSchema` — JSON Schema wrapper for stage fields
 - :class:`NavigationCommandConfig` — single navigation command config
 - :class:`NavigationConfig` — full navigation configuration
+- :class:`FinalizePreambleResult` — return type from ``_finalize_preamble``
 """
 
 from __future__ import annotations

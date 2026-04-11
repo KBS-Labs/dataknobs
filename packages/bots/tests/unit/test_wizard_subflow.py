@@ -26,6 +26,7 @@ from dataknobs_bots.reasoning.wizard_subflows import (
     _apply_data_mapping,
     _apply_result_mapping,
 )
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
 
 class TestSubflowContext:
@@ -759,3 +760,70 @@ class TestShouldPushSubflowGuard:
             "Guard failed: would have pushed duplicate subflow after "
             "state restoration"
         )
+
+
+# ---------------------------------------------------------------------------
+# Non-streaming subflow push (parity with TestStreamingSubflowPush)
+# ---------------------------------------------------------------------------
+
+
+class TestNonStreamingSubflowPush:
+    """Subflow push through finalize_turn (non-streaming) saves state correctly.
+
+    Mirrors TestStreamingSubflowPush in test_wizard_streaming.py to ensure
+    both code paths through _finalize_preamble behave identically.
+    """
+
+    @pytest.mark.asyncio
+    async def test_subflow_push_via_chat(self) -> None:
+        """Subflow push via non-streaming chat enters subflow and increments render count."""
+        subflow_config = (
+            WizardConfigBuilder("detail-subflow")
+            .stage(
+                "detail_gather",
+                is_start=True,
+                prompt="Tell me the details.",
+                response_template="Please provide details for {{ name }}.",
+            )
+            .field("detail", field_type="string", required=True)
+            .transition("detail_done", "data.get('detail')")
+            .stage("detail_done", is_end=True, prompt="Got details.")
+            .build()
+        )
+
+        config = (
+            WizardConfigBuilder("subflow-chat-test")
+            .stage("gather", is_start=True, prompt="What is your name?")
+            .field("name", field_type="string", required=True)
+            .transition(
+                target="review",
+                condition="data.get('name')",
+                subflow_network="detail_subflow",
+                return_stage="review",
+                data_mapping={"name": "name"},
+            )
+            .stage("review", is_end=True, prompt="All done!")
+            .subflow("detail_subflow", subflow_config)
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"name": "Alice"}]],
+        ) as harness:
+            result = await harness.chat("My name is Alice")
+
+            # Response should contain the subflow's first stage template
+            assert "Alice" in result.response
+
+            # Wizard should be in the subflow's first stage
+            assert harness.wizard_stage == "detail_gather"
+
+            # Render count should be incremented for the template stage
+            state = harness.wizard_state
+            assert state is not None
+            render_counts = state.get("data", {}).get(
+                "_stage_render_counts", {}
+            )
+            assert render_counts.get("detail_gather", 0) == 1
