@@ -1887,12 +1887,86 @@ class DynaBot:
 
             # Branch on phased reasoning support (same as chat()).
             # Import deferred to avoid bot ↔ reasoning circular import.
-            from ..reasoning.base import PhasedReasoningProtocol
+            # isinstance ordering matters: StreamingPhasedProtocol
+            # extends PhasedReasoningProtocol, so check it first.
+            from ..reasoning.base import (
+                PhasedReasoningProtocol,
+                StreamingPhasedProtocol,
+            )
 
-            if isinstance(self.reasoning_strategy, PhasedReasoningProtocol):
-                # Phased strategies produce a complete response that we
-                # wrap as a single stream chunk.  Future streaming-phase
-                # support will yield incremental chunks per phase.
+            if isinstance(self.reasoning_strategy, StreamingPhasedProtocol):
+                # Streaming phased flow: begin_turn + process_input
+                # blocking, stream finalize_turn per-token.
+                strategy = self.reasoning_strategy
+                handle = await strategy.begin_turn(
+                    turn.manager,
+                    self.llm,
+                    tools=list(self.tool_registry) or None,
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                )
+
+                if handle.early_response:
+                    content = self._extract_response_content(
+                        handle.early_response
+                    )
+                    turn.stream_chunks.append(content)
+                    turn.populate_from_response(
+                        handle.early_response, self.llm
+                    )
+                    yield LLMStreamResponse(
+                        delta=content,
+                        is_final=True,
+                        finish_reason="stop",
+                    )
+                else:
+                    result = await strategy.process_input(handle)
+                    if result.early_response:
+                        content = self._extract_response_content(
+                            result.early_response
+                        )
+                        turn.stream_chunks.append(content)
+                        turn.populate_from_response(
+                            result.early_response, self.llm
+                        )
+                        yield LLMStreamResponse(
+                            delta=content,
+                            is_final=True,
+                            finish_reason="stop",
+                        )
+                    else:
+                        # Tool interleaving (same as _generate_phased_response)
+                        tool_results: list[ToolExecution] | None = None
+                        if result.needs_tool_execution:
+                            if self.tool_registry:
+                                tool_results = []
+                                await self._execute_tools(
+                                    turn,
+                                    result.pending_tool_calls,
+                                    add_observations=False,
+                                    executions_out=tool_results,
+                                )
+                                if not tool_results:
+                                    tool_results = None
+
+                        # Stream finalize_turn
+                        async for chunk in strategy.stream_finalize_turn(
+                            handle, tool_results
+                        ):
+                            turn.stream_chunks.append(chunk.delta)
+                            if chunk.is_final or chunk.usage:
+                                turn.populate_from_final_stream_chunk(
+                                    chunk, self.llm
+                                )
+                            yield chunk
+
+                        # Merge phased tool executions into turn state
+                        if tool_results:
+                            turn.tool_executions.extend(tool_results)
+
+            elif isinstance(self.reasoning_strategy, PhasedReasoningProtocol):
+                # Non-streaming phased fallback (single chunk)
                 response = await self._generate_phased_response(
                     turn, temperature, max_tokens, llm_config_overrides
                 )

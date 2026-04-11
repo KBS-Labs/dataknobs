@@ -212,6 +212,63 @@ class PhasedReasoningProtocol(Protocol):
         ...
 
 
+@dataclass
+class StreamStageContext:
+    """Mutable context for lifecycle signals from streaming stage response.
+
+    Populated by ``stream_generate_stage_response`` after the LLM stream
+    completes.  ``stream_finalize_turn`` reads it to handle tool-initiated
+    completion/restart signals.
+
+    Attributes:
+        tool_completion_requested: ``True`` when the CompleteWizardTool
+            signals that the wizard should mark as completed.
+        tool_completion_summary: Summary string from the completion tool.
+        tool_restart_requested: ``True`` when the RestartWizardTool
+            signals that the wizard should restart.
+    """
+
+    tool_completion_requested: bool = False
+    tool_completion_summary: str = ""
+    tool_restart_requested: bool = False
+
+
+@runtime_checkable
+class StreamingPhasedProtocol(PhasedReasoningProtocol, Protocol):
+    """Extension of :class:`PhasedReasoningProtocol` with streaming finalize.
+
+    Strategies that implement this protocol support per-token streaming
+    from ``finalize_turn``.  DynaBot's ``stream_chat()`` checks for this
+    protocol first (isinstance ordering matters because this extends
+    ``PhasedReasoningProtocol``).
+
+    ``begin_turn`` and ``process_input`` remain non-streaming — their
+    early returns are short, complete responses that don't benefit from
+    token-level streaming.
+    """
+
+    def stream_finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> AsyncIterator[Any]:
+        """Stream Phase C: Transition FSM, stream response, save state.
+
+        Mirrors :meth:`PhasedReasoningProtocol.finalize_turn` but yields
+        ``LLMStreamResponse`` chunks instead of returning a complete
+        response.  State is saved only after the stream is fully consumed.
+
+        Args:
+            handle: Turn handle from ``begin_turn``.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (``None`` when no tools were executed).
+
+        Yields:
+            ``LLMStreamResponse`` chunks.
+        """
+        ...
+
+
 @runtime_checkable
 class ReasoningManagerProtocol(Protocol):
     """Protocol defining the manager interface for reasoning strategies.

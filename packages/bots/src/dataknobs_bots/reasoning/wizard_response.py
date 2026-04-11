@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.expressions import safe_eval
+from dataknobs_llm import LLMStreamResponse
 
-from .base import ReasoningStrategy
+from .base import ReasoningStrategy, StreamStageContext
 from .observability import create_transition_record
 from .wizard_derivations import DerivationRule
 from .wizard_types import StageSchema, WizardState, field_is_present
@@ -1491,6 +1492,217 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         tool_restart_requested = bool(restart_signal.get("requested"))
 
         return response, tool_completion_requested, tool_completion_summary, tool_restart_requested
+
+    # =================================================================
+    # Streaming response generation
+    # =================================================================
+
+    async def stream_generate_stage_response(
+        self,
+        manager: Any,
+        llm: Any,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any] | None,
+        stream_ctx: StreamStageContext,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Stream response appropriate for current stage.
+
+        Streaming counterpart of :meth:`generate_stage_response`.  Three
+        response paths:
+
+        1. **Template mode** — renders template, yields single chunk.
+        2. **Strategy mode** — delegates to
+           :meth:`_stream_strategy_stage_response`.
+        3. **Single LLM call** — streams via
+           ``manager.stream_complete()``.
+
+        Early returns (template, ``llm_assist``) emit as single final
+        chunks because they are short, scoped responses that don't
+        benefit from token-level streaming.
+
+        Args:
+            manager: ConversationManager instance
+            llm: LLM provider
+            stage: Current stage metadata
+            state: Current wizard state
+            tools: Available tools
+            stream_ctx: Mutable context populated with lifecycle signals
+                after the stream completes.
+
+        Yields:
+            :class:`LLMStreamResponse` chunks.
+        """
+        stage_name = stage.get("name", "unknown")
+        response_template = stage.get("response_template")
+        wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
+
+        # ── Template mode ────────────────────────────────────────
+        is_conversation_mode = stage.get("mode") == "conversation"
+        is_first_render = state.get_render_count(stage_name) == 0
+        use_template = response_template and (
+            not is_conversation_mode or is_first_render
+        )
+
+        if use_template:
+            extra_context = await self._generate_context_variables(
+                stage, state, llm
+            )
+            rendered = self._render_response_template(
+                response_template, stage, state, extra_context=extra_context
+            )
+
+            user_message = self._get_last_user_message(manager)
+            if stage.get("llm_assist") and user_message and self.is_help_request(user_message):
+                assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
+                scoped_prompt = (
+                    f"{manager.system_prompt}\n\n"
+                    f"The user is asking a question during the wizard. "
+                    f"Context: {assist_prompt}\n"
+                    f"Answer their question helpfully and concisely. "
+                    f"Do NOT change the topic or claim any actions."
+                )
+                logger.debug(
+                    "LLM assist for stage '%s' (user question detected)",
+                    stage_name,
+                )
+                response = await manager.complete(
+                    system_prompt_override=scoped_prompt,
+                    metadata=wizard_snapshot,
+                )
+                content = getattr(response, "content", str(response))
+            else:
+                logger.debug(
+                    "Template response for stage '%s' (%d chars)",
+                    stage_name,
+                    len(rendered),
+                )
+                content = rendered
+                await manager.add_message(
+                    role="assistant",
+                    content=rendered,
+                    metadata=wizard_snapshot,
+                )
+
+            yield LLMStreamResponse(
+                delta=content,
+                is_final=True,
+                finish_reason="stop",
+                metadata=wizard_snapshot,
+            )
+            return
+
+        # ── LLM mode ────────────────────────────────────────────
+        stage_context = self.build_stage_context(stage, state)
+        enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
+        stage_tools = self.filter_tools_for_stage(stage, tools)
+        strategy = self._resolve_stage_strategy(stage)
+
+        logger.debug(
+            "Streaming response for stage '%s' (tools=%s, strategy=%s)",
+            stage_name,
+            [getattr(t, "name", str(t)) for t in stage_tools] if stage_tools else None,
+            type(strategy).__name__ if strategy else "single",
+        )
+
+        if strategy:
+            async for chunk in self._stream_strategy_stage_response(
+                strategy, manager, enhanced_prompt, stage, state,
+                stage_tools, stream_ctx, metadata=wizard_snapshot,
+            ):
+                yield chunk
+        else:
+            # Single LLM call — stream via manager
+            async for chunk in manager.stream_complete(
+                system_prompt_override=enhanced_prompt,
+                tools=stage_tools,
+                metadata=wizard_snapshot,
+            ):
+                yield chunk
+
+    async def _stream_strategy_stage_response(
+        self,
+        strategy: ReasoningStrategy,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
+        stream_ctx: StreamStageContext,
+        metadata: dict[str, Any] | None = None,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Stream response by delegating to a registered strategy.
+
+        Streaming counterpart of :meth:`_strategy_stage_response`.
+        Injects wizard context and lifecycle signal dicts, then iterates
+        ``strategy.stream_generate()``.  After iteration completes,
+        reads lifecycle signals into ``stream_ctx``.
+
+        Args:
+            strategy: The resolved reasoning strategy instance.
+            manager: ConversationManager instance.
+            enhanced_prompt: Stage-aware system prompt.
+            stage: Stage metadata dict.
+            state: Current wizard state.
+            tools: Available tools for this stage.
+            stream_ctx: Mutable context populated with lifecycle signals.
+            metadata: Optional metadata to persist on conversation nodes.
+
+        Yields:
+            :class:`LLMStreamResponse` chunks.
+        """
+        extra_context = self._build_extra_context()
+
+        completion_signal: dict[str, Any] = {"requested": False}
+        extra_context["_completion_signal"] = completion_signal
+        restart_signal: dict[str, Any] = {"requested": False}
+        extra_context["_restart_signal"] = restart_signal
+
+        def prompt_refresher() -> str:
+            fresh_context = self.build_stage_context(stage, state)
+            return f"{manager.system_prompt}\n\n{fresh_context}"
+
+        artifact_registry = self._get_artifact_registry()
+        review_executor = self._get_review_executor()
+        context_builder = self._get_context_builder()
+        _injections: dict[str, Any] = {
+            "_artifact_registry": artifact_registry,
+            "_review_executor": review_executor,
+            "_context_builder": context_builder,
+            "_extra_context": extra_context,
+            "_prompt_refresher": prompt_refresher,
+        }
+        for attr, value in _injections.items():
+            if value is not None and hasattr(strategy, attr):
+                setattr(strategy, attr, value)
+
+        async for chunk in strategy.stream_generate(
+            manager=manager,
+            llm=None,
+            tools=tools,
+            system_prompt_override=enhanced_prompt,
+            metadata=metadata,
+        ):
+            if isinstance(chunk, LLMStreamResponse):
+                yield chunk
+            else:
+                # Strategy yielded a complete LLMResponse — wrap as chunk
+                content = getattr(chunk, "content", str(chunk))
+                yield LLMStreamResponse(
+                    delta=content,
+                    is_final=True,
+                    finish_reason="stop",
+                    metadata=getattr(chunk, "metadata", {}),
+                )
+
+        # Read lifecycle signals after stream completes
+        stream_ctx.tool_completion_requested = bool(
+            completion_signal.get("requested")
+        )
+        stream_ctx.tool_completion_summary = completion_signal.get("summary", "")
+        stream_ctx.tool_restart_requested = bool(
+            restart_signal.get("requested")
+        )
 
     def _render_auto_advance_template(
         self, stage: dict[str, Any], state: WizardState
