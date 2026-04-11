@@ -482,6 +482,9 @@ class ExtractionPipelineResult:
     """Whether the extraction met the confidence threshold."""
 
 
+_VALID_ON_ERROR: frozenset[str] = frozenset({"skip", "fail"})
+
+
 @dataclass(frozen=True)
 class ToolResultMappingEntry:
     """Single tool-to-state mapping from stage config.
@@ -505,6 +508,14 @@ class ToolResultMappingEntry:
     params: dict[str, str]
     mapping: dict[str, str]
     on_error: str = "skip"
+
+    def __post_init__(self) -> None:
+        """Validate on_error at construction time."""
+        if self.on_error not in _VALID_ON_ERROR:
+            raise ValueError(
+                f"Invalid on_error value {self.on_error!r} for tool "
+                f"{self.tool_name!r}; must be one of {sorted(_VALID_ON_ERROR)}"
+            )
 
 
 @dataclass

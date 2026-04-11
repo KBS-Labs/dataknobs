@@ -45,19 +45,6 @@ PROVIDER_ROLE_SUMMARY_LLM = "summary_llm"
 PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
 
 
-@dataclass(frozen=True)
-class _ToolCallAdapter:
-    """Minimal adapter to make ToolCallSpec compatible with _execute_tools.
-
-    ``_execute_tools`` accesses ``.name`` and ``.parameters`` on each
-    tool call object.  This adapter provides those attributes from a
-    :class:`~dataknobs_bots.reasoning.base.ToolCallSpec`.
-    """
-
-    name: str
-    parameters: dict[str, Any]
-
-
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     """Normalize wizard metadata to canonical structure.
 
@@ -1223,23 +1210,18 @@ class DynaBot:
                     "advance if transition conditions depend on tool results",
                 )
             else:
-                tool_names = [s.tool_name for s in result.pending_tool_calls]
+                tool_names = [s.name for s in result.pending_tool_calls]
                 logger.debug(
                     "Phased tool execution: %d tool(s) requested: %s",
                     len(result.pending_tool_calls),
                     tool_names,
                 )
                 tool_results = []
-                adapted_calls = [
-                    _ToolCallAdapter(
-                        name=spec.tool_name,
-                        parameters=spec.parameters,
-                    )
-                    for spec in result.pending_tool_calls
-                ]
+                # ToolCallSpec shares .name/.parameters interface with
+                # ToolCall, so pass directly — no adapter needed.
                 await self._execute_tools(
                     turn,
-                    adapted_calls,
+                    result.pending_tool_calls,
                     add_observations=False,
                     executions_out=tool_results,
                 )
@@ -1251,9 +1233,16 @@ class DynaBot:
                         len(tool_results),
                     )
 
-        return await strategy.finalize_turn(  # type: ignore[union-attr]
+        response = await strategy.finalize_turn(  # type: ignore[union-attr]
             handle, tool_results
         )
+
+        # Merge phased tool executions into turn state so _finalize_turn
+        # dispatches on_tool_executed middleware for these executions.
+        if tool_results:
+            turn.tool_executions.extend(tool_results)
+
+        return response
 
     @staticmethod
     def _extract_response_content(response: Any) -> str:

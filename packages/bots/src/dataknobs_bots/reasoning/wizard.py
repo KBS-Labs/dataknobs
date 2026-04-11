@@ -1975,7 +1975,7 @@ class WizardReasoning(ReasoningStrategy):
                         if value is not None:
                             params[param_name] = value
                     specs.append(ToolCallSpec(
-                        tool_name=trm_entry.tool_name,
+                        name=trm_entry.tool_name,
                         parameters=params,
                     ))
                 result.pending_tool_calls = specs
@@ -2041,20 +2041,23 @@ class WizardReasoning(ReasoningStrategy):
         # This runs after update_tool_tasks so task tracking sees the tool
         # execution, and before FSM transition so conditions can check
         # tool-populated state keys.
-        trm_entries = handle.tool_result_mapping if isinstance(handle, WizardTurnHandle) else []
+        #
+        # Index-based matching: trm_entries[i] corresponds to
+        # tool_results[i] (process_input builds one ToolCallSpec per
+        # trm_entry in order, and _execute_tools preserves order).
+        # This handles duplicate tool names correctly — each entry maps
+        # to its own execution result.
+        trm_entries = handle.tool_result_mapping
         if trm_entries and tool_results:
-            for trm_entry in trm_entries:
-                exec_match = next(
-                    (e for e in tool_results if e.tool_name == trm_entry.tool_name),
-                    None,
-                )
-                if exec_match is None:
-                    continue
-                if exec_match.error:
+            for idx, trm_entry in enumerate(trm_entries):
+                if idx >= len(tool_results):
+                    break
+                execution = tool_results[idx]
+                if execution.error:
                     if trm_entry.on_error == "fail":
-                        wizard_state.data[f"_tool_error_{trm_entry.tool_name}"] = exec_match.error
+                        wizard_state.data[f"_tool_error_{trm_entry.tool_name}"] = execution.error
                     continue
-                result_data = exec_match.result
+                result_data = execution.result
                 if isinstance(result_data, dict):
                     for result_key, state_key in trm_entry.mapping.items():
                         if result_key in result_data:

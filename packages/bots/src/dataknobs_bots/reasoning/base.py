@@ -78,12 +78,16 @@ class ToolCallSpec:
     ``finalize_turn``.  This is config-driven (wizard stage
     ``tool_result_mapping``), not LLM-driven.
 
+    Shares the ``.name`` / ``.parameters`` attribute interface with
+    ``ToolCall`` from ``dataknobs_llm``, so DynaBot's
+    ``_execute_tools`` can consume both without adapters.
+
     Attributes:
-        tool_name: Name of the tool in the registry.
+        name: Name of the tool in the registry.
         parameters: Keyword arguments to pass to the tool.
     """
 
-    tool_name: str
+    name: str
     parameters: dict[str, Any]
 
 

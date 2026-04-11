@@ -108,16 +108,16 @@ class TestToolCallSpecConstruction:
     """Verify ToolCallSpec and ProcessResult with pending calls."""
 
     def test_tool_call_spec_frozen(self) -> None:
-        spec = ToolCallSpec(tool_name="my_tool", parameters={"key": "val"})
-        assert spec.tool_name == "my_tool"
+        spec = ToolCallSpec(name="my_tool", parameters={"key": "val"})
+        assert spec.name == "my_tool"
         assert spec.parameters == {"key": "val"}
         with pytest.raises(AttributeError):
-            spec.tool_name = "other"  # type: ignore[misc]
+            spec.name = "other"  # type: ignore[misc]
 
     def test_process_result_with_pending_calls(self) -> None:
         specs = [
-            ToolCallSpec(tool_name="t1", parameters={"a": 1}),
-            ToolCallSpec(tool_name="t2", parameters={}),
+            ToolCallSpec(name="t1", parameters={"a": 1}),
+            ToolCallSpec(name="t2", parameters={}),
         ]
         result = ProcessResult(
             needs_tool_execution=True,
@@ -126,7 +126,7 @@ class TestToolCallSpecConstruction:
         )
         assert result.needs_tool_execution is True
         assert len(result.pending_tool_calls) == 2
-        assert result.pending_tool_calls[0].tool_name == "t1"
+        assert result.pending_tool_calls[0].name == "t1"
 
     def test_process_result_default_empty(self) -> None:
         result = ProcessResult()
