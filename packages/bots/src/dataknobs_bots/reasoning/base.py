@@ -69,6 +69,28 @@ class TurnHandle:
     early_response: Any | None = None
 
 
+@dataclass(frozen=True)
+class ToolCallSpec:
+    """A tool call requested by a reasoning strategy.
+
+    Used by the phased protocol to communicate tool calls from
+    ``process_input`` to DynaBot, which executes them before
+    ``finalize_turn``.  This is config-driven (wizard stage
+    ``tool_result_mapping``), not LLM-driven.
+
+    Shares the ``.name`` / ``.parameters`` attribute interface with
+    ``ToolCall`` from ``dataknobs_llm``, so DynaBot's
+    ``_execute_tools`` can consume both without adapters.
+
+    Attributes:
+        name: Name of the tool in the registry.
+        parameters: Keyword arguments to pass to the tool.
+    """
+
+    name: str
+    parameters: dict[str, Any]
+
+
 @dataclass
 class ProcessResult:
     """Result from the ``process_input`` phase.
@@ -82,8 +104,12 @@ class ProcessResult:
             for clarification, validation errors, collection help, and
             other early-return paths.
         needs_tool_execution: When ``True``, DynaBot runs its tool loop
-            between ``process_input`` and ``finalize_turn``.  Currently
-            always ``False`` for wizard (tools run inside ReAct stages).
+            between ``process_input`` and ``finalize_turn``.  Set by
+            wizard stages with ``tool_result_mapping`` after successful
+            extraction.
+        pending_tool_calls: Tool calls to execute when
+            ``needs_tool_execution`` is ``True``.  Built from the
+            stage's ``tool_result_mapping`` config and extracted state.
         action: Informational label describing what ``process_input``
             did (e.g. ``"extracted"``, ``"clarification"``,
             ``"collection_help"``).  For observability/debugging.
@@ -91,6 +117,7 @@ class ProcessResult:
 
     early_response: Any | None = None
     needs_tool_execution: bool = False
+    pending_tool_calls: list[ToolCallSpec] = field(default_factory=list)
     action: str = ""
 
 

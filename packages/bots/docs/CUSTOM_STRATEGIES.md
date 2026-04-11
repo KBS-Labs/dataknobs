@@ -291,6 +291,13 @@ DynaBot detects phased support via `isinstance(strategy,
 PhasedReasoningProtocol)` and uses the phased path automatically.
 Non-phased strategies continue using the single `generate()` call.
 
+When `process_input` sets `needs_tool_execution=True` and populates
+`pending_tool_calls` with `ToolCallSpec` objects, DynaBot executes those
+tools between `process_input` and `finalize_turn`. The tool results
+(as `list[ToolExecution]`) are passed to `finalize_turn`. This is used
+by wizard stages with `tool_result_mapping` to populate state from tool
+results before FSM transition evaluation.
+
 **When to implement phased execution:**
 
 - Your strategy has complex internal state (like an FSM) that needs to
@@ -313,6 +320,7 @@ Non-phased strategies continue using the single `generate()` call.
 from dataknobs_bots.reasoning.base import (
     PhasedReasoningProtocol,
     ProcessResult,
+    ToolCallSpec,
     TurnHandle,
 )
 
@@ -329,10 +337,13 @@ class MyPhasedStrategy(ReasoningStrategy):
         result = ProcessResult()
         # Extract data, validate...
         # Set result.early_response for clarification/errors
-        # Set result.needs_tool_execution = True if DynaBot should run tools
+        # To request tool execution before finalize_turn:
+        #   result.pending_tool_calls = [ToolCallSpec(tool_name="...", parameters={...})]
+        #   result.needs_tool_execution = True
         return result
 
     async def finalize_turn(self, handle, tool_results=None):
+        # tool_results is a list[ToolExecution] when tools ran, None otherwise
         # Process tool_results, transition state, generate response, save
         return response
 

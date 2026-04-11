@@ -508,6 +508,44 @@ All fields available on `StageConfig`:
 | `intent_detection` | `IntentDetectionConfig \| None` | `None` | Intent detection settings |
 | `tasks` | `tuple[dict, ...]` | `()` | Stage-level tasks |
 | `capture_mode` | `str \| None` | `None` | Extraction control: `"auto"`, `"verbatim"`, or `"extract"` |
+| `tool_result_mapping` | `tuple[dict, ...]` | `()` | Post-extraction tool calls with result-to-state mapping (see below) |
+
+### Tool Result Mapping
+
+The `tool_result_mapping` field enables config-driven tool execution after extraction. When a stage has `tool_result_mapping` and extraction succeeds, DynaBot automatically executes the specified tools and maps their results into wizard state — without an LLM call.
+
+```yaml
+stages:
+  - name: lookup
+    schema:
+      properties:
+        product_name: { type: string }
+    tool_result_mapping:
+      - tool: product_lookup           # tool name in registry
+        params:                         # tool_param → state_key
+          query: "product_name"
+        mapping:                        # result_key → state_key
+          product_id: "product_id"
+          category: "product_category"
+        on_error: skip                  # skip (default) | fail
+    transitions:
+      - target: review
+        condition: "has('product_id')"
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | `str` | Tool name in the registry |
+| `params` | `dict[str, str]` | Tool parameter name → wizard state key. Missing state keys are omitted (not passed). |
+| `mapping` | `dict[str, str]` | Tool result key → wizard state key. For dict results, maps matching keys. For non-dict results, maps to the first target key. |
+| `on_error` | `str` | `"skip"` (default): silently skip mapping. `"fail"`: write `_tool_error_{tool_name}` to state. |
+
+Key points:
+- **Flat key mapping only** — no JSONPath or nested access
+- **Tool wins** — tool results overwrite extracted data
+- **No conversation observations** — results flow through state, not chat history
+- **No result chaining** — one tool's output cannot feed another in the same turn
+- **`confirm_first_render` interaction** — on stages with a `response_template`, extraction triggers a confirmation early-return on the first turn. Tools fire on the *subsequent* turn (when the user confirms), not the extraction turn. Transition conditions that check tool-populated keys therefore require two round-trips. Set `confirm_first_render: false` to skip confirmation and let tools + transitions fire on the extraction turn.
 
 ## TransitionConfig Reference
 

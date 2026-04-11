@@ -58,6 +58,7 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "extraction_scope", "extraction_grounding",
     "derivation_enabled", "recovery_enabled",
     "routing_transforms",
+    "tool_result_mapping",
 })
 
 # Patterns that suggest a condition is natural language rather than Python
@@ -653,6 +654,8 @@ class WizardConfigLoader:
                 # depend on (e.g. classify_user_need sets classified_need,
                 # then conditions check data.get('classified_need')).
                 "routing_transforms": stage.get("routing_transforms", []),
+                # Post-extraction tool calls with result-to-state mapping
+                "tool_result_mapping": stage.get("tool_result_mapping", []),
             }
 
         # Add global tasks to the first stage's metadata

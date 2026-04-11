@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
-from .base import ProcessResult, ReasoningStrategy, TurnHandle
+from .base import ProcessResult, ReasoningStrategy, ToolCallSpec, TurnHandle
 from .observability import (
     TransitionRecord,
     WizardStateSnapshot,
@@ -60,6 +60,7 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     SCOPE_BREADTH,
     StageSchema,
     SubflowContext,
+    ToolResultMappingEntry,
     TurnContext,
     VALID_RECOVERY_STRATEGIES,
     WizardAdvanceResult,
@@ -1950,6 +1951,37 @@ class WizardReasoning(ReasoningStrategy):
 
             result.action = "extracted"
 
+            # Check for tool_result_mapping on current stage.
+            # When present, build ToolCallSpec list from extracted state
+            # and signal DynaBot to execute tools before finalize_turn.
+            # Guard: only fire when extraction actually ran (not intent-only
+            # turns where _intent short-circuited extraction).
+            raw_trm = stage.get("tool_result_mapping", [])
+            if raw_trm and "_intent" not in wizard_state.data:
+                parsed_entries = [
+                    ToolResultMappingEntry(
+                        tool_name=entry["tool"],
+                        params=entry.get("params", {}),
+                        mapping=entry.get("mapping", {}),
+                        on_error=entry.get("on_error", "skip"),
+                    )
+                    for entry in raw_trm
+                ]
+                specs = []
+                for trm_entry in parsed_entries:
+                    params: dict[str, Any] = {}
+                    for param_name, state_key in trm_entry.params.items():
+                        value = wizard_state.data.get(state_key)
+                        if value is not None:
+                            params[param_name] = value
+                    specs.append(ToolCallSpec(
+                        name=trm_entry.tool_name,
+                        parameters=params,
+                    ))
+                result.pending_tool_calls = specs
+                result.needs_tool_execution = True
+                handle.tool_result_mapping = parsed_entries
+
         return result
 
     async def finalize_turn(
@@ -2004,6 +2036,36 @@ class WizardReasoning(ReasoningStrategy):
                     execution.tool_name,
                     success=(execution.error is None),
                 )
+
+        # Apply tool_result_mapping: write tool results into wizard state.
+        # This runs after update_tool_tasks so task tracking sees the tool
+        # execution, and before FSM transition so conditions can check
+        # tool-populated state keys.
+        #
+        # Index-based matching: trm_entries[i] corresponds to
+        # tool_results[i] (process_input builds one ToolCallSpec per
+        # trm_entry in order, and _execute_tools preserves order).
+        # This handles duplicate tool names correctly — each entry maps
+        # to its own execution result.
+        trm_entries = handle.tool_result_mapping
+        if trm_entries and tool_results:
+            for idx, trm_entry in enumerate(trm_entries):
+                if idx >= len(tool_results):
+                    break
+                execution = tool_results[idx]
+                if execution.error:
+                    if trm_entry.on_error == "fail":
+                        wizard_state.data[f"_tool_error_{trm_entry.tool_name}"] = execution.error
+                    continue
+                result_data = execution.result
+                if isinstance(result_data, dict):
+                    for result_key, state_key in trm_entry.mapping.items():
+                        if result_key in result_data:
+                            wizard_state.data[state_key] = result_data[result_key]
+                elif trm_entry.mapping:
+                    # Non-dict result: map to the first target key
+                    first_state_key = next(iter(trm_entry.mapping.values()))
+                    wizard_state.data[first_state_key] = result_data
 
         # Check for subflow push BEFORE regular FSM transition
         subflow_config = self._subflows.should_push(wizard_state, user_message)

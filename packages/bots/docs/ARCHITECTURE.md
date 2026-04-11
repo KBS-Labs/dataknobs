@@ -279,8 +279,11 @@ WizardReasoning. DynaBot detects phased support automatically via
 ```
 begin_turn    → restore state, handle navigation/amendments
 process_input → extract data, validate, handle collection modes
+              → build ToolCallSpec list from tool_result_mapping config
               → [DynaBot tool execution when needs_tool_execution=True]
-finalize_turn → FSM transition, response generation, save state
+finalize_turn → apply tool result mapping into wizard_state.data
+              → FSM transition (conditions can check tool-populated keys)
+              → response generation, save state
 ```
 
 ### 7. ToolRegistry

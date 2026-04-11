@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-11T02:06:11Z",
+  "timestamp": "2026-04-11T13:35:49Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-generate-redesign",
-  "git_commit": "d0ecbc59e7b858ba1c29c7839254eade7c02725e",
+  "git_branch": "sbk/wizard-tool-to-state-integration",
+  "git_commit": "a7075cc8751e2d67640ef0df255b98035fb289a4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
