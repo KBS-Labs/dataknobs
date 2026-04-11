@@ -83,6 +83,7 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     normalize_enum_value,
     validate_strategy_names,
 )
+from .wizard_types import FinalizePreambleResult
 from .wizard_subflows import SubflowManager
 from .wizard_tasks import (
     build_initial_tasks,
@@ -1987,34 +1988,35 @@ class WizardReasoning(ReasoningStrategy):
 
         return result
 
-    async def finalize_turn(
+    async def _finalize_preamble(
         self,
-        handle: TurnHandle,
-        tool_results: list[ToolExecution] | None = None,
-    ) -> Any:
-        """Phase C: Transition FSM, generate response, save state.
+        handle: WizardTurnHandle,
+        tool_results: list[ToolExecution] | None,
+    ) -> FinalizePreambleResult:
+        """Shared pre-response setup for finalize_turn / stream_finalize_turn.
 
-        Executes the FSM transition, generates the stage response, and
-        saves wizard state.  Receives tool execution results from the
-        DynaBot tool loop (if any tools ran between ``process_input``
-        and ``finalize_turn``).
+        Runs exit hooks, applies tool results and tool_result_mapping,
+        checks for subflow pushes, runs FSM transition, and executes
+        post-transition lifecycle.
+
+        Returns a :class:`FinalizePreambleResult` whose ``subflow_pushed``
+        flag tells the caller whether to generate a subflow response
+        (early path) or a normal stage response (main path).
 
         Args:
-            handle: Turn handle from :meth:`begin_turn`.
+            handle: Validated wizard turn handle.
             tool_results: Tool execution records from DynaBot's tool
                 loop (``None`` when no tools were executed).
 
         Returns:
-            LLM response object with wizard metadata.
+            Preamble result with either subflow push info or full
+            transition output.
         """
-        if not isinstance(handle, WizardTurnHandle):
-            raise TypeError(
-                f"WizardReasoning.finalize_turn requires WizardTurnHandle, "
-                f"got {type(handle).__name__}"
-            )
         wizard_state = handle.wizard_state
         if wizard_state is None:
-            raise ValueError("WizardTurnHandle.wizard_state is None — begin_turn must be called first")
+            raise ValueError(
+                "WizardTurnHandle.wizard_state is None — begin_turn must be called first"
+            )
         manager = handle.manager
         llm = handle.llm
         tools = handle.tools
@@ -2030,8 +2032,6 @@ class WizardReasoning(ReasoningStrategy):
         update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
 
         # Update tool tasks from DynaBot-level tool execution results.
-        # This is the call site that item 78 enables — update_tool_tasks()
-        # was extracted in 77a but had no caller until now.
         if tool_results:
             for execution in tool_results:
                 update_tool_tasks(
@@ -2041,15 +2041,11 @@ class WizardReasoning(ReasoningStrategy):
                 )
 
         # Apply tool_result_mapping: write tool results into wizard state.
-        # This runs after update_tool_tasks so task tracking sees the tool
-        # execution, and before FSM transition so conditions can check
-        # tool-populated state keys.
-        #
-        # Index-based matching: trm_entries[i] corresponds to
+        # Runs AFTER update_tool_tasks so task tracking sees the execution,
+        # and BEFORE FSM transition so conditions can check tool-populated
+        # state keys.  Index-based matching: trm_entries[i] corresponds to
         # tool_results[i] (process_input builds one ToolCallSpec per
         # trm_entry in order, and _execute_tools preserves order).
-        # This handles duplicate tool names correctly — each entry maps
-        # to its own execution result.
         trm_entries = handle.tool_result_mapping
         if trm_entries and tool_results:
             for idx, trm_entry in enumerate(trm_entries):
@@ -2075,22 +2071,20 @@ class WizardReasoning(ReasoningStrategy):
         if subflow_config and self._subflows.handle_push(
             wizard_state, subflow_config, user_message
         ):
-            # Generate response for subflow's first stage
             active_fsm = self._subflows.get_active_fsm()
             new_stage = active_fsm.current_metadata
             await self._navigator.branch_for_revisited_stage(
                 manager, new_stage.get("name", "")
             )
-            stage_result = await self._response.generate_stage_response(
-                manager, llm, new_stage, wizard_state, tools
+            return FinalizePreambleResult(
+                wizard_state=wizard_state,
+                manager=manager,
+                llm=llm,
+                tools=tools,
+                user_message=user_message,
+                subflow_pushed=True,
+                subflow_new_stage=new_stage,
             )
-            # Increment render count for template stages so subsequent
-            # turns don't re-trigger first-render confirmation logic.
-            subflow_stage_name = new_stage.get("name", "")
-            if subflow_stage_name and new_stage.get("response_template"):
-                wizard_state.increment_render_count(subflow_stage_name)
-            await self._save_wizard_state(manager, wizard_state)
-            return stage_result.response
 
         # Get current stage for transition derivations and routing
         active_fsm = self._subflows.get_active_fsm()
@@ -2147,22 +2141,75 @@ class WizardReasoning(ReasoningStrategy):
 
         # Re-fetch active FSM for response generation
         active_fsm = self._subflows.get_active_fsm()
-
-        # Generate stage-aware response
         new_stage = active_fsm.current_metadata
         if new_stage.get("name") != from_stage:
             await self._navigator.branch_for_revisited_stage(
                 manager, new_stage.get("name", "")
             )
-        completed_before = wizard_state.completed
+
+        return FinalizePreambleResult(
+            wizard_state=wizard_state,
+            manager=manager,
+            llm=llm,
+            tools=tools,
+            user_message=user_message,
+            from_stage=from_stage,
+            new_stage=new_stage,
+            auto_advance_messages=auto_advance_messages,
+            completed_before=wizard_state.completed,
+        )
+
+    async def finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> Any:
+        """Phase C: Transition FSM, generate response, save state.
+
+        Executes the FSM transition, generates the stage response, and
+        saves wizard state.  Receives tool execution results from the
+        DynaBot tool loop (if any tools ran between ``process_input``
+        and ``finalize_turn``).
+
+        Args:
+            handle: Turn handle from :meth:`begin_turn`.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (``None`` when no tools were executed).
+
+        Returns:
+            LLM response object with wizard metadata.
+        """
+        if not isinstance(handle, WizardTurnHandle):
+            raise TypeError(
+                f"WizardReasoning.finalize_turn requires WizardTurnHandle, "
+                f"got {type(handle).__name__}"
+            )
+
+        pre = await self._finalize_preamble(handle, tool_results)
+
+        # ── Subflow push: generate response and return ───────────
+        if pre.subflow_pushed:
+            stage_result = await self._response.generate_stage_response(
+                pre.manager, pre.llm, pre.subflow_new_stage,
+                pre.wizard_state, pre.tools,
+            )
+            subflow_stage_name = pre.subflow_new_stage.get("name", "")
+            if subflow_stage_name and pre.subflow_new_stage.get("response_template"):
+                pre.wizard_state.increment_render_count(subflow_stage_name)
+            await self._save_wizard_state(pre.manager, pre.wizard_state)
+            return stage_result.response
+
+        # ── Normal path: generate response with lifecycle handling ─
         stage_result = await self._response.generate_stage_response(
-            manager, llm, new_stage, wizard_state, tools
+            pre.manager, pre.llm, pre.new_stage, pre.wizard_state, pre.tools,
         )
         response = stage_result.response
 
         # Prepend any messages collected from intermediate auto-advance stages
-        if auto_advance_messages:
-            WizardResponder.prepend_messages_to_response(response, auto_advance_messages)
+        if pre.auto_advance_messages:
+            WizardResponder.prepend_messages_to_response(
+                response, pre.auto_advance_messages,
+            )
 
         # Check for tool-initiated restart (RestartWizardTool signal).
         # Restart takes priority over completion — if both are set, restart
@@ -2170,32 +2217,31 @@ class WizardReasoning(ReasoningStrategy):
         if stage_result.tool_restart_requested:
             logger.info("Wizard restart signaled by restart_wizard tool")
             response = await self._navigator.execute_restart(
-                user_message, wizard_state, manager, llm
+                pre.user_message, pre.wizard_state, pre.manager, pre.llm,
             )
 
         # Check for tool-initiated completion (CompleteWizardTool signal)
-        elif not completed_before and stage_result.tool_completion_requested:
-            wizard_state.completed = True
+        elif not pre.completed_before and stage_result.tool_completion_requested:
+            pre.wizard_state.completed = True
             completion_summary = stage_result.tool_completion_summary
             if completion_summary:
                 logger.info(
                     "Wizard completion signaled by complete_wizard tool: %s",
                     completion_summary,
                 )
-                wizard_state.data["_completion_summary"] = completion_summary
+                pre.wizard_state.data["_completion_summary"] = completion_summary
             else:
                 logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
-                await self._hooks.trigger_complete(wizard_state.data)
+                await self._hooks.trigger_complete(pre.wizard_state.data)
 
-        # Mark this stage's template as rendered so subsequent messages
-        # at this stage don't trigger the first-render confirmation logic.
-        stage_rendered_name = new_stage.get("name", "")
-        if stage_rendered_name and new_stage.get("response_template"):
-            wizard_state.increment_render_count(stage_rendered_name)
+        # Mark this stage's template as rendered
+        stage_rendered_name = pre.new_stage.get("name", "")
+        if stage_rendered_name and pre.new_stage.get("response_template"):
+            pre.wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
-        await self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(pre.manager, pre.wizard_state)
 
         return response
 
@@ -2206,9 +2252,9 @@ class WizardReasoning(ReasoningStrategy):
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream Phase C: Transition FSM, stream response, save state.
 
-        Streaming counterpart of :meth:`finalize_turn`.  Pre-stream and
-        post-stream work is identical to the non-streaming path; only the
-        response generation step streams token-by-token.
+        Streaming counterpart of :meth:`finalize_turn`.  Uses the same
+        :meth:`_finalize_preamble` for pre-response setup; only the
+        response generation step differs (streaming vs. buffered).
 
         State is saved only after the stream is fully consumed.  If the
         caller abandons the stream via ``aclose()``, state is NOT saved —
@@ -2227,138 +2273,28 @@ class WizardReasoning(ReasoningStrategy):
                 f"WizardReasoning.stream_finalize_turn requires WizardTurnHandle, "
                 f"got {type(handle).__name__}"
             )
-        wizard_state = handle.wizard_state
-        if wizard_state is None:
-            raise ValueError(
-                "WizardTurnHandle.wizard_state is None — begin_turn must be called first"
-            )
-        manager = handle.manager
-        llm = handle.llm
-        tools = handle.tools
-        user_message = handle.user_message
 
-        # ── Pre-stream work (identical to finalize_turn) ─────────
+        pre = await self._finalize_preamble(handle, tool_results)
 
-        # Trigger stage exit hook if configured
-        if self._hooks:
-            await self._hooks.trigger_exit(
-                wizard_state.current_stage, wizard_state.data
-            )
-
-        # Update stage-exit tasks before leaving
-        update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
-
-        # Update tool tasks from DynaBot-level tool execution results
-        if tool_results:
-            for execution in tool_results:
-                update_tool_tasks(
-                    wizard_state,
-                    execution.tool_name,
-                    success=(execution.error is None),
-                )
-
-        # Apply tool_result_mapping: write tool results into wizard state
-        trm_entries = handle.tool_result_mapping
-        if trm_entries and tool_results:
-            for idx, trm_entry in enumerate(trm_entries):
-                if idx >= len(tool_results):
-                    break
-                execution = tool_results[idx]
-                if execution.error:
-                    if trm_entry.on_error == "fail":
-                        wizard_state.data[f"_tool_error_{trm_entry.tool_name}"] = execution.error
-                    continue
-                result_data = execution.result
-                if isinstance(result_data, dict):
-                    for result_key, state_key in trm_entry.mapping.items():
-                        if result_key in result_data:
-                            wizard_state.data[state_key] = result_data[result_key]
-                elif trm_entry.mapping:
-                    first_state_key = next(iter(trm_entry.mapping.values()))
-                    wizard_state.data[first_state_key] = result_data
-
-        # Check for subflow push BEFORE regular FSM transition
-        subflow_config = self._subflows.should_push(wizard_state, user_message)
-        if subflow_config and self._subflows.handle_push(
-            wizard_state, subflow_config, user_message
-        ):
-            active_fsm = self._subflows.get_active_fsm()
-            new_stage = active_fsm.current_metadata
-            await self._navigator.branch_for_revisited_stage(
-                manager, new_stage.get("name", "")
-            )
-            # Subflow push: stream the subflow's first stage response
+        # ── Subflow push: stream response and return ─────────────
+        if pre.subflow_pushed:
             stream_ctx = StreamStageContext()
             async for chunk in self._response.stream_generate_stage_response(
-                manager, llm, new_stage, wizard_state, tools, stream_ctx
+                pre.manager, pre.llm, pre.subflow_new_stage,
+                pre.wizard_state, pre.tools, stream_ctx,
             ):
                 yield chunk
-            # Increment render count for template stages so subsequent
-            # turns don't re-trigger first-render confirmation logic.
-            subflow_stage_name = new_stage.get("name", "")
-            if subflow_stage_name and new_stage.get("response_template"):
-                wizard_state.increment_render_count(subflow_stage_name)
-            await self._save_wizard_state(manager, wizard_state)
+            subflow_stage_name = pre.subflow_new_stage.get("name", "")
+            if subflow_stage_name and pre.subflow_new_stage.get("response_template"):
+                pre.wizard_state.increment_render_count(subflow_stage_name)
+            await self._save_wizard_state(pre.manager, pre.wizard_state)
             return
 
-        # Get current stage for transition derivations and routing
-        active_fsm = self._subflows.get_active_fsm()
-        stage = active_fsm.current_metadata
-
-        # Apply data derivations from transition configs
-        self._apply_transition_derivations(stage, wizard_state)
-
-        # Execute routing transforms (before condition evaluation)
-        await self._execute_routing_transforms(stage, wizard_state)
-
-        logger.debug(
-            "FSM transition attempt (streaming): from_stage='%s', data_keys=%s",
-            wizard_state.current_stage,
-            list(wizard_state.data.keys()),
-        )
-
-        # Execute FSM step
-        from_stage, _step_result = await self._execute_fsm_step(
-            wizard_state,
-            user_message=None if handle.skip_extraction else user_message,
-        )
-
-        # Auto-save artifact to catalog on stage transition
-        if wizard_state.current_stage != from_stage and self._catalog and self._artifact:
-            try:
-                errors = self._artifact.validate()
-                if not errors:
-                    self._catalog.save(self._artifact)
-                    logger.debug(
-                        "Auto-saved artifact on stage transition %s -> %s",
-                        from_stage,
-                        wizard_state.current_stage,
-                    )
-            except Exception:
-                logger.warning(
-                    "Auto-save on stage transition failed",
-                    exc_info=True,
-                )
-
-        # Post-transition lifecycle
-        auto_advance_messages = await self._run_post_transition_lifecycle(
-            wizard_state,
-        )
-
-        # Re-fetch active FSM for response generation
-        active_fsm = self._subflows.get_active_fsm()
-        new_stage = active_fsm.current_metadata
-        if new_stage.get("name") != from_stage:
-            await self._navigator.branch_for_revisited_stage(
-                manager, new_stage.get("name", "")
-            )
-        completed_before = wizard_state.completed
-
-        # ── Streaming section ────────────────────────────────────
+        # ── Normal path: stream response with lifecycle handling ──
 
         # Yield auto-advance messages as initial chunk
-        if auto_advance_messages:
-            prefix = "\n\n".join(auto_advance_messages) + "\n\n"
+        if pre.auto_advance_messages:
+            prefix = "\n\n".join(pre.auto_advance_messages) + "\n\n"
             yield LLMStreamResponse(delta=prefix, is_final=False)
 
         # Stream stage response.
@@ -2368,7 +2304,8 @@ class WizardReasoning(ReasoningStrategy):
         # guard.
         stream_ctx = StreamStageContext()
         async for chunk in self._response.stream_generate_stage_response(
-            manager, llm, new_stage, wizard_state, tools, stream_ctx
+            pre.manager, pre.llm, pre.new_stage, pre.wizard_state,
+            pre.tools, stream_ctx,
         ):
             yield chunk
 
@@ -2383,30 +2320,32 @@ class WizardReasoning(ReasoningStrategy):
         # restarted wizard and generate the first-stage greeting naturally.
         if stream_ctx.tool_restart_requested:
             logger.info("Wizard restart signaled by restart_wizard tool (streaming)")
-            await self._navigator.restart_cleanup(wizard_state, user_message)
+            await self._navigator.restart_cleanup(
+                pre.wizard_state, pre.user_message,
+            )
 
         # Check for tool-initiated completion
-        elif not completed_before and stream_ctx.tool_completion_requested:
-            wizard_state.completed = True
+        elif not pre.completed_before and stream_ctx.tool_completion_requested:
+            pre.wizard_state.completed = True
             completion_summary = stream_ctx.tool_completion_summary
             if completion_summary:
                 logger.info(
                     "Wizard completion signaled by complete_wizard tool: %s",
                     completion_summary,
                 )
-                wizard_state.data["_completion_summary"] = completion_summary
+                pre.wizard_state.data["_completion_summary"] = completion_summary
             else:
                 logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
-                await self._hooks.trigger_complete(wizard_state.data)
+                await self._hooks.trigger_complete(pre.wizard_state.data)
 
         # Mark this stage's template as rendered
-        stage_rendered_name = new_stage.get("name", "")
-        if stage_rendered_name and new_stage.get("response_template"):
-            wizard_state.increment_render_count(stage_rendered_name)
+        stage_rendered_name = pre.new_stage.get("name", "")
+        if stage_rendered_name and pre.new_stage.get("response_template"):
+            pre.wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state (only reached when stream fully consumed)
-        await self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(pre.manager, pre.wizard_state)
 
     async def generate(
         self,

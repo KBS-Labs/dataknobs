@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-11T14:43:34Z",
+  "timestamp": "2026-04-11T15:20:53Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-streaming-tool-feedback",
-  "git_commit": "27fd887c41ed164c041ad516983b21e951aa8457",
+  "git_branch": "sbk/finalize-preamble-extraction",
+  "git_commit": "8ec30987a101d44adf2e6381ed9d7f7dd1fca4ce",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

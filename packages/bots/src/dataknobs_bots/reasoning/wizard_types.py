@@ -482,6 +482,50 @@ class ExtractionPipelineResult:
     """Whether the extraction met the confidence threshold."""
 
 
+@dataclass
+class FinalizePreambleResult:
+    """Result from the shared finalize-turn preamble.
+
+    Bundles all intermediate values produced by
+    :meth:`WizardReasoning._finalize_preamble` that callers need for
+    response generation and post-response work.
+
+    When ``subflow_pushed`` is ``True``, a subflow was activated and
+    the caller must generate its own response for the subflow's first
+    stage (using ``subflow_new_stage``), then save state and return.
+    The ``from_stage``, ``new_stage``, ``auto_advance_messages``, and
+    ``completed_before`` fields are NOT populated in that case.
+
+    Attributes:
+        wizard_state: Current wizard state (mutable reference).
+        manager: ConversationManager for this turn.
+        llm: LLM provider instance.
+        tools: Available tools (or None).
+        user_message: The user's input message.
+        subflow_pushed: Whether a subflow was pushed (early-exit path).
+        subflow_new_stage: Stage metadata for the subflow's first stage
+            (only set when ``subflow_pushed`` is True).
+        from_stage: Stage name before FSM transition.
+        new_stage: Stage metadata after FSM transition + post-lifecycle.
+        auto_advance_messages: Rendered messages from auto-advanced
+            intermediate stages.
+        completed_before: Whether the wizard was completed before this
+            turn's response generation.
+    """
+
+    wizard_state: WizardState
+    manager: Any
+    llm: Any
+    tools: list[Any] | None
+    user_message: str
+    subflow_pushed: bool = False
+    subflow_new_stage: dict[str, Any] = field(default_factory=dict)
+    from_stage: str = ""
+    new_stage: dict[str, Any] = field(default_factory=dict)
+    auto_advance_messages: list[str] = field(default_factory=list)
+    completed_before: bool = False
+
+
 _VALID_ON_ERROR: frozenset[str] = frozenset({"skip", "fail"})
 
 
