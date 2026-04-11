@@ -268,6 +268,89 @@ async def close(self) -> None:
         await self._query_provider.close()
 ```
 
+### Phased Turn Execution (`PhasedReasoningProtocol`)
+
+By default, DynaBot calls `generate()` as a single opaque call, then runs
+its own tool execution loop on any `tool_calls` in the response.  For
+strategies that need DynaBot to interleave tool execution *within* the
+generation lifecycle (e.g. to update wizard state from tool results before
+saving), the `PhasedReasoningProtocol` splits the turn into three phases:
+
+```
+DynaBot.chat()
+  → strategy.begin_turn(manager, llm, tools, **kwargs)
+      ← TurnHandle (or early_response for navigation/amendments)
+  → strategy.process_input(handle)
+      ← ProcessResult (or early_response for clarification/validation)
+  → [DynaBot tool execution — when ProcessResult.needs_tool_execution]
+  → strategy.finalize_turn(handle, tool_results)
+      ← LLM response
+```
+
+DynaBot detects phased support via `isinstance(strategy,
+PhasedReasoningProtocol)` and uses the phased path automatically.
+Non-phased strategies continue using the single `generate()` call.
+
+**When to implement phased execution:**
+
+- Your strategy has complex internal state (like an FSM) that needs to
+  reflect tool results before being saved
+- You need tool execution to happen at a specific point in the generation
+  lifecycle, not after the entire response is produced
+- Your strategy has multiple early-return paths (navigation, validation,
+  clarification) that should bypass tool execution
+
+**When NOT to implement it:**
+
+- Simple strategies that just call `manager.complete()` — use `generate()`
+- Strategies with internal tool loops (like ReAct) — manage tools yourself
+  via `self._tool_executions`
+- Most custom strategies — the single `generate()` call is sufficient
+
+**Implementation:**
+
+```python
+from dataknobs_bots.reasoning.base import (
+    PhasedReasoningProtocol,
+    ProcessResult,
+    TurnHandle,
+)
+
+
+class MyPhasedStrategy(ReasoningStrategy):
+
+    async def begin_turn(self, manager, llm, tools=None, **kwargs):
+        handle = TurnHandle(manager=manager, llm=llm, tools=tools, kwargs=kwargs)
+        # Restore state, handle navigation...
+        # Set handle.early_response to short-circuit
+        return handle
+
+    async def process_input(self, handle):
+        result = ProcessResult()
+        # Extract data, validate...
+        # Set result.early_response for clarification/errors
+        # Set result.needs_tool_execution = True if DynaBot should run tools
+        return result
+
+    async def finalize_turn(self, handle, tool_results=None):
+        # Process tool_results, transition state, generate response, save
+        return response
+
+    async def generate(self, manager, llm, tools=None, **kwargs):
+        """Backward-compatible wrapper."""
+        handle = await self.begin_turn(manager, llm, tools, **kwargs)
+        if handle.early_response:
+            return handle.early_response
+        result = await self.process_input(handle)
+        if result.early_response:
+            return result.early_response
+        return await self.finalize_turn(handle)
+```
+
+`WizardReasoning` is currently the only built-in strategy that implements
+the phased protocol. Subclass `TurnHandle` to carry strategy-specific
+state between phases (see `WizardTurnHandle` for an example).
+
 ## Registry API
 
 ```python

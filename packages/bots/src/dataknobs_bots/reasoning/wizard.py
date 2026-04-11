@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
-from .base import ReasoningStrategy
+from .base import ProcessResult, ReasoningStrategy, TurnHandle
 from .observability import (
     TransitionRecord,
     WizardStateSnapshot,
@@ -65,6 +65,7 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     WizardAdvanceResult,
     WizardStageContext,
     WizardState,
+    WizardTurnHandle,
     _DEFAULT_AFFIRMATIVE_PHRASES,
     _DEFAULT_AFFIRMATIVE_SIGNALS,
     _DEFAULT_NEGATIVE_PHRASES,
@@ -83,9 +84,11 @@ from .wizard_tasks import (
     build_initial_tasks,
     update_field_tasks,
     update_stage_exit_tasks,
+    update_tool_tasks,
 )
 
 if TYPE_CHECKING:
+    from dataknobs_bots.bot.turn import ToolExecution
     from dataknobs_data import SyncDatabase
 
     from .wizard_fsm import WizardFSM
@@ -1514,38 +1517,54 @@ class WizardReasoning(ReasoningStrategy):
 
         return response
 
-    async def generate(
+    # =========================================================================
+    # Phased Turn Protocol (PhasedReasoningProtocol)
+    # =========================================================================
+    #
+    # The phased protocol splits generate() into three phases:
+    #   1. begin_turn — restore state, handle navigation/amendments
+    #   2. process_input — extract data, validate, handle collection modes
+    #   3. finalize_turn — FSM transition, response generation, save state
+    #
+    # DynaBot can interleave tool execution between process_input and
+    # finalize_turn, enabling tool results to update wizard state
+    # (e.g. update_tool_tasks) before state is saved.
+    #
+    # generate() is retained as a backward-compatible wrapper.
+
+    async def begin_turn(
         self,
         manager: Any,
         llm: Any,
         tools: list[Any] | None = None,
         **kwargs: Any,
-    ) -> Any:
-        """Generate response guided by wizard FSM.
+    ) -> WizardTurnHandle:
+        """Phase A: Restore state, handle navigation and amendments.
 
-        This method:
-        1. Retrieves or initializes wizard state
-        2. Handles post-completion amendments (if enabled)
-        3. Checks for navigation commands (back, skip, restart)
-        4. Extracts structured data from user input
-        5. Validates extracted data against stage schema
-        6. Executes FSM transition on valid input
-        7. Generates appropriate response for current/new stage
+        Restores wizard state from conversation metadata, clears per-turn
+        transient keys, and handles navigation commands and post-completion
+        amendments.  If the turn resolves to a navigation or amendment
+        response, ``handle.early_response`` is set.
 
         Args:
-            manager: ConversationManager instance
-            llm: LLM provider instance
-            tools: Optional list of available tools
-            **kwargs: Additional generation parameters
+            manager: ConversationManager instance.
+            llm: LLM provider instance.
+            tools: Optional list of available tools.
+            **kwargs: Additional generation parameters.
 
         Returns:
-            LLM response object with wizard metadata
+            :class:`WizardTurnHandle` with wizard state and user message.
         """
+        handle = WizardTurnHandle(
+            manager=manager, llm=llm, tools=tools, kwargs=kwargs,
+        )
+
         # Store LLM reference so transform context wrappers can access it
         self._current_llm = llm
 
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
+        handle.wizard_state = wizard_state
 
         # Clear per-turn keys from previous turn to prevent stale values
         for key in self._per_turn_keys:
@@ -1553,7 +1572,7 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.transient.pop(key, None)
 
         # Get user message
-        user_message = self._get_last_user_message(manager)
+        handle.user_message = self._get_last_user_message(manager)
 
         logger.debug(
             "Wizard generate: stage='%s', completed=%s, "
@@ -1568,11 +1587,12 @@ class WizardReasoning(ReasoningStrategy):
         # Handle post-completion amendments
         if wizard_state.completed and self._allow_amendments:
             amendment_response = await self._navigator.handle_amendment(
-                user_message, wizard_state, manager, llm, tools,
+                handle.user_message, wizard_state, manager, llm, tools,
             )
             if amendment_response:
                 await self._save_wizard_state(manager, wizard_state)
-                return amendment_response
+                handle.early_response = amendment_response
+                return handle
 
         # Auto-restart when the wizard can't meaningfully continue:
         #
@@ -1605,7 +1625,7 @@ class WizardReasoning(ReasoningStrategy):
                 self._allow_amendments,
             )
             await self._navigator.restart_cleanup(
-                wizard_state, user_message, trigger="auto_restart"
+                wizard_state, handle.user_message, trigger="auto_restart"
             )
             # Branch the conversation tree so the new recipe's context
             # starts fresh — the LLM won't see the old recipe's detailed
@@ -1616,11 +1636,49 @@ class WizardReasoning(ReasoningStrategy):
 
         # Handle navigation commands
         nav_result = await self._navigator.handle_navigation(
-            user_message, wizard_state, manager, llm
+            handle.user_message, wizard_state, manager, llm
         )
         if nav_result:
             await self._save_wizard_state(manager, wizard_state)
-            return nav_result
+            handle.early_response = nav_result
+            return handle
+
+        # Capture skip_extraction flag for process_input
+        handle.skip_extraction = wizard_state.skip_extraction
+
+        return handle
+
+    async def process_input(
+        self,
+        handle: TurnHandle,
+    ) -> ProcessResult:
+        """Phase B: Extract data, validate, prepare for transition.
+
+        Processes the user's input through the extraction pipeline,
+        validates against stage schema, and handles collection modes.
+        If the turn resolves to an early response (clarification,
+        validation error, etc.), ``result.early_response`` is set.
+
+        Args:
+            handle: Turn handle from :meth:`begin_turn`.
+
+        Returns:
+            :class:`ProcessResult` indicating outcome and whether
+            DynaBot should execute tools before :meth:`finalize_turn`.
+        """
+        if not isinstance(handle, WizardTurnHandle):
+            raise TypeError(
+                f"WizardReasoning.process_input requires WizardTurnHandle, "
+                f"got {type(handle).__name__}"
+            )
+        result = ProcessResult()
+        wizard_state = handle.wizard_state
+        if wizard_state is None:
+            raise ValueError("WizardTurnHandle.wizard_state is None — begin_turn must be called first")
+        manager = handle.manager
+        llm = handle.llm
+        tools = handle.tools
+        user_message = handle.user_message
 
         # Get current stage context from active FSM (subflow or main)
         active_fsm = self._subflows.get_active_fsm()
@@ -1631,7 +1689,7 @@ class WizardReasoning(ReasoningStrategy):
         # When auto-advance lands on a new stage, the user hasn't responded
         # to it yet.  Their message was directed at the previous stage.
         # Consume the flag (one-shot) so extraction runs normally next turn.
-        _skip_extraction = wizard_state.skip_extraction
+        _skip_extraction = handle.skip_extraction
         if _skip_extraction:
             wizard_state.skip_extraction = False
             logger.debug(
@@ -1686,7 +1744,7 @@ class WizardReasoning(ReasoningStrategy):
             # to transition evaluation / response generation below.
             # Field derivations are also skipped here — they already ran
             # on the prior turn when extraction executed.
-            pass
+            result.action = "skip"
         elif is_conversation:
             # Conversation mode: skip extraction, run intent detection.
             # Field derivations are also skipped — no new data extracted,
@@ -1697,10 +1755,11 @@ class WizardReasoning(ReasoningStrategy):
                 stage_name,
             )
             await self._extraction.detect_intent(user_message, stage, wizard_state, llm)
+            result.action = "intent_only"
         elif _collection_done_signal:
             # Done keyword detected — skip extraction (and derivation)
             # and fall through to transition evaluation below.
-            pass
+            result.action = "collection_done"
         elif _collection_help:
             # Help request during collection — generate a contextual
             # response without extraction, then return immediately so
@@ -1721,7 +1780,9 @@ class WizardReasoning(ReasoningStrategy):
             )
             self._response.add_wizard_metadata(response, wizard_state, stage)
             await self._save_wizard_state(manager, wizard_state)
-            return response
+            result.early_response = response
+            result.action = "collection_help"
+            return result
         else:
             # Structured mode: extract data and validate
 
@@ -1772,7 +1833,9 @@ class WizardReasoning(ReasoningStrategy):
                     self._response.add_wizard_metadata(
                         response, wizard_state, stage
                     )
-                    return response
+                    result.early_response = response
+                    result.action = "clarification"
+                    return result
 
                 # Reset clarification attempts on viable extraction
                 wizard_state.clarification_attempts = 0
@@ -1801,7 +1864,9 @@ class WizardReasoning(ReasoningStrategy):
                         tools,
                     )
                     if col_response is not None:
-                        return col_response
+                        result.early_response = col_response
+                        result.action = "collection_loop"
+                        return result
 
                 # When meaningful new data was extracted at a stage with a
                 # response_template, decide whether to render a
@@ -1861,7 +1926,9 @@ class WizardReasoning(ReasoningStrategy):
                         manager, llm, stage, wizard_state, tools
                     )
                     await self._save_wizard_state(manager, wizard_state)
-                    return stage_result.response
+                    result.early_response = stage_result.response
+                    result.action = "confirmation"
+                    return result
 
                 # Validate against stage schema
                 ss_validate = StageSchema.from_stage(stage)
@@ -1877,7 +1944,46 @@ class WizardReasoning(ReasoningStrategy):
                             tools=tools, wizard_state=wizard_state,
                         )
                         self._response.add_wizard_metadata(response, wizard_state, stage)
-                        return response
+                        result.early_response = response
+                        result.action = "validation_error"
+                        return result
+
+            result.action = "extracted"
+
+        return result
+
+    async def finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> Any:
+        """Phase C: Transition FSM, generate response, save state.
+
+        Executes the FSM transition, generates the stage response, and
+        saves wizard state.  Receives tool execution results from the
+        DynaBot tool loop (if any tools ran between ``process_input``
+        and ``finalize_turn``).
+
+        Args:
+            handle: Turn handle from :meth:`begin_turn`.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (``None`` when no tools were executed).
+
+        Returns:
+            LLM response object with wizard metadata.
+        """
+        if not isinstance(handle, WizardTurnHandle):
+            raise TypeError(
+                f"WizardReasoning.finalize_turn requires WizardTurnHandle, "
+                f"got {type(handle).__name__}"
+            )
+        wizard_state = handle.wizard_state
+        if wizard_state is None:
+            raise ValueError("WizardTurnHandle.wizard_state is None — begin_turn must be called first")
+        manager = handle.manager
+        llm = handle.llm
+        tools = handle.tools
+        user_message = handle.user_message
 
         # Trigger stage exit hook if configured
         if self._hooks:
@@ -1887,6 +1993,17 @@ class WizardReasoning(ReasoningStrategy):
 
         # Update stage-exit tasks before leaving
         update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
+
+        # Update tool tasks from DynaBot-level tool execution results.
+        # This is the call site that item 78 enables — update_tool_tasks()
+        # was extracted in 77a but had no caller until now.
+        if tool_results:
+            for execution in tool_results:
+                update_tool_tasks(
+                    wizard_state,
+                    execution.tool_name,
+                    success=(execution.error is None),
+                )
 
         # Check for subflow push BEFORE regular FSM transition
         subflow_config = self._subflows.should_push(wizard_state, user_message)
@@ -1905,6 +2022,10 @@ class WizardReasoning(ReasoningStrategy):
                 await self._save_wizard_state(manager, wizard_state)
                 return stage_result.response
 
+        # Get current stage for transition derivations and routing
+        active_fsm = self._subflows.get_active_fsm()
+        stage = active_fsm.current_metadata
+
         # Apply data derivations from transition configs before evaluating
         # conditions.  This lets transitions fill in values that enable their
         # own conditions and subsequent auto-advance checks.
@@ -1921,12 +2042,12 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Execute FSM step (shared method: inject keys, step, record, update).
-        # When _skip_extraction is active, the user_message was directed at
+        # When skip_extraction is active, the user_message was directed at
         # the previous stage — don't inject it as _message for FSM condition
         # evaluation on the landing stage.
         from_stage, _step_result = await self._execute_fsm_step(
             wizard_state,
-            user_message=None if _skip_extraction else user_message,
+            user_message=None if handle.skip_extraction else user_message,
         )
 
         # Auto-save artifact to catalog on stage transition.  Collection
@@ -1999,6 +2120,41 @@ class WizardReasoning(ReasoningStrategy):
         await self._save_wizard_state(manager, wizard_state)
 
         return response
+
+    async def generate(
+        self,
+        manager: Any,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Generate response guided by wizard FSM.
+
+        Backward-compatible single-call entry point that delegates to
+        the three-phase protocol (:meth:`begin_turn`,
+        :meth:`process_input`, :meth:`finalize_turn`).
+
+        Args:
+            manager: ConversationManager instance
+            llm: LLM provider instance
+            tools: Optional list of available tools
+            **kwargs: Additional generation parameters
+
+        Returns:
+            LLM response object with wizard metadata
+        """
+        handle = await self.begin_turn(manager, llm, tools, **kwargs)
+        if handle.early_response:
+            return handle.early_response
+
+        result = await self.process_input(handle)
+        if result.early_response:
+            return result.early_response
+
+        # tool_results is None here — this single-call path has no tool
+        # interleaving.  DynaBot's phased routing passes actual results
+        # via _generate_phased_response → finalize_turn(handle, tool_results).
+        return await self.finalize_turn(handle)
 
     # =========================================================================
     # Non-Conversational (Advance) API

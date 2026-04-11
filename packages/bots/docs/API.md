@@ -32,6 +32,10 @@ For convenience, here are direct links to key classes in the complete reference:
 - [ReasoningStrategy](../../../api/reference/bots.md#dataknobs_bots.ReasoningStrategy) - Base strategy
 - [SimpleReasoning](../../../api/reference/bots.md#dataknobs_bots.SimpleReasoning) - Direct LLM response
 - [ReActReasoning](../../../api/reference/bots.md#dataknobs_bots.ReActReasoning) - Tool-using agent
+- [WizardReasoning](../../../api/reference/bots.md#dataknobs_bots.WizardReasoning) - FSM-driven guided flows
+- [PhasedReasoningProtocol](../../../api/reference/bots.md#dataknobs_bots.PhasedReasoningProtocol) - Opt-in phased turn execution
+- [TurnHandle](../../../api/reference/bots.md#dataknobs_bots.TurnHandle) - Turn-scoped state for phased strategies
+- [ProcessResult](../../../api/reference/bots.md#dataknobs_bots.ProcessResult) - Result from process_input phase
 
 ### Tools
 - [KnowledgeSearchTool](../../../api/reference/bots.md#dataknobs_bots.KnowledgeSearchTool) - KB search tool

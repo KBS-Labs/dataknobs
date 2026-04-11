@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
 
+from .base import TurnHandle
 from .observability import TransitionRecord, WizardTaskList
 from .wizard_grounding import MergeFilter
 from .wizard_utils import word_in_text
@@ -476,6 +477,44 @@ class ExtractionPipelineResult:
     """Required fields still missing after the full pipeline."""
     is_confident: bool
     """Whether the extraction met the confidence threshold."""
+
+
+@dataclass
+class WizardTurnHandle(TurnHandle):
+    """Wizard-specific turn-scoped state carried between phases.
+
+    Extends :class:`TurnHandle` with wizard state, user message, and
+    extraction flags needed by ``process_input`` and ``finalize_turn``.
+
+    Attributes:
+        wizard_state: Wizard state restored from conversation metadata.
+        user_message: Last user message extracted from conversation.
+        skip_extraction: One-shot flag from auto-advance landing.
+    """
+
+    wizard_state: WizardState | None = None
+    user_message: str = ""
+    skip_extraction: bool = False
+
+
+@dataclass
+class RecoveryResult:
+    """Typed result from a recovery strategy execution.
+
+    Replaces the informal ``tuple[set[str], Any | None]`` return from
+    ``_run_recovery_pipeline``, ``_run_scope_escalation``,
+    ``_run_focused_retry``, and ``_run_boolean_recovery``.
+
+    Attributes:
+        new_data_keys: Keys that were newly set or changed in
+            ``state.data`` by the recovery strategy.
+        extraction: The (possibly updated) extraction result.  May be
+            ``None`` when a recovery strategy did not produce a new
+            extraction (e.g. boolean recovery only updates state.data).
+    """
+
+    new_data_keys: set[str]
+    extraction: Any | None = None
 
 
 # ---------------------------------------------------------------------------

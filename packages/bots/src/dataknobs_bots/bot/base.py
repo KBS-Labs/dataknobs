@@ -1137,6 +1137,68 @@ class DynaBot:
             max_tokens=max_tokens or self.default_max_tokens,
         )
 
+    async def _generate_phased_response(
+        self,
+        turn: TurnState,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        llm_config_overrides: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute phased reasoning flow with optional tool interleaving.
+
+        Used for strategies that implement
+        :class:`~dataknobs_bots.reasoning.base.PhasedReasoningProtocol`.
+        Splits the turn into begin_turn / process_input / finalize_turn
+        phases, allowing DynaBot to execute tools between process_input
+        and finalize_turn.
+
+        Args:
+            turn: Current turn state (manager must be set).
+            temperature: Optional temperature override.
+            max_tokens: Optional max tokens override.
+            llm_config_overrides: Optional per-request LLM config overrides.
+
+        Returns:
+            LLM response object.
+        """
+        strategy = self.reasoning_strategy
+        assert strategy is not None
+
+        handle = await strategy.begin_turn(  # type: ignore[union-attr]
+            turn.manager,
+            self.llm,
+            tools=list(self.tool_registry) or None,
+            temperature=temperature or self.default_temperature,
+            max_tokens=max_tokens or self.default_max_tokens,
+            llm_config_overrides=llm_config_overrides,
+        )
+
+        if handle.early_response:
+            return handle.early_response
+
+        result = await strategy.process_input(handle)  # type: ignore[union-attr]
+
+        if result.early_response:
+            return result.early_response
+
+        # Tool execution interleaving point.
+        # When process_input signals needs_tool_execution, DynaBot runs
+        # its tool loop here.  Currently wizard strategies always return
+        # needs_tool_execution=False, so this is a no-op — but the
+        # extension point is established for future tool-to-state
+        # integration.
+        tool_results: list[ToolExecution] | None = None
+        if result.needs_tool_execution and self.tool_registry:
+            # Future: DynaBot tool loop implementation for phased flow.
+            # The existing tool loop (in chat()) handles non-phased
+            # strategies; phased strategies manage tool interleaving
+            # through this path.
+            pass
+
+        return await strategy.finalize_turn(  # type: ignore[union-attr]
+            handle, tool_results
+        )
+
     @staticmethod
     def _extract_response_content(response: Any) -> str:
         """Extract text content from an LLM response object.
@@ -1470,89 +1532,102 @@ class DynaBot:
         )
         try:
             await self._prepare_turn(turn)
-            response = await self._generate_response(
-                turn.manager, temperature, max_tokens, llm_config_overrides
-            )
 
-            # DynaBot-level tool execution loop.  Strategies that handle
-            # tool_calls internally (e.g. ReAct) return responses without
-            # tool_calls, so this loop is a no-op for them.
-            loop_start = time.monotonic()
-            for _iteration in range(self._max_tool_iterations):
-                if (
-                    not self.tool_registry
-                    or not getattr(response, "tool_calls", None)
-                ):
-                    break
-                if time.monotonic() - loop_start >= self._tool_loop_timeout:
-                    logger.warning(
-                        "Tool execution loop exceeded wall-clock timeout "
-                        "(%.1fs)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-                await self._execute_tools(turn, response.tool_calls)
-                # Accumulate usage from intermediate LLM calls
-                turn.accumulate_usage(response)
-                # Enforce remaining loop budget on the LLM re-call
-                remaining = self._tool_loop_timeout - (
-                    time.monotonic() - loop_start
+            # Branch on phased reasoning support.  Strategies that
+            # implement PhasedReasoningProtocol (e.g. WizardReasoning)
+            # use the three-phase flow which enables tool interleaving.
+            # All other strategies use the existing single-call path.
+            # Import deferred to avoid bot ↔ reasoning circular import.
+            from ..reasoning.base import PhasedReasoningProtocol
+
+            if isinstance(self.reasoning_strategy, PhasedReasoningProtocol):
+                response = await self._generate_phased_response(
+                    turn, temperature, max_tokens, llm_config_overrides
                 )
-                if remaining <= 0:
-                    logger.warning(
-                        "Tool loop budget exhausted before LLM re-call "
-                        "(%.1fs budget)",
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
-                try:
-                    response = await asyncio.wait_for(
-                        turn.manager.complete(
-                            tools=list(self.tool_registry) or None,
-                            temperature=temperature or self.default_temperature,
-                            max_tokens=max_tokens or self.default_max_tokens,
-                            llm_config_overrides=llm_config_overrides,
-                        ),
-                        timeout=remaining,
-                    )
-                except (TimeoutError, asyncio.TimeoutError):
-                    logger.warning(
-                        "LLM re-call exceeded remaining tool loop "
-                        "budget (%.1fs remaining of %.1fs)",
-                        remaining,
-                        self._tool_loop_timeout,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
-                    )
-                    break
             else:
-                # Loop completed without break — cap hit
-                if self.tool_registry and getattr(
-                    response, "tool_calls", None
-                ):
-                    logger.warning(
-                        "Tool execution loop reached max iterations (%d) "
-                        "with pending tool_calls",
-                        self._max_tool_iterations,
-                        extra={
-                            "conversation_id": getattr(
-                                turn.manager, "conversation_id", None
-                            ),
-                        },
+                response = await self._generate_response(
+                    turn.manager, temperature, max_tokens, llm_config_overrides
+                )
+
+                # DynaBot-level tool execution loop.  Strategies that handle
+                # tool_calls internally (e.g. ReAct) return responses without
+                # tool_calls, so this loop is a no-op for them.
+                loop_start = time.monotonic()
+                for _iteration in range(self._max_tool_iterations):
+                    if (
+                        not self.tool_registry
+                        or not getattr(response, "tool_calls", None)
+                    ):
+                        break
+                    if time.monotonic() - loop_start >= self._tool_loop_timeout:
+                        logger.warning(
+                            "Tool execution loop exceeded wall-clock timeout "
+                            "(%.1fs)",
+                            self._tool_loop_timeout,
+                            extra={
+                                "conversation_id": getattr(
+                                    turn.manager, "conversation_id", None
+                                ),
+                            },
+                        )
+                        break
+                    await self._execute_tools(turn, response.tool_calls)
+                    # Accumulate usage from intermediate LLM calls
+                    turn.accumulate_usage(response)
+                    # Enforce remaining loop budget on the LLM re-call
+                    remaining = self._tool_loop_timeout - (
+                        time.monotonic() - loop_start
                     )
+                    if remaining <= 0:
+                        logger.warning(
+                            "Tool loop budget exhausted before LLM re-call "
+                            "(%.1fs budget)",
+                            self._tool_loop_timeout,
+                            extra={
+                                "conversation_id": getattr(
+                                    turn.manager, "conversation_id", None
+                                ),
+                            },
+                        )
+                        break
+                    try:
+                        response = await asyncio.wait_for(
+                            turn.manager.complete(
+                                tools=list(self.tool_registry) or None,
+                                temperature=temperature or self.default_temperature,
+                                max_tokens=max_tokens or self.default_max_tokens,
+                                llm_config_overrides=llm_config_overrides,
+                            ),
+                            timeout=remaining,
+                        )
+                    except (TimeoutError, asyncio.TimeoutError):
+                        logger.warning(
+                            "LLM re-call exceeded remaining tool loop "
+                            "budget (%.1fs remaining of %.1fs)",
+                            remaining,
+                            self._tool_loop_timeout,
+                            extra={
+                                "conversation_id": getattr(
+                                    turn.manager, "conversation_id", None
+                                ),
+                            },
+                        )
+                        break
+                else:
+                    # Loop completed without break — cap hit
+                    if self.tool_registry and getattr(
+                        response, "tool_calls", None
+                    ):
+                        logger.warning(
+                            "Tool execution loop reached max iterations (%d) "
+                            "with pending tool_calls",
+                            self._max_tool_iterations,
+                            extra={
+                                "conversation_id": getattr(
+                                    turn.manager, "conversation_id", None
+                                ),
+                            },
+                        )
 
             turn.response = response
             turn.response_content = self._extract_response_content(response)
@@ -1765,7 +1840,26 @@ class DynaBot:
             # execution loop can pick them up after the initial stream.
             pending_tool_calls: list[Any] | None = None
 
-            if self.reasoning_strategy:
+            # Branch on phased reasoning support (same as chat()).
+            # Import deferred to avoid bot ↔ reasoning circular import.
+            from ..reasoning.base import PhasedReasoningProtocol
+
+            if isinstance(self.reasoning_strategy, PhasedReasoningProtocol):
+                # Phased strategies produce a complete response that we
+                # wrap as a single stream chunk.  Future streaming-phase
+                # support will yield incremental chunks per phase.
+                response = await self._generate_phased_response(
+                    turn, temperature, max_tokens, llm_config_overrides
+                )
+                content = self._extract_response_content(response)
+                turn.stream_chunks.append(content)
+                turn.populate_from_response(response, self.llm)
+                yield LLMStreamResponse(
+                    delta=content,
+                    is_final=True,
+                    finish_reason="stop",
+                )
+            elif self.reasoning_strategy:
                 # Delegate to the strategy's stream_generate().
                 # Strategies with true streaming (SimpleReasoning) yield
                 # LLMStreamResponse chunks; others yield a single complete

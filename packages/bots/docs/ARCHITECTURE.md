@@ -99,7 +99,10 @@ DynaBot (Orchestrator)
 │   └── EmbeddingProvider
 ├── ReasoningStrategy (Multi-Step Reasoning)
 │   ├── SimpleReasoning
-│   └── ReActReasoning
+│   ├── ReActReasoning
+│   ├── GroundedReasoning
+│   ├── HybridReasoning
+│   └── WizardReasoning (implements PhasedReasoningProtocol)
 └── Middleware[] (Request/Response Processing)
 ```
 
@@ -252,7 +255,19 @@ Vectors → VectorStore
 
 **Responsibility**: Multi-step reasoning for complex tasks.
 
-**ReAct Loop**:
+DynaBot supports two execution paths for strategies:
+
+**Single-call path** (default): DynaBot calls `generate()`, then runs its
+own tool execution loop on any `tool_calls` in the response. Used by
+Simple, ReAct, Grounded, and Hybrid strategies.
+
+**Phased path** (`PhasedReasoningProtocol`): DynaBot calls `begin_turn()` →
+`process_input()` → [tool execution] → `finalize_turn()`, enabling tool
+results to be reflected in strategy state before it is saved. Used by
+WizardReasoning. DynaBot detects phased support automatically via
+`isinstance` check.
+
+**ReAct Loop** (single-call path):
 ```
 1. Thought: What should I do?
 2. Action: Use a tool
@@ -260,22 +275,12 @@ Vectors → VectorStore
 4. [Repeat or Final Answer]
 ```
 
-**Flow**:
-```python
-for iteration in range(max_iterations):
-    # 1. Generate reasoning step
-    response = await llm.complete(messages + tools_prompt)
-
-    # 2. Parse thought and action
-    thought, action, action_input = parse_response(response)
-
-    # 3. Execute tool if action specified
-    if action:
-        observation = await tool_registry.execute(action, action_input)
-        messages.append({"role": "tool", "content": observation})
-    else:
-        # Final answer reached
-        break
+**Wizard Phased Flow**:
+```
+begin_turn    → restore state, handle navigation/amendments
+process_input → extract data, validate, handle collection modes
+              → [DynaBot tool execution when needs_tool_execution=True]
+finalize_turn → FSM transition, response generation, save state
 ```
 
 ### 7. ToolRegistry
@@ -450,18 +455,18 @@ inject_providers(bot, main_provider=echo, memory_embedding=embed_echo)
 ┌─────────────────────────────────────┐
 │ Generate Response                   │
 ├─────────────────────────────────────┤
-│ If reasoning_strategy:              │
+│ If PhasedReasoningProtocol:         │
 │   ┌──────────────────────────────┐ │
-│   │ ReActReasoning.generate()    │ │
-│   │  • Thought loop              │ │
-│   │  • Tool execution            │ │
-│   │  • Observation               │ │
-│   │  • Final answer              │ │
+│   │ strategy.begin_turn()        │ │
+│   │ strategy.process_input()     │ │
+│   │ [DynaBot tool execution]     │ │
+│   │ strategy.finalize_turn()     │ │
 │   └──────────────────────────────┘ │
 │ Else:                               │
 │   ┌──────────────────────────────┐ │
+│   │ strategy.generate() or       │ │
 │   │ manager.complete()           │ │
-│   │  • Direct LLM call           │ │
+│   │ [DynaBot tool loop]          │ │
 │   └──────────────────────────────┘ │
 └────┬────────────────────────────────┘
      │
@@ -649,11 +654,15 @@ class ReasoningStrategy(ABC):
 
 class SimpleReasoning(ReasoningStrategy):
     async def generate(...):
-        # Simple strategy
+        # Single-call strategy
 
-class ReActReasoning(ReasoningStrategy):
+class WizardReasoning(ReasoningStrategy):
+    # Implements PhasedReasoningProtocol
+    async def begin_turn(...) -> TurnHandle: ...
+    async def process_input(handle) -> ProcessResult: ...
+    async def finalize_turn(handle, tool_results) -> Any: ...
     async def generate(...):
-        # ReAct strategy
+        # Backward-compatible wrapper calling phases
 ```
 
 ### 3. Registry Pattern

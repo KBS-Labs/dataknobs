@@ -2,7 +2,14 @@
 
 from typing import Any
 
-from .base import ReasoningManagerProtocol, ReasoningStrategy, StrategyCapabilities
+from .base import (
+    PhasedReasoningProtocol,
+    ProcessResult,
+    ReasoningManagerProtocol,
+    ReasoningStrategy,
+    StrategyCapabilities,
+    TurnHandle,
+)
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
 from .grounded import GroundedReasoning, SynthesisPlan
 from .grounded_config import (
@@ -46,6 +53,7 @@ from .task_injection import (
 )
 from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
 from .wizard_response import StageResponseResult
+from .wizard_types import RecoveryResult, WizardTurnHandle
 from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
@@ -60,10 +68,15 @@ from .registry import (
 )
 
 __all__ = [
+    "PhasedReasoningProtocol",
+    "ProcessResult",
     "ReasoningManagerProtocol",
     "ReasoningStrategy",
+    "RecoveryResult",
     "StrategyCapabilities",
     "StrategyFactory",
+    "TurnHandle",
+    "WizardTurnHandle",
     "register_strategy",
     "is_strategy_registered",
     "list_strategies",
