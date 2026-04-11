@@ -978,6 +978,10 @@ Tools are configured in two layers:
 2. **Wizard stage config** filters which tools are available per stage (via `tools` list
    of tool names)
 
+There is also a third integration mode — **tool-to-state mapping** — where tools
+run automatically after extraction (not via LLM tool calling). See
+[Tool Result Mapping](#tool-result-mapping) below.
+
 ```yaml
 # Bot-level: declare tool classes
 tools:
@@ -1077,6 +1081,78 @@ usually not needed.
 
 **`load_from_catalog`** — Load a previously saved artifact by name. Replaces the
 current artifact's fields and section data with the loaded entry.
+
+---
+
+## Tool Result Mapping
+
+In addition to LLM-driven tool calling (where the LLM decides which tools to use),
+wizard stages support **config-driven tool execution** via `tool_result_mapping`.
+After extraction succeeds, the wizard automatically calls specified tools and maps
+their results into wizard state — without an additional LLM call.
+
+This is useful when extracted data needs enrichment (e.g. a product name needs to
+be resolved to a product ID via a lookup service) and the enriched values influence
+transition conditions.
+
+### How It Works
+
+```
+process_input (extraction succeeds)
+  → stage has tool_result_mapping
+  → build tool parameters from wizard state
+  → signal needs_tool_execution = True
+
+DynaBot._generate_phased_response
+  → execute tools (no conversation observations added)
+  → pass results to finalize_turn
+
+finalize_turn
+  → map tool results into wizard_state.data
+  → FSM transition (conditions can now check tool-populated keys)
+```
+
+### Configuration
+
+```yaml
+stages:
+  - name: lookup
+    schema:
+      properties:
+        product_name: { type: string }
+    tool_result_mapping:
+      - tool: product_lookup
+        params:
+          query: "product_name"         # tool param ← state key
+        mapping:
+          product_id: "product_id"      # result key → state key
+          category: "product_category"
+        on_error: skip                  # skip (default) | fail
+    transitions:
+      - target: review
+        condition: "has('product_id')"  # checks tool-populated key
+```
+
+### Behavior
+
+- **Flat key mapping only** — no JSONPath or nested access
+- **Tool wins** — tool results overwrite any extracted data with the same key
+- **No conversation observations** — tool results are not added to chat history
+- **Missing params** — if a state key referenced by `params` has no value, that parameter is omitted (not passed as `None`)
+- **Non-dict results** — scalar tool results are mapped to the first target key in `mapping`
+- **`on_error: skip`** (default) — tool errors are silently ignored, state is not modified
+- **`on_error: fail`** — writes `_tool_error_{tool_name}` to state so conditions can detect it
+- **`confirm_first_render` interaction** — on stages with `response_template`, extraction triggers a confirmation early-return on the first turn; tools fire on the subsequent confirmation turn, not the extraction turn. Set `confirm_first_render: false` to skip confirmation and let tools + transitions fire immediately.
+
+### Comparison with LLM Tool Calling
+
+| Aspect | `tool_result_mapping` | LLM Tool Calling (ReAct) |
+|--------|----------------------|--------------------------|
+| Who decides | Stage config | LLM |
+| When it runs | After extraction, before transition | During ReAct loop |
+| LLM calls | None | LLM decides per iteration |
+| Results go to | `wizard_state.data` | Conversation history |
+| Use case | Deterministic enrichment/lookup | Open-ended reasoning |
 
 ---
 

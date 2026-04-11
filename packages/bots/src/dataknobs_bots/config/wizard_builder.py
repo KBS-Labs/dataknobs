@@ -153,6 +153,8 @@ class StageConfig:
     navigation: dict[str, Any] | None = None
     # Extraction control — "auto" (default), "verbatim", or "extract"
     capture_mode: str | None = None
+    # Post-extraction tool calls with result-to-state mapping
+    tool_result_mapping: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader."""
@@ -209,6 +211,8 @@ class StageConfig:
             d["navigation"] = self.navigation
         if self.capture_mode is not None:
             d["capture_mode"] = self.capture_mode
+        if self.tool_result_mapping:
+            d["tool_result_mapping"] = [dict(m) for m in self.tool_result_mapping]
         return d
 
 
@@ -814,6 +818,7 @@ class WizardConfigBuilder:
                     tasks=stage.tasks,
                     navigation=stage.navigation,
                     capture_mode=stage.capture_mode,
+                    tool_result_mapping=stage.tool_result_mapping,
                 )
             assembled.append(stage)
 
@@ -1083,4 +1088,5 @@ def _stage_from_dict(d: dict[str, Any]) -> StageConfig:
         intent_detection=intent_detection,
         tasks=tuple(d.get("tasks", [])),
         navigation=d.get("navigation"),
+        tool_result_mapping=tuple(d.get("tool_result_mapping", [])),
     )

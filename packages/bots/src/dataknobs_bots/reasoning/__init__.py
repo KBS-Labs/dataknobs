@@ -8,6 +8,7 @@ from .base import (
     ReasoningManagerProtocol,
     ReasoningStrategy,
     StrategyCapabilities,
+    ToolCallSpec,
     TurnHandle,
 )
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
@@ -53,7 +54,7 @@ from .task_injection import (
 )
 from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
 from .wizard_response import StageResponseResult
-from .wizard_types import RecoveryResult, WizardTurnHandle
+from .wizard_types import RecoveryResult, ToolResultMappingEntry, WizardTurnHandle
 from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
@@ -73,8 +74,10 @@ __all__ = [
     "ReasoningManagerProtocol",
     "ReasoningStrategy",
     "RecoveryResult",
+    "ToolResultMappingEntry",
     "StrategyCapabilities",
     "StrategyFactory",
+    "ToolCallSpec",
     "TurnHandle",
     "WizardTurnHandle",
     "register_strategy",

@@ -45,6 +45,19 @@ PROVIDER_ROLE_SUMMARY_LLM = "summary_llm"
 PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
 
 
+@dataclass(frozen=True)
+class _ToolCallAdapter:
+    """Minimal adapter to make ToolCallSpec compatible with _execute_tools.
+
+    ``_execute_tools`` accesses ``.name`` and ``.parameters`` on each
+    tool call object.  This adapter provides those attributes from a
+    :class:`~dataknobs_bots.reasoning.base.ToolCallSpec`.
+    """
+
+    name: str
+    parameters: dict[str, Any]
+
+
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     """Normalize wizard metadata to canonical structure.
 
@@ -935,18 +948,32 @@ class DynaBot:
         self,
         turn: TurnState,
         tool_calls: list[Any],
+        *,
+        add_observations: bool = True,
+        executions_out: list[ToolExecution] | None = None,
     ) -> None:
-        """Execute tool calls and add observations to the conversation.
+        """Execute tool calls and optionally add observations to the conversation.
 
         Builds a ``ToolExecutionContext`` from the conversation manager,
-        executes each tool, records ``ToolExecution`` on the turn state,
-        and adds tool result observations to the conversation history so
-        the next LLM call sees them.
+        executes each tool, records ``ToolExecution`` on the turn state
+        (or ``executions_out`` if provided), and optionally adds tool
+        result observations to the conversation history.
 
         Args:
-            turn: Current turn state (tool executions are appended here).
+            turn: Current turn state (tool executions are appended here
+                unless ``executions_out`` is provided).
             tool_calls: List of ``ToolCall`` objects from the LLM response.
+                Must have ``.name`` and ``.parameters`` attributes.
+            add_observations: When ``False``, skip adding tool result
+                messages to conversation history.  Used by the phased
+                protocol for strategy-driven tool calls whose results
+                flow through wizard state, not conversation history.
+            executions_out: When provided, ``ToolExecution`` records are
+                appended here instead of ``turn.tool_executions``.  Lets
+                the phased path collect results without coupling to
+                ``TurnState``.
         """
+        target_list = executions_out if executions_out is not None else turn.tool_executions
         for tool_call in tool_calls:
             tool_name = tool_call.name
             tool_context = ToolExecutionContext.from_manager(turn.manager)
@@ -957,7 +984,7 @@ class DynaBot:
 
             if tool is None:
                 observation = "Tool not found"
-                turn.tool_executions.append(ToolExecution(
+                target_list.append(ToolExecution(
                     tool_name=tool_name,
                     parameters=tool_call.parameters,
                     error="Tool not found",
@@ -988,7 +1015,7 @@ class DynaBot:
                     except (TypeError, ValueError):
                         observation = f"Tool result: {result}"
 
-                    turn.tool_executions.append(ToolExecution(
+                    target_list.append(ToolExecution(
                         tool_name=tool_name,
                         parameters=tool_call.parameters,
                         result=result,
@@ -1011,7 +1038,7 @@ class DynaBot:
                         f"Error: tool timed out after "
                         f"{self._tool_timeout:.1f}s"
                     )
-                    turn.tool_executions.append(ToolExecution(
+                    target_list.append(ToolExecution(
                         tool_name=tool_name,
                         parameters=tool_call.parameters,
                         error=(
@@ -1032,7 +1059,7 @@ class DynaBot:
                     )
                 except Exception as exc:
                     observation = f"Error: {exc!s}"
-                    turn.tool_executions.append(ToolExecution(
+                    target_list.append(ToolExecution(
                         tool_name=tool_name,
                         parameters=tool_call.parameters,
                         error=str(exc),
@@ -1049,12 +1076,13 @@ class DynaBot:
                         exc_info=True,
                     )
 
-            await turn.manager.add_message(
-                content=f"Observation from {tool_name}: {observation}",
-                role="tool",
-                name=tool_name,
-                tool_call_id=tool_call.id,
-            )
+            if add_observations:
+                await turn.manager.add_message(
+                    content=f"Observation from {tool_name}: {observation}",
+                    role="tool",
+                    name=tool_name,
+                    tool_call_id=getattr(tool_call, "id", ""),
+                )
 
     async def _finalize_turn(self, turn: TurnState) -> None:
         """Shared post-generation processing for all turn types.
@@ -1183,17 +1211,45 @@ class DynaBot:
 
         # Tool execution interleaving point.
         # When process_input signals needs_tool_execution, DynaBot runs
-        # its tool loop here.  Currently wizard strategies always return
-        # needs_tool_execution=False, so this is a no-op — but the
-        # extension point is established for future tool-to-state
-        # integration.
+        # strategy-requested tools here.  Results flow through wizard
+        # state (via tool_result_mapping in finalize_turn), not through
+        # conversation history — so add_observations=False.
         tool_results: list[ToolExecution] | None = None
-        if result.needs_tool_execution and self.tool_registry:
-            # Future: DynaBot tool loop implementation for phased flow.
-            # The existing tool loop (in chat()) handles non-phased
-            # strategies; phased strategies manage tool interleaving
-            # through this path.
-            pass
+        if result.needs_tool_execution:
+            if not self.tool_registry:
+                logger.warning(
+                    "Strategy requested tool execution (tool_result_mapping) "
+                    "but no tools are registered — skipping; wizard may not "
+                    "advance if transition conditions depend on tool results",
+                )
+            else:
+                tool_names = [s.tool_name for s in result.pending_tool_calls]
+                logger.debug(
+                    "Phased tool execution: %d tool(s) requested: %s",
+                    len(result.pending_tool_calls),
+                    tool_names,
+                )
+                tool_results = []
+                adapted_calls = [
+                    _ToolCallAdapter(
+                        name=spec.tool_name,
+                        parameters=spec.parameters,
+                    )
+                    for spec in result.pending_tool_calls
+                ]
+                await self._execute_tools(
+                    turn,
+                    adapted_calls,
+                    add_observations=False,
+                    executions_out=tool_results,
+                )
+                if not tool_results:
+                    tool_results = None
+                else:
+                    logger.debug(
+                        "Phased tool execution complete: %d result(s)",
+                        len(tool_results),
+                    )
 
         return await strategy.finalize_turn(  # type: ignore[union-attr]
             handle, tool_results

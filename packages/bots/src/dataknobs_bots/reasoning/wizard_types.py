@@ -12,6 +12,7 @@ Types defined here:
 - :class:`WizardState` — central persistent state object
 - :class:`WizardAdvanceResult` — return type for ``advance()``
 - :class:`ExtractionPipelineResult` — return type for extraction pipeline
+- :class:`ToolResultMappingEntry` — single tool-to-state mapping from stage config
 - :class:`WizardTurnHandle` — wizard-specific turn handle for phased protocol
 - :class:`RecoveryResult` — typed result from recovery strategies
 - :class:`StageSchema` — JSON Schema wrapper for stage fields
@@ -481,6 +482,31 @@ class ExtractionPipelineResult:
     """Whether the extraction met the confidence threshold."""
 
 
+@dataclass(frozen=True)
+class ToolResultMappingEntry:
+    """Single tool-to-state mapping from stage config.
+
+    Declares that after extraction, a tool should be called with
+    parameters sourced from wizard state, and its results should be
+    written back into wizard state.
+
+    Attributes:
+        tool_name: Name of the tool in the registry.
+        params: Mapping of tool parameter names to wizard state keys
+            (tool_param_name -> state_key).
+        mapping: Mapping of tool result keys to wizard state keys
+            (result_key -> state_key).
+        on_error: Error handling strategy — ``"skip"`` (default)
+            silently skips the mapping, ``"fail"`` writes an error
+            flag into state.
+    """
+
+    tool_name: str
+    params: dict[str, str]
+    mapping: dict[str, str]
+    on_error: str = "skip"
+
+
 @dataclass
 class WizardTurnHandle(TurnHandle):
     """Wizard-specific turn-scoped state carried between phases.
@@ -492,11 +518,16 @@ class WizardTurnHandle(TurnHandle):
         wizard_state: Wizard state restored from conversation metadata.
         user_message: Last user message extracted from conversation.
         skip_extraction: One-shot flag from auto-advance landing.
+        tool_result_mapping: Parsed tool-to-state mapping entries from
+            the stage config.  Populated by ``process_input`` when the
+            current stage has ``tool_result_mapping`` and extraction
+            succeeds.
     """
 
     wizard_state: WizardState | None = None
     user_message: str = ""
     skip_extraction: bool = False
+    tool_result_mapping: list[ToolResultMappingEntry] = field(default_factory=list)
 
 
 @dataclass
