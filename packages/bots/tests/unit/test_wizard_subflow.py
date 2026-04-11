@@ -29,7 +29,7 @@ from dataknobs_bots.reasoning.wizard_subflows import (
     _apply_data_mapping,
     _apply_result_mapping,
 )
-from dataknobs_bots.testing import BotTestHarness
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.testing import text_response
 
 
@@ -770,47 +770,28 @@ class TestShouldPushSubflowGuard:
 # Integration: subflow push through finalize_turn / stream_finalize_turn
 # =========================================================================
 
-# Raw wizard config with a subflow — can't use WizardConfigBuilder
-# (it lacks subflow support), so the config is constructed as a dict.
-_SUBFLOW_WIZARD_CONFIG: dict[str, Any] = {
-    "name": "subflow-integration-test",
-    "version": "1.0",
-    "stages": [
-        {
-            "name": "configure",
-            "is_start": True,
-            "prompt": "Configure the feature. Say yes to enable it.",
-            "response_template": "Please configure the feature.",
-            "confirm_first_render": False,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "enable_feature": {"type": "boolean"},
-                },
-            },
-            "transitions": [
-                {
-                    "target": "_subflow",
-                    "condition": "data.get('enable_feature') == True",
-                    "subflow": {
-                        "network": "feature_setup",
-                        "return_stage": "complete",
-                        "data_mapping": {},
-                        "result_mapping": {"setup_done": "setup_done"},
-                    },
-                },
-                {"target": "complete"},
-            ],
-        },
-        {
-            "name": "complete",
-            "is_end": True,
-            "prompt": "All done!",
-            "response_template": "Setup complete.",
-        },
-    ],
-    "subflows": {
-        "feature_setup": {
+def _build_subflow_wizard_config() -> dict[str, Any]:
+    """Build wizard config with a subflow using WizardConfigBuilder."""
+    return (
+        WizardConfigBuilder("subflow-integration-test")
+        .stage(
+            "configure",
+            is_start=True,
+            prompt="Configure the feature. Say yes to enable it.",
+            response_template="Please configure the feature.",
+            confirm_first_render=False,
+        )
+            .field("enable_feature", field_type="boolean")
+            .transition(
+                "complete",
+                condition="data.get('enable_feature') == True",
+                subflow_network="feature_setup",
+                result_mapping={"setup_done": "setup_done"},
+            )
+            .transition("complete")
+        .stage("complete", is_end=True, prompt="All done!",
+               response_template="Setup complete.")
+        .subflow("feature_setup", {
             "stages": [
                 {
                     "name": "detail_gather",
@@ -827,9 +808,9 @@ _SUBFLOW_WIZARD_CONFIG: dict[str, Any] = {
                     "response_template": "Feature setup complete.",
                 },
             ]
-        }
-    },
-}
+        })
+        .build()
+    )
 
 
 class TestSubflowPushIntegration:
@@ -846,7 +827,7 @@ class TestSubflowPushIntegration:
         from subflow's start stage (finalize_turn path).
         """
         async with await BotTestHarness.create(
-            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            wizard_config=_build_subflow_wizard_config(),
             main_responses=[
                 text_response("Now entering feature setup."),
             ],
@@ -867,7 +848,7 @@ class TestSubflowPushIntegration:
         is from subflow's start stage (stream_finalize_turn path).
         """
         async with await BotTestHarness.create(
-            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            wizard_config=_build_subflow_wizard_config(),
             main_responses=[
                 text_response("Now entering feature setup."),
             ],
@@ -886,7 +867,7 @@ class TestSubflowPushIntegration:
         normally (to 'complete') and does not push a subflow.
         """
         async with await BotTestHarness.create(
-            wizard_config=_SUBFLOW_WIZARD_CONFIG,
+            wizard_config=_build_subflow_wizard_config(),
             main_responses=[
                 text_response("Setup complete."),
             ],
