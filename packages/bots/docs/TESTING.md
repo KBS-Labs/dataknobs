@@ -29,6 +29,23 @@ async with await BotTestHarness.create(
     assert harness.wizard_stage == "done"
 ```
 
+### Streaming Tests
+
+Use `harness.stream_chat()` to test the streaming code path.  It consumes the
+full stream, captures chunks, and snapshots wizard state — same contract as
+`harness.chat()`:
+
+```python
+async with await BotTestHarness.create(
+    wizard_config=config,
+    main_responses=["Got it!"],
+    extraction_results=[[{"name": "Alice", "topic": "math"}]],
+) as harness:
+    result = await harness.stream_chat("Alice and math")
+    assert harness.wizard_data["name"] == "Alice"
+    assert len(result.chunks) > 0  # streaming chunks captured
+```
+
 ## Testing Constructs
 
 | Construct | Import | Use For |

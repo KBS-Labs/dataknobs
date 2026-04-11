@@ -574,7 +574,8 @@ class GroundedConfigBuilder:
 
 @dataclass
 class TurnResult:
-    """Result of a single ``bot.chat()`` or ``bot.greet()`` turn.
+    """Result of a single ``bot.chat()``, ``bot.greet()``, or
+    ``bot.stream_chat()`` turn.
 
     Captures the bot response along with a snapshot of wizard state
     at the end of the turn.
@@ -594,6 +595,9 @@ class TurnResult:
 
     turn_index: int = 0
     """One-based turn index (1 = first turn)."""
+
+    chunks: list[str] = field(default_factory=list)
+    """Stream chunks from ``stream_chat()``.  Empty for non-streaming turns."""
 
 
 # =============================================================================
@@ -883,6 +887,41 @@ class BotTestHarness:
             wizard_data=state.get("data", {}) if state else {},
             wizard_state=state,
             turn_index=self._turn_count,
+        )
+        self._last_result = result
+        return result
+
+    async def stream_chat(self, message: str, **kwargs: Any) -> TurnResult:
+        """Run a streaming chat turn and capture wizard state.
+
+        Consumes the full stream, joins chunks into a response string,
+        and snapshots wizard state — same contract as :meth:`chat` but
+        exercises the ``stream_chat()`` code path.
+
+        Args:
+            message: User message.
+            **kwargs: Additional kwargs passed to ``bot.stream_chat()``.
+
+        Returns:
+            ``TurnResult`` with response, chunks, and wizard state snapshot.
+        """
+        chunks: list[str] = []
+        async for chunk in self._bot.stream_chat(
+            message, self._context, **kwargs
+        ):
+            chunks.append(chunk.delta)
+        self._turn_count += 1
+
+        state = await self._bot.get_wizard_state(
+            self._context.conversation_id,
+        )
+        result = TurnResult(
+            response="".join(chunks),
+            wizard_stage=state["current_stage"] if state else None,
+            wizard_data=state.get("data", {}) if state else {},
+            wizard_state=state,
+            turn_index=self._turn_count,
+            chunks=chunks,
         )
         self._last_result = result
         return result

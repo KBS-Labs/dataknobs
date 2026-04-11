@@ -102,7 +102,7 @@ DynaBot (Orchestrator)
 │   ├── ReActReasoning
 │   ├── GroundedReasoning
 │   ├── HybridReasoning
-│   └── WizardReasoning (implements PhasedReasoningProtocol)
+│   └── WizardReasoning (implements StreamingPhasedProtocol)
 └── Middleware[] (Request/Response Processing)
 ```
 
@@ -266,6 +266,12 @@ Simple, ReAct, Grounded, and Hybrid strategies.
 results to be reflected in strategy state before it is saved. Used by
 WizardReasoning. DynaBot detects phased support automatically via
 `isinstance` check.
+
+**Streaming phased path** (`StreamingPhasedProtocol`): Extends the phased
+path with `stream_finalize_turn()`, yielding `LLMStreamResponse` chunks
+instead of returning a complete response. `stream_chat()` checks for this
+protocol first, falling back to single-chunk wrapping for non-streaming
+phased strategies. `begin_turn` and `process_input` remain non-streaming.
 
 **ReAct Loop** (single-call path):
 ```
@@ -458,7 +464,11 @@ inject_providers(bot, main_provider=echo, memory_embedding=embed_echo)
 ┌─────────────────────────────────────┐
 │ Generate Response                   │
 ├─────────────────────────────────────┤
-│ If PhasedReasoningProtocol:         │
+│ If StreamingPhasedProtocol (stream):│
+│   begin_turn → process_input →     │
+│   [tool execution] →               │
+│   stream_finalize_turn (chunks)    │
+│ Elif PhasedReasoningProtocol:      │
 │   ┌──────────────────────────────┐ │
 │   │ strategy.begin_turn()        │ │
 │   │ strategy.process_input()     │ │
@@ -664,10 +674,11 @@ class SimpleReasoning(ReasoningStrategy):
         # Single-call strategy
 
 class WizardReasoning(ReasoningStrategy):
-    # Implements PhasedReasoningProtocol
+    # Implements StreamingPhasedProtocol (extends PhasedReasoningProtocol)
     async def begin_turn(...) -> TurnHandle: ...
     async def process_input(handle) -> ProcessResult: ...
     async def finalize_turn(handle, tool_results) -> Any: ...
+    async def stream_finalize_turn(handle, tool_results) -> AsyncIterator: ...
     async def generate(...):
         # Backward-compatible wrapper calling phases
 ```
