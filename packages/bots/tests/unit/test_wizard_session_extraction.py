@@ -235,7 +235,7 @@ class TestExtractionScopeConfiguration:
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
-        assert reasoning._extraction_scope == "wizard_session"
+        assert reasoning._extraction._extraction_scope == "wizard_session"
 
     def test_custom_extraction_scope(
         self, simple_wizard_config: dict
@@ -248,7 +248,7 @@ class TestExtractionScopeConfiguration:
             extraction_scope="current_message",
         )
 
-        assert reasoning._extraction_scope == "current_message"
+        assert reasoning._extraction._extraction_scope == "current_message"
 
     def test_default_conflict_strategy(
         self, simple_wizard_config: dict
@@ -258,7 +258,7 @@ class TestExtractionScopeConfiguration:
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
-        assert reasoning._conflict_strategy == "latest_wins"
+        assert reasoning._extraction._conflict_strategy == "latest_wins"
 
     def test_default_log_conflicts(self, simple_wizard_config: dict) -> None:
         """Test that conflict logging is enabled by default."""
@@ -266,7 +266,7 @@ class TestExtractionScopeConfiguration:
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
 
-        assert reasoning._log_conflicts is True
+        assert reasoning._extraction._log_conflicts is True
 
 
 class TestExtractionScopeFromSettings:
@@ -307,9 +307,9 @@ class TestExtractionScopeFromSettings:
             log_conflicts=wizard_fsm.settings.get("log_conflicts", True),
         )
 
-        assert reasoning._extraction_scope == "current_message"
-        assert reasoning._conflict_strategy == "first_wins"
-        assert reasoning._log_conflicts is False
+        assert reasoning._extraction._extraction_scope == "current_message"
+        assert reasoning._extraction._conflict_strategy == "first_wins"
+        assert reasoning._extraction._log_conflicts is False
 
 
 class TestWizardSessionExtractionIntegration:

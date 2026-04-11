@@ -300,9 +300,10 @@ class TestStrategyStageResponse:
         strategy = reasoning._resolve_stage_strategy(stage)
         assert strategy is not None, "Expected a non-single strategy"
         state = WizardState(current_stage=stage.get("name", "test"), data={})
-        return await reasoning._strategy_stage_response(
+        response, *_ = await reasoning._strategy_stage_response(
             strategy, manager, "Test prompt", stage, state, tools,
         )
+        return response
 
     @pytest.mark.asyncio
     async def test_react_loop_no_tool_calls_returns_immediately(
@@ -708,8 +709,8 @@ class TestReactConfigLoading:
             default_max_iterations=wizard_fsm.settings.get("max_tool_iterations", 3),
         )
 
-        assert reasoning._default_tool_reasoning == "react"
-        assert reasoning._default_max_iterations == 5
+        assert reasoning._response._default_tool_reasoning == "react"
+        assert reasoning._response._default_max_iterations == 5
 
     def test_from_config_loads_react_settings(self) -> None:
         """WizardReasoning.from_config loads ReAct settings."""

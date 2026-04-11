@@ -34,6 +34,7 @@ from .wizard_types import (
     ExtractionPipelineResult,
     StageSchema,
     WizardState,
+    field_is_present,
     _DEFAULT_AFFIRMATIVE_PHRASES,
     _DEFAULT_AFFIRMATIVE_SIGNALS,
     _DEFAULT_NEGATIVE_PHRASES,
@@ -381,17 +382,8 @@ class WizardExtractor:
 
     @staticmethod
     def field_is_present(value: Any) -> bool:
-        """A field has been provided if its value is not None.
-
-        Centralises the "field presence" semantic used by the
-        ``has()`` condition helper.  The confidence gate uses the
-        equivalent logic via ``StageSchema.can_satisfy_required()``.
-
-        Note: ``_can_auto_advance`` uses stricter logic -- it
-        additionally rejects empty strings because auto-advance
-        requires fields to be *filled*, not merely *present*.
-        """
-        return value is not None
+        """Delegate to :func:`wizard_types.field_is_present`."""
+        return field_is_present(value)
 
     def apply_field_derivations(
         self,

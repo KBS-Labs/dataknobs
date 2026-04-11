@@ -684,8 +684,8 @@ class TestGroundingInit:
             GROUNDING_WIZARD_CONFIG,
             ConfigurableExtractor(results=[]),
         )
-        assert reasoning._merge_filter is not None
-        assert isinstance(reasoning._merge_filter, SchemaGroundingFilter)
+        assert reasoning._extraction._merge_filter is not None
+        assert isinstance(reasoning._extraction._merge_filter, SchemaGroundingFilter)
 
     def test_grounding_disabled_no_filter(self) -> None:
         """extraction_grounding: false -> no filter."""
@@ -693,7 +693,7 @@ class TestGroundingInit:
             GROUNDING_DISABLED_CONFIG,
             ConfigurableExtractor(results=[]),
         )
-        assert reasoning._merge_filter is None
+        assert reasoning._extraction._merge_filter is None
 
     def test_custom_filter_composes_with_grounding(self) -> None:
         """Custom merge_filter composes with grounding via CompositeMergeFilter."""
@@ -717,7 +717,7 @@ class TestGroundingInit:
             merge_filter=custom,
         )
         # Both grounding and custom filter → composite
-        assert isinstance(reasoning._merge_filter, CompositeMergeFilter)
+        assert isinstance(reasoning._extraction._merge_filter, CompositeMergeFilter)
 
     def test_custom_filter_alone_when_grounding_disabled(self) -> None:
         """Custom filter is used directly when grounding is disabled."""
@@ -741,7 +741,7 @@ class TestGroundingInit:
             merge_filter=custom,
         )
         # Grounding disabled → custom filter used directly
-        assert reasoning._merge_filter is custom
+        assert reasoning._extraction._merge_filter is custom
 
     def test_skip_builtin_grounding(self) -> None:
         """skip_builtin_grounding=True uses custom filter alone."""
@@ -766,7 +766,7 @@ class TestGroundingInit:
             skip_builtin_grounding=True,
         )
         # skip_builtin_grounding → custom filter used directly
-        assert reasoning._merge_filter is custom
+        assert reasoning._extraction._merge_filter is custom
 
 
 class TestFromConfigRoundTrip:
@@ -778,8 +778,8 @@ class TestFromConfigRoundTrip:
             "wizard_config": GROUNDING_WIZARD_CONFIG,
         }
         reasoning = WizardReasoning.from_config(config)
-        assert reasoning._merge_filter is not None
-        assert isinstance(reasoning._merge_filter, SchemaGroundingFilter)
+        assert reasoning._extraction._merge_filter is not None
+        assert isinstance(reasoning._extraction._merge_filter, SchemaGroundingFilter)
 
     def test_from_config_with_grounding_disabled(self) -> None:
         """from_config creates no filter when disabled."""
@@ -787,7 +787,7 @@ class TestFromConfigRoundTrip:
             "wizard_config": GROUNDING_DISABLED_CONFIG,
         }
         reasoning = WizardReasoning.from_config(config)
-        assert reasoning._merge_filter is None
+        assert reasoning._extraction._merge_filter is None
 
     def test_from_config_invalid_merge_filter_path(self) -> None:
         """Invalid merge_filter dotted path raises ConfigurationError."""
