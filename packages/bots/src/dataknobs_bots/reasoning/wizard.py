@@ -2084,6 +2084,11 @@ class WizardReasoning(ReasoningStrategy):
             stage_result = await self._response.generate_stage_response(
                 manager, llm, new_stage, wizard_state, tools
             )
+            # Increment render count for template stages so subsequent
+            # turns don't re-trigger first-render confirmation logic.
+            subflow_stage_name = new_stage.get("name", "")
+            if subflow_stage_name and new_stage.get("response_template"):
+                wizard_state.increment_render_count(subflow_stage_name)
             await self._save_wizard_state(manager, wizard_state)
             return stage_result.response
 
@@ -2171,7 +2176,15 @@ class WizardReasoning(ReasoningStrategy):
         # Check for tool-initiated completion (CompleteWizardTool signal)
         elif not completed_before and stage_result.tool_completion_requested:
             wizard_state.completed = True
-            logger.info("Wizard completion signaled by complete_wizard tool")
+            completion_summary = stage_result.tool_completion_summary
+            if completion_summary:
+                logger.info(
+                    "Wizard completion signaled by complete_wizard tool: %s",
+                    completion_summary,
+                )
+                wizard_state.data["_completion_summary"] = completion_summary
+            else:
+                logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
                 await self._hooks.trigger_complete(wizard_state.data)
 
@@ -2280,6 +2293,11 @@ class WizardReasoning(ReasoningStrategy):
                 manager, llm, new_stage, wizard_state, tools, stream_ctx
             ):
                 yield chunk
+            # Increment render count for template stages so subsequent
+            # turns don't re-trigger first-render confirmation logic.
+            subflow_stage_name = new_stage.get("name", "")
+            if subflow_stage_name and new_stage.get("response_template"):
+                wizard_state.increment_render_count(subflow_stage_name)
             await self._save_wizard_state(manager, wizard_state)
             return
 
@@ -2370,7 +2388,15 @@ class WizardReasoning(ReasoningStrategy):
         # Check for tool-initiated completion
         elif not completed_before and stream_ctx.tool_completion_requested:
             wizard_state.completed = True
-            logger.info("Wizard completion signaled by complete_wizard tool")
+            completion_summary = stream_ctx.tool_completion_summary
+            if completion_summary:
+                logger.info(
+                    "Wizard completion signaled by complete_wizard tool: %s",
+                    completion_summary,
+                )
+                wizard_state.data["_completion_summary"] = completion_summary
+            else:
+                logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
                 await self._hooks.trigger_complete(wizard_state.data)
 

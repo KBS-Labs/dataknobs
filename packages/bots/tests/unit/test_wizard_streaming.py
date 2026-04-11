@@ -22,7 +22,7 @@ from dataknobs_bots.reasoning.base import (
     StreamingPhasedProtocol,
 )
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
-from dataknobs_bots.tools.bank_tools import RestartWizardTool
+from dataknobs_bots.tools.bank_tools import CompleteWizardTool, RestartWizardTool
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.testing import text_response, tool_call_response
 
@@ -375,6 +375,137 @@ class TestStreamingRestartCleanup:
             # Streaming produced output (the review stage response,
             # before restart was detected post-stream)
             assert len(result.chunks) > 0
+
+
+# ---------------------------------------------------------------------------
+# Render count for template stages
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateRenderCount:
+    """Template stages get render_count incremented after streaming."""
+
+    @pytest.mark.asyncio
+    async def test_template_stage_render_count_incremented(
+        self, template_wizard_config: dict[str, Any]
+    ) -> None:
+        """After streaming to a template stage, render_count > 0.
+
+        Without this, conversation-mode template stages would re-render
+        the greeting on every turn instead of falling through to LLM.
+        """
+        async with await BotTestHarness.create(
+            wizard_config=template_wizard_config,
+            main_responses=["Here we go"],
+            extraction_results=[[{"name": "Eve"}]],
+        ) as harness:
+            await harness.stream_chat("My name is Eve")
+
+            # The "review" stage has a response_template — its render
+            # count should be 1 after the first render.
+            state = harness.wizard_state
+            assert state is not None
+            render_counts = state.get("data", {}).get(
+                "_stage_render_counts", {}
+            )
+            assert render_counts.get("review", 0) == 1
+
+
+# ---------------------------------------------------------------------------
+# Completion summary wired through to wizard state
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionSummary:
+    """tool_completion_summary reaches wizard state and hooks."""
+
+    @pytest.mark.asyncio
+    async def test_completion_summary_in_wizard_data(self) -> None:
+        """CompleteWizardTool summary is written to _completion_summary in state."""
+        config = (
+            WizardConfigBuilder("completion-summary-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+            )
+            .field("name", field_type="string", required=True)
+            .transition("finalize", "data.get('name')")
+            .stage(
+                "finalize",
+                prompt="Let me wrap up.",
+                reasoning="react",
+                max_iterations=3,
+                tools=["complete_wizard"],
+            )
+            .transition("done", "true")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                # Turn 1: extraction succeeds, transitions to "finalize"
+                # Finalize stage uses ReAct — tool call then text
+                tool_call_response(
+                    "complete_wizard", {"summary": "All data collected"}
+                ),
+                text_response("Everything is wrapped up!"),
+            ],
+            extraction_results=[[{"name": "Fiona"}]],
+            tools=[CompleteWizardTool()],
+        ) as harness:
+            result = await harness.stream_chat("My name is Fiona")
+
+            # Completion summary should be in wizard data
+            assert (
+                harness.wizard_data.get("_completion_summary")
+                == "All data collected"
+            )
+            # Wizard should be marked completed
+            assert harness.wizard_state is not None
+            assert harness.wizard_state.get("completed") is True
+
+    @pytest.mark.asyncio
+    async def test_completion_without_summary(self) -> None:
+        """CompleteWizardTool without summary: no _completion_summary key."""
+        config = (
+            WizardConfigBuilder("completion-no-summary-test")
+            .stage(
+                "gather",
+                is_start=True,
+                prompt="What is your name?",
+            )
+            .field("name", field_type="string", required=True)
+            .transition("finalize", "data.get('name')")
+            .stage(
+                "finalize",
+                prompt="Let me wrap up.",
+                reasoning="react",
+                max_iterations=3,
+                tools=["complete_wizard"],
+            )
+            .transition("done", "true")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[
+                tool_call_response("complete_wizard", {}),
+                text_response("Done!"),
+            ],
+            extraction_results=[[{"name": "Grace"}]],
+            tools=[CompleteWizardTool()],
+        ) as harness:
+            await harness.stream_chat("My name is Grace")
+
+            # No summary → no _completion_summary key
+            assert "_completion_summary" not in harness.wizard_data
+            assert harness.wizard_state is not None
+            assert harness.wizard_state.get("completed") is True
 
 
 # ---------------------------------------------------------------------------

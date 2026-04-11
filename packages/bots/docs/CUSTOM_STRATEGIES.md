@@ -379,6 +379,7 @@ class MyStreamingPhasedStrategy(ReasoningStrategy):
     # begin_turn and process_input are the same as above
 
     async def stream_finalize_turn(self, handle, tool_results=None):
+        manager = handle.manager
         # Pre-stream work (transitions, state updates)
         # ...
         # Yield streaming chunks
