@@ -235,6 +235,7 @@ Avoid these patterns in bot tests:
 ### Exception: Internal-Method Unit Tests
 
 Tests that verify WizardReasoning internal logic (`_evaluate_condition`,
-`_can_auto_advance`, transform flows) are legitimate unit tests. These may
-use `WizardReasoning` directly with the `conversation_manager_pair` conftest
-fixture. They test specific internal methods, not wizard flow behavior.
+`_can_auto_advance`, transform flows) or individual phased protocol methods
+(`begin_turn`, `process_input`, `finalize_turn`) are legitimate unit tests.
+These may use `WizardReasoning` directly with the `conversation_manager_pair`
+conftest fixture. They test specific internal methods, not wizard flow behavior.

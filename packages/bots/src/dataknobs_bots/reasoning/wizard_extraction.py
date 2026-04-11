@@ -32,6 +32,7 @@ from .wizard_types import (
     RECOVERY_SCOPE_ESCALATION,
     SCOPE_BREADTH,
     ExtractionPipelineResult,
+    RecoveryResult,
     StageSchema,
     WizardState,
     field_is_present,
@@ -195,10 +196,12 @@ class WizardExtractor:
         # 6. Recovery pipeline (only if required fields missing)
         missing = self.check_required_fields_missing(state, stage)
         if missing:
-            new_data_keys, extraction = await self._run_recovery_pipeline(
+            recovery = await self._run_recovery_pipeline(
                 extraction, state, stage,
                 message, llm, manager, new_data_keys,
             )
+            new_data_keys = recovery.new_data_keys
+            extraction = recovery.extraction
             # Re-check after recovery
             missing = self.check_required_fields_missing(state, stage)
 
@@ -1210,7 +1213,7 @@ class WizardExtractor:
         llm: Any,
         manager: Any | None,
         new_data_keys: set[str],
-    ) -> tuple[set[str], Any]:
+    ) -> RecoveryResult:
         """Run recovery strategies until required fields are satisfied.
 
         Executes strategies in pipeline order, checking before each
@@ -1229,12 +1232,12 @@ class WizardExtractor:
             new_data_keys: Set of new/changed keys (augmented in-place).
 
         Returns:
-            Tuple of (updated new_data_keys, updated extraction result).
+            :class:`RecoveryResult` with updated keys and extraction.
         """
         # Per-stage disable
         stage_recovery = stage.get("recovery_enabled")
         if stage_recovery is False:
-            return new_data_keys, extraction
+            return RecoveryResult(new_data_keys=new_data_keys, extraction=extraction)
 
         for strategy in self._recovery_pipeline:
             # Check stop condition: all required fields satisfied
@@ -1267,27 +1270,23 @@ class WizardExtractor:
                     )
 
             elif strategy == RECOVERY_SCOPE_ESCALATION:
-                escalated_keys, escalated_extraction = (
-                    await self._run_scope_escalation(
-                        extraction, wizard_state, stage,
-                        user_message, llm, manager,
-                    )
+                esc_result = await self._run_scope_escalation(
+                    extraction, wizard_state, stage,
+                    user_message, llm, manager,
                 )
-                if escalated_keys:
-                    new_data_keys |= escalated_keys
-                    extraction = escalated_extraction
+                if esc_result.new_data_keys:
+                    new_data_keys |= esc_result.new_data_keys
+                    extraction = esc_result.extraction
 
             elif strategy == RECOVERY_FOCUSED_RETRY:
                 if self._focused_retry_enabled:
-                    retry_keys, retry_extraction = (
-                        await self._run_focused_retry(
-                            wizard_state, stage,
-                            user_message, llm, manager,
-                        )
+                    retry_result = await self._run_focused_retry(
+                        wizard_state, stage,
+                        user_message, llm, manager,
                     )
-                    if retry_keys:
-                        new_data_keys |= retry_keys
-                        extraction = retry_extraction
+                    if retry_result.new_data_keys:
+                        new_data_keys |= retry_result.new_data_keys
+                        extraction = retry_result.extraction
                 else:
                     logger.debug(
                         "Recovery pipeline: focused_retry in pipeline "
@@ -1300,7 +1299,7 @@ class WizardExtractor:
                 # no-op signal for documentation purposes.
                 pass
 
-        return new_data_keys, extraction
+        return RecoveryResult(new_data_keys=new_data_keys, extraction=extraction)
 
     async def _run_scope_escalation(
         self,
@@ -1310,7 +1309,7 @@ class WizardExtractor:
         user_message: str,
         llm: Any,
         manager: Any | None,
-    ) -> tuple[set[str], Any]:
+    ) -> RecoveryResult:
         """Run scope escalation recovery strategy.
 
         When required fields are still missing and the current scope is
@@ -1319,11 +1318,12 @@ class WizardExtractor:
         the gaps.
 
         Returns:
-            Tuple of (new keys from escalation, updated extraction).
-            Empty set and original extraction if escalation didn't fire.
+            :class:`RecoveryResult` with new keys from escalation and
+            updated extraction.  Empty keys and original extraction if
+            escalation didn't fire.
         """
         if not self._scope_escalation_enabled:
-            return set(), extraction
+            return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         effective_scope = self.get_extraction_scope(stage)
         target_breadth = SCOPE_BREADTH.get(
@@ -1332,13 +1332,13 @@ class WizardExtractor:
         )
         current_breadth = SCOPE_BREADTH.get(effective_scope, 0)
         if current_breadth >= target_breadth:
-            return set(), extraction
+            return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         missing = self.check_required_fields_missing(
             wizard_state, stage,
         )
         if not missing:
-            return set(), extraction
+            return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         # Check for prior history using the same scope window
         # the escalated extraction will use.
@@ -1355,7 +1355,7 @@ class WizardExtractor:
         ) if manager is not None else False
 
         if not has_prior:
-            return set(), extraction
+            return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         logger.debug(
             "Scope escalation: %d required fields "
@@ -1378,7 +1378,7 @@ class WizardExtractor:
             wizard_state,
         )
         if not escalated.data:
-            return set(), extraction
+            return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         ss_esc = StageSchema.from_stage(stage)
         if ss_esc.exists:
@@ -1389,8 +1389,8 @@ class WizardExtractor:
             escalated.data, wizard_state, stage, user_message,
         )
         if escalated_keys:
-            return escalated_keys, escalated
-        return set(), extraction
+            return RecoveryResult(new_data_keys=escalated_keys, extraction=escalated)
+        return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
     async def _run_focused_retry(
         self,
@@ -1399,7 +1399,7 @@ class WizardExtractor:
         user_message: str,
         llm: Any,
         manager: Any | None,
-    ) -> tuple[set[str], Any]:
+    ) -> RecoveryResult:
         """Run focused retry -- extract only missing required fields.
 
         Builds a minimal schema containing only the missing required
@@ -1407,16 +1407,16 @@ class WizardExtractor:
         This is simpler for the LLM since fewer fields = easier task.
 
         Returns:
-            Tuple of (new keys from retry, extraction result).
-            Empty set and None if retry didn't produce data.
+            :class:`RecoveryResult` with new keys from retry and
+            extraction result.  Empty keys when retry didn't produce data.
         """
         ss = StageSchema.from_stage(stage)
         if not ss.exists:
-            return set(), None
+            return RecoveryResult(new_data_keys=set())
 
         missing = ss.missing_required(wizard_state.data)
         if not missing:
-            return set(), None
+            return RecoveryResult(new_data_keys=set())
 
         # Build focused schema with only the missing fields
         properties = ss.properties
@@ -1426,7 +1426,7 @@ class WizardExtractor:
             if f in properties
         }
         if not focused_properties:
-            return set(), None
+            return RecoveryResult(new_data_keys=set())
 
         focused_schema = {
             "type": "object",
@@ -1473,13 +1473,13 @@ class WizardExtractor:
                     attempt + 1,
                     sorted(retry_keys),
                 )
-                return retry_keys, retry_result
+                return RecoveryResult(new_data_keys=retry_keys, extraction=retry_result)
             # Data was extracted but merge yielded no new keys
             # (already present or blocked by grounding filter).
             # Retrying with the same inputs won't help.
             break
 
-        return set(), None
+        return RecoveryResult(new_data_keys=set())
 
     def _run_boolean_recovery(
         self,

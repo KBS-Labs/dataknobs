@@ -101,7 +101,8 @@ def update_tool_tasks(
 ) -> None:
     """Mark tool-result tasks as complete when tools succeed.
 
-    Not yet wired — call site depends on item 78 (phased generate).
+    Called from :meth:`WizardReasoning.finalize_turn` when DynaBot
+    passes tool execution results through the phased protocol.
 
     Args:
         state: Current wizard state.

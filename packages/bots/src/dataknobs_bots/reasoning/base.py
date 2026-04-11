@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from dataknobs_llm import LLMResponse
@@ -40,6 +40,149 @@ class StrategyCapabilities:
 
     manages_sources: bool = False
     manages_tools: bool = False
+
+
+@dataclass
+class TurnHandle:
+    """Turn-scoped state carried between phased reasoning phases.
+
+    Stored on the stack (not on ``self``), preventing state leakage
+    between concurrent conversations.  Strategies subclass this to add
+    their own fields (e.g. :class:`WizardTurnHandle` adds wizard state,
+    FSM context, and extraction results).
+
+    Attributes:
+        manager: Conversation manager for this turn.
+        llm: LLM provider instance.
+        tools: Optional list of available tools.
+        kwargs: Additional generation parameters forwarded from the caller.
+        early_response: When set by ``begin_turn``, signals DynaBot to
+            skip ``process_input`` / ``finalize_turn`` and return this
+            response directly.  Used for navigation and amendment
+            early-return paths.
+    """
+
+    manager: Any  # ReasoningManagerProtocol (can't reference yet)
+    llm: Any
+    tools: list[Any] | None = None
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    early_response: Any | None = None
+
+
+@dataclass
+class ProcessResult:
+    """Result from the ``process_input`` phase.
+
+    Tells DynaBot what happened during input processing and whether
+    to run tools before ``finalize_turn``.
+
+    Attributes:
+        early_response: When set, DynaBot skips tool execution and
+            ``finalize_turn``, returning this response directly.  Used
+            for clarification, validation errors, collection help, and
+            other early-return paths.
+        needs_tool_execution: When ``True``, DynaBot runs its tool loop
+            between ``process_input`` and ``finalize_turn``.  Currently
+            always ``False`` for wizard (tools run inside ReAct stages).
+        action: Informational label describing what ``process_input``
+            did (e.g. ``"extracted"``, ``"clarification"``,
+            ``"collection_help"``).  For observability/debugging.
+    """
+
+    early_response: Any | None = None
+    needs_tool_execution: bool = False
+    action: str = ""
+
+
+@runtime_checkable
+class PhasedReasoningProtocol(Protocol):
+    """Opt-in protocol for strategies that support phased turn execution.
+
+    Strategies implementing this protocol decompose ``generate()`` into
+    three phases, allowing the orchestrator (DynaBot) to interleave tool
+    execution between ``process_input`` and ``finalize_turn``.
+
+    DynaBot detects phase support via ``isinstance`` check and uses the
+    phased flow when available.  Non-phased strategies continue to use
+    the single ``generate()`` call.
+
+    The three phases correspond to the natural boundaries in a wizard
+    turn:
+
+    1. **begin_turn** — restore state, handle navigation/amendments
+    2. **process_input** — extract data, validate, prepare for transition
+    3. **finalize_turn** — transition FSM, generate response, save state
+
+    Between ``process_input`` and ``finalize_turn``, DynaBot can execute
+    tools (when ``ProcessResult.needs_tool_execution`` is ``True``),
+    enabling tool results to be reflected in wizard state before it is
+    saved.
+    """
+
+    async def begin_turn(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> TurnHandle:
+        """Phase A: Restore state, handle navigation and amendments.
+
+        Returns a :class:`TurnHandle` carrying all turn-scoped state.
+        If the turn resolves to a navigation or amendment response,
+        ``handle.early_response`` is set and DynaBot returns it directly.
+
+        Args:
+            manager: Conversation manager for this turn.
+            llm: LLM provider instance.
+            tools: Optional list of available tools.
+            **kwargs: Additional generation parameters.
+
+        Returns:
+            Turn handle with turn-scoped state.
+        """
+        ...
+
+    async def process_input(
+        self,
+        handle: TurnHandle,
+    ) -> ProcessResult:
+        """Phase B: Extract data, validate, prepare for transition.
+
+        Processes the user's input (extraction, validation, collection
+        mode handling).  If the turn resolves to an early response
+        (clarification, validation error, etc.),
+        ``result.early_response`` is set.
+
+        Args:
+            handle: Turn handle from ``begin_turn``.
+
+        Returns:
+            Process result indicating outcome and whether DynaBot
+            should execute tools before ``finalize_turn``.
+        """
+        ...
+
+    async def finalize_turn(
+        self,
+        handle: TurnHandle,
+        tool_results: list[ToolExecution] | None = None,
+    ) -> Any:
+        """Phase C: Transition FSM, generate response, save state.
+
+        Receives tool execution results from the DynaBot tool loop
+        (if any tools ran between ``process_input`` and
+        ``finalize_turn``).  Returns the final LLM response.
+
+        Args:
+            handle: Turn handle from ``begin_turn``.
+            tool_results: Tool execution records from DynaBot's tool
+                loop (``None`` when no tools were executed).
+
+        Returns:
+            LLM response object.
+        """
+        ...
 
 
 @runtime_checkable
@@ -134,6 +277,13 @@ class ReasoningStrategy(ABC):
     (e.g. ``WizardReasoning`` with FSM-driven stage responses) override
     ``greet()`` entirely.
 
+    Strategies that need DynaBot to interleave tool execution within
+    the generation lifecycle can implement
+    :class:`PhasedReasoningProtocol`, which splits ``generate()`` into
+    ``begin_turn`` / ``process_input`` / ``finalize_turn`` phases.
+    DynaBot detects phase support via ``isinstance`` check and uses
+    the phased flow automatically.
+
     Args:
         greeting_template: Optional Jinja2 template for bot-initiated
             greetings.  Variables from ``initial_context`` are available
@@ -141,8 +291,8 @@ class ReasoningStrategy(ABC):
 
     Examples:
         - Simple: Direct LLM call
-        - Chain-of-Thought: Break down reasoning into steps
         - ReAct: Reason and act in a loop with tools
+        - Wizard: FSM-driven guided flows (phased protocol)
     """
 
     @classmethod
