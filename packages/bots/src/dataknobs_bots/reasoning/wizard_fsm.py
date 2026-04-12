@@ -73,11 +73,18 @@ class WizardFSM:
         :class:`TransformContext`).  It is applied to the
         :class:`ExecutionContext` before each step executes.
 
+        If the :class:`ExecutionContext` has already been created (i.e.
+        after the first step), the factory is propagated to it immediately
+        so that the next ``step`` / ``step_async`` call uses the new
+        factory without requiring context re-creation.
+
         Args:
             factory: Callable accepting a FunctionContext and returning
                 the desired transform context.
         """
         self._transform_context_factory = factory
+        if self._context is not None:
+            self._context.transform_context_factory = factory
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -526,6 +533,10 @@ class WizardFSM:
             # Create new context with restored state
             self._context = self._fsm.create_context(data)
             self._context.set_state(current_stage)
+            if self._transform_context_factory:
+                self._context.transform_context_factory = (
+                    self._transform_context_factory
+                )
 
     @property
     def start_stage(self) -> str:

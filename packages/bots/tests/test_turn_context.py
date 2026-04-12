@@ -59,39 +59,30 @@ class TestTransformContextTurnField:
         assert ctx.turn is None
 
 
-class TestBuildTransformContextIncludesTurn:
-    """_build_transform_context includes _current_turn."""
+class TestBuildTransformContextFallback:
+    """_build_transform_context is a fallback factory with safe defaults.
 
-    def test_turn_included_when_set(self) -> None:
-        """When _current_turn is set, factory output includes it."""
-        # Build a minimal WizardReasoning with mocked WizardFSM
-        # We only need the factory method, so we test it directly.
-        wizard_fsm = MagicMock()
-        wizard_fsm.settings = {}
-        wizard_fsm.stages = {}
-        wizard_fsm.config = {}
-        wizard_fsm.hooks = MagicMock()
-        wizard_fsm.hooks.on_complete = []
+    The primary transform context factory is a per-call closure installed
+    by ``_execute_fsm_step``.  ``_build_transform_context`` provides a
+    safe default with ``turn=None`` and ``config={}`` for any FSM path
+    that bypasses ``_execute_fsm_step``.
+    """
 
-        # Note: WizardReasoning.__init__ is complex, so test the factory
-        # method in isolation by calling it as an unbound method with
-        # the right attributes set.
+    def test_fallback_has_no_turn_or_llm(self) -> None:
+        """Fallback factory returns turn=None and config={}."""
         from dataknobs_bots.artifacts.transforms import TransformContext
 
         # Create a standalone instance with minimal state
         reasoning = WizardReasoning.__new__(WizardReasoning)
-        reasoning._current_turn = TurnContext(message="test", intent="ask")
         reasoning._artifact_registry = None
         reasoning._review_executor = None
-        reasoning._current_llm = None
         reasoning._banks = {}
 
         result = reasoning._build_transform_context(None)
 
         assert isinstance(result, TransformContext)
-        assert result.turn is not None
-        assert result.turn.message == "test"
-        assert result.turn.intent == "ask"
+        assert result.turn is None
+        assert result.config == {}
 
 
 class TestPerTurnKeysConfig:
