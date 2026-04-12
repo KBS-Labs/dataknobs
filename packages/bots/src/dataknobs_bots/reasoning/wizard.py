@@ -1477,7 +1477,8 @@ class WizardReasoning(ReasoningStrategy):
         if self._response.can_auto_advance(wizard_state, stage):
             auto_advance_messages = [response.content]
             loop_messages = await self._response.run_auto_advance_loop(
-                wizard_state, active_fsm, stage, skip_first_render=True,
+                wizard_state, active_fsm, stage,
+                skip_first_render=True, llm=llm,
             )
             auto_advance_messages.extend(loop_messages)
 
@@ -2127,7 +2128,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Post-transition lifecycle (shared method: subflow pop, auto-advance, hooks)
         auto_advance_messages = await self._run_post_transition_lifecycle(
-            wizard_state,
+            wizard_state, llm=handle.llm,
         )
 
         # Re-fetch active FSM for response generation
@@ -2537,7 +2538,9 @@ class WizardReasoning(ReasoningStrategy):
             # FSM stays put (no matching transition condition).
             if transitioned:
                 auto_advance_messages = (
-                    await self._run_post_transition_lifecycle(state)
+                    await self._run_post_transition_lifecycle(
+                        state, llm=llm,
+                    )
                 )
 
         # Build result
@@ -3004,6 +3007,8 @@ class WizardReasoning(ReasoningStrategy):
     async def _run_post_transition_lifecycle(
         self,
         state: WizardState,
+        *,
+        llm: Any | None = None,
     ) -> list[str]:
         """Run post-transition lifecycle: subflow pop, auto-advance, hooks.
 
@@ -3013,6 +3018,8 @@ class WizardReasoning(ReasoningStrategy):
 
         Args:
             state: Wizard state (mutated in place).
+            llm: LLM provider for auto-advance transforms (``None``
+                when no LLM is available).
 
         Returns:
             List of rendered template strings from auto-advanced stages.
@@ -3026,7 +3033,7 @@ class WizardReasoning(ReasoningStrategy):
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
         auto_advance_messages = await self._response.run_auto_advance_loop(
-            state, active_fsm, stage,
+            state, active_fsm, stage, llm=llm,
         )
 
         # Re-fetch in case subflow pop occurred during auto-advance

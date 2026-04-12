@@ -86,6 +86,14 @@ class WizardFSM:
         if self._context is not None:
             self._context.transform_context_factory = factory
 
+    def get_transform_context_factory(self) -> Callable[..., Any] | None:
+        """Return the currently registered transform context factory.
+
+        Returns:
+            The factory callable, or ``None`` if none is registered.
+        """
+        return self._transform_context_factory
+
     @property
     def settings(self) -> dict[str, Any]:
         """Get wizard-level settings.

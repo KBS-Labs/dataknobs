@@ -341,6 +341,88 @@ class TestConcurrentTurnsIsolated:
         assert captured["B"].config.get("llm") is llm_b
 
 
+class TestAutoAdvanceLlmThreading:
+    """Auto-advance transforms receive the LLM via the scoped factory.
+
+    ``run_auto_advance_loop`` calls ``step_async`` directly (not through
+    ``_execute_fsm_step``).  It must install its own per-call closure
+    so that auto-advance transforms have access to the LLM — otherwise
+    they see ``config={}`` from the fallback factory.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_advance_transform_sees_llm(self) -> None:
+        """Transform on an auto-advance transition sees the LLM.
+
+        Config: start → (extract 'go') → mid → (auto-advance, capture_ctx) → end.
+        The capture_ctx transform fires during auto-advance and must see the LLM.
+        """
+        _captured_contexts.clear()
+
+        config = {
+            "name": "auto-advance-llm-test",
+            "settings": {
+                "extraction_scope": "current_message",
+                "auto_advance_filled_stages": True,
+            },
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"go": {"type": "string"}},
+                        "required": ["go"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "mid",
+                            "condition": "data.get('go')",
+                        }
+                    ],
+                },
+                {
+                    "name": "mid",
+                    "prompt": "Mid",
+                    "auto_advance": True,
+                    "response_template": "Advancing...",
+                    "transitions": [
+                        {
+                            "target": "end",
+                            "transform": "capture_ctx",
+                        }
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        reasoning = _make_reasoning(config, custom_functions=_custom_fns())
+
+        # Seed data so start→mid transition fires
+        state = _make_state(reasoning, data={"go": "yes"})
+
+        fake_llm = sentinel.auto_advance_llm
+
+        # Execute FSM step (start→mid) then post-transition lifecycle
+        # (mid→end via auto-advance).  The auto-advance transform must
+        # see the LLM.
+        await reasoning._execute_fsm_step(state, llm=fake_llm)
+        await reasoning._run_post_transition_lifecycle(
+            state, llm=fake_llm,
+        )
+
+        assert len(_captured_contexts) == 1, (
+            f"Expected 1 captured context from auto-advance transform, "
+            f"got {len(_captured_contexts)}"
+        )
+        ctx = _captured_contexts[0]
+        assert ctx.config.get("llm") is fake_llm, (
+            f"Auto-advance transform should see the LLM, "
+            f"got config={ctx.config}"
+        )
+
+
 class TestNoInstanceTurnState:
     """Instance no longer has _current_llm or _current_turn."""
 
