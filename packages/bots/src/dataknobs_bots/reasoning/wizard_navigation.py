@@ -60,10 +60,10 @@ class WizardNavigator:
         catalog: Artifact catalog for auto-save before restart (may be None).
         execute_fsm_step: Callback to execute an FSM step with runtime
             context injection.  Signature:
-            ``(state, *, user_message, trigger) -> (from_stage, step_result)``
+            ``(state, *, user_message, trigger, llm) -> (from_stage, step_result)``
         run_post_transition_lifecycle: Callback to run post-transition
             lifecycle (subflow pop, auto-advance, hooks).  Signature:
-            ``(state) -> list[str]``
+            ``(state, *, llm) -> list[str]``
         generate_stage_response: Callback to generate a stage response.
             Signature: ``(manager, llm, stage, state, tools) -> response``
         prepend_messages_to_response: Callback to prepend auto-advance

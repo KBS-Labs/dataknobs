@@ -383,13 +383,6 @@ class WizardReasoning(ReasoningStrategy):
 
         self._renderer = WizardRenderer()
 
-        # LLM provider set by generate() for transform context access
-        self._current_llm: Any = None
-
-        # Per-turn context delivered to transforms via the context factory.
-        # Set at the start of each FSM step, cleared after.
-        self._current_turn: TurnContext | None = None
-
         # Per-turn keys: cleared at the start of each turn, suppressed
         # in conflict detection, and treated as ephemeral (non-persistent).
         self._per_turn_keys: frozenset[str] = frozenset(
@@ -517,20 +510,21 @@ class WizardReasoning(ReasoningStrategy):
             prepend_messages_to_response=WizardResponder.prepend_messages_to_response,
         )
 
-        # Store the factory — it will be set on the ExecutionContext
-        # before FSM steps execute (see WizardFSM._ensure_context_factory).
+        # Register the fallback factory via set_transform_context_factory.
+        # The primary factory is a per-call closure installed by
+        # _execute_fsm_step; this fallback handles initial-state entry.
         self._wizard_fsm = wizard_fsm
         self._wizard_fsm.set_transform_context_factory(
             self._build_transform_context
         )
 
     def _build_transform_context(self, func_context: Any) -> Any:
-        """Build a :class:`TransformContext` from an FSM ``FunctionContext``.
+        """Fallback transform context factory.
 
-        Registered as the ``transform_context_factory`` on the
-        :class:`ExecutionContext`.  The FSM calls this instead of passing
-        the raw ``FunctionContext`` to transforms, giving them access to
-        the artifact registry, rubric executor, LLM, and memory banks.
+        The primary factory is a per-call closure installed by
+        ``_execute_fsm_step``.  This fallback provides a safe default
+        if ``step_async`` is ever called outside that method (e.g.
+        during initial-state entry before any turn begins).
 
         Args:
             func_context: The :class:`FunctionContext` built by the FSM.
@@ -542,10 +536,10 @@ class WizardReasoning(ReasoningStrategy):
 
         return TransformContext(
             fsm_context=func_context,
-            turn=self._current_turn,
+            turn=None,
             artifact_registry=self._artifact_registry,
             rubric_executor=self._review_executor,
-            config={"llm": self._current_llm} if self._current_llm else {},
+            config={},
             banks=self._banks,
         )
 
@@ -1449,9 +1443,6 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             LLM response object with wizard metadata
         """
-        # Store LLM reference so transform context wrappers can access it
-        self._current_llm = llm
-
         # Initialize fresh wizard state (restarts FSM to start stage)
         wizard_state = self._get_wizard_state(manager)
 
@@ -1486,7 +1477,8 @@ class WizardReasoning(ReasoningStrategy):
         if self._response.can_auto_advance(wizard_state, stage):
             auto_advance_messages = [response.content]
             loop_messages = await self._response.run_auto_advance_loop(
-                wizard_state, active_fsm, stage, skip_first_render=True,
+                wizard_state, active_fsm, stage,
+                skip_first_render=True, llm=llm,
             )
             auto_advance_messages.extend(loop_messages)
 
@@ -1563,9 +1555,6 @@ class WizardReasoning(ReasoningStrategy):
         handle = WizardTurnHandle(
             manager=manager, llm=llm, tools=tools, kwargs=kwargs,
         )
-
-        # Store LLM reference so transform context wrappers can access it
-        self._current_llm = llm
 
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
@@ -2114,6 +2103,7 @@ class WizardReasoning(ReasoningStrategy):
         from_stage, _step_result = await self._execute_fsm_step(
             wizard_state,
             user_message=None if handle.skip_extraction else user_message,
+            llm=handle.llm,
         )
 
         # Auto-save artifact to catalog on stage transition.  Collection
@@ -2138,7 +2128,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Post-transition lifecycle (shared method: subflow pop, auto-advance, hooks)
         auto_advance_messages = await self._run_post_transition_lifecycle(
-            wizard_state,
+            wizard_state, llm=handle.llm,
         )
 
         # Re-fetch active FSM for response generation
@@ -2527,7 +2517,7 @@ class WizardReasoning(ReasoningStrategy):
             await self._execute_routing_transforms(stage, state)
 
             # Execute FSM step (shared method)
-            await self._execute_fsm_step(state)
+            await self._execute_fsm_step(state, llm=llm)
 
             transitioned = state.current_stage != from_stage
 
@@ -2548,7 +2538,9 @@ class WizardReasoning(ReasoningStrategy):
             # FSM stays put (no matching transition condition).
             if transitioned:
                 auto_advance_messages = (
-                    await self._run_post_transition_lifecycle(state)
+                    await self._run_post_transition_lifecycle(
+                        state, llm=llm,
+                    )
                 )
 
         # Build result
@@ -2883,6 +2875,7 @@ class WizardReasoning(ReasoningStrategy):
         *,
         user_message: str | None = None,
         trigger: str = "user_input",
+        llm: Any | None = None,
     ) -> tuple[str, Any]:
         """Execute an FSM step with standard runtime key injection and state update.
 
@@ -2891,6 +2884,11 @@ class WizardReasoning(ReasoningStrategy):
         (``current_stage``, ``history``, ``completed``).  Records the
         transition if the stage changed.
 
+        A per-call closure is installed as the ``transform_context_factory``
+        so that each FSM step captures its own ``llm`` and ``TurnContext``
+        on the stack — eliminating the concurrency hazard of instance-level
+        ``_current_llm`` / ``_current_turn`` attributes.
+
         This is the shared core used by ``generate()``, ``advance()``,
         and ``WizardNavigator.navigate_skip()``.
 
@@ -2898,6 +2896,8 @@ class WizardReasoning(ReasoningStrategy):
             state: Wizard state (mutated in place).
             user_message: Optional message for condition evaluation.
             trigger: Transition trigger label for audit trail.
+            llm: LLM provider for this step's transforms (``None`` when
+                no LLM is available, e.g. navigation skips).
 
         Returns:
             Tuple of (from_stage, step_result).
@@ -2910,17 +2910,45 @@ class WizardReasoning(ReasoningStrategy):
         if user_message is not None:
             state.data["_message"] = user_message
         state.data["_bank_fn"] = self._make_bank_accessor()
-        self._current_turn = TurnContext(
+
+        # Build per-call TurnContext — lives on the stack, not on self
+        turn = TurnContext(
             message=user_message,
             bank_fn=self._make_bank_accessor(),
             intent=state.data.get("_intent"),
         )
 
-        # Execute FSM step
-        step_result = await active_fsm.step_async(state.data)
+        # Per-call closure captures local llm and turn values so that
+        # concurrent FSM steps each see their own context.
+        # Note: _artifact_registry, _review_executor, and _banks are
+        # accessed via self (not captured by value) — they are set once
+        # at construction and are stable during FSM execution.
+        from ..artifacts.transforms import TransformContext
+
+        def _scoped_factory(func_context: Any) -> Any:
+            return TransformContext(
+                fsm_context=func_context,
+                turn=turn,
+                artifact_registry=self._artifact_registry,
+                rubric_executor=self._review_executor,
+                config={"llm": llm} if llm else {},
+                banks=self._banks,
+            )
+
+        active_fsm.set_transform_context_factory(_scoped_factory)
+        try:
+            # Execute FSM step
+            step_result = await active_fsm.step_async(state.data)
+        finally:
+            # Restore the fallback factory on the *current* active FSM.
+            # step_async may have triggered a subflow push, changing which
+            # FSM is active — restore on the post-step FSM, not the
+            # pre-step local reference.
+            self._subflows.get_active_fsm().set_transform_context_factory(
+                self._build_transform_context
+            )
 
         # Clean up runtime keys
-        self._current_turn = None
         state.data.pop("_message", None)
         state.data.pop("_bank_fn", None)
 
@@ -2979,6 +3007,8 @@ class WizardReasoning(ReasoningStrategy):
     async def _run_post_transition_lifecycle(
         self,
         state: WizardState,
+        *,
+        llm: Any | None = None,
     ) -> list[str]:
         """Run post-transition lifecycle: subflow pop, auto-advance, hooks.
 
@@ -2988,6 +3018,8 @@ class WizardReasoning(ReasoningStrategy):
 
         Args:
             state: Wizard state (mutated in place).
+            llm: LLM provider for auto-advance transforms (``None``
+                when no LLM is available).
 
         Returns:
             List of rendered template strings from auto-advanced stages.
@@ -3001,7 +3033,7 @@ class WizardReasoning(ReasoningStrategy):
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
         auto_advance_messages = await self._response.run_auto_advance_loop(
-            state, active_fsm, stage,
+            state, active_fsm, stage, llm=llm,
         )
 
         # Re-fetch in case subflow pop occurred during auto-advance

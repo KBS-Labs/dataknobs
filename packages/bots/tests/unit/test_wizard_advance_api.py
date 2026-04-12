@@ -1160,16 +1160,16 @@ class TestSkipMessageInjection:
 
 
 class TestSkipTurnContext:
-    """Test that TurnContext is set during skip FSM step.
+    """Test that TurnContext is delivered via per-call closure during skip.
 
-    The original _execute_skip() did NOT set self._current_turn.
-    After refactoring, _execute_fsm_step() always sets it, which is
-    an improvement for transforms that access TurnContext during skip.
+    After the concurrency fix (item 82), ``_execute_fsm_step`` uses a
+    per-call closure — ``self._current_turn`` no longer exists.  This
+    test verifies skip still transitions correctly.
     """
 
     @pytest.mark.asyncio
-    async def test_skip_sets_turn_context_during_step(self) -> None:
-        """_current_turn is set during skip FSM step and cleared after."""
+    async def test_skip_transitions_without_instance_turn_state(self) -> None:
+        """Skip transitions correctly without instance-level turn state."""
         config = {
             "name": "test-wizard",
             "stages": [
@@ -1186,15 +1186,15 @@ class TestSkipTurnContext:
         reasoning = _make_reasoning(config)
         state = _make_state(reasoning, current_stage="start")
 
-        # Before skip, _current_turn should be None
-        assert reasoning._current_turn is None
+        # No instance-level _current_turn attribute after item 82
+        assert not hasattr(reasoning, "_current_turn")
 
         await reasoning._navigate_skip(state, user_message="skip it")
 
-        # After skip, _current_turn should be cleared
-        assert reasoning._current_turn is None
-        # But the skip did transition
+        # Skip did transition
         assert state.current_stage == "end"
+        # Still no instance-level turn state
+        assert not hasattr(reasoning, "_current_turn")
 
 
 class TestFromConfigFlag:

@@ -21,7 +21,7 @@ from dataknobs_llm import LLMStreamResponse
 from .base import ReasoningStrategy, StreamStageContext
 from .observability import create_transition_record
 from .wizard_derivations import DerivationRule
-from .wizard_types import StageSchema, WizardState, field_is_present
+from .wizard_types import StageSchema, TurnContext, WizardState, field_is_present
 
 if TYPE_CHECKING:
     from .wizard_fsm import WizardFSM
@@ -598,12 +598,18 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         initial_stage: dict[str, Any],
         *,
         skip_first_render: bool = False,
+        llm: Any | None = None,
     ) -> list[str]:
         """Run the auto-advance loop, collecting rendered templates.
 
         Advances through consecutive stages that satisfy
         :meth:`can_auto_advance`, rendering each stage's
         ``response_template`` before moving past it.
+
+        A per-call closure is installed as the ``transform_context_factory``
+        before each ``step_async`` call, mirroring the pattern in
+        ``_execute_fsm_step``, so that auto-advance transforms have
+        access to the LLM and a ``TurnContext``.
 
         Args:
             wizard_state: Current wizard state (mutated in place)
@@ -612,10 +618,14 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             skip_first_render: If True, skip the template render on
                 the first iteration (used by greet when the start
                 stage response is already captured)
+            llm: LLM provider for auto-advance transforms (``None``
+                when no LLM is available).
 
         Returns:
             List of rendered template strings from auto-advanced stages
         """
+        from ..artifacts.transforms import TransformContext
+
         messages: list[str] = []
         count = 0
         max_advances = 10
@@ -640,9 +650,42 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
                 (time.time() - wizard_state.stage_entry_time) * 1000
             )
 
-            auto_step_result = await active_fsm.step_async(
-                wizard_state.data
+            # Install per-step closure so auto-advance transforms see
+            # the LLM and a TurnContext, matching _execute_fsm_step.
+            turn = TurnContext(
+                message=None,
+                bank_fn=self._make_bank_accessor(),
+                intent=wizard_state.data.get("_intent"),
             )
+
+            def _scoped_factory(
+                func_context: Any,
+                *,
+                _turn: TurnContext = turn,
+                _llm: Any | None = llm,
+            ) -> Any:
+                return TransformContext(
+                    fsm_context=func_context,
+                    turn=_turn,
+                    artifact_registry=self._get_artifact_registry(),
+                    rubric_executor=self._get_review_executor(),
+                    config={"llm": _llm} if _llm else {},
+                    banks=self._get_banks(),
+                )
+
+            original_factory = active_fsm.get_transform_context_factory()
+            active_fsm.set_transform_context_factory(_scoped_factory)
+            try:
+                auto_step_result = await active_fsm.step_async(
+                    wizard_state.data
+                )
+            finally:
+                # Restore the previous factory (the orchestrator's
+                # fallback, installed by WizardReasoning at construction).
+                if original_factory is not None:
+                    active_fsm.set_transform_context_factory(
+                        original_factory
+                    )
             new_stage_name = active_fsm.current_stage
 
             if new_stage_name == old_stage_name:
