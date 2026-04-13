@@ -551,7 +551,11 @@ class WizardReasoning(ReasoningStrategy):
         state: WizardState,
         tools: list[Any] | None,
     ) -> Any:
-        """Wrapper for navigator callback — unwraps StageResponseResult."""
+        """Wrapper for navigator callback — unwraps StageResponseResult.
+
+        Uses the default ``track_render=True`` because all navigation
+        paths (back, skip, restart, amendment) should record renders.
+        """
         result = await self._response.generate_stage_response(
             manager, llm, stage, state, tools,
         )
@@ -1465,12 +1469,6 @@ class WizardReasoning(ReasoningStrategy):
         )
         response = stage_result.response
 
-        # Record that the start stage template has been rendered so that
-        # generate() does not re-render it as a "first confirmation" when
-        # the user's first message arrives with extracted data.
-        if stage.get("response_template"):
-            wizard_state.increment_render_count(stage.get("name", "unknown"))
-
         # Auto-advance through message stages if the start stage has
         # auto_advance: true. The start stage response is already captured,
         # so skip_first_render=True avoids re-rendering it.
@@ -1496,10 +1494,6 @@ class WizardReasoning(ReasoningStrategy):
                     manager, llm, landing_stage, wizard_state, tools=[],
                 )
                 response = stage_result.response
-                if landing_stage.get("response_template"):
-                    wizard_state.increment_render_count(
-                        landing_stage.get("name", "unknown")
-                    )
                 WizardResponder.prepend_messages_to_response(
                     response, auto_advance_messages
                 )
@@ -1917,7 +1911,8 @@ class WizardReasoning(ReasoningStrategy):
                         render_count,
                     )
                     stage_result = await self._response.generate_stage_response(
-                        manager, llm, stage, wizard_state, tools
+                        manager, llm, stage, wizard_state, tools,
+                        track_render=False,
                     )
                     await self._save_wizard_state(manager, wizard_state)
                     result.early_response = stage_result.response
@@ -2183,7 +2178,7 @@ class WizardReasoning(ReasoningStrategy):
         if pre.subflow_pushed:
             stage_result = await self._response.generate_stage_response(
                 pre.manager, pre.llm, pre.subflow_new_stage,
-                pre.wizard_state, pre.tools,
+                pre.wizard_state, pre.tools, track_render=False,
             )
             await self._save_wizard_state(pre.manager, pre.wizard_state)
             return stage_result.response
@@ -2223,11 +2218,6 @@ class WizardReasoning(ReasoningStrategy):
                 logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
                 await self._hooks.trigger_complete(pre.wizard_state.data)
-
-        # Mark this stage's template as rendered
-        stage_rendered_name = pre.new_stage.get("name", "")
-        if stage_rendered_name and pre.new_stage.get("response_template"):
-            pre.wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
         await self._save_wizard_state(pre.manager, pre.wizard_state)
@@ -2271,6 +2261,7 @@ class WizardReasoning(ReasoningStrategy):
             async for chunk in self._response.stream_generate_stage_response(
                 pre.manager, pre.llm, pre.subflow_new_stage,
                 pre.wizard_state, pre.tools, stream_ctx,
+                track_render=False,
             ):
                 yield chunk
             await self._save_wizard_state(pre.manager, pre.wizard_state)
@@ -2324,11 +2315,6 @@ class WizardReasoning(ReasoningStrategy):
                 logger.info("Wizard completion signaled by complete_wizard tool")
             if self._hooks:
                 await self._hooks.trigger_complete(pre.wizard_state.data)
-
-        # Mark this stage's template as rendered
-        stage_rendered_name = pre.new_stage.get("name", "")
-        if stage_rendered_name and pre.new_stage.get("response_template"):
-            pre.wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state (only reached when stream fully consumed)
         await self._save_wizard_state(pre.manager, pre.wizard_state)

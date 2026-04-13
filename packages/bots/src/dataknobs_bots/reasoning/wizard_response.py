@@ -142,6 +142,7 @@ class WizardResponder:
         stage: dict[str, Any],
         state: WizardState,
         tools: list[Any] | None,
+        track_render: bool = True,
     ) -> StageResponseResult:
         """Generate response appropriate for current stage.
 
@@ -171,23 +172,20 @@ class WizardResponder:
             stage: Current stage metadata
             state: Current wizard state
             tools: Available tools
+            track_render: If True (default), increment the stage's
+                render count after generating the response.  Pass
+                False for subflow push paths where the template is
+                displayed as a question and confirmation should fire
+                on the user's next response.
 
         Returns:
             :class:`StageResponseResult` with response and lifecycle signals.
         """
         stage_name = stage.get("name", "unknown")
         response_template = stage.get("response_template")
-
-        # Build wizard metadata snapshot once — passed to whichever call
-        # creates the conversation node so every path persists it.
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        # Conversation-mode stages use the template only for the initial
-        # greeting (first render).  After that, subsequent turns fall
-        # through to LLM mode so the bot can actually converse.
-        # Structured stages (the default) render the template on every
-        # turn — the template IS the response (e.g. review summaries).
         is_conversation_mode = stage.get("mode") == "conversation"
         is_first_render = state.get_render_count(stage_name) == 0
         use_template = response_template and (
@@ -195,63 +193,21 @@ class WizardResponder:
         )
 
         if use_template:
-            # Generate LLM context variables if configured
-            extra_context = await self._generate_context_variables(
-                stage, state, llm
+            content, llm_response = await self._resolve_template_content(
+                manager, llm, stage, state, response_template, wizard_snapshot,
             )
-
-            rendered = self._render_response_template(
-                response_template, stage, state, extra_context=extra_context
+            response = llm_response if llm_response is not None else (
+                self.create_template_response(content)
             )
-
-            # Check if user is asking a question and llm_assist is enabled
-            user_message = self._get_last_user_message(manager)
-            if stage.get("llm_assist") and user_message and self.is_help_request(user_message):
-                assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
-                scoped_prompt = (
-                    f"{manager.system_prompt}\n\n"
-                    f"The user is asking a question during the wizard. "
-                    f"Context: {assist_prompt}\n"
-                    f"Answer their question helpfully and concisely. "
-                    f"Do NOT change the topic or claim any actions."
-                )
-                logger.debug(
-                    "LLM assist for stage '%s' (user question detected)",
-                    stage_name,
-                )
-                response = await manager.complete(
-                    system_prompt_override=scoped_prompt,
-                    metadata=wizard_snapshot,
-                )
-            else:
-                logger.debug(
-                    "Template response for stage '%s' (%d chars)",
-                    stage_name,
-                    len(rendered),
-                )
-                response = self.create_template_response(rendered)
-                # Persist template response to conversation store
-                # (manager.complete() does this automatically, but template
-                # mode bypasses the LLM so we must persist explicitly)
-                await manager.add_message(
-                    role="assistant",
-                    content=rendered,
-                    metadata=wizard_snapshot,
-                )
-
             self.add_wizard_metadata(response, state, stage)
+            if track_render and response_template:
+                state.increment_render_count(stage_name)
             return StageResponseResult(response=response)
 
-        # ── LLM mode (original behavior) ─────────────────────────
-        # Build stage-aware system prompt
-        stage_context = self.build_stage_context(stage, state)
-        enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
-
-        # Filter tools to stage-specific ones
-        stage_tools = self.filter_tools_for_stage(stage, tools)
-
-        # Resolve reasoning strategy for this stage
-        strategy = self._resolve_stage_strategy(stage)
+        # ── LLM mode ────────────────────────────────────────────
+        enhanced_prompt, stage_tools, strategy = self._prepare_llm_mode(
+            manager, stage, state, tools,
+        )
 
         logger.debug(
             "Generating response for stage '%s' (tools=%s, strategy=%s)",
@@ -296,6 +252,12 @@ class WizardResponder:
 
         # Add wizard metadata to response
         self.add_wizard_metadata(response, state, stage)
+
+        # Only fires for conversation-mode stages where response_template
+        # is truthy but use_template was False (past first render).  For
+        # pure LLM stages response_template is falsy so this is a no-op.
+        if track_render and response_template:
+            state.increment_render_count(stage_name)
 
         return StageResponseResult(
             response=response,
@@ -1073,6 +1035,109 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             metadata=wizard_snapshot,
         )
 
+    async def _resolve_template_content(
+        self,
+        manager: Any,
+        llm: Any,
+        stage: dict[str, Any],
+        state: WizardState,
+        response_template: str,
+        wizard_snapshot: dict[str, Any],
+    ) -> tuple[str, Any | None]:
+        """Resolve template mode content for a stage.
+
+        Shared by :meth:`generate_stage_response` and
+        :meth:`stream_generate_stage_response`.  Handles context
+        variable generation, template rendering, llm_assist, and
+        conversation store persistence.
+
+        Args:
+            manager: ConversationManager instance.
+            llm: LLM provider.
+            stage: Current stage metadata.
+            state: Current wizard state.
+            response_template: The template string to render.
+            wizard_snapshot: Wizard metadata dict for persistence.
+
+        Returns:
+            Tuple of ``(content, llm_response)``.  When llm_assist
+            fires, ``llm_response`` is the full response object from
+            ``manager.complete()`` (preserving usage, model, and other
+            metadata).  For plain template renders, ``llm_response`` is
+            ``None`` and the caller should wrap ``content`` via
+            :meth:`create_template_response`.
+        """
+        stage_name = stage.get("name", "unknown")
+
+        extra_context = await self._generate_context_variables(
+            stage, state, llm
+        )
+        rendered = self._render_response_template(
+            response_template, stage, state, extra_context=extra_context
+        )
+
+        user_message = self._get_last_user_message(manager)
+        if stage.get("llm_assist") and user_message and self.is_help_request(user_message):
+            assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
+            scoped_prompt = (
+                f"{manager.system_prompt}\n\n"
+                f"The user is asking a question during the wizard. "
+                f"Context: {assist_prompt}\n"
+                f"Answer their question helpfully and concisely. "
+                f"Do NOT change the topic or claim any actions."
+            )
+            logger.debug(
+                "LLM assist for stage '%s' (user question detected)",
+                stage_name,
+            )
+            response = await manager.complete(
+                system_prompt_override=scoped_prompt,
+                metadata=wizard_snapshot,
+            )
+            content = getattr(response, "content", str(response))
+            return content, response
+
+        logger.debug(
+            "Template response for stage '%s' (%d chars)",
+            stage_name,
+            len(rendered),
+        )
+        await manager.add_message(
+            role="assistant",
+            content=rendered,
+            metadata=wizard_snapshot,
+        )
+        return rendered, None
+
+    def _prepare_llm_mode(
+        self,
+        manager: Any,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any] | None,
+    ) -> tuple[str, list[Any], Any]:
+        """Prepare LLM mode parameters for a stage.
+
+        Shared by :meth:`generate_stage_response` and
+        :meth:`stream_generate_stage_response`.  Builds the
+        enhanced system prompt, filters tools, and resolves the
+        reasoning strategy.
+
+        Args:
+            manager: ConversationManager instance.
+            stage: Current stage metadata.
+            state: Current wizard state.
+            tools: Available tools from the caller.
+
+        Returns:
+            Tuple of ``(enhanced_prompt, stage_tools, strategy)``.
+        """
+        stage_context = self.build_stage_context(stage, state)
+        enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
+        stage_tools = self.filter_tools_for_stage(stage, tools)
+        strategy = self._resolve_stage_strategy(stage)
+        return enhanced_prompt, stage_tools, strategy
+
     def _render_response_template(
         self,
         template_str: str,
@@ -1586,6 +1651,7 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         state: WizardState,
         tools: list[Any] | None,
         stream_ctx: StreamStageContext,
+        track_render: bool = True,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream response appropriate for current stage.
 
@@ -1610,6 +1676,12 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             tools: Available tools
             stream_ctx: Mutable context populated with lifecycle signals
                 after the stream completes.
+            track_render: If True (default), increment the stage's
+                render count after the stream completes.  Pass False
+                for subflow push paths.  The increment is placed after
+                the final yield so that abandoned streams (via
+                ``aclose()`` / ``GeneratorExit``) skip it — matching
+                the pre-consolidation caller-side behavior.
 
         Yields:
             :class:`LLMStreamResponse` chunks.
@@ -1626,58 +1698,32 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         )
 
         if use_template:
-            extra_context = await self._generate_context_variables(
-                stage, state, llm
+            content, llm_response = await self._resolve_template_content(
+                manager, llm, stage, state, response_template, wizard_snapshot,
             )
-            rendered = self._render_response_template(
-                response_template, stage, state, extra_context=extra_context
-            )
-
-            user_message = self._get_last_user_message(manager)
-            if stage.get("llm_assist") and user_message and self.is_help_request(user_message):
-                assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
-                scoped_prompt = (
-                    f"{manager.system_prompt}\n\n"
-                    f"The user is asking a question during the wizard. "
-                    f"Context: {assist_prompt}\n"
-                    f"Answer their question helpfully and concisely. "
-                    f"Do NOT change the topic or claim any actions."
-                )
-                logger.debug(
-                    "LLM assist for stage '%s' (user question detected)",
-                    stage_name,
-                )
-                response = await manager.complete(
-                    system_prompt_override=scoped_prompt,
-                    metadata=wizard_snapshot,
-                )
-                content = getattr(response, "content", str(response))
-            else:
-                logger.debug(
-                    "Template response for stage '%s' (%d chars)",
-                    stage_name,
-                    len(rendered),
-                )
-                content = rendered
-                await manager.add_message(
-                    role="assistant",
-                    content=rendered,
-                    metadata=wizard_snapshot,
-                )
-
-            yield LLMStreamResponse(
-                delta=content,
-                is_final=True,
-                finish_reason="stop",
-                metadata=wizard_snapshot,
-            )
+            # Propagate LLM metadata (usage, model) when llm_assist fired
+            chunk_kwargs: dict[str, Any] = {
+                "delta": content,
+                "is_final": True,
+                "finish_reason": "stop",
+                "metadata": wizard_snapshot,
+            }
+            if llm_response is not None:
+                usage = getattr(llm_response, "usage", None)
+                model = getattr(llm_response, "model", None)
+                if usage:
+                    chunk_kwargs["usage"] = usage
+                if model:
+                    chunk_kwargs["model"] = model
+            yield LLMStreamResponse(**chunk_kwargs)
+            if track_render and response_template:
+                state.increment_render_count(stage_name)
             return
 
         # ── LLM mode ────────────────────────────────────────────
-        stage_context = self.build_stage_context(stage, state)
-        enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
-        stage_tools = self.filter_tools_for_stage(stage, tools)
-        strategy = self._resolve_stage_strategy(stage)
+        enhanced_prompt, stage_tools, strategy = self._prepare_llm_mode(
+            manager, stage, state, tools,
+        )
 
         logger.debug(
             "Streaming response for stage '%s' (tools=%s, strategy=%s)",
@@ -1700,6 +1746,16 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
                 metadata=wizard_snapshot,
             ):
                 yield chunk
+
+        # Increment after final yield — only reached when stream is
+        # fully consumed.  If the caller abandons via aclose(),
+        # GeneratorExit is thrown at the yield point and this code
+        # is skipped.
+        # Only fires for conversation-mode stages where response_template
+        # is truthy but use_template was False (past first render).  For
+        # pure LLM stages response_template is falsy so this is a no-op.
+        if track_render and response_template:
+            state.increment_render_count(stage_name)
 
     async def _stream_strategy_stage_response(
         self,

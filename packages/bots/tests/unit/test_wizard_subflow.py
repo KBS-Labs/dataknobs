@@ -919,10 +919,7 @@ def _build_subflow_confirmation_config() -> dict[str, Any]:
                     "name": "team_lead",
                     "is_start": True,
                     "prompt": "Who is the team lead?",
-                    "response_template": (
-                        "Project: {{ project_name }}. "
-                        "Who is the team lead?"
-                    ),
+                    "response_template": "Who is the team lead?",
                     # confirm_first_render defaults to True —
                     # confirmation SHOULD fire after first extraction.
                     "schema": {
@@ -966,7 +963,7 @@ class TestSubflowPushRenderCount:
             wizard_config=_build_subflow_confirmation_config(),
             main_responses=[
                 # Response for the subflow's first stage (team_lead)
-                text_response("Project: Alpha. Who is the team lead?"),
+                text_response("Who is the team lead?"),
             ],
             extraction_results=[
                 # Turn 1: extract project_name → triggers subflow push
@@ -983,12 +980,10 @@ class TestSubflowPushRenderCount:
             # CRITICAL: render_count for team_lead must be 0.
             # The subflow's first stage template was displayed as a
             # question — the user hasn't responded yet.
-            render_counts = harness.wizard_data.get(
-                "_stage_render_counts", {}
-            )
-            assert render_counts.get("team_lead", 0) == 0, (
-                f"render_count for team_lead should be 0 after subflow "
-                f"push, got {render_counts.get('team_lead', 0)}"
+            assert "_stage_render_counts" not in harness.wizard_data or \
+                harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0, (
+                "render_count for team_lead should be 0 after subflow push, "
+                f"got {harness.wizard_data.get('_stage_render_counts', {}).get('team_lead', 0)}"
             )
 
     @pytest.mark.asyncio
@@ -1000,11 +995,9 @@ class TestSubflowPushRenderCount:
             wizard_config=_build_subflow_confirmation_config(),
             main_responses=[
                 # Turn 1: subflow push renders team_lead template
-                text_response("Project: Alpha. Who is the team lead?"),
-                # Turn 2: confirmation renders the template again with data
-                text_response(
-                    "Project: Alpha. Team lead: Alice. Is that correct?"
-                ),
+                text_response("Who is the team lead?"),
+                # Turn 2: confirmation re-renders template
+                text_response("Who is the team lead?"),
             ],
             extraction_results=[
                 # Turn 1: project_name → subflow push
@@ -1019,13 +1012,49 @@ class TestSubflowPushRenderCount:
             assert harness.wizard_stage == "team_lead"
 
             # Turn 2: user provides team lead name
-            result = await harness.chat("Alice Johnson")
+            await harness.chat("Alice Johnson")
 
             # Confirmation should fire: wizard stays on team_lead
             # (not advance to subflow_done)
             assert harness.wizard_stage == "team_lead", (
                 f"Expected wizard to stay on 'team_lead' for confirmation, "
                 f"but it advanced to '{harness.wizard_stage}'"
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="dk-43: confirmation re-renders question template instead "
+        "of showing extracted data for user verification",
+        strict=True,
+    )
+    async def test_confirmation_shows_extracted_data(self) -> None:
+        """dk-43: Confirmation response should include extracted data.
+
+        Currently, the confirmation path re-renders the stage's
+        response_template (the question). The user sees the question
+        again with no indication of what was extracted. The confirmation
+        response should include the extracted data so the user can
+        verify it before confirming.
+        """
+        async with await BotTestHarness.create(
+            wizard_config=_build_subflow_confirmation_config(),
+            main_responses=[
+                text_response("Who is the team lead?"),
+                text_response("Who is the team lead?"),
+            ],
+            extraction_results=[
+                [{"project_name": "Alpha Project"}],
+                [{"lead_name": "Alice Johnson"}],
+            ],
+        ) as harness:
+            await harness.greet()
+            await harness.chat("Alpha Project")
+            result = await harness.chat("Alice Johnson")
+
+            # The confirmation response should show the extracted data
+            # so the user can verify it before confirming.
+            assert "alice" in result.response.lower(), (
+                "Confirmation response should contain extracted lead name"
             )
 
     @pytest.mark.asyncio
@@ -1036,7 +1065,7 @@ class TestSubflowPushRenderCount:
         async with await BotTestHarness.create(
             wizard_config=_build_subflow_confirmation_config(),
             main_responses=[
-                text_response("Project: Alpha. Who is the team lead?"),
+                text_response("Who is the team lead?"),
             ],
             extraction_results=[
                 [{"project_name": "Alpha Project"}],
@@ -1047,10 +1076,8 @@ class TestSubflowPushRenderCount:
 
             assert harness.wizard_stage == "team_lead"
 
-            render_counts = harness.wizard_data.get(
-                "_stage_render_counts", {}
-            )
-            assert render_counts.get("team_lead", 0) == 0, (
-                f"render_count for team_lead should be 0 after subflow "
-                f"push (streaming), got {render_counts.get('team_lead', 0)}"
+            assert "_stage_render_counts" not in harness.wizard_data or \
+                harness.wizard_data["_stage_render_counts"].get("team_lead", 0) == 0, (
+                "render_count for team_lead should be 0 after subflow push "
+                f"(streaming), got {harness.wizard_data.get('_stage_render_counts', {}).get('team_lead', 0)}"
             )
