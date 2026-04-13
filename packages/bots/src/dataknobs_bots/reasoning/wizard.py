@@ -1916,12 +1916,35 @@ class WizardReasoning(ReasoningStrategy):
                         stage_name,
                         render_count,
                     )
-                    stage_result = await self._response.generate_stage_response(
-                        manager, llm, stage, wizard_state, tools,
-                        track_render=False,
+                    confirmation_content = (
+                        self._response.build_confirmation_content(
+                            stage,
+                            wizard_state,
+                            new_data_keys,
+                        )
+                    )
+                    response = self._response.create_template_response(
+                        confirmation_content
+                    )
+                    self._response.add_wizard_metadata(
+                        response, wizard_state, stage
+                    )
+                    # Persist confirmation to conversation history so the
+                    # LLM sees it on subsequent turns (matches the old
+                    # generate_stage_response path via
+                    # _resolve_template_content).
+                    wizard_snapshot = {
+                        "wizard": self._response._build_wizard_metadata(
+                            wizard_state
+                        )
+                    }
+                    await manager.add_message(
+                        role="assistant",
+                        content=confirmation_content,
+                        metadata=wizard_snapshot,
                     )
                     await self._save_wizard_state(manager, wizard_state)
-                    result.early_response = stage_result.response
+                    result.early_response = response
                     result.action = "confirmation"
                     return result
 

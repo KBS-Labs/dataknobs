@@ -1930,8 +1930,38 @@ This gives users three paths:
 **Confirmation on New Data:**
 
 Stages with `response_template` automatically show a confirmation summary when new data is
-first extracted. By default, this confirmation fires only once (the first render). Two
-per-stage flags control this behavior:
+first extracted. By default, the confirmation auto-generates a summary from the stage's
+schema field descriptions and the extracted values, e.g.:
+
+```
+Here's what I got:
+- **Subject topic for the quiz:** English grammar
+
+Is that correct?
+```
+
+To customize the confirmation message, set `confirmation_template` — a Jinja2 template
+with access to the same context as `response_template` (all wizard state data, `bank`,
+`artifact`, etc.):
+
+```yaml
+stages:
+  - name: define_topic
+    response_template: "What topic should the quiz cover?"
+    confirmation_template: |
+      Got it — topic is **{{ topic }}**.
+      Say "looks good" to proceed or provide more details.
+    schema:
+      type: object
+      properties:
+        topic: { type: string, description: Subject topic for the quiz }
+```
+
+When `confirmation_template` is omitted, the auto-generated summary is used. When it is
+defined, it replaces the auto-generated summary entirely.
+
+By default, confirmation fires only once (the first render). Two per-stage flags control
+this behavior:
 
 - `confirm_first_render` (default `true`): Controls whether the first-render confirmation
   fires. Set to `false` to skip the confirmation pause and evaluate transitions immediately.

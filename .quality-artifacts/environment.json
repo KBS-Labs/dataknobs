@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-13T18:47:35Z",
+  "timestamp": "2026-04-13T20:04:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-subflow-confirmation-bug",
-  "git_commit": "7c0e9e319b1585566e9edcce169036dabc191104",
+  "git_branch": "sbk/fix-extraction-confirmation",
+  "git_commit": "68277bca8bd1d04534e4592fe67cc9f2328d2038",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

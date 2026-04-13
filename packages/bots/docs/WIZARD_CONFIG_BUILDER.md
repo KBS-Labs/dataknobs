@@ -501,6 +501,7 @@ All fields available on `StageConfig`:
 | `max_iterations` | `int \| None` | `None` | Max ReAct iterations |
 | `extraction_model` | `str \| None` | `None` | Model for extraction |
 | `response_template` | `str \| None` | `None` | Template-driven response |
+| `confirmation_template` | `str \| None` | `None` | Jinja2 template for confirmation. Overrides auto-generated confirmation |
 | `llm_assist` | `bool` | `False` | Enable LLM-assisted responses |
 | `llm_assist_prompt` | `str \| None` | `None` | Custom LLM assist prompt |
 | `context_generation` | `ContextGenerationConfig \| None` | `None` | LLM context generation |

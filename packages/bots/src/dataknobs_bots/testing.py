@@ -113,6 +113,7 @@ class WizardConfigBuilder:
         is_end: bool = False,
         prompt: str = "",
         response_template: str | None = None,
+        confirmation_template: str | None = None,
         mode: str | None = None,
         extraction_scope: str | None = None,
         auto_advance: bool | None = None,
@@ -143,6 +144,10 @@ class WizardConfigBuilder:
             prompt: Stage prompt text.
             response_template: Jinja2 template rendered after extraction
                 to confirm captured data.
+            confirmation_template: Optional Jinja2 template rendered
+                during confirmation instead of ``response_template``.
+                When omitted, confirmation auto-generates a summary
+                from the stage schema and extracted data.
             mode: Stage mode (e.g. ``"conversation"``).
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.
@@ -191,6 +196,8 @@ class WizardConfigBuilder:
             stage["is_end"] = True
         if response_template is not None:
             stage["response_template"] = response_template
+        if confirmation_template is not None:
+            stage["confirmation_template"] = confirmation_template
         if mode is not None:
             stage["mode"] = mode
         if extraction_scope is not None:

@@ -43,7 +43,8 @@ def _default_transform_context_factory(fn_ctx: Any) -> Any:
 # Known stage fields recognized by the wizard config loader
 KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "name", "label", "is_start", "is_end",
-    "prompt", "response_template", "llm_assist", "llm_assist_prompt",
+    "prompt", "response_template", "confirmation_template",
+    "llm_assist", "llm_assist_prompt",
     "schema", "suggestions", "help_text",
     "can_skip", "skip_default", "can_go_back", "auto_advance",
     "confirm_on_new_data", "confirm_first_render",
@@ -629,6 +630,7 @@ class WizardConfigLoader:
                 "verbose": stage.get("verbose"),
                 # Template-driven response mode (bypasses LLM for stage prompt)
                 "response_template": stage.get("response_template"),
+                "confirmation_template": stage.get("confirmation_template"),
                 "llm_assist": stage.get("llm_assist", False),
                 "llm_assist_prompt": stage.get("llm_assist_prompt"),
                 # LLM-generated context variables for template rendering
