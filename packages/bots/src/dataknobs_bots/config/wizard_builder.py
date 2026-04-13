@@ -34,10 +34,12 @@ Example:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
@@ -110,6 +112,32 @@ class ContextGenerationConfig:
         return {"variables": dict(self.variables)}
 
 
+# ── StageConfig field classifications for serialization ──────────────
+#
+# Shared by StageConfig.to_dict() and StageConfig.from_dict() so that
+# adding a tuple or nested field only requires updating one place.
+#
+# See the "HOW TO ADD A NEW STAGE FIELD" guide in
+# reasoning/wizard_loader.py for the full checklist.
+
+# Nested dataclass fields — need .to_dict() / constructor deserialization
+_NESTED_FIELDS: frozenset[str] = frozenset({
+    "transitions", "intent_detection", "context_generation",
+})
+# Tuple fields containing dicts — list[dict] ↔ tuple[dict, ...]
+_TUPLE_DICT_FIELDS: frozenset[str] = frozenset({
+    "tasks", "tool_result_mapping",
+})
+# Tuple fields containing primitives — list ↔ tuple
+_TUPLE_PRIMITIVE_FIELDS: frozenset[str] = frozenset({
+    "suggestions", "tools", "routing_transforms",
+})
+# All tuple fields (union of the two above)
+_TUPLE_FIELDS: frozenset[str] = _TUPLE_DICT_FIELDS | _TUPLE_PRIMITIVE_FIELDS
+# Required fields always present in serialized output
+_REQUIRED_FIELDS: frozenset[str] = frozenset({"name", "prompt"})
+
+
 @dataclass(frozen=True)
 class StageConfig:
     """Configuration for a single wizard stage."""
@@ -124,6 +152,7 @@ class StageConfig:
     skip_default: Any = None
     can_go_back: bool = True
     auto_advance: bool | None = None
+    confirm_first_render: bool = True
     confirm_on_new_data: bool = False
     # Display
     label: str | None = None
@@ -141,6 +170,7 @@ class StageConfig:
     extraction_model: str | None = None
     # Response generation
     response_template: str | None = None
+    confirmation_template: str | None = None
     llm_assist: bool = False
     llm_assist_prompt: str | None = None
     context_generation: ContextGenerationConfig | None = None
@@ -151,69 +181,118 @@ class StageConfig:
     tasks: tuple[dict[str, Any], ...] = ()
     # Per-stage navigation keyword overrides
     navigation: dict[str, Any] | None = None
-    # Extraction control — "auto" (default), "verbatim", or "extract"
+    # Collection mode (multi-record collection via MemoryBank)
+    collection_mode: str | None = None
+    collection_config: dict[str, Any] | None = None
+    # Extraction control
     capture_mode: str | None = None
+    extraction_scope: str | None = None
+    extraction_grounding: str | None = None
+    derivation_enabled: bool | None = None
+    recovery_enabled: bool | None = None
+    # Routing transforms
+    routing_transforms: tuple[str, ...] = ()
     # Post-extraction tool calls with result-to-state mapping
     tool_result_mapping: tuple[dict[str, Any], ...] = ()
+    # Debugging
+    store_trace: bool | None = None
+    verbose: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict compatible with WizardConfigLoader."""
+        """Convert to dict compatible with WizardConfigLoader.
+
+        Iterates :func:`dataclasses.fields` so new fields added to the
+        dataclass are serialized automatically.  Only nested dataclass
+        fields (transitions, intent_detection, context_generation) and
+        tuple→list coercion need explicit handling.
+        """
         d: dict[str, Any] = {"name": self.name, "prompt": self.prompt}
-        if self.is_start:
-            d["is_start"] = True
-        if self.is_end:
-            d["is_end"] = True
-        if self.can_skip:
-            d["can_skip"] = True
-        if self.skip_default is not None:
-            d["skip_default"] = self.skip_default
-        if not self.can_go_back:
-            d["can_go_back"] = False
-        if self.auto_advance is not None:
-            d["auto_advance"] = self.auto_advance
-        if self.confirm_on_new_data:
-            d["confirm_on_new_data"] = True
-        if self.label is not None:
-            d["label"] = self.label
-        if self.suggestions:
-            d["suggestions"] = list(self.suggestions)
-        if self.help_text is not None:
-            d["help_text"] = self.help_text
-        if self.schema is not None:
-            d["schema"] = self.schema
+
+        for f in dataclass_fields(self):
+            if f.name in _REQUIRED_FIELDS or f.name in _NESTED_FIELDS:
+                continue
+            value = getattr(self, f.name)
+            # Skip fields at their default value to minimize output
+            if f.default is not dataclasses.MISSING and value == f.default:
+                continue
+            if f.name in _TUPLE_DICT_FIELDS:
+                d[f.name] = [dict(item) for item in value]
+            elif f.name in _TUPLE_PRIMITIVE_FIELDS:
+                d[f.name] = list(value)
+            else:
+                d[f.name] = value
+
+        # Nested dataclass serialization
         if self.transitions:
             d["transitions"] = [t.to_dict() for t in self.transitions]
-        if self.tools:
-            d["tools"] = list(self.tools)
-        if self.reasoning is not None:
-            d["reasoning"] = self.reasoning
-        if self.reasoning_config is not None:
-            d["reasoning_config"] = self.reasoning_config
-        if self.max_iterations is not None:
-            d["max_iterations"] = self.max_iterations
-        if self.extraction_model is not None:
-            d["extraction_model"] = self.extraction_model
-        if self.response_template is not None:
-            d["response_template"] = self.response_template
-        if self.llm_assist:
-            d["llm_assist"] = True
-        if self.llm_assist_prompt is not None:
-            d["llm_assist_prompt"] = self.llm_assist_prompt
         if self.context_generation is not None:
             d["context_generation"] = self.context_generation.to_dict()
-        if self.mode is not None:
-            d["mode"] = self.mode
         if self.intent_detection is not None:
             d["intent_detection"] = self.intent_detection.to_dict()
-        if self.tasks:
-            d["tasks"] = [dict(t) for t in self.tasks]
-        if self.navigation is not None:
-            d["navigation"] = self.navigation
-        if self.capture_mode is not None:
-            d["capture_mode"] = self.capture_mode
-        if self.tool_result_mapping:
-            d["tool_result_mapping"] = [dict(m) for m in self.tool_result_mapping]
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> StageConfig:
+        """Construct a StageConfig from a raw config dict.
+
+        Iterates :func:`dataclasses.fields` to extract every field,
+        so new fields added to the dataclass are picked up
+        automatically.  Only fields with non-trivial deserialization
+        (nested dataclasses, list→tuple coercion) need explicit
+        handling.
+
+        Args:
+            d: Raw stage config dict (e.g. from YAML).
+
+        Returns:
+            Populated ``StageConfig`` instance.
+        """
+        kwargs: dict[str, Any] = {}
+        for f in dataclass_fields(cls):
+            if f.name in _NESTED_FIELDS:
+                continue
+            if f.name in _TUPLE_FIELDS:
+                kwargs[f.name] = tuple(d.get(f.name, []))
+            elif f.name == "name":
+                kwargs["name"] = d["name"]
+            else:
+                # Use the dataclass field's default as fallback
+                if f.default is not dataclasses.MISSING:
+                    kwargs[f.name] = d.get(f.name, f.default)
+                else:
+                    # No default — field is required or has default_factory
+                    kwargs[f.name] = d.get(f.name)
+
+        # Nested dataclass: transitions
+        kwargs["transitions"] = tuple(
+            TransitionConfig(
+                target=t["target"],
+                condition=t.get("condition"),
+                transform=t.get("transform"),
+                priority=t.get("priority"),
+                derive=t.get("derive"),
+                metadata=t.get("metadata"),
+                subflow=t.get("subflow"),
+            )
+            for t in d.get("transitions", [])
+        )
+
+        # Nested dataclass: intent_detection
+        raw_intent = d.get("intent_detection")
+        if raw_intent:
+            kwargs["intent_detection"] = IntentDetectionConfig(
+                method=raw_intent.get("method", "keyword"),
+                intents=tuple(raw_intent.get("intents", [])),
+            )
+
+        # Nested dataclass: context_generation
+        raw_ctx = d.get("context_generation")
+        if raw_ctx:
+            kwargs["context_generation"] = ContextGenerationConfig(
+                variables=raw_ctx.get("variables", {}),
+            )
+
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -834,39 +913,16 @@ class WizardConfigBuilder:
             intent_override = intents_by_stage.get(stage.name)
 
             if extra_transitions or intent_override:
-                # Rebuild stage with merged transitions and/or intent
+                # Rebuild stage with merged transitions and/or intent.
+                # Uses dataclasses.replace to avoid manually enumerating
+                # fields (which silently drops new fields when StageConfig
+                # grows).
                 new_transitions = stage.transitions + tuple(extra_transitions)
                 new_intent = intent_override or stage.intent_detection
-                stage = StageConfig(
-                    name=stage.name,
-                    prompt=stage.prompt,
-                    is_start=stage.is_start,
-                    is_end=stage.is_end,
-                    can_skip=stage.can_skip,
-                    skip_default=stage.skip_default,
-                    can_go_back=stage.can_go_back,
-                    auto_advance=stage.auto_advance,
-                    confirm_on_new_data=stage.confirm_on_new_data,
-                    label=stage.label,
-                    suggestions=stage.suggestions,
-                    help_text=stage.help_text,
-                    schema=stage.schema,
+                stage = replace(
+                    stage,
                     transitions=new_transitions,
-                    tools=stage.tools,
-                    reasoning=stage.reasoning,
-                    reasoning_config=stage.reasoning_config,
-                    max_iterations=stage.max_iterations,
-                    extraction_model=stage.extraction_model,
-                    response_template=stage.response_template,
-                    llm_assist=stage.llm_assist,
-                    llm_assist_prompt=stage.llm_assist_prompt,
-                    context_generation=stage.context_generation,
-                    mode=stage.mode,
                     intent_detection=new_intent,
-                    tasks=stage.tasks,
-                    navigation=stage.navigation,
-                    capture_mode=stage.capture_mode,
-                    tool_result_mapping=stage.tool_result_mapping,
                 )
             assembled.append(stage)
 
@@ -1080,61 +1136,9 @@ def _find_reachable(stages: list[StageConfig], start: str) -> set[str]:
 
 
 def _stage_from_dict(d: dict[str, Any]) -> StageConfig:
-    """Construct a StageConfig from a wizard config stage dict."""
-    intent_detection = None
-    if d.get("intent_detection"):
-        raw_intent = d["intent_detection"]
-        intent_detection = IntentDetectionConfig(
-            method=raw_intent.get("method", "keyword"),
-            intents=tuple(raw_intent.get("intents", [])),
-        )
+    """Construct a StageConfig from a wizard config stage dict.
 
-    context_generation = None
-    if d.get("context_generation"):
-        raw_ctx = d["context_generation"]
-        context_generation = ContextGenerationConfig(
-            variables=raw_ctx.get("variables", {}),
-        )
-
-    transitions = tuple(
-        TransitionConfig(
-            target=t["target"],
-            condition=t.get("condition"),
-            transform=t.get("transform"),
-            priority=t.get("priority"),
-            derive=t.get("derive"),
-            metadata=t.get("metadata"),
-            subflow=t.get("subflow"),
-        )
-        for t in d.get("transitions", [])
-    )
-
-    return StageConfig(
-        name=d["name"],
-        prompt=d.get("prompt", ""),
-        is_start=d.get("is_start", False),
-        is_end=d.get("is_end", False),
-        can_skip=d.get("can_skip", False),
-        skip_default=d.get("skip_default"),
-        can_go_back=d.get("can_go_back", True),
-        auto_advance=d.get("auto_advance"),
-        label=d.get("label"),
-        suggestions=tuple(d.get("suggestions", [])),
-        help_text=d.get("help_text"),
-        schema=d.get("schema"),
-        transitions=transitions,
-        tools=tuple(d.get("tools", [])),
-        reasoning=d.get("reasoning"),
-        reasoning_config=d.get("reasoning_config"),
-        max_iterations=d.get("max_iterations"),
-        extraction_model=d.get("extraction_model"),
-        response_template=d.get("response_template"),
-        llm_assist=d.get("llm_assist", False),
-        llm_assist_prompt=d.get("llm_assist_prompt"),
-        context_generation=context_generation,
-        mode=d.get("mode"),
-        intent_detection=intent_detection,
-        tasks=tuple(d.get("tasks", [])),
-        navigation=d.get("navigation"),
-        tool_result_mapping=tuple(d.get("tool_result_mapping", [])),
-    )
+    Delegates to :meth:`StageConfig.from_dict` which iterates its own
+    dataclass fields, so new fields are picked up automatically.
+    """
+    return StageConfig.from_dict(d)

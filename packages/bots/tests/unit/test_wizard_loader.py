@@ -1,12 +1,18 @@
 """Tests for WizardConfigLoader."""
 
 import tempfile
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 import pytest
 import yaml
 
-from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.config.wizard_builder import StageConfig
+from dataknobs_bots.reasoning.wizard_loader import (
+    KNOWN_STAGE_FIELDS,
+    WizardConfigLoader,
+    _STAGE_FIELDS,
+)
 
 
 @pytest.fixture
@@ -808,3 +814,37 @@ class TestTransformContextFactory:
             wizard_config_file, transform_context_factory=my_factory,
         )
         assert wizard_fsm._transform_context_factory is my_factory
+
+
+class TestStageFieldRegistrySync:
+    """Verify that the stage field registry, KNOWN_STAGE_FIELDS, and
+    StageConfig stay in sync.
+
+    Adding a new stage field to the _STAGE_FIELDS registry should be
+    the only change needed in wizard_loader.py.  StageConfig in
+    wizard_builder.py must also declare the field so the typed
+    builder API exposes it.  These tests catch drift between the
+    three representations.
+    """
+
+    def test_known_stage_fields_matches_registry(self) -> None:
+        """KNOWN_STAGE_FIELDS is derived from _STAGE_FIELDS + special cases."""
+        registry_names = {f.name for f in _STAGE_FIELDS}
+        special_cases = {"transitions", "tasks"}
+        expected = registry_names | special_cases
+        assert KNOWN_STAGE_FIELDS == expected, (
+            f"KNOWN_STAGE_FIELDS drifted from _STAGE_FIELDS registry. "
+            f"Missing from KNOWN: {expected - KNOWN_STAGE_FIELDS}, "
+            f"Extra in KNOWN: {KNOWN_STAGE_FIELDS - expected}"
+        )
+
+    def test_stage_config_covers_registry_fields(self) -> None:
+        """StageConfig must declare every field in _STAGE_FIELDS."""
+        registry_names = {f.name for f in _STAGE_FIELDS}
+        config_names = {f.name for f in dataclass_fields(StageConfig)}
+        missing = registry_names - config_names
+        assert not missing, (
+            f"StageConfig is missing fields from _STAGE_FIELDS registry: "
+            f"{sorted(missing)}. Add them to StageConfig in "
+            f"wizard_builder.py so the typed builder API exposes them."
+        )

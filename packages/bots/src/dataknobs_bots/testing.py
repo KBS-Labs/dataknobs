@@ -145,9 +145,12 @@ class WizardConfigBuilder:
             response_template: Jinja2 template rendered after extraction
                 to confirm captured data.
             confirmation_template: Optional Jinja2 template rendered
-                during confirmation instead of ``response_template``.
-                When omitted, confirmation auto-generates a summary
-                from the stage schema and extracted data.
+                during confirmation instead of the auto-generated
+                summary.  Requires ``response_template`` to also be
+                set (the confirmation flow only triggers on stages
+                that have a ``response_template``).  When omitted,
+                confirmation auto-generates a summary from the stage
+                schema and extracted data.
             mode: Stage mode (e.g. ``"conversation"``).
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.

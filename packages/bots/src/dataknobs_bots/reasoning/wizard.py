@@ -1934,7 +1934,7 @@ class WizardReasoning(ReasoningStrategy):
                     # generate_stage_response path via
                     # _resolve_template_content).
                     wizard_snapshot = {
-                        "wizard": self._response._build_wizard_metadata(
+                        "wizard": self._build_wizard_metadata(
                             wizard_state
                         )
                     }
