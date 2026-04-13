@@ -555,6 +555,12 @@ class WizardReasoning(ReasoningStrategy):
 
         Uses the default ``track_render=True`` because all navigation
         paths (back, skip, restart, amendment) should record renders.
+
+        Note: prior to the render-count consolidation (dk-42),
+        ``handle_amendment`` did not increment render_count while
+        back/skip/restart did.  This was an inconsistency — amendment
+        re-opens a stage and renders its response, so it should track
+        the render like the other navigation paths.
         """
         result = await self._response.generate_stage_response(
             manager, llm, stage, state, tools,

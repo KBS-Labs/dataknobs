@@ -174,9 +174,11 @@ class WizardResponder:
             tools: Available tools
             track_render: If True (default), increment the stage's
                 render count after generating the response.  Pass
-                False for subflow push paths where the template is
-                displayed as a question and confirmation should fire
-                on the user's next response.
+                False when (a) the caller has already incremented
+                the render count explicitly (confirmation path in
+                ``process_input``), or (b) for subflow push paths
+                where the template is displayed as a question and
+                confirmation should fire on the user's next response.
 
         Returns:
             :class:`StageResponseResult` with response and lifecycle signals.
@@ -1678,8 +1680,11 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
                 after the stream completes.
             track_render: If True (default), increment the stage's
                 render count after the stream completes.  Pass False
-                for subflow push paths.  The increment is placed after
-                the final yield so that abandoned streams (via
+                when (a) the caller has already incremented the render
+                count explicitly (confirmation path), or (b) for
+                subflow push paths where confirmation should fire on
+                the user's next response.  The increment is placed
+                after the final yield so that abandoned streams (via
                 ``aclose()`` / ``GeneratorExit``) skip it — matching
                 the pre-consolidation caller-side behavior.
 

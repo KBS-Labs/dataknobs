@@ -667,11 +667,10 @@ class TestShouldPushSubflowGuard:
             subflow_stack=[],  # Not in a subflow
         )
 
-        # Set up the FSM context to be at the configure stage
-        # First, trigger context creation by calling step()
-        wizard_with_subflow._fsm.step({})
-        # Then manually set the current state to configure
-        wizard_with_subflow._fsm._context.current_state = "configure"
+        # Set up the FSM to be at the configure stage via the public API
+        wizard_with_subflow._fsm.restore(
+            {"current_stage": "configure", "data": {}}
+        )
 
         # Verify the state is not in a subflow
         assert wizard_state.is_in_subflow is False
@@ -701,9 +700,10 @@ class TestShouldPushSubflowGuard:
             subflow_stack=[],
         )
 
-        # Set up the FSM context to be at the configure stage
-        wizard_with_subflow._fsm.step({})
-        wizard_with_subflow._fsm._context.current_state = "configure"
+        # Set up the FSM to be at the configure stage via the public API
+        wizard_with_subflow._fsm.restore(
+            {"current_stage": "configure", "data": {}}
+        )
 
         # Verify the state is not in a subflow
         assert wizard_state.is_in_subflow is False
@@ -888,12 +888,12 @@ class TestSubflowPushIntegration:
 def _build_subflow_confirmation_config() -> dict[str, Any]:
     """Build wizard config for testing subflow push render_count semantics.
 
-    Unlike ``_build_subflow_wizard_config`` (which sets
-    ``confirm_first_render=False``), this config uses the default
-    ``confirm_first_render=True`` so the confirmation path is exercised.
-    The subflow's first stage collects a field with a template — if
-    render_count is incorrectly set to 1 after push, confirmation will
-    be skipped.
+    The parent stage (``project_name``) uses ``confirm_first_render=False``
+    so it transitions immediately on extraction.  The subflow's first
+    stage (``team_lead``) uses the default ``confirm_first_render=True``
+    so the confirmation path is exercised there.  If render_count is
+    incorrectly set to 1 after the subflow push, confirmation on
+    ``team_lead`` will be skipped.
     """
     return (
         WizardConfigBuilder("subflow-confirmation-test")
