@@ -878,3 +878,179 @@ class TestSubflowPushIntegration:
 
         assert harness.wizard_stage == "complete"
         assert "complete" in result.response.lower()
+
+
+# =========================================================================
+# dk-42: Subflow push must NOT increment render count
+# =========================================================================
+
+
+def _build_subflow_confirmation_config() -> dict[str, Any]:
+    """Build wizard config for testing subflow push render_count semantics.
+
+    Unlike ``_build_subflow_wizard_config`` (which sets
+    ``confirm_first_render=False``), this config uses the default
+    ``confirm_first_render=True`` so the confirmation path is exercised.
+    The subflow's first stage collects a field with a template — if
+    render_count is incorrectly set to 1 after push, confirmation will
+    be skipped.
+    """
+    return (
+        WizardConfigBuilder("subflow-confirmation-test")
+        .stage(
+            "project_name",
+            is_start=True,
+            prompt="What is the project name?",
+            response_template="Please enter the project name.",
+            confirm_first_render=False,
+        )
+            .field("project_name", field_type="string", required=True)
+            .transition(
+                "done",
+                condition="data.get('project_name')",
+                subflow_network="team_details",
+                result_mapping={"lead_name": "lead_name"},
+            )
+        .stage("done", is_end=True, prompt="All done!",
+               response_template="Project setup complete.")
+        .subflow("team_details", {
+            "stages": [
+                {
+                    "name": "team_lead",
+                    "is_start": True,
+                    "prompt": "Who is the team lead?",
+                    "response_template": (
+                        "Project: {{ project_name }}. "
+                        "Who is the team lead?"
+                    ),
+                    # confirm_first_render defaults to True —
+                    # confirmation SHOULD fire after first extraction.
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "lead_name": {
+                                "type": "string",
+                                "description": "Team lead name",
+                            },
+                        },
+                        "required": ["lead_name"],
+                    },
+                    "transitions": [{"target": "subflow_done"}],
+                },
+                {
+                    "name": "subflow_done",
+                    "is_end": True,
+                    "prompt": "Team details captured.",
+                    "response_template": "Team details complete.",
+                },
+            ],
+        })
+        .build()
+    )
+
+
+class TestSubflowPushRenderCount:
+    """dk-42: Subflow push must not increment render count.
+
+    When a subflow is pushed, the subflow's first stage template is
+    displayed as a question. render_count should remain 0 so that the
+    confirmation logic fires when the user responds with data. The bug
+    (introduced in commit 7140c998) increments render_count to 1 during
+    the push, causing confirmation to be silently skipped.
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_count_zero_after_subflow_push(self) -> None:
+        """After subflow push, the subflow stage's render_count must be 0."""
+        async with await BotTestHarness.create(
+            wizard_config=_build_subflow_confirmation_config(),
+            main_responses=[
+                # Response for the subflow's first stage (team_lead)
+                text_response("Project: Alpha. Who is the team lead?"),
+            ],
+            extraction_results=[
+                # Turn 1: extract project_name → triggers subflow push
+                [{"project_name": "Alpha Project"}],
+            ],
+        ) as harness:
+            await harness.greet()
+            # User provides project name → extraction → subflow push
+            await harness.chat("Alpha Project")
+
+            # The wizard should be in the subflow at team_lead
+            assert harness.wizard_stage == "team_lead"
+
+            # CRITICAL: render_count for team_lead must be 0.
+            # The subflow's first stage template was displayed as a
+            # question — the user hasn't responded yet.
+            render_counts = harness.wizard_data.get(
+                "_stage_render_counts", {}
+            )
+            assert render_counts.get("team_lead", 0) == 0, (
+                f"render_count for team_lead should be 0 after subflow "
+                f"push, got {render_counts.get('team_lead', 0)}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_confirmation_fires_after_subflow_push(self) -> None:
+        """After subflow push, the user's data response must trigger
+        confirmation — not skip straight to transition.
+        """
+        async with await BotTestHarness.create(
+            wizard_config=_build_subflow_confirmation_config(),
+            main_responses=[
+                # Turn 1: subflow push renders team_lead template
+                text_response("Project: Alpha. Who is the team lead?"),
+                # Turn 2: confirmation renders the template again with data
+                text_response(
+                    "Project: Alpha. Team lead: Alice. Is that correct?"
+                ),
+            ],
+            extraction_results=[
+                # Turn 1: project_name → subflow push
+                [{"project_name": "Alpha Project"}],
+                # Turn 2: lead_name extracted from user response
+                [{"lead_name": "Alice Johnson"}],
+            ],
+        ) as harness:
+            await harness.greet()
+            # Turn 1: project name → subflow push
+            await harness.chat("Alpha Project")
+            assert harness.wizard_stage == "team_lead"
+
+            # Turn 2: user provides team lead name
+            result = await harness.chat("Alice Johnson")
+
+            # Confirmation should fire: wizard stays on team_lead
+            # (not advance to subflow_done)
+            assert harness.wizard_stage == "team_lead", (
+                f"Expected wizard to stay on 'team_lead' for confirmation, "
+                f"but it advanced to '{harness.wizard_stage}'"
+            )
+
+    @pytest.mark.asyncio
+    async def test_render_count_zero_after_subflow_push_streaming(
+        self,
+    ) -> None:
+        """Streaming path: same render_count=0 assertion after subflow push."""
+        async with await BotTestHarness.create(
+            wizard_config=_build_subflow_confirmation_config(),
+            main_responses=[
+                text_response("Project: Alpha. Who is the team lead?"),
+            ],
+            extraction_results=[
+                [{"project_name": "Alpha Project"}],
+            ],
+        ) as harness:
+            await harness.greet()
+            await harness.stream_chat("Alpha Project")
+
+            assert harness.wizard_stage == "team_lead"
+
+            render_counts = harness.wizard_data.get(
+                "_stage_render_counts", {}
+            )
+            assert render_counts.get("team_lead", 0) == 0, (
+                f"render_count for team_lead should be 0 after subflow "
+                f"push (streaming), got {render_counts.get('team_lead', 0)}"
+            )

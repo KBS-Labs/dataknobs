@@ -2185,9 +2185,6 @@ class WizardReasoning(ReasoningStrategy):
                 pre.manager, pre.llm, pre.subflow_new_stage,
                 pre.wizard_state, pre.tools,
             )
-            subflow_stage_name = pre.subflow_new_stage.get("name", "")
-            if subflow_stage_name and pre.subflow_new_stage.get("response_template"):
-                pre.wizard_state.increment_render_count(subflow_stage_name)
             await self._save_wizard_state(pre.manager, pre.wizard_state)
             return stage_result.response
 
@@ -2276,9 +2273,6 @@ class WizardReasoning(ReasoningStrategy):
                 pre.wizard_state, pre.tools, stream_ctx,
             ):
                 yield chunk
-            subflow_stage_name = pre.subflow_new_stage.get("name", "")
-            if subflow_stage_name and pre.subflow_new_stage.get("response_template"):
-                pre.wizard_state.increment_render_count(subflow_stage_name)
             await self._save_wizard_state(pre.manager, pre.wizard_state)
             return
 

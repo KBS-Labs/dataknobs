@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-04-13T17:27:33Z",
+  "timestamp": "2026-04-13T17:38:20Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
+  "packages": "bots",
+  "tested_packages": ["bots"],
   "package_hashes": {
-  "bots": "e7fce96a9f5f5d71299342ab71b622564f72f8f74eaeb0a81b3e529f6b6ea292",
+  "bots": "7f51255a2d8d6e382a29a3e2ef460b2f0c28d1d8bb45225fcf3ca992080f875a",
   "common": "fb00bc8d957003bd77738ce7b585ff6c46c23c08eedb6fd72d508e0c2ae160ba",
   "config": "137a7200403640278b6df0be35056ba3f5660b3376cb55faeeba17a9411e91a4",
   "data": "07c0a6dff4e733233c757b73b5618e50a31bed91812cd39410d42bf81084abac",
