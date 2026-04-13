@@ -555,12 +555,6 @@ class WizardNavigator:
             response = await self._generate_stage_response(
                 manager, llm, stage, state, None
             )
-            # Record render so next input doesn't trigger first-render
-            # confirmation.
-            if stage.get("response_template"):
-                state.increment_render_count(
-                    stage.get("name", "unknown")
-                )
             return response
         # Can't go back - inform user
         return await manager.complete(
@@ -614,10 +608,6 @@ class WizardNavigator:
         response = await self._generate_stage_response(
             manager, llm, stage, state, None
         )
-        if stage.get("response_template"):
-            state.increment_render_count(
-                stage.get("name", "unknown")
-            )
         if auto_advance_messages:
             self._prepend_messages_to_response(response, auto_advance_messages)
         return response
@@ -657,10 +647,6 @@ class WizardNavigator:
         response = await self._generate_stage_response(
             manager, llm, stage, state, None
         )
-        # Record that the start stage template has been rendered so
-        # the next user message doesn't trigger first-render confirmation.
-        if stage.get("response_template"):
-            state.increment_render_count(stage.get("name", "unknown"))
         return response
 
     # ------------------------------------------------------------------

@@ -432,13 +432,16 @@ class TestStreamingSubflowPush:
             # Wizard should be in the subflow's first stage
             assert harness.wizard_stage == "detail_gather"
 
-            # Render count should be incremented for the template stage
+            # Render count must be 0 after subflow push — the template
+            # is displayed as a question (like a greeting). The user
+            # hasn't responded yet, so confirmation should fire on the
+            # next user message. (dk-42: was incorrectly 1 before fix.)
             state = harness.wizard_state
             assert state is not None
             render_counts = state.get("data", {}).get(
                 "_stage_render_counts", {}
             )
-            assert render_counts.get("detail_gather", 0) == 1
+            assert render_counts.get("detail_gather", 0) == 0
 
 
 # ---------------------------------------------------------------------------
