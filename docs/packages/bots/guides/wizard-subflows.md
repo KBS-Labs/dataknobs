@@ -34,7 +34,26 @@ Because the state is maintained on a stack (`WizardState.subflow_stack`), subflo
 
 ### First-Render Confirmation
 
-When a subflow stage has a `response_template` and receives new extracted data on its first visit, the wizard renders the template and pauses before evaluating transitions. This adds an extra confirmation turn. To skip this and evaluate transitions immediately, set `confirm_first_render: false` on the stage:
+When a subflow stage has a `response_template` and receives new extracted data on its first visit, the wizard pauses before evaluating transitions and shows a confirmation summary. By default, the confirmation is auto-generated from the stage's schema field descriptions and extracted values. To customize it, set `confirmation_template`:
+
+```yaml
+stages:
+  - name: configure_quiz
+    response_template: "How many questions?"
+    confirmation_template: |
+      Got it — {{ quiz_question_count }} questions.
+      Ready to generate?
+    schema:
+      type: object
+      properties:
+        quiz_question_count: { type: integer, description: Number of questions }
+      required: [quiz_question_count]
+    transitions:
+      - target: quiz_complete
+        condition: "data.get('quiz_question_count')"
+```
+
+To skip the confirmation pause entirely and evaluate transitions immediately, set `confirm_first_render: false`:
 
 ```yaml
 stages:
@@ -42,14 +61,6 @@ stages:
     confirm_first_render: false
     response_template: |
       Quiz settings: {{ quiz_question_count }} questions
-    schema:
-      type: object
-      properties:
-        quiz_question_count: { type: integer }
-      required: [quiz_question_count]
-    transitions:
-      - target: quiz_complete
-        condition: "data.get('quiz_question_count')"
 ```
 
 Stages with `reasoning: react` skip this confirmation automatically via a different code path.

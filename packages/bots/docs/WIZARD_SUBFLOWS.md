@@ -34,14 +34,27 @@ Because the state is maintained on a stack (`WizardState.subflow_stack`), subflo
 
 ### First-Render Confirmation in Subflow Stages
 
-Subflow stages follow the same first-render confirmation behavior as main flow stages: when a stage has a `response_template` and receives new extracted data on its first visit, the wizard renders the template and returns **before evaluating transitions**. The next user message triggers transition evaluation.
+Subflow stages follow the same first-render confirmation behavior as main flow stages: when a stage has a `response_template` and receives new extracted data on its first visit, the wizard shows a confirmation summary and returns **before evaluating transitions**. The next user message triggers transition evaluation.
+
+By default, the confirmation is auto-generated from the stage's schema field descriptions and extracted values. To customize the confirmation message, set `confirmation_template` — a Jinja2 template with the same context as `response_template`:
+
+```yaml
+stages:
+  - name: team_lead
+    response_template: "Who is the team lead?"
+    confirmation_template: "Lead: {{ lead_name }}. Correct?"
+    schema:
+      type: object
+      properties:
+        lead_name: { type: string, description: Team lead name }
+```
 
 This means each subflow stage that collects data via a schema adds one confirmation turn to the conversation. Plan for this when estimating turn counts:
 
 ```
 [parent] User provides data → subflow pushes → lands on subflow start stage
-[subflow] Bot renders subflow stage template (confirmation)     ← Turn N
-[subflow] User confirms → extraction → transition fires → pop   ← Turn N+1
+[subflow] Bot shows confirmation (auto-generated or confirmation_template)  ← Turn N
+[subflow] User confirms → extraction → transition fires → pop              ← Turn N+1
 [parent] Bot renders return stage template
 ```
 

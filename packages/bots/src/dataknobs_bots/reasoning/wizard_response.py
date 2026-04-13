@@ -987,6 +987,65 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         """
         return _TemplateResponse(content=content)
 
+    def build_confirmation_content(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+        new_data_keys: set[str],
+    ) -> str:
+        """Build confirmation content for extracted data.
+
+        When the stage defines ``confirmation_template``, renders it as
+        a Jinja2 template with full wizard state context (same as
+        ``response_template``).  Otherwise, auto-generates a confirmation
+        listing each newly extracted field with its schema description
+        and current value.
+
+        Args:
+            stage: Current stage metadata.
+            state: Current wizard state (data already merged).
+            new_data_keys: Set of field names extracted this turn.
+
+        Returns:
+            Rendered confirmation string.
+        """
+        confirmation_template = stage.get("confirmation_template")
+        if confirmation_template:
+            return self._render_response_template(
+                confirmation_template, stage, state,
+                extra_context={"new_data_keys": new_data_keys},
+            )
+
+        # Auto-generate from schema + extracted data
+        schema = stage.get("schema") or {}
+        properties = schema.get("properties") or {}
+        lines: list[str] = []
+        for key in sorted(new_data_keys):
+            value = state.data.get(key)
+            if value is not None:
+                label = properties.get(key, {}).get("description", key)
+                formatted = (
+                    ", ".join(str(item) for item in value)
+                    if isinstance(value, list)
+                    else str(value)
+                )
+                lines.append(f"- **{label}:** {formatted}")
+        if not lines:
+            # All extracted values were None — auto-generation has nothing
+            # to show.  Fall back to response_template re-render.
+            stage_name = stage.get("name", "unknown")
+            logger.warning(
+                "Stage '%s': confirmation auto-generation produced no "
+                "lines (all new_data_keys mapped to None). Falling back "
+                "to response_template re-render.",
+                stage_name,
+            )
+            response_template = stage.get("response_template", "")
+            return self._render_response_template(
+                response_template, stage, state,
+            )
+        return "Here's what I got:\n" + "\n".join(lines) + "\n\nIs that correct?"
+
     # =====================================================================
     # Private implementation methods
     # =====================================================================

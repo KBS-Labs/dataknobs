@@ -993,16 +993,11 @@ class TestSubflowPushRenderCount:
         """
         async with await BotTestHarness.create(
             wizard_config=_build_subflow_confirmation_config(),
-            main_responses=[
-                # Turn 1: subflow push renders team_lead template
-                text_response("Who is the team lead?"),
-                # Turn 2: confirmation re-renders template
-                text_response("Who is the team lead?"),
-            ],
+            main_responses=[],
             extraction_results=[
                 # Turn 1: project_name → subflow push
                 [{"project_name": "Alpha Project"}],
-                # Turn 2: lead_name extracted from user response
+                # Turn 2: lead_name extracted → auto-confirmation
                 [{"lead_name": "Alice Johnson"}],
             ],
         ) as harness:
@@ -1022,26 +1017,16 @@ class TestSubflowPushRenderCount:
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="dk-43: confirmation re-renders question template instead "
-        "of showing extracted data for user verification",
-        strict=True,
-    )
     async def test_confirmation_shows_extracted_data(self) -> None:
-        """dk-43: Confirmation response should include extracted data.
+        """dk-43: Confirmation auto-generates summary from extracted data.
 
-        Currently, the confirmation path re-renders the stage's
-        response_template (the question). The user sees the question
-        again with no indication of what was extracted. The confirmation
-        response should include the extracted data so the user can
-        verify it before confirming.
+        When confirmation fires, the response must include the newly
+        extracted data so the user can verify it — not re-render the
+        question template.
         """
         async with await BotTestHarness.create(
             wizard_config=_build_subflow_confirmation_config(),
-            main_responses=[
-                text_response("Who is the team lead?"),
-                text_response("Who is the team lead?"),
-            ],
+            main_responses=[],
             extraction_results=[
                 [{"project_name": "Alpha Project"}],
                 [{"lead_name": "Alice Johnson"}],
@@ -1051,11 +1036,169 @@ class TestSubflowPushRenderCount:
             await harness.chat("Alpha Project")
             result = await harness.chat("Alice Johnson")
 
-            # The confirmation response should show the extracted data
-            # so the user can verify it before confirming.
-            assert "alice" in result.response.lower(), (
+            # Auto-generated confirmation must include the extracted value
+            assert "Alice Johnson" in result.response, (
                 "Confirmation response should contain extracted lead name"
             )
+            # Must include the schema description as label
+            assert "Team lead name" in result.response, (
+                "Confirmation response should use schema description as label"
+            )
+            # Must ask for verification
+            assert "correct" in result.response.lower(), (
+                "Confirmation response should ask user to verify"
+            )
+
+    @pytest.mark.asyncio
+    async def test_confirmation_template_override(self) -> None:
+        """dk-43: confirmation_template overrides auto-generation.
+
+        Uses a subflow pattern (the natural render_count=0 scenario)
+        with a confirmation_template on the subflow's first stage.
+        """
+        config = (
+            WizardConfigBuilder("confirm-template-test")
+            .stage(
+                "project_name",
+                is_start=True,
+                prompt="What is the project name?",
+                response_template="Enter the project name.",
+                confirm_first_render=False,
+            )
+                .field("project_name", field_type="string", required=True)
+                .transition(
+                    "done",
+                    condition="data.get('project_name')",
+                    subflow_network="team_details",
+                    result_mapping={"lead_name": "lead_name"},
+                )
+            .stage("done", is_end=True, prompt="Done.",
+                   response_template="Complete.")
+            .subflow("team_details", {
+                "stages": [
+                    {
+                        "name": "team_lead",
+                        "is_start": True,
+                        "prompt": "Who is the team lead?",
+                        "response_template": "Who is the team lead?",
+                        "confirmation_template": (
+                            "Lead: {{ lead_name }}. Correct?"
+                        ),
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "lead_name": {
+                                    "type": "string",
+                                    "description": "Team lead name",
+                                },
+                            },
+                            "required": ["lead_name"],
+                        },
+                        "transitions": [{"target": "subflow_done"}],
+                    },
+                    {
+                        "name": "subflow_done",
+                        "is_end": True,
+                        "prompt": "Done.",
+                        "response_template": "Team details complete.",
+                    },
+                ],
+            })
+            .build()
+        )
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[],
+            extraction_results=[
+                [{"project_name": "Alpha"}],
+                [{"lead_name": "Alice Johnson"}],
+            ],
+        ) as harness:
+            await harness.greet()
+            await harness.chat("Alpha")
+            result = await harness.chat("Alice Johnson")
+
+            assert result.response.strip() == "Lead: Alice Johnson. Correct?"
+            assert harness.wizard_stage == "team_lead"
+
+    @pytest.mark.asyncio
+    async def test_auto_confirmation_multi_field(self) -> None:
+        """dk-43: Auto-generated confirmation lists all newly extracted fields.
+
+        Uses a subflow with a multi-field schema to verify the
+        auto-generated confirmation includes all extracted fields
+        with their schema descriptions.
+        """
+        config = (
+            WizardConfigBuilder("multi-field-confirm")
+            .stage(
+                "start",
+                is_start=True,
+                prompt="Begin.",
+                response_template="Starting.",
+                confirm_first_render=False,
+            )
+                .field("trigger", field_type="string", required=True)
+                .transition(
+                    "done",
+                    condition="data.get('trigger')",
+                    subflow_network="details",
+                    result_mapping={
+                        "name": "name", "age": "age",
+                    },
+                )
+            .stage("done", is_end=True, prompt="Done.",
+                   response_template="Complete.")
+            .subflow("details", {
+                "stages": [
+                    {
+                        "name": "gather",
+                        "is_start": True,
+                        "prompt": "Enter details.",
+                        "response_template": "Name and age?",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Full name",
+                                },
+                                "age": {
+                                    "type": "integer",
+                                    "description": "Age in years",
+                                },
+                            },
+                            "required": ["name", "age"],
+                        },
+                        "transitions": [{"target": "sub_done"}],
+                    },
+                    {
+                        "name": "sub_done",
+                        "is_end": True,
+                        "prompt": "Done.",
+                        "response_template": "Details complete.",
+                    },
+                ],
+            })
+            .build()
+        )
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=[],
+            extraction_results=[
+                [{"trigger": "go"}],
+                [{"name": "Carol", "age": 30}],
+            ],
+        ) as harness:
+            await harness.greet()
+            await harness.chat("go")
+            result = await harness.chat("Carol, 30")
+
+            # Both fields should appear in auto-generated confirmation
+            assert "Carol" in result.response
+            assert "30" in str(result.response)
+            assert "Full name" in result.response
+            assert "Age in years" in result.response
 
     @pytest.mark.asyncio
     async def test_render_count_zero_after_subflow_push_streaming(

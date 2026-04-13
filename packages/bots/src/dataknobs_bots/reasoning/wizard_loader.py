@@ -40,26 +40,113 @@ def _default_transform_context_factory(fn_ctx: Any) -> Any:
 
     return TransformContext(fsm_context=fn_ctx)
 
-# Known stage fields recognized by the wizard config loader
-KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
-    "name", "label", "is_start", "is_end",
-    "prompt", "response_template", "llm_assist", "llm_assist_prompt",
-    "schema", "suggestions", "help_text",
-    "can_skip", "skip_default", "can_go_back", "auto_advance",
-    "confirm_on_new_data", "confirm_first_render",
-    "transitions", "tools",
-    "reasoning", "reasoning_config", "max_iterations",
-    "store_trace", "verbose",
-    "extraction_model",
-    "context_generation", "mode", "intent_detection",
-    "tasks", "navigation",
-    "collection_mode", "collection_config",
-    "capture_mode",
-    "extraction_scope", "extraction_grounding",
-    "derivation_enabled", "recovery_enabled",
-    "routing_transforms",
-    "tool_result_mapping",
-})
+# ── Stage field registry ─────────────────────────────────────────────
+#
+# Single source of truth for all recognized stage-level config fields.
+# KNOWN_STAGE_FIELDS and _extract_metadata() are both derived from this
+# registry, so adding a new field requires only one entry here.
+#
+# Fields with special extraction logic (transitions, tasks) are not in
+# the registry — they are handled inline in _extract_metadata().
+#
+# HOW TO ADD A NEW STAGE FIELD:
+#
+#   1. Add a _StageField("field_name") entry below (with default if
+#      not None).  This automatically updates KNOWN_STAGE_FIELDS and
+#      _extract_metadata().
+#
+#   2. Add the field to StageConfig in config/wizard_builder.py.
+#      StageConfig.to_dict() and from_dict() pick it up automatically
+#      via dataclass field introspection.  If the field is a tuple or
+#      nested dataclass type, also add it to the classification
+#      constants at the top of that file (_TUPLE_PRIMITIVE_FIELDS,
+#      _TUPLE_DICT_FIELDS, or _NESTED_FIELDS).
+#
+#   3. Run tests — TestStageFieldRegistrySync will fail if StageConfig
+#      is missing the new field.
+
+class _StageField:
+    """Descriptor for a single wizard stage config field."""
+
+    __slots__ = ("default", "name")
+
+    def __init__(self, name: str, default: Any = None) -> None:
+        self.name = name
+        self.default = default
+
+    def extract(self, stage: dict[str, Any]) -> Any:
+        """Read this field from a raw stage config dict.
+
+        Returns a fresh copy for mutable defaults (lists) so that
+        callers cannot mutate the shared default object.
+        """
+        if self.default is None:
+            return stage.get(self.name)
+        value = stage.get(self.name, self.default)
+        # Return a copy of mutable defaults to prevent shared-state bugs
+        if value is self.default and isinstance(value, list):
+            return list(value)
+        return value
+
+
+# Registry of all stage fields with their extraction defaults.
+# Fields default to None unless an explicit default is given.
+_STAGE_FIELDS: tuple[_StageField, ...] = (
+    # Identity
+    _StageField("name"),
+    _StageField("label"),  # label default uses stage["name"]; handled in _extract_metadata
+    _StageField("is_start", default=False),
+    _StageField("is_end", default=False),
+    # Prompts and templates
+    _StageField("prompt", default=""),
+    _StageField("response_template"),
+    _StageField("confirmation_template"),
+    _StageField("llm_assist", default=False),
+    _StageField("llm_assist_prompt"),
+    # Schema and suggestions
+    _StageField("schema"),
+    _StageField("suggestions", default=[]),
+    _StageField("help_text"),
+    # Navigation
+    _StageField("can_skip", default=False),
+    _StageField("skip_default"),
+    _StageField("can_go_back", default=True),
+    _StageField("auto_advance"),
+    # Confirmation
+    _StageField("confirm_on_new_data", default=False),
+    _StageField("confirm_first_render", default=True),
+    # Tools and reasoning
+    _StageField("tools", default=[]),
+    _StageField("reasoning"),
+    _StageField("reasoning_config"),
+    _StageField("max_iterations"),
+    _StageField("extraction_model"),
+    _StageField("store_trace"),
+    _StageField("verbose"),
+    # Context and mode
+    _StageField("context_generation"),
+    _StageField("mode"),
+    _StageField("intent_detection"),
+    _StageField("navigation"),
+    # Collection
+    _StageField("collection_mode"),
+    _StageField("collection_config"),
+    # Extraction control
+    _StageField("capture_mode"),
+    _StageField("extraction_scope"),
+    _StageField("extraction_grounding"),
+    _StageField("derivation_enabled"),
+    _StageField("recovery_enabled"),
+    # Routing and post-extraction
+    _StageField("routing_transforms", default=[]),
+    _StageField("tool_result_mapping", default=[]),
+)
+
+# Derived: set of all recognized stage field names (includes fields
+# handled specially by _extract_metadata: transitions, tasks).
+KNOWN_STAGE_FIELDS: frozenset[str] = (
+    frozenset(f.name for f in _STAGE_FIELDS) | {"transitions", "tasks"}
+)
 
 # Patterns that suggest a condition is natural language rather than Python
 _ENGLISH_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -602,61 +689,15 @@ class WizardConfigLoader:
             # Extract per-stage tasks
             stage_tasks = self._extract_stage_tasks(stage)
 
-            metadata[stage["name"]] = {
-                "name": stage["name"],  # Include name in metadata for template access
-                "label": stage.get("label", stage["name"]),
-                "prompt": stage.get("prompt", ""),
-                "schema": stage.get("schema"),
-                "suggestions": stage.get("suggestions", []),
-                "help_text": stage.get("help_text"),
-                "can_skip": stage.get("can_skip", False),
-                "skip_default": stage.get("skip_default"),
-                "can_go_back": stage.get("can_go_back", True),
-                "auto_advance": stage.get("auto_advance"),
-                "confirm_on_new_data": stage.get("confirm_on_new_data", False),
-                "confirm_first_render": stage.get("confirm_first_render", True),
-                "tools": stage.get("tools", []),
-                "extraction_model": stage.get("extraction_model"),
-                "is_start": stage.get("is_start", False),
-                "is_end": stage.get("is_end", False),
-                "transitions": transitions,  # Include transitions for observability
-                "tasks": stage_tasks,  # Per-stage tasks
-                # Per-stage strategy injection settings
-                "reasoning": stage.get("reasoning"),  # registered strategy name
-                "reasoning_config": stage.get("reasoning_config"),
-                "max_iterations": stage.get("max_iterations"),
-                "store_trace": stage.get("store_trace"),
-                "verbose": stage.get("verbose"),
-                # Template-driven response mode (bypasses LLM for stage prompt)
-                "response_template": stage.get("response_template"),
-                "llm_assist": stage.get("llm_assist", False),
-                "llm_assist_prompt": stage.get("llm_assist_prompt"),
-                # LLM-generated context variables for template rendering
-                "context_generation": stage.get("context_generation"),
-                # Conversation stage paradigm
-                "mode": stage.get("mode"),
-                "intent_detection": stage.get("intent_detection"),
-                # Per-stage navigation keyword overrides
-                "navigation": stage.get("navigation"),
-                # Collection mode (multi-record collection via MemoryBank)
-                "collection_mode": stage.get("collection_mode"),
-                "collection_config": stage.get("collection_config"),
-                # Extraction control — "auto", "verbatim", or "extract"
-                "capture_mode": stage.get("capture_mode"),
-                # Per-stage extraction overrides
-                "extraction_scope": stage.get("extraction_scope"),
-                "extraction_grounding": stage.get("extraction_grounding"),
-                "derivation_enabled": stage.get("derivation_enabled"),
-                "recovery_enabled": stage.get("recovery_enabled"),
-                # Routing transforms — executed after extraction/merge/derivation
-                # but before transition condition evaluation.  Used to run
-                # classification or signal-setting functions that conditions
-                # depend on (e.g. classify_user_need sets classified_need,
-                # then conditions check data.get('classified_need')).
-                "routing_transforms": stage.get("routing_transforms", []),
-                # Post-extraction tool calls with result-to-state mapping
-                "tool_result_mapping": stage.get("tool_result_mapping", []),
-            }
+            # Build metadata from field registry
+            stage_meta = {f.name: f.extract(stage) for f in _STAGE_FIELDS}
+            # Override label default: falls back to stage name, not None
+            if stage_meta["label"] is None:
+                stage_meta["label"] = stage["name"]
+            # Special fields with pre-processed extraction
+            stage_meta["transitions"] = transitions
+            stage_meta["tasks"] = stage_tasks
+            metadata[stage["name"]] = stage_meta
 
         # Add global tasks to the first stage's metadata
         # The WizardReasoning can then collect them during initialization
