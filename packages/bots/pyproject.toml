@@ -12,6 +12,7 @@ dependencies = [
     "dataknobs-config>=0.2.0",
     "dataknobs-llm>=0.1.0",
     "dataknobs-data>=0.3.1",
+    "dataknobs-utils>=1.2.6",
     "dataknobs-xization>=1.1.0",
     "dataknobs-fsm>=0.1.2",
     "pyyaml>=6.0",
@@ -29,6 +30,7 @@ dataknobs-common = { workspace = true }
 dataknobs-config = { workspace = true }
 dataknobs-llm = { workspace = true }
 dataknobs-data = { workspace = true }
+dataknobs-utils = { workspace = true }
 dataknobs-xization = { workspace = true }
 dataknobs-fsm = { workspace = true }
 
@@ -144,6 +146,7 @@ known-first-party = [
     "dataknobs_config",
     "dataknobs_llm",
     "dataknobs_data",
+    "dataknobs_utils",
     "dataknobs_xization",
     "dataknobs_fsm"
 ]

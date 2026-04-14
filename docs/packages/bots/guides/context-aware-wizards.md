@@ -25,6 +25,7 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [The Problem](#the-problem)
   - [How Grounding Works](#how-grounding-works)
   - [Grounding Configuration](#grounding-configuration)
+  - [Value Expansion](#value-expansion)
   - [Custom Merge Filters](#custom-merge-filters)
   - [Walk-Through: Correction Scenario](#walk-through-correction-scenario)
 - [Enum Normalization](#enum-normalization)
@@ -445,6 +446,53 @@ schema:
 | `affirmative_phrases` | `list[str]` | Override default affirmative multi-word phrases for boolean recovery |
 | `negative_signals` | `list[str]` | Override default negative signal words for boolean recovery |
 | `negative_phrases` | `list[str]` | Override default negative multi-word phrases for boolean recovery |
+| `expand_from_message` | `true` / `false` | Enable value expansion for this field (default `false`; see [Value Expansion](#value-expansion)) |
+
+### Value Expansion
+
+Extraction models sometimes return a partial value when the user's message contains a compound phrase. For example, a model may extract `"formal"` when the user said `"formal and academic"`. The extracted value passes grounding (it IS in the message), but it is incomplete.
+
+Value expansion recovers the full phrase by scanning the user's message for the extracted value and expanding rightward across explicit conjunctions (`and`, `or`, `nor`). Expansion stops at natural phrase boundaries:
+
+- Punctuation (`. , ; : ! ?`)
+- Field-switching patterns (`and the`, `and set`, `and make`, `and include`, `and add`, `and use`, `but`)
+- End of message
+
+When expansion finds a longer phrase, the grounding filter returns `MergeDecision.transform(expanded_value)` instead of `MergeDecision.accept()`. The expanded value — composed entirely of the user's own words — replaces the partial extraction in wizard data.
+
+**Expansion is opt-in** via `x-extraction.expand_from_message: true`. It is best suited for **descriptive fields** where compound phrases are common — tone, style, mood, audience. It is not appropriate for identity fields (names, IDs, topics) where the word `"and"` typically separates values for *different* fields rather than parts of a compound value.
+
+For example, if the user says `"Alice and math"` and the LLM extracts `name: "Alice"`, default-on expansion would incorrectly expand the name to `"Alice and math"`. With opt-in, only fields explicitly marked for expansion are affected.
+
+Expansion is also automatically skipped for:
+
+- **Enum fields** — values are constrained to a fixed set
+- **Non-string schema types** — integers, booleans, arrays, etc.
+
+```yaml
+schema:
+  properties:
+    tone:
+      type: string
+      description: "Writing tone"
+      x-extraction:
+        expand_from_message: true   # opt in — "formal" → "formal and academic"
+    name:
+      type: string
+      description: "User's name"
+      # no expand_from_message — default off, "Alice" stays "Alice"
+```
+
+**Example** (with `expand_from_message: true`):
+
+| User message | Extracted | Expanded | Stored |
+|---|---|---|---|
+| "Set the tone to formal and academic" | `"formal"` | `"formal and academic"` | `"formal and academic"` |
+| "Make it warm and inviting" | `"warm"` | `"warm and inviting"` | `"warm and inviting"` |
+| "The tone should be formal." | `"formal"` | (no expansion) | `"formal"` |
+| "Set the tone to formal and the style to narrative" | `"formal"` | (boundary: `and the`) | `"formal"` |
+
+The expansion algorithm lives in `dataknobs_utils.value_expansion` as a pure text-processing utility. The `SchemaGroundingFilter` in `wizard_grounding.py` calls it for grounded string values on opted-in fields.
 
 ### Custom Merge Filters
 

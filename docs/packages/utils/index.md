@@ -21,6 +21,7 @@ The Utils package includes utilities for:
 - **File Operations**: File system utilities and helpers
 - **Elasticsearch Integration**: Elasticsearch client and query builders
 - **LLM Utilities**: Large Language Model prompt management
+- **Value Expansion**: Conjunction-bounded expansion of partial extracted values
 - **Data Processing**: Pandas, XML, SQL, and other data utilities
 
 ## Package Structure
@@ -43,6 +44,7 @@ dataknobs-utils/
 │       ├── stats_utils.py
 │       ├── subprocess_utils.py
 │       ├── sys_utils.py
+│       ├── value_expansion.py
 │       └── xml_utils.py
 └── tests/
 ```
@@ -141,6 +143,7 @@ messages = prompt_tree.get_messages()
 
 | Module | Purpose |
 |--------|---------|
+| `value_expansion` | Conjunction-bounded expansion of partial string extractions |
 | `emoji_utils` | Emoji detection and processing |
 | `pandas_utils` | Pandas DataFrame utilities |
 | `requests_utils` | HTTP request helpers |

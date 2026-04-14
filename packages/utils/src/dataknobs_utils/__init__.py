@@ -15,6 +15,7 @@ from dataknobs_utils import (
     stats_utils,
     subprocess_utils,
     sys_utils,
+    value_expansion,
     xml_utils,
 )
 
@@ -34,5 +35,6 @@ __all__ = [
     "stats_utils",
     "subprocess_utils",
     "sys_utils",
+    "value_expansion",
     "xml_utils",
 ]
