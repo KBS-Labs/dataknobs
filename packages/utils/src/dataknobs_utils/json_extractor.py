@@ -93,84 +93,134 @@ class JSONExtractor:
         self.fixed_jsons = []
         self.non_json_text = text
 
-        # Find all potential JSON objects using regex
-        # Look for patterns that start with { and end with }
+        # Find all potential JSON objects using string-aware brace matching
         potential_jsons = self._find_json_objects(text)
 
-        extracted_jsons = []
+        extracted_jsons = self._try_parse_candidates(potential_jsons)
 
-        for json_text, is_complete in potential_jsons:
-            try:
-                # Try to parse the JSON text
-                json_obj = json.loads(json_text)
-                if is_complete:
-                    self.complete_jsons.append(json_obj)
-                else:
-                    self.fixed_jsons.append(json_obj)
-                extracted_jsons.append(json_obj)
-
-                # Remove the JSON text from non_json_text
-                self.non_json_text = self.non_json_text.replace(json_text, "", 1)
-            except json.JSONDecodeError:
-                # If it's malformed, try to fix it
-                fixed_json = self._fix_json(json_text)
-                if fixed_json:
-                    try:
-                        json_obj = json.loads(fixed_json)
-                        self.fixed_jsons.append(json_obj)
-                        extracted_jsons.append(json_obj)
-
-                        # Remove the original JSON text from non_json_text
-                        self.non_json_text = self.non_json_text.replace(json_text, "", 1)
-                    except json.JSONDecodeError:
-                        # If we still can't parse it, leave it in non_json_text
-                        pass
+        # Fallback: if nothing parsed from the primary scan, a stray '{'
+        # in surrounding text may have absorbed the real JSON.  Try
+        # scanning from later '{' positions that look like JSON starts.
+        if not extracted_jsons:
+            fallback_jsons = self._fallback_scan(text)
+            if fallback_jsons:
+                extracted_jsons = self._try_parse_candidates(fallback_jsons)
 
         # Clean up any remaining JSON brackets in non_json_text
         self.non_json_text = self.non_json_text.strip()
 
         return extracted_jsons
 
-    def _find_json_objects(self, text: str) -> List[Tuple[str, bool]]:
-        """Find potential JSON objects using bracket matching.
+    def _try_parse_candidates(
+        self, candidates: List[Tuple[str, bool]]
+    ) -> List[Dict[str, Any]]:
+        """Attempt to parse a list of candidate JSON text fragments.
 
-        Scans text for brace-delimited objects using a stack-based approach to
-        identify complete JSON objects (with matching braces) and incomplete ones.
-
-        Args:
-            text: Text to search for JSON-like patterns.
+        Tries ``json.loads`` on each candidate, falling back to
+        :meth:`_fix_json` for malformed ones.  Successfully parsed
+        objects are appended to :attr:`complete_jsons` or
+        :attr:`fixed_jsons` and removed from :attr:`non_json_text`.
 
         Returns:
-            List[Tuple[str, bool]]: List of tuples where each tuple contains
-                (json_text, is_complete). is_complete is True for objects with
-                matching braces, False for incomplete objects.
+            List of successfully parsed JSON objects.
         """
-        result = []
+        extracted: List[Dict[str, Any]] = []
 
-        # First try to find complete JSON objects
-        stack = []
-        start_index = None
+        for json_text, is_complete in candidates:
+            try:
+                json_obj = json.loads(json_text)
+                if is_complete:
+                    self.complete_jsons.append(json_obj)
+                else:
+                    self.fixed_jsons.append(json_obj)
+                extracted.append(json_obj)
+                self.non_json_text = self.non_json_text.replace(json_text, "", 1)
+            except json.JSONDecodeError:
+                fixed_json = self._fix_json(json_text)
+                if fixed_json:
+                    try:
+                        json_obj = json.loads(fixed_json)
+                        self.fixed_jsons.append(json_obj)
+                        extracted.append(json_obj)
+                        self.non_json_text = self.non_json_text.replace(
+                            json_text, "", 1
+                        )
+                    except json.JSONDecodeError:
+                        pass
+
+        return extracted
+
+    def _find_json_objects(self, text: str) -> List[Tuple[str, bool]]:
+        """Primary scan: string-aware brace matching over the full text."""
+        result: List[Tuple[str, bool]] = []
+        stack: List[str] = []
+        start_index: int | None = None
+        in_string = False
+        escape_next = False
 
         for i, char in enumerate(text):
-            if char == "{" and start_index is None:
-                start_index = i
-                stack.append(char)
-            elif char == "{" and stack:
+            if escape_next:
+                escape_next = False
+                continue
+
+            if in_string:
+                if char == "\\":
+                    escape_next = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            # Outside of a string
+            if char == '"':
+                if stack:  # only enter string state inside an object
+                    in_string = True
+            elif char == "{":
+                if start_index is None:
+                    start_index = i
                 stack.append(char)
             elif char == "}" and stack:
                 stack.pop()
                 if not stack and start_index is not None:
-                    # Complete JSON object found
                     json_text = text[start_index : i + 1]
                     result.append((json_text, True))
                     start_index = None
 
-        # Now look for incomplete JSON objects that started but didn't finish
+        # Incomplete JSON that started but didn't close
         if start_index is not None:
             incomplete_json = text[start_index:]
             result.append((incomplete_json, False))
 
         return result
+
+    def _fallback_scan(self, text: str) -> List[Tuple[str, bool]]:
+        """Fallback scan: try each potential JSON start position.
+
+        When the primary scan fails (e.g. a stray ``{`` in surrounding
+        prose swallowed the real JSON), find later ``{`` positions and
+        attempt a scan from each one that looks like a JSON object start
+        (``{"`` pattern).  Skips the very first ``{`` since the primary
+        scan already tried from there.
+        """
+        # Start after the first '{' — the primary scan already tried from it
+        first_brace = text.find("{")
+        if first_brace == -1:
+            return []
+        search_start = first_brace + 1
+
+        while True:
+            idx = text.find("{", search_start)
+            if idx == -1:
+                break
+            # Quick heuristic: a JSON object starts with {"
+            remaining = text[idx:]
+            stripped = remaining.lstrip("{")
+            if stripped and stripped[0] == '"':
+                candidates = self._find_json_objects(remaining)
+                if candidates:
+                    return candidates
+            search_start = idx + 1
+
+        return []
 
     def _fix_json(self, json_text: str) -> str | None:
         """Repair malformed JSON by closing unclosed elements.
