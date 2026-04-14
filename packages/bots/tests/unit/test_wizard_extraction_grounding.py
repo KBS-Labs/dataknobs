@@ -21,14 +21,8 @@ from dataknobs_bots.reasoning.wizard_grounding import (
 )
 from dataknobs_bots.reasoning.wizard_utils import word_in_text
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_llm import LLMConfig
-from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.conversations.storage import DataknobsConversationStorage
-from dataknobs_llm.llm.providers.echo import EchoProvider
-from dataknobs_llm.prompts import ConfigPromptLibrary
-from dataknobs_llm.prompts.builders import AsyncPromptBuilder
-from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
+from dataknobs_bots.testing import BotTestHarness
+from dataknobs_llm.testing import ConfigurableExtractor
 
 # ---------------------------------------------------------------------------
 # Unit tests for SchemaGroundingFilter
@@ -285,6 +279,107 @@ class TestSchemaGroundingFilterXExtraction:
         ).action != "reject"
 
 
+class TestRequireGrounded:
+    """Tests for require_grounded x-extraction option (item 88).
+
+    When ``require_grounded: true``, ungrounded values are rejected even
+    on first write (existing_value is None), closing the benefit-of-the-
+    doubt bypass that otherwise lets the extraction LLM invent values.
+    """
+
+    def setup_method(self) -> None:
+        self.f = SchemaGroundingFilter()
+
+    def test_rejects_ungrounded_first_write(self) -> None:
+        """Exact grounding + require_grounded rejects invented values."""
+        decision = self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        assert "require_grounded" in (decision.reason or "")
+
+    def test_accepts_grounded_first_write(self) -> None:
+        """Grounded value accepted even with require_grounded."""
+        decision = self.f.filter(
+            "domain_id", "python-ninja", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_false_preserves_benefit_of_doubt(self) -> None:
+        """Default / explicit false keeps existing behavior."""
+        # Explicit false
+        assert self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": False,
+            }}, {},
+        ).action != "reject"
+        # Absent (default)
+        assert self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {"grounding": "exact"}}, {},
+        ).action != "reject"
+
+    def test_existing_value_still_rejects_ungrounded(self) -> None:
+        """Overwrite protection works independently of require_grounded."""
+        decision = self.f.filter(
+            "domain_id", "python-programming", "old-id",
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        # Must be the pre-existing overwrite-protection path, not require_grounded
+        assert "require_grounded" not in (decision.reason or "")
+        assert "preserved" in (decision.reason or "")
+
+    def test_grounding_skip_takes_precedence(self) -> None:
+        """grounding=skip bypasses require_grounded entirely."""
+        decision = self.f.filter(
+            "domain_id", "invented-value", None,
+            "unrelated message",
+            {"type": "string", "x-extraction": {
+                "grounding": "skip", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_fuzzy_grounding_ignores_require_grounded(self) -> None:
+        """grounding=fuzzy always returns grounded=True, so require_grounded is never evaluated."""
+        decision = self.f.filter(
+            "domain_id", "invented-value", None,
+            "unrelated message",
+            {"type": "string", "x-extraction": {
+                "grounding": "fuzzy", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_default_type_dispatch_with_require_grounded(self) -> None:
+        """require_grounded works with default type-based grounding too."""
+        # "quantum physics" has zero word overlap with "make a tutor"
+        decision = self.f.filter(
+            "subject", "quantum physics", None,
+            "make a tutor",
+            {"type": "string", "x-extraction": {
+                "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        assert "require_grounded" in (decision.reason or "")
+
+
 class TestSignificantWords:
     """Test the significant_words helper."""
 
@@ -420,37 +515,17 @@ PER_STAGE_GROUNDING_CONFIG: dict[str, Any] = {
 }
 
 
-async def _create_manager() -> tuple[ConversationManager, EchoProvider]:
-    """Create a ConversationManager + EchoProvider pair for testing."""
-    config = LLMConfig(
-        provider="echo",
-        model="echo-test",
-        options={"echo_prefix": ""},
-    )
-    provider = EchoProvider(config)
-    library = ConfigPromptLibrary({
-        "system": {
-            "assistant": {
-                "template": "You are a helpful assistant.",
-            },
-        },
-    })
-    builder = AsyncPromptBuilder(library=library)
-    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
-    manager = await ConversationManager.create(
-        llm=provider,
-        prompt_builder=builder,
-        storage=storage,
-    )
-    return manager, provider
-
-
 def _build_reasoning(
     config: dict[str, Any],
     extractor: ConfigurableExtractor,
     **kwargs: Any,
 ) -> WizardReasoning:
-    """Build a WizardReasoning from a config dict with injected extractor."""
+    """Build a WizardReasoning from a config dict with injected extractor.
+
+    Used by :class:`TestGroundingInit` and :class:`TestFromConfigRoundTrip`
+    which test internal constructor logic (exempt from BotTestHarness mandate).
+    Behavioral integration tests should use :class:`BotTestHarness` instead.
+    """
     loader = WizardConfigLoader()
     wizard_fsm = loader.load_from_dict(config)
     settings = config.get("settings", {})
@@ -477,87 +552,126 @@ class TestCorrectionScenario:
         The extraction model returns empty strings for subject/domain_id,
         but grounding prevents the overwrite.
         """
-        # Turn 2 extraction: user provides all fields
-        turn2_data = {
-            "intent": "quiz",
-            "subject": "history",
-            "domain_id": "history-quizzer",
-            "domain_name": "History Quizzer",
-        }
-        # Turn 3 extraction: model hallucinated empty fields
-        turn3_data = {
-            "intent": "tutor",
-            "subject": "",
-            "domain_id": "",
-            "domain_name": "History Quizzer",
-        }
-
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(data=turn2_data, confidence=0.9),
-                SimpleExtractionResult(data=turn3_data, confidence=0.9),
+        async with await BotTestHarness.create(
+            wizard_config=GROUNDING_WIZARD_CONFIG,
+            main_responses=["Got it!", "Updated!"],
+            extraction_results=[
+                [
+                    {"intent": "quiz", "subject": "history",
+                     "domain_id": "history-quizzer",
+                     "domain_name": "History Quizzer"},
+                ],
+                [
+                    {"intent": "tutor", "subject": "",
+                     "domain_id": "",
+                     "domain_name": "History Quizzer"},
+                ],
             ],
-        )
-        reasoning = _build_reasoning(GROUNDING_WIZARD_CONFIG, extractor)
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!", "Updated!"])
+        ) as harness:
+            # Turn 1: all fields filled for the first time
+            await harness.chat(
+                "I want a history quiz bot called History Quizzer, "
+                "ID history-quizzer"
+            )
+            assert harness.wizard_data["intent"] == "quiz"
+            assert harness.wizard_data["subject"] == "history"
+            assert harness.wizard_data["domain_id"] == "history-quizzer"
 
-        # Turn 2: all fields filled for the first time
-        await manager.add_message(role="user", content=
-            "I want a history quiz bot called History Quizzer, "
-            "ID history-quizzer"
-        )
-        await reasoning.generate(manager, provider)
-
-        # Verify turn 2 state
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["intent"] == "quiz"
-        assert ws.data["subject"] == "history"
-        assert ws.data["domain_id"] == "history-quizzer"
-
-        # Turn 3: correction — only intent should change
-        await manager.add_message(role="user", content=
-            "Actually, make it a tutor instead. "
-            "Keep the same name and subject."
-        )
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["intent"] == "tutor", "Intent should be updated"
-        assert ws.data["subject"] == "history", "Subject should be preserved"
-        assert ws.data["domain_id"] == "history-quizzer", (
-            "Domain ID should be preserved"
-        )
+            # Turn 2: correction — only intent should change
+            await harness.chat(
+                "Actually, make it a tutor instead. "
+                "Keep the same name and subject."
+            )
+            assert harness.wizard_data["intent"] == "tutor", (
+                "Intent should be updated"
+            )
+            assert harness.wizard_data["subject"] == "history", (
+                "Subject should be preserved"
+            )
+            assert harness.wizard_data["domain_id"] == "history-quizzer", (
+                "Domain ID should be preserved"
+            )
 
     @pytest.mark.asyncio
     async def test_first_turn_all_fields_merge(self) -> None:
         """First turn: no existing data, everything merges."""
-        first_data = {
-            "intent": "quiz",
-            "subject": "history",
-            "domain_id": "history-quizzer",
-            "domain_name": "History Quizzer",
-        }
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(data=first_data, confidence=0.9),
+        async with await BotTestHarness.create(
+            wizard_config=GROUNDING_WIZARD_CONFIG,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [
+                    {"intent": "quiz", "subject": "history",
+                     "domain_id": "history-quizzer",
+                     "domain_name": "History Quizzer"},
+                ],
             ],
-        )
-        reasoning = _build_reasoning(GROUNDING_WIZARD_CONFIG, extractor)
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!"])
+        ) as harness:
+            await harness.chat("I want a history quiz bot")
+            assert harness.wizard_data["intent"] == "quiz"
+            assert harness.wizard_data["subject"] == "history"
+            assert harness.wizard_data["domain_id"] == "history-quizzer"
+            assert harness.wizard_data["domain_name"] == "History Quizzer"
 
-        await manager.add_message(role="user", content=
-            "I want a history quiz bot"
-        )
-        await reasoning.generate(manager, provider)
 
-        ws = reasoning._get_wizard_state(manager)
-        # All fields should merge — no existing data to protect
-        assert ws.data["intent"] == "quiz"
-        assert ws.data["subject"] == "history"
-        assert ws.data["domain_id"] == "history-quizzer"
-        assert ws.data["domain_name"] == "History Quizzer"
+REQUIRE_GROUNDED_CONFIG: dict[str, Any] = {
+    "name": "require-grounded-test",
+    "version": "1.0",
+    "settings": {
+        "extraction_grounding": True,
+    },
+    "stages": [
+        {
+            "name": "gather",
+            "is_start": True,
+            "prompt": "Tell me your domain ID.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "domain_id": {
+                        "type": "string",
+                        "x-extraction": {
+                            "grounding": "exact",
+                            "require_grounded": True,
+                        },
+                    },
+                    "subject": {"type": "string"},
+                },
+                "required": ["domain_id", "subject"],
+            },
+            "transitions": [
+                {
+                    "target": "done",
+                    "condition": (
+                        "data.get('domain_id') and data.get('subject')"
+                    ),
+                },
+            ],
+        },
+        {"name": "done", "is_end": True, "prompt": "All done!"},
+    ],
+}
+
+
+class TestRequireGroundedIntegration:
+    """Integration: require_grounded flows through config to filter."""
+
+    @pytest.mark.asyncio
+    async def test_ungrounded_first_write_rejected_end_to_end(self) -> None:
+        """Invented domain_id rejected; grounded subject accepted."""
+        async with await BotTestHarness.create(
+            wizard_config=REQUIRE_GROUNDED_CONFIG,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"domain_id": "python-programming", "subject": "history"}],
+            ],
+        ) as harness:
+            await harness.chat(
+                'Use "python-ninja" for the ID, subject is history',
+            )
+            # "python-programming" not literally in message -> rejected
+            assert harness.wizard_data.get("domain_id") is None
+            # "history" is in message -> accepted via default grounding
+            assert harness.wizard_data["subject"] == "history"
 
 
 class TestGroundingConfig:
@@ -566,66 +680,40 @@ class TestGroundingConfig:
     @pytest.mark.asyncio
     async def test_grounding_disabled_allows_overwrite(self) -> None:
         """extraction_grounding: false allows ungrounded overwrites."""
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(
-                    data={"subject": "history", "tone": "casual"},
-                    confidence=0.9,
-                ),
-                SimpleExtractionResult(
-                    data={"subject": "", "tone": "formal"},
-                    confidence=0.9,
-                ),
+        async with await BotTestHarness.create(
+            wizard_config=GROUNDING_DISABLED_CONFIG,
+            main_responses=["Got it!", "Updated!"],
+            extraction_results=[
+                [{"subject": "history", "tone": "casual"}],
+                [{"subject": "", "tone": "formal"}],
             ],
-        )
-        reasoning = _build_reasoning(GROUNDING_DISABLED_CONFIG, extractor)
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!", "Updated!"])
+        ) as harness:
+            await harness.chat("history casual")
+            assert harness.wizard_data["subject"] == "history"
 
-        # Turn 1
-        await manager.add_message(role="user", content="history casual")
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "history"
-
-        # Turn 2: ungrounded overwrite allowed
-        await manager.add_message(role="user", content="make it formal")
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "", "Grounding disabled: overwrite allowed"
+            # Turn 2: ungrounded overwrite allowed
+            await harness.chat("make it formal")
+            assert harness.wizard_data["subject"] == "", (
+                "Grounding disabled: overwrite allowed"
+            )
 
     @pytest.mark.asyncio
     async def test_per_stage_grounding_override(self) -> None:
         """Per-stage extraction_grounding: false overrides wizard-level true."""
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(
-                    data={"subject": "history", "tone": "casual"},
-                    confidence=0.9,
-                ),
-                SimpleExtractionResult(
-                    data={"subject": "", "tone": "formal"},
-                    confidence=0.9,
-                ),
+        async with await BotTestHarness.create(
+            wizard_config=PER_STAGE_GROUNDING_CONFIG,
+            main_responses=["Got it!", "Updated!"],
+            extraction_results=[
+                [{"subject": "history", "tone": "casual"}],
+                [{"subject": "", "tone": "formal"}],
             ],
-        )
-        reasoning = _build_reasoning(PER_STAGE_GROUNDING_CONFIG, extractor)
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!", "Updated!"])
+        ) as harness:
+            await harness.chat("history casual")
 
-        # Turn 1
-        await manager.add_message(role="user", content="history casual")
-        await reasoning.generate(manager, provider)
-
-        # Turn 2: stage has grounding disabled
-        await manager.add_message(role="user", content="change tone to formal")
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        # Per-stage grounding disabled -> empty string overwrites
-        assert ws.data["subject"] == ""
+            # Turn 2: stage has grounding disabled
+            await harness.chat("change tone to formal")
+            # Per-stage grounding disabled -> empty string overwrites
+            assert harness.wizard_data["subject"] == ""
 
 
 class TestMergeFilterProtocol:
@@ -848,40 +936,23 @@ class TestPerStageReEnable:
             ],
         }
 
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(
-                    data={"subject": "history", "tone": "casual"},
-                    confidence=0.9,
-                ),
-                SimpleExtractionResult(
-                    data={"subject": "", "tone": "formal", "extra": "val"},
-                    confidence=0.9,
-                ),
+        async with await BotTestHarness.create(
+            wizard_config=reenable_config,
+            main_responses=["Got it!", "Updated!"],
+            extraction_results=[
+                [{"subject": "history", "tone": "casual"}],
+                [{"subject": "", "tone": "formal", "extra": "val"}],
             ],
-        )
-        reasoning = _build_reasoning(reenable_config, extractor)
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!", "Updated!"])
+        ) as harness:
+            await harness.chat("history casual")
+            assert harness.wizard_data["subject"] == "history"
 
-        # Turn 1
-        await manager.add_message(role="user", content="history casual")
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "history"
-
-        # Turn 2: grounding re-enabled per-stage should protect subject
-        await manager.add_message(
-            role="user", content="change tone to formal",
-        )
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "history", (
-            "Per-stage re-enabled grounding should protect existing data"
-        )
-        assert ws.data["tone"] == "formal"
+            # Turn 2: grounding re-enabled per-stage should protect subject
+            await harness.chat("change tone to formal")
+            assert harness.wizard_data["subject"] == "history", (
+                "Per-stage re-enabled grounding should protect existing data"
+            )
+            assert harness.wizard_data["tone"] == "formal"
 
 
 class TestStageOverrideWithSkipBuiltinGrounding:
@@ -896,6 +967,7 @@ class TestStageOverrideWithSkipBuiltinGrounding:
             "version": "1.0",
             "settings": {
                 "extraction_grounding": True,
+                "skip_builtin_grounding": True,
             },
             "stages": [
                 {
@@ -927,45 +999,25 @@ class TestStageOverrideWithSkipBuiltinGrounding:
             ],
         }
 
-        extractor = ConfigurableExtractor(
-            results=[
-                SimpleExtractionResult(
-                    data={"subject": "history", "tone": "casual"},
-                    confidence=0.9,
-                ),
-                SimpleExtractionResult(
-                    data={"subject": "", "tone": "formal", "extra": "val"},
-                    confidence=0.9,
-                ),
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Updated!"],
+            extraction_results=[
+                [{"subject": "history", "tone": "casual"}],
+                [{"subject": "", "tone": "formal", "extra": "val"}],
             ],
-        )
-        reasoning = _build_reasoning(
-            config, extractor, skip_builtin_grounding=True,
-        )
-        manager, provider = await _create_manager()
-        provider.set_responses(["Got it!", "Updated!"])
+        ) as harness:
+            # Turn 1: fill subject + tone (extra still missing -> no transition)
+            await harness.chat("history casual")
+            assert harness.wizard_data["subject"] == "history"
 
-        # Turn 1: fill subject + tone (extra still missing → no transition)
-        await manager.add_message(
-            role="user", content="history casual",
-        )
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "history"
-
-        # Turn 2: stage grounding=True should protect subject from ""
-        await manager.add_message(
-            role="user", content="change tone to formal",
-        )
-        await reasoning.generate(manager, provider)
-
-        ws = reasoning._get_wizard_state(manager)
-        assert ws.data["subject"] == "history", (
-            "Stage extraction_grounding=True should override "
-            "skip_builtin_grounding and protect existing data"
-        )
-        assert ws.data["tone"] == "formal"
+            # Turn 2: stage grounding=True should protect subject from ""
+            await harness.chat("change tone to formal")
+            assert harness.wizard_data["subject"] == "history", (
+                "Stage extraction_grounding=True should override "
+                "skip_builtin_grounding and protect existing data"
+            )
+            assert harness.wizard_data["tone"] == "formal"
 
 
 class TestAdditionalEdgeCases:

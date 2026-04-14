@@ -411,6 +411,7 @@ schema:
       type: string
       x-extraction:
         grounding: exact              # require literal match in message
+        require_grounded: true        # reject ungrounded even on first write
     description:
       type: string
       description: "Brief description of the bot"
@@ -430,6 +431,7 @@ schema:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `grounding` | `"exact"` / `"fuzzy"` / `"skip"` | Override grounding strategy |
+| `require_grounded` | `true` / `false` | Reject ungrounded values even on first write (default `false` — benefit of the doubt when no existing value) |
 | `empty_allowed` | `true` / `false` | Allow empty string/array to overwrite existing values |
 | `overlap_threshold` | `float` | Per-field word overlap ratio override |
 | `check_direction` | `true` / `false` | Boolean fields: verify value direction via negation detection (default `true`) |
