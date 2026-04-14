@@ -30,7 +30,6 @@ from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.testing import text_response
 from dataknobs_llm.tools.base import Tool
 
-
 # ── Helper: minimal tool for tool_result_mapping ─────────────────────
 
 class LookupKbTool(Tool):
@@ -80,7 +79,10 @@ class TestConfirmOnNewDataWithToolResultMapping:
                 "gather",
                 is_start=True,
                 prompt="Tell me the domain.",
-                response_template="Domain: {{ domain }}{% if kb_name %}, KB: {{ kb_name }}{% endif %}",
+                response_template=(
+                    "Domain: {{ domain }}"
+                    "{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
+                ),
                 confirm_first_render=False,
                 confirm_on_new_data=True,
                 tool_result_mapping=[{
@@ -136,7 +138,10 @@ class TestConfirmOnNewDataWithToolResultMapping:
                 "gather",
                 is_start=True,
                 prompt="Tell me the domain.",
-                response_template="Domain: {{ domain }}{% if kb_name %}, KB: {{ kb_name }}{% endif %}",
+                response_template=(
+                    "Domain: {{ domain }}"
+                    "{% if kb_name %}, KB: {{ kb_name }}{% endif %}"
+                ),
                 confirm_first_render=False,
                 confirm_on_new_data=True,
                 tool_result_mapping=[{

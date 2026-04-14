@@ -41,19 +41,19 @@ class ConfirmationEvaluator:
 
         Decision matrix (``cfr`` = ``confirm_first_render``):
 
-        +-------+------------------+---------------+----------+----------------+---------------+
-        | count | confirm_on_new   | new_data_keys | snap     | should_confirm | save_snapshot |
-        +=======+==================+===============+==========+================+===============+
-        | 0     | any              | non-empty     | n/a      | cfr != False   | has_cond      |
-        +-------+------------------+---------------+----------+----------------+---------------+
-        | 0     | any              | empty         | n/a      | False          | has_cond      |
-        +-------+------------------+---------------+----------+----------------+---------------+
-        | >0    | True             | any           | non-empty| True           | True          |
-        +-------+------------------+---------------+----------+----------------+---------------+
-        | >0    | True             | any           | empty    | False          | True          |
-        +-------+------------------+---------------+----------+----------------+---------------+
-        | >0    | False            | any           | any      | False          | False         |
-        +-------+------------------+---------------+----------+----------------+---------------+
+        +-------+------------------+---------------+------------+----------------+---------------+
+        | count | confirm_on_new   | new_data_keys | snap_diff  | should_confirm | save_snapshot |
+        +=======+==================+===============+============+================+===============+
+        | 0     | any              | non-empty     | n/a        | cfr != False   | has_cond      |
+        +-------+------------------+---------------+------------+----------------+---------------+
+        | 0     | any              | empty         | n/a        | False          | has_cond      |
+        +-------+------------------+---------------+------------+----------------+---------------+
+        | >0    | True             | any           | non-empty  | True           | True          |
+        +-------+------------------+---------------+------------+----------------+---------------+
+        | >0    | True             | any           | empty      | False          | True          |
+        +-------+------------------+---------------+------------+----------------+---------------+
+        | >0    | False            | any           | any        | False          | False         |
+        +-------+------------------+---------------+------------+----------------+---------------+
 
         ``has_cond`` = ``confirm_on_new_data`` is set on the stage.
 
@@ -167,8 +167,10 @@ class ConfirmationEvaluator:
     ) -> None:
         """Save current schema property values as the stage snapshot.
 
-        Single entry point for snapshot persistence — callers should
-        not call ``wizard_state.save_stage_snapshot`` directly.
+        Preferred entry point for snapshot persistence within the wizard
+        reasoning layer — ``wizard.py`` routes all snapshot saves
+        through this method rather than calling
+        ``wizard_state.save_stage_snapshot`` directly.
 
         Args:
             stage: Current stage metadata dict.

@@ -12,6 +12,7 @@ Types defined here:
 - :class:`WizardState` — central persistent state object
 - :class:`WizardAdvanceResult` — return type for ``advance()``
 - :class:`ExtractionPipelineResult` — return type for extraction pipeline
+- :class:`ConfirmationEvaluation` — result from confirmation evaluator
 - :class:`ToolResultMappingEntry` — single tool-to-state mapping from stage config
 - :class:`WizardTurnHandle` — wizard-specific turn handle for phased protocol
 - :class:`RecoveryResult` — typed result from recovery strategies
@@ -346,6 +347,21 @@ class WizardState:
         """Get saved schema snapshot for a stage."""
         return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
 
+    def set_stage_snapshot(
+        self, stage_name: str, snapshot: dict[str, Any],
+    ) -> None:
+        """Set an arbitrary snapshot for a stage.
+
+        Unlike :meth:`save_stage_snapshot` (which captures *current*
+        data values), this accepts an explicit dict — useful for
+        seeding a prior snapshot in tests that verify snapshot diff
+        detection.
+        """
+        snapshots: dict[str, dict[str, Any]] = self.data.setdefault(
+            "_stage_rendered_snapshot", {},
+        )
+        snapshots[stage_name] = dict(snapshot)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dictionary.
 
@@ -494,11 +510,11 @@ class ConfirmationEvaluation:
 
     should_confirm: bool
     """Whether to pause with a confirmation response."""
-    confirm_keys: set[str]
+    confirm_keys: frozenset[str]
     """Keys to pass to ``build_confirmation_content`` (extraction | snapshot diff)."""
     should_save_snapshot: bool
     """Whether to save/update the stage snapshot after this evaluation."""
-    snapshot_diff_keys: set[str]
+    snapshot_diff_keys: frozenset[str]
     """Keys that differ between current and prior snapshot (for logging)."""
 
 

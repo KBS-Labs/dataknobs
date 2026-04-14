@@ -10,13 +10,15 @@ exercises snapshot saving through the ``advance()`` API.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
 
+from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_confirmation import ConfirmationEvaluator
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_bots.reasoning.wizard_types import WizardState
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -224,9 +226,7 @@ class TestReconfirmOnNewData:
         state = _make_state({"domain": "Math", "kb_name": "science-kb"})
         state.increment_render_count("gather")
         # Prior snapshot has old domain but no kb_name
-        state.data["_stage_rendered_snapshot"] = {
-            "gather": {"domain": "Science"},
-        }
+        state.set_stage_snapshot("gather", {"domain": "Science"})
 
         # Extraction only changed domain; kb_name was set by tool
         result = evaluator.evaluate(stage, state, {"domain"})
@@ -246,9 +246,7 @@ class TestReconfirmOnNewData:
         state = _make_state({"domain": "Science", "kb_name": "science-kb"})
         state.increment_render_count("gather")
         # Prior snapshot doesn't include kb_name
-        state.data["_stage_rendered_snapshot"] = {
-            "gather": {"domain": "Science"},
-        }
+        state.set_stage_snapshot("gather", {"domain": "Science"})
 
         result = evaluator.evaluate(stage, state, set())
 
@@ -306,9 +304,7 @@ class TestComputeSnapshotDiff:
         stage = _make_stage(fields={"a": "string", "b": "string"})
         state = _make_state({"a": "1"})
         # Prior snapshot had both a and b
-        state.data["_stage_rendered_snapshot"] = {
-            "gather": {"a": "1", "b": "2"},
-        }
+        state.set_stage_snapshot("gather", {"a": "1", "b": "2"})
 
         diff = evaluator.compute_snapshot_diff(stage, state)
 
@@ -321,9 +317,7 @@ class TestComputeSnapshotDiff:
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(fields={"a": "string", "b": "string"})
         state = _make_state({"a": "1", "b": None})
-        state.data["_stage_rendered_snapshot"] = {
-            "gather": {"a": "1", "b": "old_value"},
-        }
+        state.set_stage_snapshot("gather", {"a": "1", "b": "old_value"})
 
         diff = evaluator.compute_snapshot_diff(stage, state)
 
@@ -368,11 +362,8 @@ class TestSaveSnapshot:
 
 # ── advance() path snapshot test ─────────────────────────────────────
 
-def _make_reasoning(config: dict[str, Any]) -> Any:
+def _make_reasoning(config: dict[str, Any]) -> WizardReasoning:
     """Create a WizardReasoning from a config dict."""
-    from dataknobs_bots.reasoning.wizard import WizardReasoning
-    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
     loader = WizardConfigLoader()
     wizard_fsm = loader.load_from_dict(config)
     return WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
@@ -409,8 +400,6 @@ class TestAdvancePathSnapshotSave:
             ],
         }
         reasoning = _make_reasoning(config)
-        import time
-
         state = WizardState(
             current_stage="gather",
             data={},

@@ -3120,14 +3120,16 @@ class WizardReasoning(ReasoningStrategy):
         same order.  Adding a step here guarantees both paths get it.
 
         The snapshot save here is the **authoritative** save for
-        ``confirm_on_new_data`` purposes.  It runs after
-        ``tool_result_mapping`` (applied earlier in
-        ``_finalize_preamble``), transition derivations, and routing
-        transforms — capturing the full post-mutation state.  This
-        supersedes any earlier snapshot saved by ``process_input``
-        during the confirmation rendering step; the ordering is
-        intentional so that the next turn's diff reflects only
-        genuinely new changes.
+        ``confirm_on_new_data`` purposes.  It runs after transition
+        derivations and routing transforms — capturing the full
+        post-mutation state.  In the ``_finalize_preamble`` path,
+        ``tool_result_mapping`` is applied before this method is
+        called, so the snapshot also includes tool-written fields;
+        in the ``advance()`` path, no ``tool_result_mapping`` runs.
+        This supersedes any earlier snapshot saved by
+        ``process_input`` during the confirmation rendering step;
+        the ordering is intentional so that the next turn's diff
+        reflects only genuinely new changes.
 
         Args:
             stage: Current stage metadata.
