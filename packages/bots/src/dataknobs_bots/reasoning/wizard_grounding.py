@@ -9,7 +9,8 @@ Core grounding logic (type-dispatched checks, text utilities, negation
 detection) lives in :mod:`dataknobs_llm.extraction.grounding` as a
 standalone utility.  This module provides the **wizard-specific merge
 policy** that wraps those checks: grounded values merge; ungrounded
-values merge only when there is no existing data to protect.
+values merge only when there is no existing data to protect
+(configurable per-field via ``require_grounded``).
 
 Grounding Architecture::
 

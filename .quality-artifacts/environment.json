@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-14T17:04:15Z",
+  "timestamp": "2026-04-14T17:20:10Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.6 (Homebrew 2026-04-09 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fix-extraction-grounding-first-write-filter",
-  "git_commit": "cb44c8740b2065e96c2a20f866d3ce2fb6780a90",
+  "git_commit": "e17c00f38d3286c484d0fe1f186f8b6020c42a3d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
