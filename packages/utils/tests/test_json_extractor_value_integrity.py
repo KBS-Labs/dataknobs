@@ -145,9 +145,9 @@ class TestTruncatedJSON:
         text = '{"tone": "formal and academic", "confidence": '
         result = extractor.extract_jsons(text)
 
-        # This is interesting — value after colon is empty
-        # _fix_json needs to handle this gracefully
-        assert len(result) <= 1  # May or may not parse
+        # Value after colon is empty — _fix_json closes braces but
+        # json.loads rejects the missing value, so nothing parses.
+        assert len(result) == 0
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -158,8 +158,9 @@ class TestTruncatedJSON:
 class TestSurroundingBraces:
     """Test behavior when surrounding text contains unmatched braces.
 
-    _find_json_objects uses brace-matching without string awareness,
-    so stray braces in surrounding text could interfere.
+    Stray braces in surrounding prose can absorb the real JSON during
+    the primary scan.  The fallback scan recovers by trying later '{'
+    positions that look like JSON starts.
     """
 
     def test_preceding_text_with_matched_braces(self):
@@ -186,6 +187,7 @@ class TestSurroundingBraces:
 
         assert len(result) == 1
         assert result[0]["tone"] == "formal and academic"
+        assert len(extractor.complete_jsons) == 1
 
     def test_preceding_text_with_unmatched_close_brace(self):
         """Unmatched } in text before JSON."""
@@ -197,6 +199,21 @@ class TestSurroundingBraces:
         assert len(valid_results) == 1
         assert valid_results[0]["tone"] == "formal and academic"
 
+    def test_prior_json_then_stray_brace_absorbing_target(self):
+        """Valid JSON before a stray { that absorbs the target — fallback recovers both.
+
+        The primary scan finds {"id": 1} and {stray {"tone": ...}} (braces
+        balance). The second candidate fails json.loads. The fallback then
+        scans the remaining non_json_text and recovers the inner object.
+        """
+        extractor = JSONExtractor()
+        text = '{"id": 1} then {stray absorbed {"tone": "formal and academic"}}'
+        result = extractor.extract_jsons(text)
+
+        assert len(result) == 2
+        assert result[0] == {"id": 1}
+        assert result[1]["tone"] == "formal and academic"
+
     def test_text_with_braces_around_json(self):
         """Wrapping braces around the actual JSON (LLM sometimes does this).
 
@@ -205,6 +222,15 @@ class TestSurroundingBraces:
         """
         extractor = JSONExtractor()
         text = '{{"tone": "formal and academic"}}'
+        result = extractor.extract_jsons(text)
+
+        assert len(result) == 1
+        assert result[0]["tone"] == "formal and academic"
+
+    def test_triple_braces_around_json(self):
+        """Triple-wrapped braces — fallback peels through to find the object."""
+        extractor = JSONExtractor()
+        text = '{{{"tone": "formal and academic"}}}'
         result = extractor.extract_jsons(text)
 
         assert len(result) == 1
@@ -401,10 +427,10 @@ class TestLLMResponsePatterns:
 
 
 class TestFindJsonObjectsStringAwareness:
-    """Directly test _find_json_objects to expose the string-awareness gap.
+    """Directly test _find_json_objects string-aware brace matching.
 
-    The method currently doesn't track whether characters are inside
-    JSON string values, meaning braces in strings confuse the matcher.
+    Verifies that braces inside JSON string values do not confuse
+    the brace depth tracker (the fix this branch introduces).
     """
 
     def test_find_objects_simple(self):

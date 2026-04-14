@@ -98,13 +98,14 @@ class JSONExtractor:
 
         extracted_jsons = self._try_parse_candidates(potential_jsons)
 
-        # Fallback: if nothing parsed from the primary scan, a stray '{'
-        # in surrounding text may have absorbed the real JSON.  Try
-        # scanning from later '{' positions that look like JSON starts.
-        if not extracted_jsons:
-            fallback_jsons = self._fallback_scan(text)
+        # Fallback: if non_json_text still contains potential JSON starts,
+        # a stray '{' in surrounding text may have absorbed them during the
+        # primary scan.  Try scanning from later '{' positions.  This
+        # covers both "nothing parsed" and "some parsed but more remain".
+        if '{"' in self.non_json_text:
+            fallback_jsons = self._fallback_scan(self.non_json_text)
             if fallback_jsons:
-                extracted_jsons = self._try_parse_candidates(fallback_jsons)
+                extracted_jsons.extend(self._try_parse_candidates(fallback_jsons))
 
         # Clean up any remaining JSON brackets in non_json_text
         self.non_json_text = self.non_json_text.strip()
@@ -151,7 +152,16 @@ class JSONExtractor:
         return extracted
 
     def _find_json_objects(self, text: str) -> List[Tuple[str, bool]]:
-        """Primary scan: string-aware brace matching over the full text."""
+        """Primary scan: string-aware brace matching over the full text.
+
+        Args:
+            text: Text to search for JSON-like ``{...}`` patterns.
+
+        Returns:
+            List of ``(json_text, is_complete)`` tuples.  *is_complete* is
+            ``True`` when the braces balanced; ``False`` for a trailing
+            fragment that started with ``{`` but never closed.
+        """
         result: List[Tuple[str, bool]] = []
         stack: List[str] = []
         start_index: int | None = None
@@ -195,11 +205,16 @@ class JSONExtractor:
     def _fallback_scan(self, text: str) -> List[Tuple[str, bool]]:
         """Fallback scan: try each potential JSON start position.
 
-        When the primary scan fails (e.g. a stray ``{`` in surrounding
-        prose swallowed the real JSON), find later ``{`` positions and
-        attempt a scan from each one that looks like a JSON object start
-        (``{"`` pattern).  Skips the very first ``{`` since the primary
-        scan already tried from there.
+        When the primary scan fails to parse (e.g. a stray ``{`` in
+        surrounding prose swallowed the real JSON), find later ``{``
+        positions and attempt a scan from each one that looks like a
+        JSON object start (``{"`` pattern).  Skips the very first ``{``
+        since the primary scan already tried from there.
+
+        Collects candidates from *all* matching positions so that
+        multiple layers of brace-wrapping (``{{{...}}}``) are handled —
+        a double-wrapped candidate will fail ``json.loads``, but the
+        deeper single-wrapped candidate will succeed.
         """
         # Start after the first '{' — the primary scan already tried from it
         first_brace = text.find("{")
@@ -207,20 +222,22 @@ class JSONExtractor:
             return []
         search_start = first_brace + 1
 
+        all_candidates: List[Tuple[str, bool]] = []
         while True:
             idx = text.find("{", search_start)
             if idx == -1:
                 break
             # Quick heuristic: a JSON object starts with {"
+            # lstrip('{') peels any depth of brace-wrapping (e.g. {{{" )
+            # so the check works for both direct {"key" and wrapped {{"key".
             remaining = text[idx:]
             stripped = remaining.lstrip("{")
             if stripped and stripped[0] == '"':
                 candidates = self._find_json_objects(remaining)
-                if candidates:
-                    return candidates
+                all_candidates.extend(candidates)
             search_start = idx + 1
 
-        return []
+        return all_candidates
 
     def _fix_json(self, json_text: str) -> str | None:
         """Repair malformed JSON by closing unclosed elements.
