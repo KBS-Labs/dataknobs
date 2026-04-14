@@ -5,6 +5,17 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-04-13
+
+### dataknobs-bots [0.6.15]
+
+#### Fixed
+- fixed inconsistency bugs by refactoring monolithic confirmation logic
+- fixed extraction confirmation gap
+- fixed render_count bug on subflow push (w/test-first exposure)
+- refactored to consolidate render_count tracking and stream/no-stream generate_stage_response code paths
+
+
 ## Release - 2026-04-11
 
 ### dataknobs-bots [0.6.14]
