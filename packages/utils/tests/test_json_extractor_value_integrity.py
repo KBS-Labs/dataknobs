@@ -236,6 +236,29 @@ class TestSurroundingBraces:
         assert len(result) == 1
         assert result[0]["tone"] == "formal and academic"
 
+    def test_stray_brace_with_nested_json_no_duplicates(self):
+        """Nested JSON inside stray braces must not produce duplicate results.
+
+        The fallback scan skips past found objects so that inner nested
+        objects are not extracted as separate entries.
+        """
+        extractor = JSONExtractor()
+        text = '{outer {"a": {"b": 1}}}'
+        result = extractor.extract_jsons(text)
+
+        assert len(result) == 1
+        assert result[0] == {"a": {"b": 1}}
+
+    def test_stray_brace_with_deeply_nested_json(self):
+        """Deeply nested JSON inside stray braces — single result."""
+        extractor = JSONExtractor()
+        text = '{note: here is {"name": "Alice", "address": {"city": "NYC"}}}'
+        result = extractor.extract_jsons(text)
+
+        assert len(result) == 1
+        assert result[0]["name"] == "Alice"
+        assert result[0]["address"]["city"] == "NYC"
+
 
 # ──────────────────────────────────────────────────────────────────
 # Category 4: String values containing brace characters
@@ -243,41 +266,22 @@ class TestSurroundingBraces:
 
 
 class TestBracesInStringValues:
-    """Test the core suspected bug: _find_json_objects doesn't track
-    string context, so braces inside string values confuse brace matching.
-    """
+    """Verify that braces inside JSON string values do not confuse matching."""
 
     def test_closing_brace_in_earlier_value(self):
-        """A } inside a string value prematurely closes the JSON match.
+        """Balanced {braces} inside a string value must not confuse matching.
 
-        This is the most likely generalized bug: if ANY string value
-        contains }, the brace matching terminates early, potentially
-        truncating later values.
+        The inner braces in "use a {formal} tone" are balanced, so even
+        without string awareness they would not break the outer object.
+        With string awareness they are simply ignored.
         """
         extractor = JSONExtractor()
         text = '{"note": "use a {formal} tone", "tone": "formal and academic"}'
         result = extractor.extract_jsons(text)
 
-        # Without string awareness, _find_json_objects sees:
-        # { at pos 0 → stack=["{"]
-        # { at "formal}" → stack=["{", "{"]
-        # } at "formal}" → stack=["{"]
-        # } at "tone"," → stack=[] → extracts {"note": "use a {formal} tone"}
-        #   But wait — the } after "tone" is at `, "tone"...` which isn't a }
-        # Let me reconsider...
-        # Actually "use a {formal} tone" contains { and }
-        # { at pos 0 → stack=["{"]
-        # { inside the string → stack=["{", "{"]
-        # } inside the string "formal}" → stack=["{"]
-        # next } would be at `tone", "tone"...` — no, the next } is the end
-        # The structure: {"note": "use a {formal} tone", "tone": "formal and academic"}
-        # Real } is at the very end
-        # With the inner {} balanced, the outer {} would also balance correctly!
-        # So this might actually work due to the inner braces being balanced.
-
-        valid_results = [r for r in result if isinstance(r, dict) and "tone" in r]
-        assert len(valid_results) == 1
-        assert valid_results[0]["tone"] == "formal and academic"
+        assert len(result) == 1
+        assert result[0]["tone"] == "formal and academic"
+        assert result[0]["note"] == "use a {formal} tone"
 
     def test_unbalanced_brace_in_value_close_only(self):
         """A lone } in a string value must not cause premature close.

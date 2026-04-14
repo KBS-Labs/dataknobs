@@ -6,7 +6,7 @@ JSON objects embedded in text, with categorization of complete vs fixed objects.
 
 import json
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from dataknobs_utils.json_utils import get_value
 
@@ -26,13 +26,13 @@ class JSONExtractor:
 
     def __init__(self) -> None:
         # List of complete, well-formed JSON objects
-        self.complete_jsons: List[Dict[str, Any]] = []
+        self.complete_jsons: list[dict[str, Any]] = []
         # List of JSON objects that were malformed but fixed
-        self.fixed_jsons: List[Dict[str, Any]] = []
+        self.fixed_jsons: list[dict[str, Any]] = []
         # Text that doesn't contain JSON objects
         self.non_json_text: str = ""
 
-    def get_values(self, key_path: str) -> List[Any]:
+    def get_values(self, key_path: str) -> list[Any]:
         """Get values at a specific path from all complete JSON objects.
 
         Uses dot notation to navigate nested JSON structures and retrieves values
@@ -43,7 +43,7 @@ class JSONExtractor:
                 nested structures).
 
         Returns:
-            List[Any]: List of values found at the path (empty if none found).
+            list[Any]: List of values found at the path (empty if none found).
         """
         values = []
         for json_obj in self.complete_jsons:
@@ -75,7 +75,7 @@ class JSONExtractor:
                 break
         return value
 
-    def extract_jsons(self, text: str) -> List[Dict[str, Any]]:
+    def extract_jsons(self, text: str) -> list[dict[str, Any]]:
         """Extract all JSON objects from text, repairing malformed JSON when possible.
 
         Searches for JSON objects in the text, attempts to parse them, and repairs
@@ -86,7 +86,7 @@ class JSONExtractor:
             text: Text string potentially containing JSON objects.
 
         Returns:
-            List[Dict[str, Any]]: All successfully extracted and parsed JSON objects
+            list[dict[str, Any]]: All successfully extracted and parsed JSON objects
                 (both complete and fixed).
         """
         self.complete_jsons = []
@@ -113,8 +113,8 @@ class JSONExtractor:
         return extracted_jsons
 
     def _try_parse_candidates(
-        self, candidates: List[Tuple[str, bool]]
-    ) -> List[Dict[str, Any]]:
+        self, candidates: list[tuple[str, bool]]
+    ) -> list[dict[str, Any]]:
         """Attempt to parse a list of candidate JSON text fragments.
 
         Tries ``json.loads`` on each candidate, falling back to
@@ -125,7 +125,7 @@ class JSONExtractor:
         Returns:
             List of successfully parsed JSON objects.
         """
-        extracted: List[Dict[str, Any]] = []
+        extracted: list[dict[str, Any]] = []
 
         for json_text, is_complete in candidates:
             try:
@@ -151,7 +151,7 @@ class JSONExtractor:
 
         return extracted
 
-    def _find_json_objects(self, text: str) -> List[Tuple[str, bool]]:
+    def _find_json_objects(self, text: str) -> list[tuple[str, bool]]:
         """Primary scan: string-aware brace matching over the full text.
 
         Args:
@@ -162,8 +162,8 @@ class JSONExtractor:
             ``True`` when the braces balanced; ``False`` for a trailing
             fragment that started with ``{`` but never closed.
         """
-        result: List[Tuple[str, bool]] = []
-        stack: List[str] = []
+        result: list[tuple[str, bool]] = []
+        stack: list[str] = []
         start_index: int | None = None
         in_string = False
         escape_next = False
@@ -202,27 +202,37 @@ class JSONExtractor:
 
         return result
 
-    def _fallback_scan(self, text: str) -> List[Tuple[str, bool]]:
-        """Fallback scan: try each potential JSON start position.
+    def _fallback_scan(self, text: str) -> list[tuple[str, bool]]:
+        """Fallback scan: try later ``{`` positions in residual text.
 
-        When the primary scan fails to parse (e.g. a stray ``{`` in
-        surrounding prose swallowed the real JSON), find later ``{``
-        positions and attempt a scan from each one that looks like a
-        JSON object start (``{"`` pattern).  Skips the very first ``{``
-        since the primary scan already tried from there.
+        Called on :attr:`non_json_text` (the residual after the primary
+        scan removed any successfully-parsed objects).  A stray ``{`` in
+        surrounding prose can swallow the real JSON during the primary
+        scan; this method recovers it by trying each ``{`` that looks
+        like a JSON object start (``{"`` pattern).
 
-        Collects candidates from *all* matching positions so that
-        multiple layers of brace-wrapping (``{{{...}}}``) are handled —
-        a double-wrapped candidate will fail ``json.loads``, but the
+        The first ``{`` in *text* is skipped because it is typically the
+        stray brace that caused the primary scan to fail.  Candidates
+        are collected from all matching positions so that multiple
+        layers of brace-wrapping (``{{{...}}}``) are handled — a
+        double-wrapped candidate will fail ``json.loads``, but the
         deeper single-wrapped candidate will succeed.
+
+        After finding candidates at a given position, the search
+        advances past the end of the first found object to avoid
+        extracting nested inner objects as separate duplicates.
+
+        Note:
+            Residual wrapper fragments (e.g. ``{stray }``) may remain
+            in :attr:`non_json_text` after the inner JSON is extracted.
+            These are original prose characters, not lost JSON.
         """
-        # Start after the first '{' — the primary scan already tried from it
         first_brace = text.find("{")
         if first_brace == -1:
             return []
         search_start = first_brace + 1
 
-        all_candidates: List[Tuple[str, bool]] = []
+        all_candidates: list[tuple[str, bool]] = []
         while True:
             idx = text.find("{", search_start)
             if idx == -1:
@@ -234,7 +244,16 @@ class JSONExtractor:
             stripped = remaining.lstrip("{")
             if stripped and stripped[0] == '"':
                 candidates = self._find_json_objects(remaining)
-                all_candidates.extend(candidates)
+                if candidates:
+                    all_candidates.extend(candidates)
+                    first_text = candidates[0][0]
+                    # Skip past the found object only if it starts with {"
+                    # (likely real JSON).  Brace-wrapped candidates (starting
+                    # with "{{") will fail json.loads, so we must NOT skip —
+                    # the next position may hold the real inner object.
+                    if first_text.startswith('{"'):
+                        search_start = idx + len(first_text)
+                        continue
             search_start = idx + 1
 
         return all_candidates
@@ -298,20 +317,20 @@ class JSONExtractor:
 
         return fixed_json
 
-    def get_complete_jsons(self) -> List[Dict[str, Any]]:
+    def get_complete_jsons(self) -> list[dict[str, Any]]:
         """Get all well-formed JSON objects extracted from text.
 
         Returns:
-            List[Dict[str, Any]]: List of JSON objects that were successfully
+            list[dict[str, Any]]: List of JSON objects that were successfully
                 parsed without requiring repairs.
         """
         return self.complete_jsons
 
-    def get_fixed_jsons(self) -> List[Dict[str, Any]]:
+    def get_fixed_jsons(self) -> list[dict[str, Any]]:
         """Get all JSON objects that were repaired from malformed state.
 
         Returns:
-            List[Dict[str, Any]]: List of JSON objects that required repair
+            list[dict[str, Any]]: List of JSON objects that required repair
                 (closing brackets, quotes, etc.) before successful parsing.
         """
         return self.fixed_jsons
