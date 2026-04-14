@@ -170,6 +170,9 @@ class SchemaGroundingFilter:
       (allow empty string/array to overwrite)
     - ``overlap_threshold``: ``float``
       (per-field word overlap ratio)
+    - ``require_grounded``: ``true`` | ``false``
+      (reject ungrounded values even when no existing value;
+      default ``false`` preserves benefit-of-the-doubt for first write)
     - ``check_direction``: ``true`` | ``false``
       (boolean fields: also verify value direction via negation
       detection; default ``true``)
@@ -212,6 +215,13 @@ class SchemaGroundingFilter:
             return MergeDecision.accept(reason="grounded")
 
         if existing_value is None:
+            if x_ext.get("require_grounded", False):
+                return MergeDecision.reject(
+                    reason=(
+                        f"require_grounded: extracted {new_value!r} "
+                        f"not grounded in message"
+                    ),
+                )
             # No existing data to protect --- benefit of the doubt.
             return MergeDecision.accept(
                 reason="ungrounded but no existing value",

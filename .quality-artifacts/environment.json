@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-14T01:11:11Z",
+  "timestamp": "2026-04-14T17:04:15Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.2 (Homebrew 2026-03-26 aarch64-apple-darwin)",
+  "uv_version": "uv 0.11.6 (Homebrew 2026-04-09 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-confirm-field-divergence",
-  "git_commit": "c538d299bc7962dfb3aa03bb6a23313f3715cede",
+  "git_branch": "sbk/fix-extraction-grounding-first-write-filter",
+  "git_commit": "cb44c8740b2065e96c2a20f866d3ce2fb6780a90",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

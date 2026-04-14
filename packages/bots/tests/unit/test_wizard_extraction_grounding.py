@@ -285,6 +285,107 @@ class TestSchemaGroundingFilterXExtraction:
         ).action != "reject"
 
 
+class TestRequireGrounded:
+    """Tests for require_grounded x-extraction option (item 88).
+
+    When ``require_grounded: true``, ungrounded values are rejected even
+    on first write (existing_value is None), closing the benefit-of-the-
+    doubt bypass that otherwise lets the extraction LLM invent values.
+    """
+
+    def setup_method(self) -> None:
+        self.f = SchemaGroundingFilter()
+
+    def test_rejects_ungrounded_first_write(self) -> None:
+        """Exact grounding + require_grounded rejects invented values."""
+        decision = self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        assert "require_grounded" in (decision.reason or "")
+
+    def test_accepts_grounded_first_write(self) -> None:
+        """Grounded value accepted even with require_grounded."""
+        decision = self.f.filter(
+            "domain_id", "python-ninja", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_false_preserves_benefit_of_doubt(self) -> None:
+        """Default / explicit false keeps existing behavior."""
+        # Explicit false
+        assert self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": False,
+            }}, {},
+        ).action != "reject"
+        # Absent (default)
+        assert self.f.filter(
+            "domain_id", "python-programming", None,
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {"grounding": "exact"}}, {},
+        ).action != "reject"
+
+    def test_existing_value_still_rejects_ungrounded(self) -> None:
+        """Overwrite protection works independently of require_grounded."""
+        decision = self.f.filter(
+            "domain_id", "python-programming", "old-id",
+            'Use "python-ninja" for the Domain ID',
+            {"type": "string", "x-extraction": {
+                "grounding": "exact", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        # Must be the pre-existing overwrite-protection path, not require_grounded
+        assert "require_grounded" not in (decision.reason or "")
+        assert "preserved" in (decision.reason or "")
+
+    def test_grounding_skip_takes_precedence(self) -> None:
+        """grounding=skip bypasses require_grounded entirely."""
+        decision = self.f.filter(
+            "domain_id", "invented-value", None,
+            "unrelated message",
+            {"type": "string", "x-extraction": {
+                "grounding": "skip", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_fuzzy_grounding_ignores_require_grounded(self) -> None:
+        """grounding=fuzzy short-circuits before require_grounded is checked."""
+        decision = self.f.filter(
+            "domain_id", "invented-value", None,
+            "unrelated message",
+            {"type": "string", "x-extraction": {
+                "grounding": "fuzzy", "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action != "reject"
+
+    def test_default_type_dispatch_with_require_grounded(self) -> None:
+        """require_grounded works with default type-based grounding too."""
+        # "quantum physics" has zero word overlap with "make a tutor"
+        decision = self.f.filter(
+            "subject", "quantum physics", None,
+            "make a tutor",
+            {"type": "string", "x-extraction": {
+                "require_grounded": True,
+            }}, {},
+        )
+        assert decision.action == "reject"
+        assert "require_grounded" in (decision.reason or "")
+
+
 class TestSignificantWords:
     """Test the significant_words helper."""
 
@@ -558,6 +659,79 @@ class TestCorrectionScenario:
         assert ws.data["subject"] == "history"
         assert ws.data["domain_id"] == "history-quizzer"
         assert ws.data["domain_name"] == "History Quizzer"
+
+
+REQUIRE_GROUNDED_CONFIG: dict[str, Any] = {
+    "name": "require-grounded-test",
+    "version": "1.0",
+    "settings": {
+        "extraction_grounding": True,
+    },
+    "stages": [
+        {
+            "name": "gather",
+            "is_start": True,
+            "prompt": "Tell me your domain ID.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "domain_id": {
+                        "type": "string",
+                        "x-extraction": {
+                            "grounding": "exact",
+                            "require_grounded": True,
+                        },
+                    },
+                    "subject": {"type": "string"},
+                },
+                "required": ["domain_id", "subject"],
+            },
+            "transitions": [
+                {
+                    "target": "done",
+                    "condition": (
+                        "data.get('domain_id') and data.get('subject')"
+                    ),
+                },
+            ],
+        },
+        {"name": "done", "is_end": True, "prompt": "All done!"},
+    ],
+}
+
+
+class TestRequireGroundedIntegration:
+    """Integration: require_grounded flows through config to filter."""
+
+    @pytest.mark.asyncio
+    async def test_ungrounded_first_write_rejected_end_to_end(self) -> None:
+        """Invented domain_id rejected; grounded subject accepted."""
+        extractor = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(
+                    data={
+                        "domain_id": "python-programming",
+                        "subject": "history",
+                    },
+                    confidence=0.9,
+                ),
+            ],
+        )
+        reasoning = _build_reasoning(REQUIRE_GROUNDED_CONFIG, extractor)
+        manager, provider = await _create_manager()
+        provider.set_responses(["Got it!"])
+
+        await manager.add_message(
+            role="user",
+            content='Use "python-ninja" for the ID, subject is history',
+        )
+        await reasoning.generate(manager, provider)
+
+        ws = reasoning._get_wizard_state(manager)
+        # "python-programming" not literally in message -> rejected
+        assert ws.data.get("domain_id") is None
+        # "history" is in message -> accepted via default grounding
+        assert ws.data["subject"] == "history"
 
 
 class TestGroundingConfig:
