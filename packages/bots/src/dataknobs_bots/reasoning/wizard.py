@@ -37,6 +37,7 @@ from .wizard_derivations import (
     DerivationRule,
     parse_derivation_rules,
 )
+from .wizard_confirmation import ConfirmationEvaluator
 from .wizard_extraction import WizardExtractor
 from .wizard_grounding import (
     CompositeMergeFilter,
@@ -421,6 +422,10 @@ class WizardReasoning(ReasoningStrategy):
             focused_retry_max_retries=max(1, focused_retry_max_retries),
             field_derivations=self._field_derivations,
         )
+
+        # Confirmation decision logic — owns the should-confirm gate
+        # and snapshot lifecycle (extracted in item 87).
+        self._confirmation = ConfirmationEvaluator()
 
         # Track last wizard state for cleanup in close()
         self._last_wizard_state: WizardState | None = None
@@ -1862,65 +1867,42 @@ class WizardReasoning(ReasoningStrategy):
                         result.action = "collection_loop"
                         return result
 
-                # When meaningful new data was extracted at a stage with a
-                # response_template, decide whether to render a
-                # confirmation before evaluating transitions.
-                #
-                # Two modes:
-                # 1. First-render (render_counts == 0): confirm when new
-                #    data exists, unless confirm_first_render is false.
-                # 2. confirm_on_new_data: re-confirm whenever schema
-                #    property values changed since the last render
-                #    (catches "change difficulty to hard" after the
-                #    initial summary was shown).
-                #
-                # Stages whose template has already been shown AND
-                # that lack confirm_on_new_data skip this — the
-                # user's response is an action (e.g. "review") and
-                # should trigger a transition.
-                should_confirm = False
-                if new_data_keys and stage.get("response_template"):
-                    if wizard_state.get_render_count(stage_name) == 0:
-                        # First render — confirm unless stage opts out
-                        if stage.get("confirm_first_render", True) is not False:
-                            should_confirm = True
-                    elif stage.get("confirm_on_new_data"):
-                        # Re-confirm when schema property values changed
-                        ss_props = StageSchema.from_stage(stage).property_names
-                        current_snapshot = {
-                            k: wizard_state.data[k]
-                            for k in ss_props
-                            if k in wizard_state.data
-                            and wizard_state.data[k] is not None
-                        }
-                        prior_snapshot = wizard_state.get_stage_snapshot(
-                            stage_name
-                        )
-                        if current_snapshot != prior_snapshot:
-                            should_confirm = True
+                # Decide whether to render a confirmation before
+                # evaluating transitions.  The evaluator owns the
+                # decision matrix and snapshot lifecycle (item 87).
+                evaluation = self._confirmation.evaluate(
+                    stage, wizard_state, new_data_keys,
+                )
 
-                if should_confirm:
+                if evaluation.should_save_snapshot and not evaluation.should_confirm:
+                    # Save baseline snapshot for future diffs (e.g.
+                    # confirm_first_render=False with confirm_on_new_data
+                    # — first render skips confirmation but needs a
+                    # baseline for subsequent diff comparisons).
+                    self._confirmation.save_snapshot(stage, wizard_state)
+
+                if evaluation.should_confirm:
                     render_count = wizard_state.increment_render_count(
                         stage_name
                     )
-                    # Save snapshot for confirm_on_new_data comparison
-                    if stage.get("confirm_on_new_data"):
-                        wizard_state.save_stage_snapshot(
-                            stage_name,
-                            StageSchema.from_stage(stage).property_names,
+                    if evaluation.should_save_snapshot:
+                        self._confirmation.save_snapshot(
+                            stage, wizard_state,
                         )
                     logger.debug(
-                        "New data extracted (%s) at stage '%s' — "
-                        "rendering confirmation (render #%d)",
-                        new_data_keys,
+                        "Confirmation at stage '%s' — keys=%s "
+                        "(extraction=%s, snapshot_diff=%s, render #%d)",
                         stage_name,
+                        evaluation.confirm_keys,
+                        new_data_keys,
+                        evaluation.snapshot_diff_keys,
                         render_count,
                     )
                     confirmation_content = (
                         self._response.build_confirmation_content(
                             stage,
                             wizard_state,
-                            new_data_keys,
+                            evaluation.confirm_keys,
                         )
                     )
                     response = self._response.create_template_response(
@@ -2105,13 +2087,9 @@ class WizardReasoning(ReasoningStrategy):
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
 
-        # Apply data derivations from transition configs before evaluating
-        # conditions.  This lets transitions fill in values that enable their
-        # own conditions and subsequent auto-advance checks.
-        self._apply_transition_derivations(stage, wizard_state)
-
-        # Execute routing transforms (before condition evaluation)
-        await self._execute_routing_transforms(stage, wizard_state)
+        # Pre-transition preparation: derivations, routing transforms,
+        # and snapshot update (shared with advance — see item 87).
+        await self._prepare_transition(stage, wizard_state)
 
         # Log pre-transition state
         logger.debug(
@@ -2449,6 +2427,15 @@ class WizardReasoning(ReasoningStrategy):
             info, and completion status.  When ``user_input`` was a ``str``,
             the result also includes ``extraction`` and ``missing_fields``.
 
+        Note:
+            ``confirm_first_render`` and ``confirm_on_new_data`` are
+            **not evaluated** in this path — confirmations are a
+            conversational concept handled by ``process_input`` /
+            ``generate()``.  However, the stage snapshot IS updated
+            (via :meth:`_prepare_transition`) so that a subsequent
+            conversational flow on the same state sees an accurate
+            baseline for diff comparisons.
+
         Raises:
             ValueError: If ``user_input`` is a ``str``, ``llm`` is
                 ``None``, and no ``navigation`` command is provided.
@@ -2519,11 +2506,9 @@ class WizardReasoning(ReasoningStrategy):
                 )
             update_stage_exit_tasks(state, state.current_stage)
 
-            # Apply transition derivations
-            self._apply_transition_derivations(stage, state)
-
-            # Execute routing transforms (before condition evaluation)
-            await self._execute_routing_transforms(stage, state)
+            # Pre-transition preparation: derivations, routing transforms,
+            # and snapshot update (shared with _finalize_preamble).
+            await self._prepare_transition(stage, state)
 
             # Execute FSM step (shared method)
             await self._execute_fsm_step(state, llm=llm)
@@ -3122,6 +3107,36 @@ class WizardReasoning(ReasoningStrategy):
     def _get_last_user_message(manager: Any) -> str:
         """Delegate to responder.  See :meth:`WizardResponder._get_last_user_message`."""
         return WizardResponder._get_last_user_message(manager)
+
+    async def _prepare_transition(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+    ) -> None:
+        """Run pre-transition preparation: derivations, transforms, snapshot.
+
+        Shared by :meth:`_finalize_preamble` and :meth:`advance` so that
+        every transition path applies the same preparation steps in the
+        same order.  Adding a step here guarantees both paths get it.
+
+        The snapshot save here is the **authoritative** save for
+        ``confirm_on_new_data`` purposes.  It runs after
+        ``tool_result_mapping`` (applied earlier in
+        ``_finalize_preamble``), transition derivations, and routing
+        transforms — capturing the full post-mutation state.  This
+        supersedes any earlier snapshot saved by ``process_input``
+        during the confirmation rendering step; the ordering is
+        intentional so that the next turn's diff reflects only
+        genuinely new changes.
+
+        Args:
+            stage: Current stage metadata.
+            state: Wizard state (mutated in place by derivations/transforms).
+        """
+        self._apply_transition_derivations(stage, state)
+        await self._execute_routing_transforms(stage, state)
+        if stage.get("confirm_on_new_data"):
+            self._confirmation.save_snapshot(stage, state)
 
     def _apply_transition_derivations(
         self,

@@ -483,6 +483,25 @@ class ExtractionPipelineResult:
     """Whether the extraction met the confidence threshold."""
 
 
+@dataclass(frozen=True)
+class ConfirmationEvaluation:
+    """Result from :meth:`ConfirmationEvaluator.evaluate`.
+
+    Encapsulates the confirmation decision so that the caller
+    (``process_input``) can act on a flat result rather than
+    re-implementing nested gate logic.
+    """
+
+    should_confirm: bool
+    """Whether to pause with a confirmation response."""
+    confirm_keys: set[str]
+    """Keys to pass to ``build_confirmation_content`` (extraction | snapshot diff)."""
+    should_save_snapshot: bool
+    """Whether to save/update the stage snapshot after this evaluation."""
+    snapshot_diff_keys: set[str]
+    """Keys that differ between current and prior snapshot (for logging)."""
+
+
 @dataclass
 class FinalizePreambleResult:
     """Result from the shared finalize-turn preamble.
