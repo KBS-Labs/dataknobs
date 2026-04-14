@@ -280,8 +280,10 @@ dataknobs_bots/
 │   ├── simple.py       # Simple reasoning
 │   ├── react.py        # ReAct reasoning
 │   ├── wizard.py            # Wizard reasoning orchestrator
+│   ├── wizard_confirmation.py # Confirmation decision + snapshot lifecycle
 │   ├── wizard_extraction.py # Extraction pipeline + recovery
 │   ├── wizard_navigation.py # Navigation commands + amendments
+│   ├── wizard_response.py   # Response generation + auto-advance
 │   ├── wizard_types.py      # Data types, constants, helpers
 │   ├── wizard_subflows.py   # Nested subflow lifecycle
 │   ├── wizard_tasks.py      # Task tracking utilities
