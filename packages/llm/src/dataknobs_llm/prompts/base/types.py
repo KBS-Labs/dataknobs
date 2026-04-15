@@ -98,6 +98,11 @@ class PromptTemplateDict(TypedDict, total=False):
 
     Attributes:
         template: The template string with {{variables}} and ((conditionals))
+        template_syntax: Authoring syntax annotation — ``"format"`` for Python
+            ``.format()`` style (``{var}``) or ``"jinja2"`` for Jinja2 style
+            (``{{ var }}``). Controls how the template is normalized before
+            rendering. Default: ``"jinja2"`` for new prompts. See
+            :mod:`dataknobs_llm.prompts.syntax` for conversion utilities.
         defaults: Default values for template parameters
         validation: Validation configuration for this template
         metadata: Additional metadata (author, version, etc.)
@@ -108,6 +113,7 @@ class PromptTemplateDict(TypedDict, total=False):
         template_mode: Template rendering mode ("mixed" or "jinja2")
     """
     template: str
+    template_syntax: str
     defaults: Dict[str, Any]
     validation: ValidationConfig
     metadata: Dict[str, Any]

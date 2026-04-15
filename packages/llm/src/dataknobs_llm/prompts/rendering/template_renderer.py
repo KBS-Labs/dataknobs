@@ -23,6 +23,7 @@ from ..base.types import (
     RenderResult,
     TemplateMode
 )
+from ..syntax import TemplateSyntax, normalize_to_jinja2
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,10 @@ class TemplateRenderer:
     ) -> RenderResult:
         """Render a PromptTemplateDict structure with validation.
 
+        If the template declares ``template_syntax: "format"``, it is first
+        normalized to Jinja2 syntax before rendering. This means all runtime
+        rendering uses the Jinja2 engine regardless of authoring syntax.
+
         Args:
             prompt_template: PromptTemplateDict dictionary with template, defaults, validation
             params: Parameters to substitute (merged with template defaults)
@@ -253,10 +258,24 @@ class TemplateRenderer:
             **params
         }
 
-        # Get template mode from template or use override
+        # Normalize template syntax if annotated
+        template_text = prompt_template["template"]
+        syntax_str = prompt_template.get("template_syntax")
+        syntax_normalized = False
+        if syntax_str:
+            syntax = TemplateSyntax.from_string(syntax_str)
+            template_text = normalize_to_jinja2(template_text, syntax)
+            syntax_normalized = True
+
+        # Get template mode from template or use override.
+        # When template_syntax normalization has been applied, the output is
+        # pure Jinja2 — force JINJA2 mode to avoid the MIXED preprocessor
+        # mangling the converted {{ var }} expressions.
         template_mode_str = prompt_template.get("template_mode", "mixed")
         template_mode = TemplateMode.from_string(template_mode_str)
         effective_mode = mode_override if mode_override is not None else template_mode
+        if syntax_normalized and effective_mode == TemplateMode.MIXED:
+            effective_mode = TemplateMode.JINJA2
 
         # Get validation config from template
         template_validation = prompt_template.get("validation")
@@ -278,7 +297,7 @@ class TemplateRenderer:
 
         # Render with merged params, validation, and effective mode
         return self.render(
-            template=prompt_template["template"],
+            template=template_text,
             params=merged_params,
             validation=validation,
             template_metadata=prompt_template.get("metadata"),
