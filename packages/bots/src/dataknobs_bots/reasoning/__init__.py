@@ -150,6 +150,7 @@ def create_reasoning_from_config(
     config: dict[str, Any],
     *,
     knowledge_base: Any | None = None,
+    prompt_resolver: Any | None = None,
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
@@ -193,4 +194,8 @@ def create_reasoning_from_config(
         strategy = create_reasoning_from_config(config, knowledge_base=kb)
         ```
     """
-    return get_registry().create(config=config, knowledge_base=knowledge_base)
+    return get_registry().create(
+        config=config,
+        knowledge_base=knowledge_base,
+        prompt_resolver=prompt_resolver,
+    )

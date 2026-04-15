@@ -170,6 +170,7 @@ class DynaBot:
         max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
         tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
+        prompt_resolver: Any | None = None,
     ):
         """Initialize DynaBot.
 
@@ -212,6 +213,10 @@ class DynaBot:
                 completion (async generators cannot be reliably
                 cancelled mid-chunk).  Individual tool executions are always
                 bounded by ``tool_timeout``.
+            prompt_resolver: Optional :class:`PromptResolver` for resolving
+                prompts from the composed prompt library.  Built automatically
+                by ``from_config()``; pass explicitly only when constructing
+                bots programmatically with custom libraries.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -240,10 +245,16 @@ class DynaBot:
             )
         self._tool_timeout = tool_timeout
         self._tool_loop_timeout = tool_loop_timeout
+        self._prompt_resolver = prompt_resolver
         self._owns_llm = True  # Set False by from_config() when llm= injected
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
+
+    @property
+    def prompt_resolver(self) -> Any | None:
+        """The prompt resolver for this bot, if configured."""
+        return self._prompt_resolver
 
     def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
         """Register an auxiliary LLM/embedding provider by role.
@@ -472,38 +483,88 @@ class DynaBot:
                 storage_config
             )
 
-        # Create prompt builder
-        # Support optional prompts configuration
-        prompt_libraries = []
-        if "prompts" in config:
-            from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
+        # Build composed prompt library with precedence:
+        #   1. Inline prompts (config["prompts"]) — highest priority
+        #   2. Configured prompt_libraries — consumer file/config overrides
+        #   3. Bots default library — all built-in prompt fragments
+        #   4. Extraction default library — extraction prompts (lowest)
+        from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 
+        composed_libraries = []
+        library_names = []
+
+        # 1. Inline prompts from config (highest priority)
+        if "prompts" in config:
             prompts_config = config["prompts"]
 
-            # If prompts are provided as a dict, create a config-based library
             if isinstance(prompts_config, dict):
-                # Convert simple string prompts to proper template structure
                 structured_config = {"system": {}, "user": {}}
 
                 for prompt_name, prompt_content in prompts_config.items():
                     if isinstance(prompt_content, dict):
-                        # Already structured - use as-is
-                        # Assume it's a system prompt unless specified
                         prompt_type = prompt_content.get("type", "system")
                         if prompt_type in structured_config:
                             structured_config[prompt_type][prompt_name] = prompt_content
                     else:
-                        # Simple string - treat as system prompt template
                         structured_config["system"][prompt_name] = {
                             "template": prompt_content
                         }
 
-                library = ConfigPromptLibrary(structured_config)
-                prompt_libraries.append(library)
+                composed_libraries.append(ConfigPromptLibrary(structured_config))
+                library_names.append("inline_config")
 
-        # Create composite library (empty if no prompts configured)
-        library = CompositePromptLibrary(libraries=prompt_libraries)
+        # 2. Configured prompt_libraries (consumer overrides)
+        if "prompt_libraries" in config:
+            for lib_config in sorted(
+                config["prompt_libraries"],
+                key=lambda c: c.get("priority", 50),
+            ):
+                lib_type = lib_config.get("type", "config")
+                if lib_type == "filesystem":
+                    from dataknobs_llm.prompts import FileSystemPromptLibrary
+
+                    lib_path = lib_config.get("path", "")
+                    composed_libraries.append(
+                        FileSystemPromptLibrary(Path(lib_path))
+                    )
+                    library_names.append(f"filesystem:{lib_path}")
+                elif lib_type == "config":
+                    lib_prompts = lib_config.get("prompts", {})
+                    structured = {"system": {}}
+                    for name, content in lib_prompts.items():
+                        if isinstance(content, dict):
+                            structured["system"][name] = content
+                        else:
+                            structured["system"][name] = {"template": content}
+                    composed_libraries.append(ConfigPromptLibrary(structured))
+                    library_names.append("config_library")
+                else:
+                    logger.warning(
+                        "Unknown prompt_library type %r — skipping",
+                        lib_type,
+                    )
+
+        # 3. Bots default library (built-in prompt fragments)
+        from dataknobs_bots.prompts.defaults import get_default_prompt_library
+
+        composed_libraries.append(get_default_prompt_library())
+        library_names.append("bots_defaults")
+
+        # 4. Extraction default library (lowest priority)
+        from dataknobs_llm.extraction.prompts import get_extraction_prompt_library
+
+        composed_libraries.append(get_extraction_prompt_library())
+        library_names.append("extraction_defaults")
+
+        library = CompositePromptLibrary(
+            libraries=composed_libraries, names=library_names,
+        )
         prompt_builder = AsyncPromptBuilder(library)
+
+        # Build prompt resolver for downstream components
+        from dataknobs_bots.prompts.resolver import PromptResolver
+
+        prompt_resolver = PromptResolver(library)
 
         # Create memory (pass llm so summary memory can use it)
         memory = None
@@ -560,6 +621,7 @@ class DynaBot:
             reasoning_strategy = create_reasoning_from_config(
                 reasoning_config,
                 knowledge_base=knowledge_base,
+                prompt_resolver=prompt_resolver,
             )
 
             # Config-driven source construction for strategies that
@@ -702,6 +764,7 @@ class DynaBot:
             tool_loop_timeout=config.get(
                 "tool_loop_timeout", cls._DEFAULT_TOOL_LOOP_TIMEOUT
             ),
+            prompt_resolver=prompt_resolver,
         )
 
         for role, provider in subsystem_providers.items():

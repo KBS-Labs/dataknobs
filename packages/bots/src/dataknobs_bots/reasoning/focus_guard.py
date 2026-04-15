@@ -167,6 +167,7 @@ class FocusGuard:
         drift_threshold: float = 0.5,
         use_keyword_detection: bool = True,
         use_llm_evaluation: bool = False,
+        prompt_resolver: Any | None = None,
     ) -> None:
         """Initialize FocusGuard.
 
@@ -175,11 +176,14 @@ class FocusGuard:
             drift_threshold: Severity threshold for correction (0.0-1.0)
             use_keyword_detection: Use keyword-based drift detection
             use_llm_evaluation: Use LLM for drift evaluation (not yet implemented)
+            prompt_resolver: Optional PromptResolver for resolving focus
+                prompts from the prompt library
         """
         self.max_tangent_depth = max_tangent_depth
         self.drift_threshold = drift_threshold
         self.use_keyword_detection = use_keyword_detection
         self.use_llm_evaluation = use_llm_evaluation
+        self._prompt_resolver = prompt_resolver
 
     def build_context(
         self,
@@ -259,7 +263,9 @@ class FocusGuard:
     def get_focus_prompt(self, context: FocusContext) -> str:
         """Generate a focus prompt to inject into system message.
 
-        This prompt reminds the LLM to stay on topic.
+        This prompt reminds the LLM to stay on topic.  If a prompt resolver
+        is configured, resolves the ``focus.guidance`` meta-prompt from the
+        library; otherwise falls back to inline string construction.
 
         Args:
             context: Current focus context
@@ -267,21 +273,44 @@ class FocusGuard:
         Returns:
             Focus prompt string
         """
+        # Prepare collected data summary for both library and fallback paths
+        collected_str = ""
+        if context.collected_data:
+            collected = list(context.collected_data.keys())
+            if len(collected) > 5:
+                collected = collected[:5] + [f"...and {len(collected) - 5} more"]
+            collected_str = ", ".join(collected)
+
+        required_str = (
+            ", ".join(context.required_fields)
+            if context.required_fields
+            else ""
+        )
+
+        # Try library resolution
+        if self._prompt_resolver is not None:
+            result = self._prompt_resolver.resolve(
+                "focus.guidance",
+                primary_goal=context.primary_goal,
+                current_task=context.current_task or "",
+                required_fields=required_str,
+                collected=collected_str,
+            )
+            if result is not None:
+                return result
+
+        # Inline fallback
         lines = ["## Focus Guidance"]
         lines.append(f"**Primary Goal**: {context.primary_goal}")
 
         if context.current_task:
             lines.append(f"**Current Task**: {context.current_task}")
 
-        if context.required_fields:
-            lines.append(f"**Still Needed**: {', '.join(context.required_fields)}")
+        if required_str:
+            lines.append(f"**Still Needed**: {required_str}")
 
-        if context.collected_data:
-            # Summarize what's already collected
-            collected = list(context.collected_data.keys())
-            if len(collected) > 5:
-                collected = collected[:5] + [f"...and {len(collected) - 5} more"]
-            lines.append(f"**Already Have**: {', '.join(collected)}")
+        if collected_str:
+            lines.append(f"**Already Have**: {collected_str}")
 
         lines.append("")
         lines.append("Stay focused on the current task. If the user asks about ")
@@ -401,6 +430,10 @@ class FocusGuard:
     def get_correction_prompt(self, evaluation: FocusEvaluation) -> str:
         """Generate a correction prompt to redirect the conversation.
 
+        If a prompt resolver is configured, resolves the ``focus.drift``
+        meta-prompt from the library; otherwise falls back to inline
+        string construction.
+
         Args:
             evaluation: FocusEvaluation indicating drift
 
@@ -410,6 +443,19 @@ class FocusGuard:
         if not evaluation.is_drifting:
             return ""
 
+        # Try library resolution
+        if self._prompt_resolver is not None:
+            result = self._prompt_resolver.resolve(
+                "focus.drift",
+                reason=evaluation.reason or "",
+                suggested_redirect=evaluation.suggested_redirect or "",
+                tangent_count=evaluation.tangent_count,
+                max_tangent_depth=self.max_tangent_depth,
+            )
+            if result is not None:
+                return result
+
+        # Inline fallback
         lines = ["## Focus Correction Needed"]
 
         if evaluation.reason:
