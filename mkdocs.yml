@@ -175,6 +175,7 @@ nav:
         - packages/llm/guides/extraction.md
         - packages/llm/guides/testing.md
         - packages/llm/guides/parallel-execution.md
+        - packages/llm/guides/prompt-reference.md
       - API Reference:
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
@@ -223,6 +224,9 @@ nav:
           - packages/bots/guides/config-toolkit.md
           - packages/bots/guides/wizard-config-builder.md
           - packages/bots/guides/TEMPLATE_SECURITY.md
+        - Prompt System:
+          - packages/bots/guides/prompt-reference.md
+          - packages/bots/guides/prompt-customization.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:

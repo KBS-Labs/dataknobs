@@ -1,6 +1,11 @@
 """Reasoning strategies for DynaBot."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .base import (
     PhasedReasoningProtocol,
@@ -150,6 +155,7 @@ def create_reasoning_from_config(
     config: dict[str, Any],
     *,
     knowledge_base: Any | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
@@ -170,6 +176,10 @@ def create_reasoning_from_config(
             ``from_config()`` classmethod.
         knowledge_base: Optional knowledge base instance forwarded
             as a kwarg to the strategy factory.
+        prompt_resolver: Optional :class:`~dataknobs_bots.prompts.resolver.PromptResolver`
+            for library-based prompt resolution.  Forwarded to strategies
+            that support prompt customization (grounded, hybrid, wizard,
+            focus guard).
 
     Returns:
         Configured reasoning strategy instance.
@@ -193,4 +203,8 @@ def create_reasoning_from_config(
         strategy = create_reasoning_from_config(config, knowledge_base=kb)
         ```
     """
-    return get_registry().create(config=config, knowledge_base=knowledge_base)
+    return get_registry().create(
+        config=config,
+        knowledge_base=knowledge_base,
+        prompt_resolver=prompt_resolver,
+    )

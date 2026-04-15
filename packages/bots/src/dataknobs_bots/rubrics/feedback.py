@@ -10,9 +10,12 @@ from rubric evaluation results:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .models import (
     CriterionResult,
@@ -28,6 +31,7 @@ async def generate_feedback_summary(
     rubric: Rubric,
     evaluation: RubricEvaluation,
     llm: AsyncLLMProvider | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> str:
     """Generate a feedback summary for a rubric evaluation.
 
@@ -40,13 +44,18 @@ async def generate_feedback_summary(
         rubric: The rubric used for evaluation.
         evaluation: The completed evaluation results.
         llm: Optional LLM provider for enhanced summaries.
+        prompt_resolver: Optional PromptResolver for resolving rubric
+            feedback prompts from the prompt library.
 
     Returns:
         A human-readable feedback summary string.
     """
     if llm is not None:
         try:
-            return await _generate_llm_summary(rubric, evaluation, llm)
+            return await _generate_llm_summary(
+                rubric, evaluation, llm,
+                prompt_resolver=prompt_resolver,
+            )
         except Exception as e:
             logger.warning(
                 "LLM feedback generation failed, falling back to deterministic: %s",
@@ -151,26 +160,46 @@ async def _generate_llm_summary(
     rubric: Rubric,
     evaluation: RubricEvaluation,
     llm: AsyncLLMProvider,
+    prompt_resolver: PromptResolver | None = None,
 ) -> str:
     """Generate an LLM-enhanced natural language summary."""
     criterion_by_id = {c.id: c for c in rubric.criteria}
 
     results_text = _build_results_text(rubric, evaluation, criterion_by_id)
+    pass_fail = "PASSED" if evaluation.passed else "FAILED"
+    weighted_score = f"{evaluation.weighted_score:.0%}"
 
-    system_message = (
-        "You are a feedback summarizer for content evaluation. "
-        "Given structured evaluation results, produce a concise, helpful "
-        "natural language summary. Focus on actionable feedback. "
-        "Keep the summary to 3-5 sentences."
-    )
+    # Try library resolution for system message
+    system_message = None
+    if prompt_resolver is not None:
+        system_message = prompt_resolver.resolve("rubric.feedback_summary.system")
+    if system_message is None:
+        system_message = (
+            "You are a feedback summarizer for content evaluation. "
+            "Given structured evaluation results, produce a concise, helpful "
+            "natural language summary. Focus on actionable feedback. "
+            "Keep the summary to 3-5 sentences."
+        )
 
-    user_message = (
-        f"Rubric: {rubric.name}\n"
-        f"Description: {rubric.description}\n"
-        f"Overall: {'PASSED' if evaluation.passed else 'FAILED'} "
-        f"(score: {evaluation.weighted_score:.0%})\n\n"
-        f"Criteria results:\n{results_text}"
-    )
+    # Try library resolution for user message
+    user_message = None
+    if prompt_resolver is not None:
+        user_message = prompt_resolver.resolve(
+            "rubric.feedback_summary.user",
+            rubric_name=rubric.name,
+            rubric_description=rubric.description,
+            pass_fail=pass_fail,
+            weighted_score=weighted_score,
+            results_text=results_text,
+        )
+    if user_message is None:
+        user_message = (
+            f"Rubric: {rubric.name}\n"
+            f"Description: {rubric.description}\n"
+            f"Overall: {pass_fail} "
+            f"(score: {weighted_score})\n\n"
+            f"Criteria results:\n{results_text}"
+        )
 
     messages = [
         LLMMessage(role="system", content=system_message),

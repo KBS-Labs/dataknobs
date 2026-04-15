@@ -24,6 +24,7 @@ from .wizard_derivations import DerivationRule
 from .wizard_types import StageSchema, TurnContext, WizardState, field_is_present
 
 if TYPE_CHECKING:
+    from ..prompts.resolver import PromptResolver
     from .wizard_fsm import WizardFSM
     from .wizard_renderer import WizardRenderer
     from .wizard_subflows import SubflowManager
@@ -91,6 +92,7 @@ class WizardResponder:
         clarification_groups: list[dict[str, Any]],
         clarification_exclude_derivable: bool,
         clarification_template: str | None,
+        prompt_resolver: PromptResolver | None = None,
         # --- Callbacks (orchestrator-owned, may change during lifecycle) ---
         build_wizard_metadata: Callable[[WizardState], dict[str, Any]],
         execute_fsm_step: Callable[..., Awaitable[tuple[str, Any]]],
@@ -119,6 +121,7 @@ class WizardResponder:
         self._clarification_groups = clarification_groups
         self._clarification_exclude_derivable = clarification_exclude_derivable
         self._clarification_template = clarification_template
+        self._prompt_resolver = prompt_resolver
 
         # Callbacks
         self._build_wizard_metadata = build_wizard_metadata
@@ -330,21 +333,27 @@ class WizardResponder:
             f"\n**Suggestions**: {', '.join(suggestions)}" if suggestions else ""
         )
 
-        clarification_context = f"""
-## Clarification Needed
-
-I wasn't able to clearly understand the user's response for this stage.
-
-**Potential Issues**:
-{issue_list}
-
-**What I'm Looking For**: \
-{stage.get('prompt', 'Please provide more specific information.')}\
-{suggestions_text}
-
-Please ask a clarifying question to help gather the needed information.
-Be conversational and helpful - don't make the user feel like they did something wrong.
-"""
+        stage_prompt = stage.get("prompt", "Please provide more specific information.")
+        clarification_context = None
+        if self._prompt_resolver is not None:
+            clarification_context = self._prompt_resolver.resolve(
+                "wizard.clarification",
+                issue_list=issue_list,
+                stage_prompt=stage_prompt,
+                suggestions_text=suggestions_text,
+            )
+        if clarification_context is None:
+            clarification_context = (
+                f"## Clarification Needed\n\n"
+                f"I wasn't able to clearly understand the user's response "
+                f"for this stage.\n\n"
+                f"**Potential Issues**:\n{issue_list}\n\n"
+                f"**What I'm Looking For**: {stage_prompt}{suggestions_text}\n\n"
+                f"Please ask a clarifying question to help gather the needed "
+                f"information.\n"
+                f"Be conversational and helpful - don't make the user feel "
+                f"like they did something wrong."
+            )
         return await self._complete_with_wizard_context(
             manager, clarification_context, stage, wizard_state, tools,
         )
@@ -372,19 +381,25 @@ Be conversational and helpful - don't make the user feel like they did something
             LLM response requesting corrections
         """
         error_list = "\n".join(f"- {e}" for e in errors)
-        error_context = f"""
-## Validation Required
-
-The user's input for this stage needs clarification:
-
-**Issues**:
-{error_list}
-
-**What's Needed**: {stage.get('prompt', 'Please provide the required information.')}
-
-Please kindly ask the user to provide the missing or corrected information.
-Be specific about what's needed but remain friendly and helpful.
-"""
+        stage_prompt = stage.get("prompt", "Please provide the required information.")
+        error_context = None
+        if self._prompt_resolver is not None:
+            error_context = self._prompt_resolver.resolve(
+                "wizard.validation",
+                error_list=error_list,
+                stage_prompt=stage_prompt,
+            )
+        if error_context is None:
+            error_context = (
+                f"## Validation Required\n\n"
+                f"The user's input for this stage needs clarification:\n\n"
+                f"**Issues**:\n{error_list}\n\n"
+                f"**What's Needed**: {stage_prompt}\n\n"
+                f"Please kindly ask the user to provide the missing or "
+                f"corrected information.\n"
+                f"Be specific about what's needed but remain friendly "
+                f"and helpful."
+            )
         return await self._complete_with_wizard_context(
             manager, error_context, stage, wizard_state, tools,
         )
@@ -416,17 +431,25 @@ Be specific about what's needed but remain friendly and helpful.
             LLM response explaining the error and offering retry
         """
         stage_name = stage.get("name", "unknown")
-        error_context = f"""
-## Processing Error
-
-An error occurred while processing the transition from the "{stage_name}" stage:
-
-**Error**: {error}
-
-Please apologize for the issue and let the user know they can try again.
-If the error suggests a configuration or system issue, suggest they contact support.
-Be concise and helpful.
-"""
+        error_context = None
+        if self._prompt_resolver is not None:
+            error_context = self._prompt_resolver.resolve(
+                "wizard.transform_error",
+                stage_name=stage_name,
+                error=error,
+            )
+        if error_context is None:
+            error_context = (
+                f"## Processing Error\n\n"
+                f'An error occurred while processing the transition from '
+                f'the "{stage_name}" stage:\n\n'
+                f"**Error**: {error}\n\n"
+                f"Please apologize for the issue and let the user know they "
+                f"can try again.\n"
+                f"If the error suggests a configuration or system issue, "
+                f"suggest they contact support.\n"
+                f"Be concise and helpful."
+            )
         return await self._complete_with_wizard_context(
             manager, error_context, stage, wizard_state, tools,
             include_stage_context=False,
@@ -454,20 +477,29 @@ Be concise and helpful.
         Returns:
             LLM response offering restart option
         """
-        restart_context = f"""
-## Multiple Clarification Attempts
-
-We've had difficulty understanding the responses for this stage.
-
-**Current Stage**: {stage.get('name', 'unknown')}
-**Goal**: {stage.get('prompt', 'Provide information')}
-
-Please offer the user two options:
-1. Try one more time with clearer instructions
-2. Start the wizard over from the beginning (type "restart")
-
-Be empathetic and helpful - acknowledge that the questions might not be clear.
-"""
+        stage_name = stage.get("name", "unknown")
+        stage_prompt = stage.get("prompt", "Provide information")
+        restart_context = None
+        if self._prompt_resolver is not None:
+            restart_context = self._prompt_resolver.resolve(
+                "wizard.restart_offer",
+                stage_name=stage_name,
+                stage_prompt=stage_prompt,
+            )
+        if restart_context is None:
+            restart_context = (
+                f"## Multiple Clarification Attempts\n\n"
+                f"We've had difficulty understanding the responses for "
+                f"this stage.\n\n"
+                f"**Current Stage**: {stage_name}\n"
+                f"**Goal**: {stage_prompt}\n\n"
+                f"Please offer the user two options:\n"
+                f"1. Try one more time with clearer instructions\n"
+                f'2. Start the wizard over from the beginning '
+                f'(type "restart")\n\n'
+                f"Be empathetic and helpful - acknowledge that the questions "
+                f"might not be clear."
+            )
         return await self._complete_with_wizard_context(
             manager, restart_context, stage, wizard_state, tools,
         )

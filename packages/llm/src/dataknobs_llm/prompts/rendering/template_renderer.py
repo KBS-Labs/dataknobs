@@ -9,11 +9,15 @@ This module provides template rendering with:
 
 import re
 import logging
+import threading
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
-from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, Undefined
+from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, Undefined, pass_context
+
+if TYPE_CHECKING:
+    from ..base.abstract_prompt_library import AbstractPromptLibrary
 
 from dataknobs_llm.template_utils import render_conditional_template
 from ..base.types import (
@@ -23,6 +27,7 @@ from ..base.types import (
     RenderResult,
     TemplateMode
 )
+from ..syntax import TemplateSyntax, normalize_to_jinja2
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +111,136 @@ class TemplateRenderer:
             undefined=PreserveUndefined,
         )
 
+        # Prompt library for prompt_ref() resolution (set via set_prompt_library)
+        self._prompt_library: AbstractPromptLibrary | None = None
+
+        # Thread-local storage for cycle detection during prompt_ref() resolution
+        self._resolution_local = threading.local()
+
         # Register custom filters (domain-specific)
         self._register_custom_filters()
 
+        # Register prompt_ref() as a Jinja2 global function.
+        # We wrap the bound method in a closure so @pass_context can set
+        # its jinja_pass_arg attribute (Jinja2 can't set attrs on bound methods).
+        @pass_context
+        def _prompt_ref_wrapper(jinja_context: Any, key: str, **extra_params: Any) -> str:
+            return self._prompt_ref(jinja_context, key, **extra_params)
+
+        self._jinja_env.globals["prompt_ref"] = _prompt_ref_wrapper
+
+    def set_prompt_library(
+        self, library: "AbstractPromptLibrary | None"
+    ) -> None:
+        """Set the prompt library used for ``prompt_ref()`` resolution.
+
+        The prompt library provides the template lookup for ``prompt_ref()``
+        calls within Jinja2 templates. This is typically set by the
+        ``PromptBuilder`` before rendering.
+
+        Args:
+            library: The prompt library to use, or ``None`` to clear.
+        """
+        self._prompt_library = library
+
+    @property
+    def prompt_library(self) -> "AbstractPromptLibrary | None":
+        """The currently active prompt library for ``prompt_ref()`` resolution."""
+        return self._prompt_library
+
+    def _prompt_ref(self, jinja_context: Any, key: str, **extra_params: Any) -> str:
+        """Resolve a prompt reference from the active library.
+
+        This function is registered as a Jinja2 global with ``@pass_context``
+        so templates can call ``{{ prompt_ref("some.key") }}`` to compose
+        prompts from fragments.
+
+        The referenced template inherits the parent template's rendering
+        context (matching Jinja2 ``{% include %}`` semantics).  The merge
+        order is: parent context < template defaults < explicit extra_params.
+        This means fragments automatically see variables from the calling
+        template without requiring manual threading.
+
+        Resolution is recursive — a referenced prompt can itself contain
+        ``prompt_ref()`` calls. Cycle detection prevents infinite loops.
+
+        Args:
+            jinja_context: The Jinja2 rendering context (injected by
+                ``@pass_context``).  Contains the parent template's
+                variables.
+            key: The prompt key to look up in the library (checked as both
+                system and user prompt).
+            **extra_params: Additional parameters merged into the current
+                rendering context for this specific reference. These
+                override both the parent context and the referenced
+                template's defaults.
+
+        Returns:
+            The rendered prompt text, or an empty string if the key is not
+            found and no library is set.
+
+        Raises:
+            ValueError: If a circular reference is detected.
+        """
+        if self._prompt_library is None:
+            logger.warning(
+                "prompt_ref('%s') called but no prompt library is set", key
+            )
+            return ""
+
+        # Cycle detection using thread-local resolution stack.
+        # We maintain both a list (for traversal-order error messages) and
+        # a set (for O(1) membership checks).
+        if not hasattr(self._resolution_local, "stack"):
+            self._resolution_local.stack = []
+            self._resolution_local.stack_set = set()
+
+        stack: list[str] = self._resolution_local.stack
+        stack_set: set[str] = self._resolution_local.stack_set
+        if key in stack_set:
+            cycle_path = " -> ".join(stack) + f" -> {key}"
+            raise ValueError(
+                f"Circular prompt reference detected: {cycle_path}"
+            )
+
+        # Look up the prompt template (try system first, then user)
+        template_dict = self._prompt_library.get_system_prompt(key)
+        if template_dict is None:
+            template_dict = self._prompt_library.get_user_prompt(key)
+
+        if template_dict is None:
+            logger.warning("prompt_ref('%s'): key not found in library", key)
+            return ""
+
+        # Push onto resolution stack for cycle detection
+        stack.append(key)
+        stack_set.add(key)
+        try:
+            template_text = template_dict.get("template", "")
+
+            # Check for template_syntax annotation and normalize
+            syntax_str = template_dict.get("template_syntax")
+            if syntax_str:
+                syntax = TemplateSyntax.from_string(syntax_str)
+                template_text = normalize_to_jinja2(template_text, syntax)
+
+            # Inherit the parent template's variables (matching Jinja2
+            # {% include %} semantics), then layer on template defaults,
+            # then explicit extra_params.  Later values win.
+            parent_vars = jinja_context.get_all()
+            ref_defaults = template_dict.get("defaults", {})
+            merged_params = {**parent_vars, **ref_defaults, **extra_params}
+
+            # Render the referenced template with Jinja2 (recursive —
+            # prompt_ref() calls within this template will re-enter this method)
+            jinja_template = self._jinja_env.from_string(template_text)
+            return jinja_template.render(**merged_params)
+        finally:
+            stack.pop()
+            stack_set.discard(key)
+
     @staticmethod
-    def _get_system_context() -> Dict[str, str]:
+    def _get_system_context() -> dict[str, str]:
         """Return system context variables for template rendering.
 
         These are injected as lowest-priority parameters so that templates
@@ -130,9 +260,9 @@ class TemplateRenderer:
     def render(
         self,
         template: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         validation: ValidationConfig | None = None,
-        template_metadata: Dict[str, Any] | None = None,
+        template_metadata: dict[str, Any] | None = None,
         mode: TemplateMode | None = None
     ) -> RenderResult:
         """Render a template with parameters and validation.
@@ -232,11 +362,15 @@ class TemplateRenderer:
     def render_prompt_template(
         self,
         prompt_template: PromptTemplateDict,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         validation_override: ValidationLevel | None = None,
         mode_override: TemplateMode | None = None
     ) -> RenderResult:
         """Render a PromptTemplateDict structure with validation.
+
+        If the template declares ``template_syntax: "format"``, it is first
+        normalized to Jinja2 syntax before rendering. This means all runtime
+        rendering uses the Jinja2 engine regardless of authoring syntax.
 
         Args:
             prompt_template: PromptTemplateDict dictionary with template, defaults, validation
@@ -253,10 +387,24 @@ class TemplateRenderer:
             **params
         }
 
-        # Get template mode from template or use override
+        # Normalize template syntax if annotated
+        template_text = prompt_template["template"]
+        syntax_str = prompt_template.get("template_syntax")
+        syntax_normalized = False
+        if syntax_str:
+            syntax = TemplateSyntax.from_string(syntax_str)
+            template_text = normalize_to_jinja2(template_text, syntax)
+            syntax_normalized = True
+
+        # Get template mode from template or use override.
+        # When template_syntax normalization has been applied, the output is
+        # pure Jinja2 — force JINJA2 mode to avoid the MIXED preprocessor
+        # mangling the converted {{ var }} expressions.
         template_mode_str = prompt_template.get("template_mode", "mixed")
         template_mode = TemplateMode.from_string(template_mode_str)
         effective_mode = mode_override if mode_override is not None else template_mode
+        if syntax_normalized and effective_mode == TemplateMode.MIXED:
+            effective_mode = TemplateMode.JINJA2
 
         # Get validation config from template
         template_validation = prompt_template.get("validation")
@@ -278,7 +426,7 @@ class TemplateRenderer:
 
         # Render with merged params, validation, and effective mode
         return self.render(
-            template=prompt_template["template"],
+            template=template_text,
             params=merged_params,
             validation=validation,
             template_metadata=prompt_template.get("metadata"),
@@ -287,10 +435,10 @@ class TemplateRenderer:
 
     def batch_render(
         self,
-        templates: List[str],
-        params: Dict[str, Any],
+        templates: list[str],
+        params: dict[str, Any],
         validation: ValidationConfig | None = None
-    ) -> List[RenderResult]:
+    ) -> list[RenderResult]:
         """Render multiple templates with the same parameters.
 
         Args:
@@ -307,7 +455,7 @@ class TemplateRenderer:
         ]
 
     @staticmethod
-    def _extract_variables(template: str) -> Set[str]:
+    def _extract_variables(template: str) -> set[str]:
         """Extract all variable names from a template (including Jinja2 syntax).
 
         Args:
@@ -403,7 +551,7 @@ class TemplateRenderer:
         self._jinja_env.filters[name] = filter_func
 
     @staticmethod
-    def _get_line_col(template: str, position: int) -> Tuple[int, int]:
+    def _get_line_col(template: str, position: int) -> tuple[int, int]:
         """Get line and column number for a position in the template.
 
         Args:
@@ -445,7 +593,7 @@ class TemplateRenderer:
         return snippet
 
     @staticmethod
-    def validate_template_syntax_detailed(template: str) -> List[TemplateSyntaxError]:
+    def validate_template_syntax_detailed(template: str) -> list[TemplateSyntaxError]:
         """Validate template syntax and return detailed errors with locations.
 
         Args:
@@ -551,7 +699,7 @@ class TemplateRenderer:
         return errors
 
     @staticmethod
-    def validate_template_syntax(template: str) -> List[str]:
+    def validate_template_syntax(template: str) -> list[str]:
         """Validate template syntax and return error messages.
 
         This is a convenience wrapper around validate_template_syntax_detailed()
@@ -571,7 +719,7 @@ class TemplateRenderer:
 
 def render_template(
     template: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
     validation_level: ValidationLevel = ValidationLevel.WARN
 ) -> str:
     """Convenience function to render a template with parameters.
@@ -599,8 +747,8 @@ def render_template(
 
 def render_template_strict(
     template: str,
-    params: Dict[str, Any],
-    required_params: List[str]
+    params: dict[str, Any],
+    required_params: list[str]
 ) -> str:
     """Render a template with strict validation (ERROR level).
 

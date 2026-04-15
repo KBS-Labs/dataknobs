@@ -33,3 +33,6 @@ __all__ = [
     "AbstractPromptLibrary",
     "BasePromptLibrary",
 ]
+
+# Note: TemplateSyntax is exported from dataknobs_llm.prompts.syntax, not here,
+# to keep the base package focused on library types.

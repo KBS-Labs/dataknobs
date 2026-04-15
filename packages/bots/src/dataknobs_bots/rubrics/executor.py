@@ -22,9 +22,12 @@ import hashlib
 import importlib
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .feedback import generate_feedback_summary
 from .models import (
@@ -114,9 +117,11 @@ class RubricExecutor:
         self,
         function_registry: FunctionRegistry,
         llm: AsyncLLMProvider | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         self._function_registry = function_registry
         self._llm = llm
+        self._prompt_resolver = prompt_resolver
 
     async def evaluate(
         self,
@@ -161,7 +166,8 @@ class RubricExecutor:
         )
 
         evaluation.feedback_summary = await generate_feedback_summary(
-            rubric, evaluation, self._llm
+            rubric, evaluation, self._llm,
+            prompt_resolver=self._prompt_resolver,
         )
 
         return evaluation
@@ -378,7 +384,22 @@ class RubricExecutor:
             for level in criterion.levels
         )
         valid_ids = ", ".join(f'"{level.id}"' for level in criterion.levels)
+        example_level_id = criterion.levels[0].id if criterion.levels else ""
 
+        # Try library resolution
+        if self._prompt_resolver is not None:
+            result = self._prompt_resolver.resolve(
+                "rubric.classification",
+                criterion_name=criterion.name,
+                criterion_description=criterion.description,
+                level_descriptions=level_descriptions,
+                valid_ids=valid_ids,
+                example_level_id=example_level_id,
+            )
+            if result is not None:
+                return result
+
+        # Inline fallback
         return (
             f"You are a classification evaluator for the criterion: {criterion.name}\n"
             f"Description: {criterion.description}\n\n"
@@ -386,7 +407,7 @@ class RubricExecutor:
             f"{level_descriptions}\n\n"
             f"Respond with a JSON object containing a single field \"level_id\" "
             f"set to one of: {valid_ids}\n"
-            f"Example: {{\"level_id\": \"{criterion.levels[0].id}\"}}\n"
+            f"Example: {{\"level_id\": \"{example_level_id}\"}}\n"
             f"Do not include any other text."
         )
 

@@ -361,6 +361,7 @@ PRINT_RESULTS=()
 PRINT_EXCEPTIONS=(
     "*/cli/main.py"       # CLI interface uses Rich console.print
     "*/api/advanced.py"   # Debugger class needs user output
+    "*/prompts/syntax.py" # CLI tool for prompt syntax conversion/detection
 )
 
 # Function to check if a file should be excluded

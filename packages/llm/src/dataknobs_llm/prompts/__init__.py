@@ -70,6 +70,15 @@ from .rendering import (
     render_template_strict,
 )
 
+# Template syntax annotation and conversion
+from .syntax import (
+    TemplateSyntax,
+    format_to_jinja2,
+    jinja2_to_format,
+    detect_syntax,
+    normalize_to_jinja2,
+)
+
 # Prompt library implementations
 from .implementations import (
     FileSystemPromptLibrary,
@@ -141,6 +150,13 @@ __all__ = [
     "TemplateSyntaxError",
     "render_template",
     "render_template_strict",
+
+    # Syntax annotation and conversion
+    "TemplateSyntax",
+    "format_to_jinja2",
+    "jinja2_to_format",
+    "detect_syntax",
+    "normalize_to_jinja2",
 
     # Library implementations
     "FileSystemPromptLibrary",

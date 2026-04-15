@@ -9,7 +9,7 @@ This module defines:
 """
 
 from enum import Enum
-from typing import Any, Dict, List, TypedDict
+from typing import Any, TypedDict
 from dataclasses import dataclass, field
 
 
@@ -74,8 +74,8 @@ class ValidationConfig:
     def __init__(
         self,
         level: ValidationLevel | None = None,
-        required_params: List[str] | None = None,
-        optional_params: List[str] | None = None
+        required_params: list[str] | None = None,
+        optional_params: list[str] | None = None
     ):
         """Initialize validation configuration.
 
@@ -98,6 +98,11 @@ class PromptTemplateDict(TypedDict, total=False):
 
     Attributes:
         template: The template string with {{variables}} and ((conditionals))
+        template_syntax: Authoring syntax annotation — ``"format"`` for Python
+            ``.format()`` style (``{var}``) or ``"jinja2"`` for Jinja2 style
+            (``{{ var }}``). Controls how the template is normalized before
+            rendering. Default: ``"jinja2"`` for new prompts. See
+            :mod:`dataknobs_llm.prompts.syntax` for conversion utilities.
         defaults: Default values for template parameters
         validation: Validation configuration for this template
         metadata: Additional metadata (author, version, etc.)
@@ -108,13 +113,14 @@ class PromptTemplateDict(TypedDict, total=False):
         template_mode: Template rendering mode ("mixed" or "jinja2")
     """
     template: str
-    defaults: Dict[str, Any]
+    template_syntax: str
+    defaults: dict[str, Any]
     validation: ValidationConfig
-    metadata: Dict[str, Any]
-    sections: Dict[str, str]
+    metadata: dict[str, Any]
+    sections: dict[str, str]
     extends: str
-    rag_config_refs: List[str]
-    rag_configs: List['RAGConfig']
+    rag_config_refs: list[str]
+    rag_configs: list['RAGConfig']
     template_mode: str
 
 
@@ -133,7 +139,7 @@ class RAGConfig(TypedDict, total=False):
     adapter_name: str
     query: str
     k: int
-    filters: Dict[str, Any]
+    filters: dict[str, Any]
     placeholder: str
     header: str
     item_template: str
@@ -150,9 +156,9 @@ class MessageIndex(TypedDict, total=False):
         rag_configs: RAG configurations for this message sequence
         metadata: Additional metadata for this message index
     """
-    messages: List[Dict[str, str]]
-    rag_configs: List[RAGConfig]
-    metadata: Dict[str, Any]
+    messages: list[dict[str, str]]
+    rag_configs: list[RAGConfig]
+    metadata: dict[str, Any]
 
 
 @dataclass
@@ -169,15 +175,15 @@ class RenderResult:
                     Contains details about RAG searches executed during rendering
     """
     content: str
-    params_used: Dict[str, Any] = field(default_factory=dict)
-    params_missing: List[str] = field(default_factory=list)
-    validation_warnings: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    rag_metadata: Dict[str, Any] | None = None
+    params_used: dict[str, Any] = field(default_factory=dict)
+    params_missing: list[str] = field(default_factory=list)
+    validation_warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    rag_metadata: dict[str, Any] | None = None
 
 
 # Type aliases for convenience
-TemplateDict = Dict[str, PromptTemplateDict]
-MessageIndexDict = Dict[str, MessageIndex]
-ParameterDict = Dict[str, Any]
-AdapterDict = Dict[str, Any]  # Will be refined in adapter modules
+TemplateDict = dict[str, PromptTemplateDict]
+MessageIndexDict = dict[str, MessageIndex]
+ParameterDict = dict[str, Any]
+AdapterDict = dict[str, Any]  # Will be refined in adapter modules

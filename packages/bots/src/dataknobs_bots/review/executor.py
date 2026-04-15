@@ -32,6 +32,7 @@ from .protocol import ReviewProtocolDefinition
 
 if TYPE_CHECKING:
     from ..artifacts.models import ArtifactTypeDefinition as ArtifactDefinition
+    from ..prompts.resolver import PromptResolver
 
 # NOTE: ArtifactReview was removed from artifacts.models when the rubric
 # system replaced persona-based reviews. This local import keeps the
@@ -114,6 +115,7 @@ class ReviewExecutor:
         protocols: dict[str, ReviewProtocolDefinition] | None = None,
         custom_personas: dict[str, ReviewPersona] | None = None,
         custom_functions: dict[str, CustomValidator] | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         """Initialize executor.
 
@@ -122,8 +124,11 @@ class ReviewExecutor:
             protocols: Protocol definitions from configuration
             custom_personas: Additional personas beyond built-ins
             custom_functions: Custom validation functions
+            prompt_resolver: Optional PromptResolver for resolving
+                review persona prompts from the prompt library
         """
         self._llm = llm
+        self._prompt_resolver = prompt_resolver
         self._protocols = protocols or {}
         self._personas: dict[str, ReviewPersona] = {**BUILT_IN_PERSONAS}
         if custom_personas:
@@ -318,14 +323,31 @@ class ReviewExecutor:
             else str(artifact.content)
         )
 
-        prompt = persona.prompt_template.format(
-            artifact_type=artifact.type,
-            artifact_name=artifact.name,
-            artifact_purpose=getattr(
-                getattr(artifact, "metadata", None), "purpose", None
-            ) or "Not specified",
-            artifact_content=content_str,
-        )
+        artifact_purpose = getattr(
+            getattr(artifact, "metadata", None), "purpose", None
+        ) or "Not specified"
+
+        # Try library resolution for persona prompt.
+        # The key follows the pattern review.persona.{persona_id}.
+        prompt = None
+        persona_id = protocol.persona_id or getattr(persona, "id", None)
+        if self._prompt_resolver is not None and persona_id:
+            prompt = self._prompt_resolver.resolve(
+                f"review.persona.{persona_id}",
+                artifact_type=artifact.type,
+                artifact_name=artifact.name,
+                artifact_purpose=artifact_purpose,
+                artifact_content=content_str,
+            )
+
+        # Inline fallback — use the persona's template directly
+        if prompt is None:
+            prompt = persona.prompt_template.format(
+                artifact_type=artifact.type,
+                artifact_name=artifact.name,
+                artifact_purpose=artifact_purpose,
+                artifact_content=content_str,
+            )
 
         # Call LLM
         try:

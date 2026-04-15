@@ -4,7 +4,9 @@ This module provides BasePromptLibrary, a concrete implementation of
 AbstractPromptLibrary that includes caching and common utilities.
 """
 
-from typing import Any, Dict, List, Union
+from __future__ import annotations
+
+from typing import Any
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
@@ -29,7 +31,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
     def __init__(
         self,
         enable_cache: bool = True,
-        metadata: Dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None
     ):
         """Initialize the base prompt library.
 
@@ -41,11 +43,11 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self._metadata = metadata or {}
 
         # Caches for loaded prompts and indexes
-        self._system_prompt_cache: Dict[str, PromptTemplateDict] = {}
-        self._user_prompt_cache: Dict[str, PromptTemplateDict] = {}
-        self._message_index_cache: Dict[str, MessageIndex] = {}
-        self._rag_config_cache: Dict[str, RAGConfig] = {}  # Standalone RAG configs
-        self._prompt_rag_cache: Dict[tuple, List[RAGConfig]] = {}  # (name, type)
+        self._system_prompt_cache: dict[str, PromptTemplateDict] = {}
+        self._user_prompt_cache: dict[str, PromptTemplateDict] = {}
+        self._message_index_cache: dict[str, MessageIndex] = {}
+        self._rag_config_cache: dict[str, RAGConfig] = {}  # Standalone RAG configs
+        self._prompt_rag_cache: dict[tuple, list[RAGConfig]] = {}  # (name, type)
 
     # ===== Cache Management =====
 
@@ -69,7 +71,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Metadata =====
 
-    def get_metadata(self) -> Dict[str, Any]:
+    def get_metadata(self) -> dict[str, Any]:
         """Get metadata about this prompt library.
 
         Returns:
@@ -179,7 +181,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str
-    ) -> List[RAGConfig] | None:
+    ) -> list[RAGConfig] | None:
         """Get prompt RAG configs from cache if caching is enabled.
 
         Args:
@@ -197,7 +199,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str,
-        configs: List[RAGConfig]
+        configs: list[RAGConfig]
     ) -> None:
         """Cache prompt RAG configurations if caching is enabled.
 
@@ -211,7 +213,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Common Parsing Methods =====
 
-    def _parse_validation_config(self, data: Union[Dict, ValidationConfig]) -> ValidationConfig:
+    def _parse_validation_config(self, data: dict | ValidationConfig) -> ValidationConfig:
         """Parse validation configuration from dict or ValidationConfig.
 
         This method is shared by all library implementations for consistent
@@ -254,7 +256,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             optional_params=optional_params
         )
 
-    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
+    def _parse_rag_config(self, data: dict[str, Any]) -> RAGConfig:
         """Parse RAG configuration from dict.
 
         This method is shared by all library implementations for consistent
@@ -316,89 +318,65 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if isinstance(data, dict) and len(data) == 0:
             return {"template": ""}
 
-        # Initialize template
-        template: PromptTemplateDict = None
-
-        # If dict with template field
-        if isinstance(data, dict) and "template" in data:
-            template = {
-                "template": data["template"],
-            }
-
-            # Add optional fields
-            if "defaults" in data:
-                template["defaults"] = data["defaults"]
-
-            if "validation" in data:
-                template["validation"] = self._parse_validation_config(data["validation"])
-
-            if "metadata" in data:
-                template["metadata"] = data["metadata"]
-
-            # Add template mode field
-            if "template_mode" in data:
-                template["template_mode"] = data["template_mode"]
-
-            # Add composition fields
-            if "sections" in data:
-                template["sections"] = data["sections"]
-
-            if "extends" in data:
-                template["extends"] = data["extends"]
-
-            # Add RAG configuration fields
-            if "rag_config_refs" in data:
-                template["rag_config_refs"] = data["rag_config_refs"]
-
-            if "rag_configs" in data:
-                template["rag_configs"] = [
-                    self._parse_rag_config(rag_data)
-                    for rag_data in data["rag_configs"]
-                ]
-
-            return template
-
-        # If dict with extends field but no template (template will be inherited)
-        elif isinstance(data, dict) and "extends" in data:
-            template = {}
-
-            # Template will be inherited from base
-            template["extends"] = data["extends"]
-
-            # Add optional override fields
-            if "defaults" in data:
-                template["defaults"] = data["defaults"]
-
-            if "validation" in data:
-                template["validation"] = self._parse_validation_config(data["validation"])
-
-            if "metadata" in data:
-                template["metadata"] = data["metadata"]
-
-            # Add template mode field
-            if "template_mode" in data:
-                template["template_mode"] = data["template_mode"]
-
-            if "sections" in data:
-                template["sections"] = data["sections"]
-
-            # Add RAG configuration fields
-            if "rag_config_refs" in data:
-                template["rag_config_refs"] = data["rag_config_refs"]
-
-            if "rag_configs" in data:
-                template["rag_configs"] = [
-                    self._parse_rag_config(rag_data)
-                    for rag_data in data["rag_configs"]
-                ]
-
-            return template
-
-        else:
+        if not isinstance(data, dict):
             raise ValueError(
                 f"Invalid prompt template data: expected dict with 'template' or 'extends' key, "
                 f"or string, got {type(data)}"
             )
+
+        # Must have either "template" or "extends" (or both)
+        has_template = "template" in data
+        has_extends = "extends" in data
+
+        if not has_template and not has_extends:
+            raise ValueError(
+                f"Invalid prompt template data: expected dict with 'template' or 'extends' key, "
+                f"or string, got dict with keys: {list(data.keys())}"
+            )
+
+        # Build the template dict — start with the required key(s)
+        template: PromptTemplateDict = {}
+        if has_template:
+            template["template"] = data["template"]
+        if has_extends:
+            template["extends"] = data["extends"]
+
+        # Copy optional fields shared by all template variants
+        self._apply_optional_fields(template, data)
+
+        return template
+
+    def _apply_optional_fields(
+        self, template: PromptTemplateDict, data: dict[str, Any]
+    ) -> None:
+        """Copy optional fields from parsed data into a PromptTemplateDict.
+
+        This is the single location where optional PromptTemplateDict fields
+        are transferred from input data to the parsed template. Adding a new
+        field to PromptTemplateDict requires only one change here.
+
+        Args:
+            template: The template dict being built (modified in place).
+            data: The raw input data dict.
+        """
+        # Simple pass-through fields
+        passthrough_fields = (
+            "defaults", "metadata", "template_mode", "template_syntax",
+            "sections", "rag_config_refs",
+        )
+        for field_name in passthrough_fields:
+            if field_name in data:
+                template[field_name] = data[field_name]  # type: ignore[literal-required]
+
+        # Fields requiring parsing
+        if "validation" in data:
+            template["validation"] = self._parse_validation_config(data["validation"])
+
+        if "rag_configs" in data:
+            template["rag_configs"] = [
+                self._parse_rag_config(rag_data)
+                for rag_data in data["rag_configs"]
+            ]
 
     # ===== Abstract Methods (must be implemented by subclasses) =====
 
@@ -415,7 +393,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_system_prompt()"
         )
 
-    def list_system_prompts(self) -> List[str]:
+    def list_system_prompts(self) -> list[str]:
         """List all available system prompt names.
 
         Subclasses must implement this method.
@@ -438,7 +416,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_user_prompt()"
         )
 
-    def list_user_prompts(self) -> List[str]:
+    def list_user_prompts(self) -> list[str]:
         """List available user prompts.
 
         Subclasses must implement this method.
@@ -460,7 +438,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_message_index()"
         )
 
-    def list_message_indexes(self) -> List[str]:
+    def list_message_indexes(self) -> list[str]:
         """List all available message index names.
 
         Subclasses must implement this method.
@@ -488,7 +466,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         prompt_type: str = "user",
         index: int = 0,
         **kwargs: Any
-    ) -> List[RAGConfig]:
+    ) -> list[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
 
         Subclasses must implement this method.

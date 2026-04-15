@@ -56,6 +56,10 @@ class BasePromptBuilder(ABC):
         self._renderer = TemplateRenderer(default_validation=default_validation)
         self._raise_on_rag_error = raise_on_rag_error
 
+        # Wire the prompt library into the renderer so that prompt_ref()
+        # calls within templates can resolve references from the library.
+        self._renderer.set_prompt_library(library)
+
     # ===== Shared Helper Methods =====
 
     def _extract_formatted_content_from_cache(

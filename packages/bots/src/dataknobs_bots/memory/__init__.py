@@ -1,7 +1,12 @@
 """Memory implementations for DynaBot."""
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .artifact_bank import ArtifactBank
 from .artifact_io import (
@@ -56,12 +61,14 @@ __all__ = [
 async def create_memory_from_config(
     config: dict[str, Any],
     llm_provider: Any | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> Memory:
     """Create memory instance from configuration.
 
     Args:
         config: Memory configuration with 'type' field and type-specific params
         llm_provider: Optional LLM provider instance, required for summary memory
+        prompt_resolver: Optional PromptResolver for resolving memory prompts
 
     Returns:
         Configured Memory instance
@@ -142,6 +149,7 @@ async def create_memory_from_config(
             recent_window=config.get("recent_window", 10),
             summary_prompt=config.get("summary_prompt"),
             owns_llm_provider=has_dedicated_llm,
+            prompt_resolver=prompt_resolver,
         )
 
     elif memory_type == "composite":
@@ -150,7 +158,8 @@ async def create_memory_from_config(
         try:
             for strategy_config in strategy_configs:
                 strategy = await create_memory_from_config(
-                    strategy_config, llm_provider
+                    strategy_config, llm_provider,
+                    prompt_resolver=prompt_resolver,
                 )
                 strategies.append(strategy)
             if not strategies:

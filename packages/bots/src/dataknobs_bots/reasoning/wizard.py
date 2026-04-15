@@ -96,6 +96,7 @@ from .wizard_tasks import (
 
 if TYPE_CHECKING:
     from dataknobs_bots.bot.turn import ToolExecution
+    from dataknobs_bots.prompts.resolver import PromptResolver
     from dataknobs_data import SyncDatabase
 
     from .wizard_fsm import WizardFSM
@@ -182,6 +183,7 @@ class WizardReasoning(ReasoningStrategy):
         clarification_template: str | None = None,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
+        prompt_resolver: PromptResolver | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -482,6 +484,7 @@ class WizardReasoning(ReasoningStrategy):
             clarification_groups=clarification_groups or [],
             clarification_exclude_derivable=clarification_exclude_derivable,
             clarification_template=clarification_template,
+            prompt_resolver=prompt_resolver,
             build_wizard_metadata=self._build_wizard_metadata,
             execute_fsm_step=self._execute_fsm_step,
             make_bank_accessor=self._make_bank_accessor,
@@ -1136,7 +1139,7 @@ class WizardReasoning(ReasoningStrategy):
         return self._context_builder
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> WizardReasoning:  # type: ignore[override]
+    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> WizardReasoning:  # type: ignore[override]
         """Create WizardReasoning from configuration dict.
 
         Args:
@@ -1381,7 +1384,10 @@ class WizardReasoning(ReasoningStrategy):
                     protocols[proto_id] = ReviewProtocolDefinition.from_config(
                         proto_id, proto_config
                     )
-                review_executor = ReviewExecutor(protocols=protocols)
+                review_executor = ReviewExecutor(
+                    protocols=protocols,
+                    prompt_resolver=kwargs.get("prompt_resolver"),
+                )
                 logger.info(
                     "Created review executor with %d protocols", len(protocols)
                 )
@@ -1440,6 +1446,7 @@ class WizardReasoning(ReasoningStrategy):
             consistent_navigation_lifecycle=config.get(
                 "consistent_navigation_lifecycle", True
             ),
+            prompt_resolver=kwargs.get("prompt_resolver"),
         )
 
     async def greet(
