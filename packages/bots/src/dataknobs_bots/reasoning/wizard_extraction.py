@@ -62,6 +62,7 @@ class WizardExtractor:
         # --- Merge ---
         merge_filter: MergeFilter | None,
         grounding_overlap_threshold: float,
+        expansion_config: Any | None,
         # --- Normalization ---
         enum_normalize: bool,
         normalize_threshold: float,
@@ -86,6 +87,7 @@ class WizardExtractor:
         self._extractor = extractor
         self._merge_filter = merge_filter
         self._grounding_overlap_threshold = grounding_overlap_threshold
+        self._expansion_config = expansion_config
         self._enum_normalize = enum_normalize
         self._normalize_threshold = normalize_threshold
         self._reject_unmatched = reject_unmatched
@@ -1164,6 +1166,7 @@ class WizardExtractor:
                     self._merge_filter
                     or SchemaGroundingFilter(
                         overlap_threshold=self._grounding_overlap_threshold,
+                        expansion_config=self._expansion_config,
                     )
                 )
             else:

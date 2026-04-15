@@ -37,6 +37,11 @@ import dataclasses
 import logging
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from dataknobs_utils.value_expansion import (
+    ValueExpansionConfig,
+    expand_value_in_message,
+)
+
 from dataknobs_llm.extraction.grounding import (
     DEFAULT_NEGATION_KEYWORDS,
     DEFAULT_STOPWORDS,
@@ -64,6 +69,7 @@ __all__ = [
     "MergeDecision",
     "MergeFilter",
     "SchemaGroundingFilter",
+    "ValueExpansionConfig",
     # Re-exported from dataknobs_llm.extraction.grounding
     "detect_boolean_signal",
     "field_keywords",
@@ -182,14 +188,63 @@ class SchemaGroundingFilter:
     - ``negation_proximity``: ``int``
       (max word distance between negation and field keyword;
       ``0`` means no proximity requirement; default ``0``)
+    - ``expand_from_message``: ``true`` | ``false``
+      (enable value expansion for this string field;
+      default ``false`` — when enabled, partial extractions
+      are expanded across conjunctions to recover the full
+      compound phrase from the user's message; best for
+      descriptive fields like tone, style, or mood where
+      compound values are common)
+
+    Note: ``grounding: "skip"`` bypasses expansion as well as
+    grounding — the value is accepted as-is without any processing.
 
     Args:
         overlap_threshold: Default minimum word-overlap ratio for
             string grounding (0.0-1.0).  Defaults to 0.5.
+        expansion_config: Algorithm parameters for value expansion.
+            Uses defaults when ``None``.  Configurable via
+            ``expansion_config`` in wizard settings YAML.
     """
 
-    def __init__(self, overlap_threshold: float = 0.5) -> None:
+    def __init__(
+        self,
+        overlap_threshold: float = 0.5,
+        expansion_config: ValueExpansionConfig | None = None,
+    ) -> None:
         self._config = GroundingConfig(overlap_threshold=overlap_threshold)
+        self._expansion_config = expansion_config
+
+    def _try_expand(
+        self,
+        value: Any,
+        user_message: str,
+        schema_property: dict[str, Any],
+    ) -> str | None:
+        """Attempt to expand a partial string extraction to the full phrase.
+
+        Returns the expanded value, or ``None`` if expansion is not
+        applicable or yields no change.
+        """
+        # Gate 1: only non-empty string values
+        if not isinstance(value, str) or not value:
+            return None
+        # Gate 2: skip non-string schema types
+        if schema_property.get("type", "string") != "string":
+            return None
+        # Gate 3: skip enum fields (values are constrained)
+        if "enum" in schema_property:
+            return None
+        # Gate 4: opt-in via x-extraction annotation (default off)
+        x_ext = schema_property.get("x-extraction", {})
+        if not x_ext.get("expand_from_message", False):
+            return None
+        return expand_value_in_message(
+            value,
+            user_message,
+            stopwords=self._config.stopwords,
+            config=self._expansion_config,
+        )
 
     def filter(
         self,
@@ -213,6 +268,13 @@ class SchemaGroundingFilter:
         )
 
         if result.grounded:
+            expanded = self._try_expand(
+                new_value, user_message, schema_property,
+            )
+            if expanded is not None:
+                return MergeDecision.transform(
+                    expanded, reason="expanded partial extraction",
+                )
             return MergeDecision.accept(reason="grounded")
 
         if existing_value is None:

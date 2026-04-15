@@ -43,6 +43,7 @@ from .wizard_grounding import (
     CompositeMergeFilter,
     MergeFilter,
     SchemaGroundingFilter,
+    ValueExpansionConfig,
 )
 from .wizard_hooks import WizardHooks
 from .wizard_navigation import WizardNavigator
@@ -164,6 +165,7 @@ class WizardReasoning(ReasoningStrategy):
         merge_filter: MergeFilter | None = None,
         skip_builtin_grounding: bool = False,
         grounding_overlap_threshold: float = 0.5,
+        expansion_config: ValueExpansionConfig | None = None,
         scope_escalation_enabled: bool = False,
         scope_escalation_scope: str = "wizard_session",
         recent_messages_count: int = 3,
@@ -236,6 +238,10 @@ class WizardReasoning(ReasoningStrategy):
             grounding_overlap_threshold: Minimum word-overlap ratio for
                 string grounding (0.0--1.0).  Defaults to 0.5.  Only used
                 when the built-in grounding filter is active.
+            expansion_config: Algorithm parameters for value expansion.
+                Uses defaults when ``None``.  Controls conjunction sets,
+                phrase-break characters, and field-boundary patterns.
+                See :class:`ValueExpansionConfig`.
             scope_escalation_enabled: When True, automatically retry extraction
                 with a broader scope when required fields are missing after
                 the initial extraction.  Defaults to False (backward-compat).
@@ -348,6 +354,7 @@ class WizardReasoning(ReasoningStrategy):
         if extraction_grounding and not skip_builtin_grounding:
             filters.append(SchemaGroundingFilter(
                 overlap_threshold=grounding_overlap_threshold,
+                expansion_config=expansion_config,
             ))
         if merge_filter is not None:
             filters.append(merge_filter)
@@ -406,6 +413,7 @@ class WizardReasoning(ReasoningStrategy):
             extractor=self._extractor,
             merge_filter=_merge_filter,
             grounding_overlap_threshold=grounding_overlap_threshold,
+            expansion_config=expansion_config,
             enum_normalize=enum_normalize,
             normalize_threshold=normalize_threshold,
             reject_unmatched=reject_unmatched,
@@ -1239,6 +1247,12 @@ class WizardReasoning(ReasoningStrategy):
         grounding_overlap_threshold = wizard_fsm.settings.get(
             "grounding_overlap_threshold", 0.5,
         )
+        expansion_config_dict = wizard_fsm.settings.get("expansion_config")
+        expansion_config: ValueExpansionConfig | None = (
+            ValueExpansionConfig(**expansion_config_dict)
+            if expansion_config_dict
+            else None
+        )
 
         # Load custom merge filter if specified
         merge_filter: MergeFilter | None = None
@@ -1405,6 +1419,7 @@ class WizardReasoning(ReasoningStrategy):
             merge_filter=merge_filter,
             skip_builtin_grounding=skip_builtin_grounding,
             grounding_overlap_threshold=grounding_overlap_threshold,
+            expansion_config=expansion_config,
             scope_escalation_enabled=scope_escalation_enabled,
             scope_escalation_scope=scope_escalation_scope,
             recent_messages_count=recent_messages_count,

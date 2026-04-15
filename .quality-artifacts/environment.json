@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-14T22:05:25Z",
+  "timestamp": "2026-04-14T23:54:16Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.6 (Homebrew 2026-04-09 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-json-extractor",
-  "git_commit": "38172e30c4941d2e5f82daa924d363e7772a3eea",
+  "git_branch": "sbk/extractor-grounding-expansion",
+  "git_commit": "7d6855a5268a84fb9e8b66c3b4334b75c5ac8ea6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
