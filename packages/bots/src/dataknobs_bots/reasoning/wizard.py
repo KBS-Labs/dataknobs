@@ -2143,6 +2143,19 @@ class WizardReasoning(ReasoningStrategy):
                     exc_info=True,
                 )
 
+        # Re-extract from the triggering message at the landing stage
+        # when re_extract_on_entry is configured (Item 89).  Must run
+        # before post-transition lifecycle so that re-extracted data is
+        # available for auto-advance condition evaluation.
+        if wizard_state.current_stage != from_stage:
+            await self._run_post_transition_re_extraction(
+                wizard_state,
+                from_stage,
+                user_message,
+                llm=handle.llm,
+                manager=manager,
+            )
+
         # Post-transition lifecycle (shared method: subflow pop, auto-advance, hooks)
         auto_advance_messages = await self._run_post_transition_lifecycle(
             wizard_state, llm=handle.llm,
@@ -2540,6 +2553,16 @@ class WizardReasoning(ReasoningStrategy):
                     logger.warning(
                         "Auto-save on transition failed", exc_info=True
                     )
+
+            # Re-extract from the triggering message at the landing stage
+            # (Item 89).  Only meaningful for string input (extract mode).
+            if transitioned and extract_mode:
+                await self._run_post_transition_re_extraction(
+                    state,
+                    from_stage,
+                    user_input,
+                    llm=llm,
+                )
 
             # Post-transition lifecycle (shared method) — only when a
             # transition actually occurred.  Without this guard, hooks like
@@ -3059,6 +3082,92 @@ class WizardReasoning(ReasoningStrategy):
             await self._hooks.trigger_complete(state.data)
 
         return auto_advance_messages
+
+    async def _run_post_transition_re_extraction(
+        self,
+        state: WizardState,
+        from_stage: str,
+        user_message: str | None,
+        *,
+        llm: Any | None = None,
+        manager: Any | None = None,
+    ) -> bool:
+        """Re-extract from the triggering message at the landing stage.
+
+        Called after ``_execute_fsm_step()`` and before
+        ``_run_post_transition_lifecycle()`` when the target stage has
+        ``re_extract_on_entry: true``.  This enables single-turn
+        edit-back flows where a user's message contains data relevant
+        to both the source and target stages.
+
+        If ``state.skip_extraction`` is set (from a prior auto-advance),
+        this method clears it — re-extraction supersedes the skip.  In
+        the conversational path (``generate()``/``finalize_turn()``),
+        ``process_input`` already clears ``skip_extraction`` before this
+        method runs, so the clearance is only reachable via ``advance()``.
+
+        Args:
+            state: Wizard state (mutated in place).
+            from_stage: Stage we transitioned FROM.
+            user_message: The user's message that triggered the transition.
+            llm: LLM provider for extraction.
+            manager: Conversation manager for extraction context.
+
+        Returns:
+            ``True`` if re-extraction ran and produced data, ``False``
+            otherwise.
+        """
+        # No transition occurred — nothing to re-extract
+        if state.current_stage == from_stage:
+            return False
+
+        # No user message to re-extract from (e.g. greet)
+        if not user_message:
+            return False
+
+        # Check if landing stage wants re-extraction
+        active_fsm = self._subflows.get_active_fsm()
+        stage = active_fsm.current_metadata
+        if not stage.get("re_extract_on_entry"):
+            return False
+
+        # Stage has no schema — nothing to extract against
+        if not stage.get("schema"):
+            return False
+
+        logger.info(
+            "Re-extracting at landing stage '%s' from transition message "
+            "(source: '%s')",
+            stage.get("name"),
+            from_stage,
+        )
+
+        # Run the full extraction pipeline against the target stage's schema
+        pipeline_result = await self._extraction.run_extraction_pipeline(
+            user_message, stage, state, llm,
+            manager=manager,
+        )
+
+        # Clear skip_extraction if it was set — re-extraction just happened.
+        # In the conversational path, process_input already cleared this flag,
+        # so this branch is only reachable via advance().
+        if state.skip_extraction:
+            state.skip_extraction = False
+            logger.debug(
+                "Cleared skip_extraction after re-extraction at '%s'",
+                stage.get("name"),
+            )
+
+        produced_data = bool(pipeline_result.new_data_keys)
+        if produced_data:
+            logger.info(
+                "Re-extraction at '%s' captured %d fields: %s",
+                stage.get("name"),
+                len(pipeline_result.new_data_keys),
+                sorted(pipeline_result.new_data_keys),
+            )
+
+        return produced_data
 
     # ------------------------------------------------------------------
     # Navigation delegation — thin forwards to WizardNavigator.

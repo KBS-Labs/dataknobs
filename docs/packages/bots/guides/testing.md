@@ -157,7 +157,7 @@ config = (WizardConfigBuilder("quiz-wizard")
 
 | Method | Description |
 |--------|-------------|
-| `.stage(name, *, is_start, is_end, prompt, mode, extraction_scope, auto_advance, skip_extraction)` | Add a stage |
+| `.stage(name, *, is_start, is_end, prompt, mode, extraction_scope, auto_advance, skip_extraction, re_extract_on_entry)` | Add a stage |
 | `.field(name, *, field_type, required, description, enum, default, x_extraction)` | Add a field to the current stage |
 | `.transition(target, condition, priority)` | Add a transition from the current stage |
 | `.settings(**kwargs)` | Set wizard-level settings |

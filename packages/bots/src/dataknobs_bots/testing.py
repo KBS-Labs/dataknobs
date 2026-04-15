@@ -120,6 +120,7 @@ class WizardConfigBuilder:
         skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
         recovery_enabled: bool | None = None,
+        re_extract_on_entry: bool | None = None,
         confirm_first_render: bool | None = None,
         confirm_on_new_data: bool | None = None,
         can_skip: bool | None = None,
@@ -159,6 +160,10 @@ class WizardConfigBuilder:
                 Set to ``False`` to suppress derivation on this stage.
             recovery_enabled: Per-stage recovery pipeline override.
                 Set to ``False`` to suppress all recovery on this stage.
+            re_extract_on_entry: When ``True``, re-extract from the
+                triggering message against this stage's schema after
+                entering via a mid-turn transition.  Enables single-turn
+                edit-back flows.
             confirm_first_render: Whether to pause for confirmation on
                 first render when new data is extracted. Default ``True``.
                 Set to ``False`` to skip confirmation and evaluate
@@ -213,6 +218,8 @@ class WizardConfigBuilder:
             stage["derivation_enabled"] = derivation_enabled
         if recovery_enabled is not None:
             stage["recovery_enabled"] = recovery_enabled
+        if re_extract_on_entry is not None:
+            stage["re_extract_on_entry"] = re_extract_on_entry
         if confirm_first_render is not None:
             stage["confirm_first_render"] = confirm_first_render
         if confirm_on_new_data is not None:

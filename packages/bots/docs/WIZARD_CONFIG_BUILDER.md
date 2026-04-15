@@ -512,6 +512,7 @@ All fields available on `StageConfig`:
 | `intent_detection` | `IntentDetectionConfig \| None` | `None` | Intent detection settings |
 | `tasks` | `tuple[dict, ...]` | `()` | Stage-level tasks |
 | `capture_mode` | `str \| None` | `None` | Extraction control: `"auto"`, `"verbatim"`, or `"extract"` |
+| `re_extract_on_entry` | `bool \| None` | `None` | Re-extract from the triggering message when entering via transition. See [Transition Re-Extraction](context-aware-wizards.md#transition-re-extraction) |
 | `tool_result_mapping` | `tuple[dict, ...]` | `()` | Post-extraction tool calls with result-to-state mapping (see below) |
 
 ### Tool Result Mapping
