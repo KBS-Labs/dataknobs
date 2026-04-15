@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_llm.extraction.grounding import value_matches_schema_type
 from dataknobs_bots.reasoning.wizard_grounding import (
     CompositeMergeFilter,
     MergeDecision,
@@ -19,9 +20,10 @@ from dataknobs_bots.reasoning.wizard_grounding import (
     _has_negation,
     significant_words,
 )
+from dataknobs_bots.reasoning.wizard_types import StageSchema
 from dataknobs_bots.reasoning.wizard_utils import word_in_text
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_bots.testing import BotTestHarness
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.testing import ConfigurableExtractor
 
 # ---------------------------------------------------------------------------
@@ -1406,3 +1408,82 @@ class TestHasNegation:
             field_keywords=None,
             proximity=5,
         )
+
+
+# ---------------------------------------------------------------------------
+# Type-mismatch validation (item 91)
+# ---------------------------------------------------------------------------
+
+
+class TestValueMatchesSchemaType:
+    """Unit tests for value_matches_schema_type (canonical in grounding.py)."""
+
+    def test_string_matches_string(self) -> None:
+        assert value_matches_schema_type("hello", "string") is True
+
+    def test_bool_rejects_string(self) -> None:
+        assert value_matches_schema_type(True, "string") is False
+
+    def test_int_rejects_string(self) -> None:
+        assert value_matches_schema_type(42, "string") is False
+
+    def test_bool_matches_boolean(self) -> None:
+        assert value_matches_schema_type(True, "boolean") is True
+
+    def test_string_rejects_boolean(self) -> None:
+        assert value_matches_schema_type("yes", "boolean") is False
+
+    def test_int_matches_integer(self) -> None:
+        assert value_matches_schema_type(42, "integer") is True
+
+    def test_bool_rejects_integer(self) -> None:
+        assert value_matches_schema_type(True, "integer") is False
+
+    def test_float_matches_number(self) -> None:
+        assert value_matches_schema_type(3.14, "number") is True
+
+    def test_int_matches_number(self) -> None:
+        assert value_matches_schema_type(42, "number") is True
+
+    def test_bool_rejects_number(self) -> None:
+        assert value_matches_schema_type(False, "number") is False
+
+    def test_list_matches_array(self) -> None:
+        assert value_matches_schema_type([1, 2], "array") is True
+
+    def test_string_rejects_array(self) -> None:
+        assert value_matches_schema_type("a", "array") is False
+
+    def test_unknown_type_passes(self) -> None:
+        assert value_matches_schema_type({"k": "v"}, "object") is True
+
+
+# ---------------------------------------------------------------------------
+# E2E: type-mismatch rejection through full pipeline (item 91)
+# ---------------------------------------------------------------------------
+
+
+class TestTypeMismatchE2E:
+    """BotTestHarness E2E test for type-mismatch rejection."""
+
+    @pytest.mark.asyncio
+    async def test_bool_for_string_field_rejected_e2e(self) -> None:
+        """Boolean extraction for a string field is rejected end-to-end."""
+        config = (
+            WizardConfigBuilder("test")
+            .stage("gather", is_start=True, prompt="What tone?")
+                .field("tone", field_type="string", required=True)
+                .transition("done", "data.get('tone')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["What tone would you like?"],
+            extraction_results=[[{"tone": True}]],
+        ) as harness:
+            await harness.chat("Set the tone to formal and academic")
+            # Bool should be rejected — tone stays unset, wizard stays at gather
+            assert harness.wizard_data.get("tone") is None
+            assert harness.wizard_stage == "gather"

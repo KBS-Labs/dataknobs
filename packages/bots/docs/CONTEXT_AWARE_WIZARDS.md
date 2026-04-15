@@ -366,6 +366,8 @@ Extraction grounding verifies each extracted value against the user's actual mes
 | `integer`/`number` | The literal number appears as a whole word in the message |
 | `array` | At least one element appears as a whole word in the message; empty arrays grounded via field keyword + negation keyword |
 
+**Type-mismatch guard:** Before any type-specific check, grounding rejects values whose Python type doesn't match the declared schema type (strategy `"type_mismatch"`). This catches extraction errors like a boolean `True` for a `string` field, or a `bool` for an `integer` field (Python's `bool` is a subclass of `int`, so this requires explicit handling). The normalization layer (`_normalize_extracted_data`) performs the same check independently as defense-in-depth.
+
 The merge decision is conservative:
 
 | Grounded? | Existing value? | Action |

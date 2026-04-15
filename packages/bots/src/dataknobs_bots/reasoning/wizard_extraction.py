@@ -14,6 +14,10 @@ import copy
 import logging
 from typing import Any
 
+from dataknobs_llm.extraction.grounding import (
+    SCHEMA_TYPE_CHECKS,
+    value_matches_schema_type,
+)
 from dataknobs_llm.extraction.schema_extractor import SimpleExtractionResult
 
 from .wizard_derivations import DerivationRule, apply_field_derivations
@@ -54,6 +58,11 @@ class WizardExtractor:
     _BOOL_FALSE = frozenset({"no", "false", "0", "n", "off", "disable", "disabled"})
     _ALL_KEYWORDS = frozenset({"all", "everything", "all of them", "every one"})
     _NONE_KEYWORDS = frozenset({"none", "nothing", "no tools", "empty"})
+
+    # Schema type → valid Python types for post-coercion type validation.
+    # Canonical definition: SCHEMA_TYPE_CHECKS in
+    # dataknobs_llm.extraction.grounding (imported at module level).
+    _SCHEMA_TYPE_MAP = SCHEMA_TYPE_CHECKS
 
     def __init__(
         self,
@@ -906,7 +915,7 @@ class WizardExtractor:
                         float(stripped),
                     )
                 except ValueError:
-                    pass  # Leave as-is; validation will catch it
+                    pass  # Leave as-is; the type-mismatch final pass below will reject it
 
             # --- Array handling ---
             elif declared_type == "array":
@@ -988,6 +997,25 @@ class WizardExtractor:
                             field_name, final_value,
                             prop["enum"],
                         )
+
+        # Final pass: reject values whose type doesn't match the schema.
+        # Defense-in-depth — grounding also catches this, but normalization
+        # runs unconditionally (even when grounding is disabled).
+        for field_name, value in list(normalized.items()):
+            if field_name.startswith("_") or field_name not in properties:
+                continue
+            if value is None:
+                continue
+            prop = properties[field_name]
+            declared_type = prop.get("type")
+            if declared_type and not value_matches_schema_type(
+                value, declared_type,
+            ):
+                logger.debug(
+                    "Type mismatch: %s expects %s, got %s (%r) — rejecting",
+                    field_name, declared_type, type(value).__name__, value,
+                )
+                normalized[field_name] = None
 
         return normalized
 

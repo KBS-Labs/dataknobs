@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-15T03:55:30Z",
+  "timestamp": "2026-04-15T14:22:37Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.6 (Homebrew 2026-04-09 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-transition-re-extraction",
-  "git_commit": "40edf7e6a077ff0c1a62916fa7dd681ae75007a7",
+  "git_branch": "sbk/fix-extraction-type-mismatch",
+  "git_commit": "af283344847af094ee2fff0afd5e73de27916198",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
