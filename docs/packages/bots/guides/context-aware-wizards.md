@@ -1249,7 +1249,7 @@ stages:
         condition: "data.get('tone')"
 ```
 
-Default: `false`. When `true`, the wizard re-runs the full extraction pipeline against this stage's schema using the same user message that triggered the transition. The extraction pipeline includes normalization, grounded merge, defaults, derivations, and recovery — the same steps as a normal extraction.
+Default: disabled (absent). When `true`, the wizard re-runs the full extraction pipeline against this stage's schema using the same user message that triggered the transition. The extraction pipeline includes normalization, grounded merge, defaults, derivations, and recovery — the same steps as a normal extraction.
 
 ### How It Works {#re-extraction-how-it-works}
 

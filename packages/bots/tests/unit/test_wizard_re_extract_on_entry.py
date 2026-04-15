@@ -22,7 +22,7 @@ from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
 
 def _edit_back_config(
     *,
-    re_extract: bool = True,
+    re_extract: bool | None = True,
     auto_advance_filled: bool = True,
     target_has_schema: bool = True,
 ) -> dict[str, Any]:
@@ -42,7 +42,7 @@ def _edit_back_config(
         .stage(
             "target",
             prompt="Enter value.",
-            re_extract_on_entry=re_extract if re_extract else None,
+            re_extract_on_entry=re_extract,
         )
     )
     if target_has_schema:
@@ -89,11 +89,11 @@ class TestReExtractOnEntry:
             assert harness.wizard_stage == "done"
 
     @pytest.mark.asyncio
-    async def test_re_extract_default_false_no_re_extraction(self) -> None:
-        """Stages without re_extract_on_entry do NOT re-extract.
+    async def test_re_extract_explicit_false_no_re_extraction(self) -> None:
+        """Stages with re_extract_on_entry=False do NOT re-extract.
 
-        The wizard should land on the target stage without extracting
-        value_field, requiring a second message.
+        Explicit False disables re-extraction; the wizard lands on the
+        target stage without extracting value_field.
         """
         config = _edit_back_config(re_extract=False)
 
@@ -109,6 +109,29 @@ class TestReExtractOnEntry:
             await harness.chat("Route and set value to formal")
             assert harness.wizard_data.get("routing_field") == "go"
             # value_field was NOT extracted — still at target
+            assert harness.wizard_data.get("value_field") is None
+            assert harness.wizard_stage == "target"
+
+    @pytest.mark.asyncio
+    async def test_re_extract_absent_no_re_extraction(self) -> None:
+        """Stages with re_extract_on_entry absent (None) do NOT re-extract.
+
+        When re_extract_on_entry is not configured at all, the stage
+        behaves the same as explicit False — no re-extraction.
+        """
+        config = _edit_back_config(re_extract=None)
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Enter value."],
+            extraction_results=[
+                # Turn 1 at source: extracts routing_field
+                [{"routing_field": "go"}],
+                # No re-extraction — next extraction is on turn 2
+            ],
+        ) as harness:
+            await harness.chat("Route and set value to formal")
+            assert harness.wizard_data.get("routing_field") == "go"
             assert harness.wizard_data.get("value_field") is None
             assert harness.wizard_stage == "target"
 

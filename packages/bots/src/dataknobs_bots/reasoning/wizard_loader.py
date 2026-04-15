@@ -137,7 +137,7 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     _StageField("extraction_grounding"),
     _StageField("derivation_enabled"),
     _StageField("recovery_enabled"),
-    _StageField("re_extract_on_entry", default=False),
+    _StageField("re_extract_on_entry"),
     # Routing and post-extraction
     _StageField("routing_transforms", default=[]),
     _StageField("tool_result_mapping", default=[]),
