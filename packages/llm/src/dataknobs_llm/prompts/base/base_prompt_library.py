@@ -316,89 +316,65 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if isinstance(data, dict) and len(data) == 0:
             return {"template": ""}
 
-        # Initialize template
-        template: PromptTemplateDict = None
-
-        # If dict with template field
-        if isinstance(data, dict) and "template" in data:
-            template = {
-                "template": data["template"],
-            }
-
-            # Add optional fields
-            if "defaults" in data:
-                template["defaults"] = data["defaults"]
-
-            if "validation" in data:
-                template["validation"] = self._parse_validation_config(data["validation"])
-
-            if "metadata" in data:
-                template["metadata"] = data["metadata"]
-
-            # Add template mode field
-            if "template_mode" in data:
-                template["template_mode"] = data["template_mode"]
-
-            # Add composition fields
-            if "sections" in data:
-                template["sections"] = data["sections"]
-
-            if "extends" in data:
-                template["extends"] = data["extends"]
-
-            # Add RAG configuration fields
-            if "rag_config_refs" in data:
-                template["rag_config_refs"] = data["rag_config_refs"]
-
-            if "rag_configs" in data:
-                template["rag_configs"] = [
-                    self._parse_rag_config(rag_data)
-                    for rag_data in data["rag_configs"]
-                ]
-
-            return template
-
-        # If dict with extends field but no template (template will be inherited)
-        elif isinstance(data, dict) and "extends" in data:
-            template = {}
-
-            # Template will be inherited from base
-            template["extends"] = data["extends"]
-
-            # Add optional override fields
-            if "defaults" in data:
-                template["defaults"] = data["defaults"]
-
-            if "validation" in data:
-                template["validation"] = self._parse_validation_config(data["validation"])
-
-            if "metadata" in data:
-                template["metadata"] = data["metadata"]
-
-            # Add template mode field
-            if "template_mode" in data:
-                template["template_mode"] = data["template_mode"]
-
-            if "sections" in data:
-                template["sections"] = data["sections"]
-
-            # Add RAG configuration fields
-            if "rag_config_refs" in data:
-                template["rag_config_refs"] = data["rag_config_refs"]
-
-            if "rag_configs" in data:
-                template["rag_configs"] = [
-                    self._parse_rag_config(rag_data)
-                    for rag_data in data["rag_configs"]
-                ]
-
-            return template
-
-        else:
+        if not isinstance(data, dict):
             raise ValueError(
                 f"Invalid prompt template data: expected dict with 'template' or 'extends' key, "
                 f"or string, got {type(data)}"
             )
+
+        # Must have either "template" or "extends" (or both)
+        has_template = "template" in data
+        has_extends = "extends" in data
+
+        if not has_template and not has_extends:
+            raise ValueError(
+                f"Invalid prompt template data: expected dict with 'template' or 'extends' key, "
+                f"or string, got dict with keys: {list(data.keys())}"
+            )
+
+        # Build the template dict — start with the required key(s)
+        template: PromptTemplateDict = {}
+        if has_template:
+            template["template"] = data["template"]
+        if has_extends:
+            template["extends"] = data["extends"]
+
+        # Copy optional fields shared by all template variants
+        self._apply_optional_fields(template, data)
+
+        return template
+
+    def _apply_optional_fields(
+        self, template: PromptTemplateDict, data: dict[str, Any]
+    ) -> None:
+        """Copy optional fields from parsed data into a PromptTemplateDict.
+
+        This is the single location where optional PromptTemplateDict fields
+        are transferred from input data to the parsed template. Adding a new
+        field to PromptTemplateDict requires only one change here.
+
+        Args:
+            template: The template dict being built (modified in place).
+            data: The raw input data dict.
+        """
+        # Simple pass-through fields
+        passthrough_fields = (
+            "defaults", "metadata", "template_mode", "template_syntax",
+            "sections", "rag_config_refs",
+        )
+        for field_name in passthrough_fields:
+            if field_name in data:
+                template[field_name] = data[field_name]  # type: ignore[literal-required]
+
+        # Fields requiring parsing
+        if "validation" in data:
+            template["validation"] = self._parse_validation_config(data["validation"])
+
+        if "rag_configs" in data:
+            template["rag_configs"] = [
+                self._parse_rag_config(rag_data)
+                for rag_data in data["rag_configs"]
+            ]
 
     # ===== Abstract Methods (must be implemented by subclasses) =====
 
