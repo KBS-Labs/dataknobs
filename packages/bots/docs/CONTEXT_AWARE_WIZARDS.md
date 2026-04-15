@@ -50,6 +50,11 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Per-Stage Override](#recovery-per-stage-override)
   - [Pipeline Examples](#pipeline-examples)
   - [Clarification Grouping](#clarification-grouping)
+- [Transition Re-Extraction](#transition-re-extraction)
+  - [The Problem](#re-extraction-problem)
+  - [Configuration](#re-extraction-configuration)
+  - [How It Works](#re-extraction-how-it-works)
+  - [Interaction with skip_extraction](#interaction-with-skip_extraction)
 - [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
@@ -1098,6 +1103,78 @@ When the confidence gate fires, the wizard identifies which required fields are 
 4. **Renders the template** (if configured). The `template` receives a `field_groups` variable — a list of dicts with `fields` and `question` keys. If no template is set, the questions are rendered as a simple bullet list.
 
 When no groups are configured, the existing behavior is preserved — the wizard generates a generic clarification prompt from the extraction issues.
+
+---
+
+## Transition Re-Extraction
+
+### The Problem {#re-extraction-problem}
+
+When a wizard transitions from stage A to stage B mid-turn, the user's message is only extracted against stage A's schema. Any data in the message relevant to stage B's schema is lost, forcing the user to repeat information in a second message.
+
+For example, in an edit-back flow the user says "Change the tone to formal" at a finalize stage. The finalize stage extracts the routing field (`edit_section: "options"`) and transitions to the options stage — but "formal" is never extracted because it belongs to the options stage's schema, not finalize's.
+
+### Configuration {#re-extraction-configuration}
+
+Enable re-extraction on a stage with the `re_extract_on_entry` field:
+
+```yaml
+stages:
+  - name: configure_options
+    re_extract_on_entry: true   # Re-extract from the triggering message
+    schema:
+      properties:
+        tone: { type: string, enum: [formal, casual, academic] }
+      required: [tone]
+    transitions:
+      - target: finalize
+        condition: "data.get('tone')"
+```
+
+Default: disabled (absent). When `true`, the wizard re-runs the full extraction pipeline against this stage's schema using the same user message that triggered the transition. The extraction pipeline includes normalization, grounded merge, defaults, derivations, and recovery — the same steps as a normal extraction.
+
+### How It Works {#re-extraction-how-it-works}
+
+The re-extraction runs after the FSM transition fires but before the post-transition lifecycle (auto-advance, hooks):
+
+```
+1. User message arrives at source stage
+2. Extract from message using source stage's schema
+3. Evaluate transitions → transition fires
+4. Enter target stage
+5. ★ Re-extract from the SAME message using target stage's schema
+6. Run post-transition lifecycle (auto-advance, hooks)
+7. Generate response
+```
+
+This ordering is critical: re-extracted data is available in `wizard_state.data` when auto-advance evaluates transition conditions at step 6. This enables single-turn edit-back flows:
+
+1. **Finalize** extracts `edit_section: "options"` → transitions to **configure_options**
+2. **configure_options** re-extracts `tone: "formal"` from the same message
+3. Auto-advance evaluates transitions → `tone` is present → advances to **finalize**
+4. Config re-saved with updated tone — single turn
+
+Re-extraction is silently skipped when:
+- No transition occurred (stayed at the same stage)
+- No user message is available (e.g., greet)
+- The target stage has no schema
+
+**Limitation:** Re-extraction runs only once per turn, for the stage entered by the initial transition. If re-extraction fills the target stage's required fields and auto-advance fires to a subsequent stage that also has `re_extract_on_entry`, that subsequent stage does **not** re-extract. Design edit-back flows so the re-extraction target is the final destination, not a waypoint.
+
+The `advance()` API also supports re-extraction when called with string input (extract mode). Dict input has no raw message to re-extract from, so `re_extract_on_entry` is a no-op.
+
+### Interaction with skip_extraction
+
+`re_extract_on_entry` and `skip_extraction` serve opposite purposes:
+
+| Flag | Purpose | Set by |
+|------|---------|--------|
+| `skip_extraction` | Prevent extraction at a landing stage after auto-advance | Auto-advance loop (one-shot) |
+| `re_extract_on_entry` | Enable extraction at a landing stage from the transition message | Stage config (permanent) |
+
+When both flags coexist on a state object, re-extraction takes priority and clears `skip_extraction`. This ensures the next turn's extraction runs normally rather than being skipped.
+
+In the conversational path (`generate()`/`finalize_turn()`), `process_input` already clears `skip_extraction` before re-extraction runs, so this interaction is only reachable via the `advance()` API — for example, when a prior `advance()` call triggered auto-advance (setting `skip_extraction`) and the next `advance()` call lands on a stage with `re_extract_on_entry`.
 
 ---
 

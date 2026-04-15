@@ -2123,29 +2123,14 @@ class WizardReasoning(ReasoningStrategy):
             llm=handle.llm,
         )
 
-        # Auto-save artifact to catalog on stage transition.  Collection
-        # stages add records via bank.add() directly (not through tools),
-        # so tool-level auto-save won't capture them.  Saving here ensures
-        # the catalog stays current as the wizard progresses.
-        if wizard_state.current_stage != from_stage and self._catalog and self._artifact:
-            try:
-                errors = self._artifact.validate()
-                if not errors:
-                    self._catalog.save(self._artifact)
-                    logger.debug(
-                        "Auto-saved artifact on stage transition %s -> %s",
-                        from_stage,
-                        wizard_state.current_stage,
-                    )
-            except Exception:
-                logger.warning(
-                    "Auto-save on stage transition failed",
-                    exc_info=True,
-                )
-
-        # Post-transition lifecycle (shared method: subflow pop, auto-advance, hooks)
-        auto_advance_messages = await self._run_post_transition_lifecycle(
-            wizard_state, llm=handle.llm,
+        # Post-transition sequence: auto-save, re-extraction, lifecycle
+        # (shared method — see also advance()).
+        auto_advance_messages = await self._run_post_transition_sequence(
+            wizard_state,
+            from_stage,
+            user_message,
+            llm=handle.llm,
+            manager=manager,
         )
 
         # Re-fetch active FSM for response generation
@@ -2530,27 +2515,16 @@ class WizardReasoning(ReasoningStrategy):
 
             transitioned = state.current_stage != from_stage
 
-            # Artifact auto-save on transition
-            if transitioned and self._catalog and self._artifact:
-                try:
-                    errors = self._artifact.validate()
-                    if not errors:
-                        self._catalog.save(self._artifact)
-                except Exception:
-                    logger.warning(
-                        "Auto-save on transition failed", exc_info=True
-                    )
-
-            # Post-transition lifecycle (shared method) — only when a
-            # transition actually occurred.  Without this guard, hooks like
-            # ``trigger_enter`` fire spuriously for the current stage when the
-            # FSM stays put (no matching transition condition).
-            if transitioned:
-                auto_advance_messages = (
-                    await self._run_post_transition_lifecycle(
-                        state, llm=llm,
-                    )
-                )
+            # Post-transition sequence: auto-save, re-extraction, lifecycle
+            # (shared method — see also _finalize_preamble()).
+            # extract_mode=False when user_input is a dict (direct merge),
+            # so re-extraction is skipped (no raw text to extract from).
+            auto_advance_messages = await self._run_post_transition_sequence(
+                state,
+                from_stage,
+                user_input if extract_mode else None,
+                llm=llm,
+            )
 
         # Build result
         active_fsm = self._subflows.get_active_fsm()
@@ -3013,6 +2987,78 @@ class WizardReasoning(ReasoningStrategy):
 
         return from_stage, step_result
 
+    async def _run_post_transition_sequence(
+        self,
+        state: WizardState,
+        from_stage: str,
+        user_message: str | None = None,
+        *,
+        llm: Any | None = None,
+        manager: Any | None = None,
+    ) -> list[str]:
+        """Run the full post-transition sequence after an FSM step.
+
+        Consolidates auto-save, re-extraction, and lifecycle into a
+        single method shared by ``_finalize_preamble()`` and
+        ``advance()``.  All steps are gated on a transition having
+        actually occurred (``state.current_stage != from_stage``).
+
+        Sequence:
+            1. **Artifact auto-save** — persist to catalog when
+               configured.
+            2. **Re-extraction** — re-extract from the user's message
+               at the landing stage when ``re_extract_on_entry`` is
+               configured (Item 89).  Skipped when ``user_message``
+               is ``None`` (greet, or dict-input in ``advance()``).
+            3. **Post-transition lifecycle** — subflow pop,
+               auto-advance loop, entry/completion hooks.
+
+        Args:
+            state: Wizard state (mutated in place).
+            from_stage: Stage name before the FSM step.
+            user_message: The user's message that triggered the
+                transition.  ``None`` for greet or dict-input mode
+                in ``advance()``.
+            llm: LLM provider for extraction and auto-advance.
+            manager: Conversation manager (``None`` in the
+                ``advance()`` path).
+
+        Returns:
+            List of rendered template strings from auto-advanced
+            stages (empty when no transition occurred).
+        """
+        # No transition — nothing to do
+        if state.current_stage == from_stage:
+            return []
+
+        # 1. Artifact auto-save
+        if self._catalog and self._artifact:
+            try:
+                errors = self._artifact.validate()
+                if not errors:
+                    self._catalog.save(self._artifact)
+                    logger.debug(
+                        "Auto-saved artifact on stage transition %s -> %s",
+                        from_stage,
+                        state.current_stage,
+                    )
+            except Exception:
+                logger.warning(
+                    "Auto-save on stage transition failed",
+                    exc_info=True,
+                )
+
+        # 2. Re-extraction (Item 89)
+        await self._run_post_transition_re_extraction(
+            state, from_stage, user_message,
+            llm=llm, manager=manager,
+        )
+
+        # 3. Post-transition lifecycle (subflow pop, auto-advance, hooks)
+        return await self._run_post_transition_lifecycle(
+            state, llm=llm,
+        )
+
     async def _run_post_transition_lifecycle(
         self,
         state: WizardState,
@@ -3021,9 +3067,9 @@ class WizardReasoning(ReasoningStrategy):
     ) -> list[str]:
         """Run post-transition lifecycle: subflow pop, auto-advance, hooks.
 
-        Called after ``_execute_fsm_step()`` to handle the standard
-        post-transition sequence.  Shared by ``generate()`` and
-        ``advance()``.
+        Called by ``_run_post_transition_sequence()`` as the final step
+        of the post-transition pipeline, after artifact auto-save and
+        re-extraction.
 
         Args:
             state: Wizard state (mutated in place).
@@ -3059,6 +3105,96 @@ class WizardReasoning(ReasoningStrategy):
             await self._hooks.trigger_complete(state.data)
 
         return auto_advance_messages
+
+    async def _run_post_transition_re_extraction(
+        self,
+        state: WizardState,
+        from_stage: str,
+        user_message: str | None,
+        *,
+        llm: Any | None = None,
+        manager: Any | None = None,
+    ) -> bool:
+        """Re-extract from the triggering message at the landing stage.
+
+        Called by ``_run_post_transition_sequence()`` between artifact
+        auto-save and the post-transition lifecycle.  This enables
+        single-turn edit-back flows where a user's message contains
+        data relevant to both the source and target stages.
+
+        If ``state.skip_extraction`` is set (from a prior auto-advance),
+        this method clears it — re-extraction supersedes the skip.  In
+        the conversational path, ``process_input`` clears
+        ``skip_extraction`` when the flag is set, so the clearance
+        here is only reachable via ``advance()``.
+
+        Args:
+            state: Wizard state (mutated in place).
+            from_stage: Stage we transitioned FROM.
+            user_message: The user's message that triggered the transition.
+            llm: LLM provider for extraction.
+            manager: Conversation manager for extraction context.
+
+        Returns:
+            ``True`` if re-extraction ran and produced data, ``False``
+            otherwise.
+        """
+        # Defensive guard — _run_post_transition_sequence() already gates
+        # on this, but kept for safety if called directly in the future.
+        if state.current_stage == from_stage:
+            return False
+
+        # No user message to re-extract from (e.g. greet)
+        if not user_message:
+            return False
+
+        # Check if landing stage wants re-extraction.
+        # Uses ``is not True`` because re_extract_on_entry is default-off:
+        # None (absent) and False both skip re-extraction; only True
+        # enables it.  Contrast with derivation_enabled / recovery_enabled,
+        # which are default-on and use ``is False`` to disable explicitly.
+        active_fsm = self._subflows.get_active_fsm()
+        stage = active_fsm.current_metadata
+        if stage.get("re_extract_on_entry") is not True:
+            return False
+
+        # Stage has no schema — nothing to extract against
+        if not stage.get("schema"):
+            return False
+
+        logger.info(
+            "Re-extracting at landing stage '%s' from transition message "
+            "(source: '%s')",
+            stage.get("name"),
+            from_stage,
+        )
+
+        # Run the full extraction pipeline against the target stage's schema
+        pipeline_result = await self._extraction.run_extraction_pipeline(
+            user_message, stage, state, llm,
+            manager=manager,
+        )
+
+        # Clear skip_extraction if it was set — re-extraction just happened.
+        # In the conversational path, process_input clears this flag when
+        # it is set, so this branch is only reachable via advance().
+        if state.skip_extraction:
+            state.skip_extraction = False
+            logger.debug(
+                "Cleared skip_extraction after re-extraction at '%s'",
+                stage.get("name"),
+            )
+
+        produced_data = bool(pipeline_result.new_data_keys)
+        if produced_data:
+            logger.info(
+                "Re-extraction at '%s' captured %d fields: %s",
+                stage.get("name"),
+                len(pipeline_result.new_data_keys),
+                sorted(pipeline_result.new_data_keys),
+            )
+
+        return produced_data
 
     # ------------------------------------------------------------------
     # Navigation delegation — thin forwards to WizardNavigator.
