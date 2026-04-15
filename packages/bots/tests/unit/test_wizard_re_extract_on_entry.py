@@ -264,15 +264,17 @@ class TestReExtractAdvancePath:
     """
 
     @pytest.mark.asyncio
-    async def test_advance_re_extraction_clears_skip_extraction(
+    async def test_advance_re_extraction_chains_to_completion(
         self,
     ) -> None:
-        """advance() re-extraction clears skip_extraction on the state.
+        """advance() re-extraction clears skip_extraction, allowing
+        extraction to run, then auto-advance chains to completion.
 
         When a prior advance() triggered auto-advance, skip_extraction
         is left True on the state.  If the next advance() transitions to
         a re_extract_on_entry stage, re-extraction clears the flag so
-        the following turn's extraction is not skipped.
+        extraction runs.  After re-extraction captures data, auto-advance
+        chains through to done (Item 92 gate relaxation).
         """
         config = _edit_back_config(re_extract=True, auto_advance_filled=False)
         # Force LLM extraction on all schema stages so the
@@ -322,9 +324,13 @@ class TestReExtractAdvancePath:
         assert state.data.get("value_field") == "formal"
         assert state.current_stage == "done"
         assert state.completed is True
-        # skip_extraction is True because auto-advance set it — harmless
-        # since the wizard is complete.  The re-extraction DID clear it
-        # (allowing extraction to run), then auto-advance re-set it.
+        # Verify extraction ran twice: once at source (routing_field),
+        # once via re-extraction at target (value_field).  This confirms
+        # skip_extraction was cleared — if it hadn't been, the second
+        # extraction would have been skipped.
+        assert len(extractor.extract_calls) == 2
+        # skip_extraction is True because auto-advance re-set it after
+        # re-extraction cleared it — harmless since the wizard is complete.
         assert state.skip_extraction is True
 
 
