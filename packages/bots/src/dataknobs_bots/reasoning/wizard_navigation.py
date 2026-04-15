@@ -63,7 +63,7 @@ class WizardNavigator:
             ``(state, *, user_message, trigger, llm) -> (from_stage, step_result)``
         run_post_transition_lifecycle: Callback to run post-transition
             lifecycle (subflow pop, auto-advance, hooks).  Signature:
-            ``(state, *, llm) -> list[str]``
+            ``(state, *, llm, after_re_extraction) -> list[str]``
         generate_stage_response: Callback to generate a stage response.
             Signature: ``(manager, llm, stage, state, tools) -> response``
         prepend_messages_to_response: Callback to prepend auto-advance

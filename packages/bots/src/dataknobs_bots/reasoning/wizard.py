@@ -3049,14 +3049,14 @@ class WizardReasoning(ReasoningStrategy):
                 )
 
         # 2. Re-extraction (Item 89)
-        await self._run_post_transition_re_extraction(
+        re_extracted = await self._run_post_transition_re_extraction(
             state, from_stage, user_message,
             llm=llm, manager=manager,
         )
 
         # 3. Post-transition lifecycle (subflow pop, auto-advance, hooks)
         return await self._run_post_transition_lifecycle(
-            state, llm=llm,
+            state, llm=llm, after_re_extraction=re_extracted,
         )
 
     async def _run_post_transition_lifecycle(
@@ -3064,6 +3064,7 @@ class WizardReasoning(ReasoningStrategy):
         state: WizardState,
         *,
         llm: Any | None = None,
+        after_re_extraction: bool = False,
     ) -> list[str]:
         """Run post-transition lifecycle: subflow pop, auto-advance, hooks.
 
@@ -3075,6 +3076,9 @@ class WizardReasoning(ReasoningStrategy):
             state: Wizard state (mutated in place).
             llm: LLM provider for auto-advance transforms (``None``
                 when no LLM is available).
+            after_re_extraction: When ``True``, relax the
+                ``auto_advance`` gate on the landing stage because
+                re-extraction just captured data.
 
         Returns:
             List of rendered template strings from auto-advanced stages.
@@ -3089,6 +3093,7 @@ class WizardReasoning(ReasoningStrategy):
         stage = active_fsm.current_metadata
         auto_advance_messages = await self._response.run_auto_advance_loop(
             state, active_fsm, stage, llm=llm,
+            after_re_extraction=after_re_extraction,
         )
 
         # Re-fetch in case subflow pop occurred during auto-advance
