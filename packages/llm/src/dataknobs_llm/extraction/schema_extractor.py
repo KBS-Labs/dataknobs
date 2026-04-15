@@ -42,6 +42,11 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_utils.json_extractor import JSONExtractor
 
+from dataknobs_llm.extraction.prompts import (
+    DEFAULT_EXTRACTION_PROMPT,
+    EXTRACTION_WITH_ASSUMPTIONS_PROMPT,
+)
+
 if TYPE_CHECKING:
     from dataknobs_llm.extraction.observability import ExtractionTracker
     from dataknobs_llm.llm.base import AsyncLLMProvider
@@ -191,82 +196,6 @@ class SimpleExtractionResult:
         matching :attr:`ExtractionResult.is_confident`.
         """
         return round(self.confidence, 10) >= 0.8 and not self.errors
-
-
-# Default extraction prompt template
-DEFAULT_EXTRACTION_PROMPT = """Extract structured data from the user's message.
-
-## Schema
-Extract data matching this JSON Schema:
-```json
-{schema}
-```
-
-## Context
-{context}
-
-## Instructions
-1. Parse the user's message and extract relevant information
-2. Return ONLY a valid JSON object matching the schema
-3. If the user did NOT mention a field at all, omit it
-4. If you cannot extract the required information, return an empty object {{}}
-5. Do not include explanations - only return the JSON object
-6. For boolean fields: "yes"/"enable"/"add" → true; "no"/"disable"/"skip"/"none" → false
-7. Negations count as explicit values: "no knowledge base" → kb_enabled: false
-8. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
-9. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
-
-## User Message
-{text}
-
-## Extracted Data (JSON only):"""
-
-# Extraction prompt template with assumption tracking
-EXTRACTION_WITH_ASSUMPTIONS_PROMPT = """Extract structured data from the user's message and identify any assumptions made.
-
-## Schema
-Extract data matching this JSON Schema:
-```json
-{schema}
-```
-
-## Context
-{context}
-
-## Instructions
-1. Parse the user's message and extract relevant information
-2. Identify any assumptions you make about:
-   - Ambiguous terms or references
-   - Implied but not explicitly stated information
-   - Default values used when information is missing
-   - Interpretations that could have multiple meanings
-3. If the user did NOT mention a field at all, omit it from "data"
-4. For boolean fields: "yes"/"enable"/"add" → true; "no"/"disable"/"skip"/"none" → false
-5. Negations count as explicit values: "no knowledge base" → kb_enabled: false
-6. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
-7. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
-8. Return a JSON object with two keys:
-   - "data": The extracted data matching the schema
-   - "assumptions": Array of assumption objects with:
-     - "content": Description of the assumption
-     - "field": Which field this relates to (or null if general)
-     - "confidence": How confident you are (0.0-1.0)
-
-## Example Output
-```json
-{{
-  "data": {{"name": "John", "age": 30}},
-  "assumptions": [
-    {{"content": "Assumed 'John' refers to a person's first name", "field": "name", "confidence": 0.9}},
-    {{"content": "Age of 30 was mentioned in a different context but likely applies here", "field": "age", "confidence": 0.7}}
-  ]
-}}
-```
-
-## User Message
-{text}
-
-## Extracted Data and Assumptions (JSON only):"""
 
 
 class SchemaExtractor:
