@@ -10,9 +10,12 @@ from rubric evaluation results:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .models import (
     CriterionResult,
@@ -28,7 +31,7 @@ async def generate_feedback_summary(
     rubric: Rubric,
     evaluation: RubricEvaluation,
     llm: AsyncLLMProvider | None = None,
-    prompt_resolver: Any | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> str:
     """Generate a feedback summary for a rubric evaluation.
 
@@ -157,7 +160,7 @@ async def _generate_llm_summary(
     rubric: Rubric,
     evaluation: RubricEvaluation,
     llm: AsyncLLMProvider,
-    prompt_resolver: Any | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> str:
     """Generate an LLM-enhanced natural language summary."""
     criterion_by_id = {c.id: c for c in rubric.criteria}

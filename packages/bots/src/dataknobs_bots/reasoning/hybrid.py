@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.grounded_config import GroundedSynthesisConfig
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
@@ -94,12 +97,17 @@ class HybridReasoning(ReasoningStrategy):
                 ``HybridReasoningConfig.from_dict``).
             **kwargs: Optional ``knowledge_base`` — auto-wrapped via
                 the grounded child's ``set_knowledge_base``.
+                Optional ``prompt_resolver`` — forwarded to the
+                grounded child for library-based prompt resolution.
 
         Returns:
             Configured HybridReasoning instance.
         """
         hybrid_config = HybridReasoningConfig.from_dict(config)
-        strategy = cls(config=hybrid_config)
+        strategy = cls(
+            config=hybrid_config,
+            prompt_resolver=kwargs.get("prompt_resolver"),
+        )
         # Auto-wrap knowledge_base — same guard as GroundedReasoning.
         # Check the grounded child's sources to avoid double-wrapping
         # when the config already declares a vector_kb source.
@@ -112,11 +120,19 @@ class HybridReasoning(ReasoningStrategy):
             strategy.set_knowledge_base(knowledge_base)
         return strategy
 
-    def __init__(self, *, config: HybridReasoningConfig) -> None:
+    def __init__(
+        self,
+        *,
+        config: HybridReasoningConfig,
+        prompt_resolver: PromptResolver | None = None,
+    ) -> None:
         super().__init__(greeting_template=config.greeting_template)
         self._config = config
 
-        self._grounded = GroundedReasoning(config=config.grounded)
+        self._grounded = GroundedReasoning(
+            config=config.grounded,
+            prompt_resolver=prompt_resolver,
+        )
         self._react = ReActReasoning(
             max_iterations=config.react_max_iterations,
             verbose=config.react_verbose,

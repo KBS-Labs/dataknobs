@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..context.accumulator import ConversationContext
+    from ..prompts.resolver import PromptResolver
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ class FocusGuard:
         drift_threshold: float = 0.5,
         use_keyword_detection: bool = True,
         use_llm_evaluation: bool = False,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         """Initialize FocusGuard.
 

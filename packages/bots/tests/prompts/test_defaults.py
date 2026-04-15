@@ -14,7 +14,7 @@ import pytest
 from dataknobs_llm.prompts import ConfigPromptLibrary, CompositePromptLibrary
 
 from dataknobs_bots.prompts.defaults import (
-    _collect_all_bots_keys,
+    get_all_bots_keys,
     get_default_prompt_library,
     get_full_prompt_library,
 )
@@ -38,16 +38,16 @@ class TestAllBotsPromptKeys:
             + len(GROUNDED_PROMPT_KEYS)
             + len(FOCUS_PROMPT_KEYS)
         )
-        assert len(_collect_all_bots_keys()) == expected
+        assert len(get_all_bots_keys()) == expected
 
     def test_no_namespace_collisions(self) -> None:
         """All keys use distinct namespace prefixes per module."""
-        wizard_keys = {k for k in _collect_all_bots_keys() if k.startswith("wizard.")}
-        memory_keys = {k for k in _collect_all_bots_keys() if k.startswith("memory.")}
-        rubric_keys = {k for k in _collect_all_bots_keys() if k.startswith("rubric.")}
-        review_keys = {k for k in _collect_all_bots_keys() if k.startswith("review.")}
-        grounded_keys = {k for k in _collect_all_bots_keys() if k.startswith("grounded.")}
-        focus_keys = {k for k in _collect_all_bots_keys() if k.startswith("focus.")}
+        wizard_keys = {k for k in get_all_bots_keys() if k.startswith("wizard.")}
+        memory_keys = {k for k in get_all_bots_keys() if k.startswith("memory.")}
+        rubric_keys = {k for k in get_all_bots_keys() if k.startswith("rubric.")}
+        review_keys = {k for k in get_all_bots_keys() if k.startswith("review.")}
+        grounded_keys = {k for k in get_all_bots_keys() if k.startswith("grounded.")}
+        focus_keys = {k for k in get_all_bots_keys() if k.startswith("focus.")}
 
         assert len(wizard_keys) == len(WIZARD_PROMPT_KEYS)
         assert len(memory_keys) == len(MEMORY_PROMPT_KEYS)
@@ -58,7 +58,7 @@ class TestAllBotsPromptKeys:
 
     def test_all_values_are_prompt_template_dicts(self) -> None:
         """Every value has the required 'template' and 'template_syntax' keys."""
-        for key, value in _collect_all_bots_keys().items():
+        for key, value in get_all_bots_keys().items():
             assert "template" in value, f"Key {key!r} missing 'template'"
             assert "template_syntax" in value, f"Key {key!r} missing 'template_syntax'"
 

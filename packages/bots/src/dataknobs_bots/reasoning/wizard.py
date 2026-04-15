@@ -96,6 +96,7 @@ from .wizard_tasks import (
 
 if TYPE_CHECKING:
     from dataknobs_bots.bot.turn import ToolExecution
+    from dataknobs_bots.prompts.resolver import PromptResolver
     from dataknobs_data import SyncDatabase
 
     from .wizard_fsm import WizardFSM
@@ -182,7 +183,7 @@ class WizardReasoning(ReasoningStrategy):
         clarification_template: str | None = None,
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ):
         """Initialize WizardReasoning.
 

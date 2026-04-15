@@ -48,8 +48,11 @@ _MODULES: list[tuple[str, dict[str, PromptTemplateDict]]] = [
 _all_bots_keys: dict[str, PromptTemplateDict] | None = None
 
 
-def _collect_all_bots_keys() -> dict[str, PromptTemplateDict]:
+def get_all_bots_keys() -> dict[str, PromptTemplateDict]:
     """Merge all bots prompt key registries into a single dict.
+
+    Returns a cached dict of all prompt keys across all bots prompt modules.
+    Useful for testing and introspection.
 
     Raises ``ValueError`` if any key appears in more than one module
     (namespacing should prevent this, but we verify defensively).
@@ -89,7 +92,7 @@ def get_default_prompt_library() -> ConfigPromptLibrary:
         A ``ConfigPromptLibrary`` with all bots prompt keys registered
         as system prompts.
     """
-    return ConfigPromptLibrary(config={"system": _collect_all_bots_keys()})
+    return ConfigPromptLibrary(config={"system": get_all_bots_keys()})
 
 
 def get_full_prompt_library() -> CompositePromptLibrary:

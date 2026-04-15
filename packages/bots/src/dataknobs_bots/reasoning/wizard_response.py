@@ -24,6 +24,7 @@ from .wizard_derivations import DerivationRule
 from .wizard_types import StageSchema, TurnContext, WizardState, field_is_present
 
 if TYPE_CHECKING:
+    from ..prompts.resolver import PromptResolver
     from .wizard_fsm import WizardFSM
     from .wizard_renderer import WizardRenderer
     from .wizard_subflows import SubflowManager
@@ -91,7 +92,7 @@ class WizardResponder:
         clarification_groups: list[dict[str, Any]],
         clarification_exclude_derivable: bool,
         clarification_template: str | None,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
         # --- Callbacks (orchestrator-owned, may change during lifecycle) ---
         build_wizard_metadata: Callable[[WizardState], dict[str, Any]],
         execute_fsm_step: Callable[..., Awaitable[tuple[str, Any]]],

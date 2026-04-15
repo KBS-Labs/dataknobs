@@ -65,6 +65,8 @@ class PromptResolver:
         """
         template_dict = self._library.get_system_prompt(key)
         if template_dict is None:
+            template_dict = self._library.get_user_prompt(key)
+        if template_dict is None:
             return None
 
         try:
@@ -72,7 +74,7 @@ class PromptResolver:
                 template_dict, variables,
             )
             return result.content
-        except Exception:
+        except ValueError:
             logger.exception(
                 "Failed to render prompt key %r — falling back to inline",
                 key,

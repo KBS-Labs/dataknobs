@@ -30,9 +30,12 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.utils.template_env import create_template_env
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 from dataknobs_data.sources.base import (
     GroundedSource,
     RetrievalIntent,
@@ -273,7 +276,7 @@ class GroundedReasoning(ReasoningStrategy):
         config: GroundedReasoningConfig,
         sources: list[GroundedSource] | None = None,
         query_provider: Any | None = None,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         """Initialize the grounded reasoning strategy.
 
@@ -1371,6 +1374,14 @@ class GroundedReasoning(ReasoningStrategy):
                 parts_resolved = [original_system_prompt]
                 if kb_section:
                     parts_resolved.append(kb_section)
+                elif kb_context:
+                    # Library key missing — use inline wrapper to avoid
+                    # silently dropping knowledge base context.
+                    parts_resolved.append(
+                        "\n\n<knowledge_base>\n"
+                        f"{kb_context}\n"
+                        "</knowledge_base>"
+                    )
                 parts_resolved.append(synthesis_text)
                 if cfg.instruction:
                     parts_resolved.append(cfg.instruction)

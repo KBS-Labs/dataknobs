@@ -293,8 +293,8 @@ class TestPromptRefBuilderIntegration:
         builder = PromptBuilder(library=library)
 
         result = builder.render_system_prompt("greet", params={"name": "Alice"})
-        # Note: prompt_ref'd templates get extra_params from the prompt_ref call,
-        # not from the parent render context. The parent's params are not
-        # automatically inherited by prompt_ref'd templates.
-        # "greet.name" needs name passed explicitly via prompt_ref or defaults.
+        # prompt_ref'd templates inherit the parent template's rendering
+        # context (matching Jinja2 {% include %} semantics).  The merge
+        # order is: parent context < template defaults < explicit extra_params.
+        assert "Hello Alice!" in result.content
         assert "Goodbye!" in result.content

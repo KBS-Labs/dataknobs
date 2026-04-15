@@ -22,9 +22,12 @@ import hashlib
 import importlib
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .feedback import generate_feedback_summary
 from .models import (
@@ -114,7 +117,7 @@ class RubricExecutor:
         self,
         function_registry: FunctionRegistry,
         llm: AsyncLLMProvider | None = None,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         self._function_registry = function_registry
         self._llm = llm

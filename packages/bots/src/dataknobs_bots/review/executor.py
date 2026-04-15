@@ -32,6 +32,7 @@ from .protocol import ReviewProtocolDefinition
 
 if TYPE_CHECKING:
     from ..artifacts.models import ArtifactTypeDefinition as ArtifactDefinition
+    from ..prompts.resolver import PromptResolver
 
 # NOTE: ArtifactReview was removed from artifacts.models when the rubric
 # system replaced persona-based reviews. This local import keeps the
@@ -114,7 +115,7 @@ class ReviewExecutor:
         protocols: dict[str, ReviewProtocolDefinition] | None = None,
         custom_personas: dict[str, ReviewPersona] | None = None,
         custom_functions: dict[str, CustomValidator] | None = None,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ) -> None:
         """Initialize executor.
 

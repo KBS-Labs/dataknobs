@@ -11,7 +11,7 @@ import re
 import logging
 import threading
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Set, Tuple, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
 from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, Undefined, pass_context
@@ -240,7 +240,7 @@ class TemplateRenderer:
             stack_set.discard(key)
 
     @staticmethod
-    def _get_system_context() -> Dict[str, str]:
+    def _get_system_context() -> dict[str, str]:
         """Return system context variables for template rendering.
 
         These are injected as lowest-priority parameters so that templates
@@ -260,9 +260,9 @@ class TemplateRenderer:
     def render(
         self,
         template: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         validation: ValidationConfig | None = None,
-        template_metadata: Dict[str, Any] | None = None,
+        template_metadata: dict[str, Any] | None = None,
         mode: TemplateMode | None = None
     ) -> RenderResult:
         """Render a template with parameters and validation.
@@ -362,7 +362,7 @@ class TemplateRenderer:
     def render_prompt_template(
         self,
         prompt_template: PromptTemplateDict,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         validation_override: ValidationLevel | None = None,
         mode_override: TemplateMode | None = None
     ) -> RenderResult:
@@ -435,10 +435,10 @@ class TemplateRenderer:
 
     def batch_render(
         self,
-        templates: List[str],
-        params: Dict[str, Any],
+        templates: list[str],
+        params: dict[str, Any],
         validation: ValidationConfig | None = None
-    ) -> List[RenderResult]:
+    ) -> list[RenderResult]:
         """Render multiple templates with the same parameters.
 
         Args:
@@ -455,7 +455,7 @@ class TemplateRenderer:
         ]
 
     @staticmethod
-    def _extract_variables(template: str) -> Set[str]:
+    def _extract_variables(template: str) -> set[str]:
         """Extract all variable names from a template (including Jinja2 syntax).
 
         Args:
@@ -551,7 +551,7 @@ class TemplateRenderer:
         self._jinja_env.filters[name] = filter_func
 
     @staticmethod
-    def _get_line_col(template: str, position: int) -> Tuple[int, int]:
+    def _get_line_col(template: str, position: int) -> tuple[int, int]:
         """Get line and column number for a position in the template.
 
         Args:
@@ -593,7 +593,7 @@ class TemplateRenderer:
         return snippet
 
     @staticmethod
-    def validate_template_syntax_detailed(template: str) -> List[TemplateSyntaxError]:
+    def validate_template_syntax_detailed(template: str) -> list[TemplateSyntaxError]:
         """Validate template syntax and return detailed errors with locations.
 
         Args:
@@ -699,7 +699,7 @@ class TemplateRenderer:
         return errors
 
     @staticmethod
-    def validate_template_syntax(template: str) -> List[str]:
+    def validate_template_syntax(template: str) -> list[str]:
         """Validate template syntax and return error messages.
 
         This is a convenience wrapper around validate_template_syntax_detailed()
@@ -719,7 +719,7 @@ class TemplateRenderer:
 
 def render_template(
     template: str,
-    params: Dict[str, Any],
+    params: dict[str, Any],
     validation_level: ValidationLevel = ValidationLevel.WARN
 ) -> str:
     """Convenience function to render a template with parameters.
@@ -747,8 +747,8 @@ def render_template(
 
 def render_template_strict(
     template: str,
-    params: Dict[str, Any],
-    required_params: List[str]
+    params: dict[str, Any],
+    required_params: list[str]
 ) -> str:
     """Render a template with strict validation (ERROR level).
 

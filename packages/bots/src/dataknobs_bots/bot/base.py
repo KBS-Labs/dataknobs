@@ -13,6 +13,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_llm import LLMStreamResponse
+
 from dataknobs_llm.conversations import (
     ConversationManager,
     ConversationStorage,
@@ -35,6 +36,7 @@ from .turn import ToolExecution, TurnMode, TurnState
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
+    from ..prompts.resolver import PromptResolver
     from ..reasoning.base import ProcessResult
 
 logger = logging.getLogger(__name__)
@@ -170,7 +172,7 @@ class DynaBot:
         max_tool_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
         tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
-        prompt_resolver: Any | None = None,
+        prompt_resolver: PromptResolver | None = None,
     ):
         """Initialize DynaBot.
 
@@ -252,7 +254,7 @@ class DynaBot:
         self._providers: dict[str, AsyncLLMProvider] = {}
 
     @property
-    def prompt_resolver(self) -> Any | None:
+    def prompt_resolver(self) -> PromptResolver | None:
         """The prompt resolver for this bot, if configured."""
         return self._prompt_resolver
 

@@ -18,7 +18,7 @@ from dataknobs_llm.prompts.base.types import TemplateMode
 
 from dataknobs_bots.prompts.resolver import PromptResolver
 from dataknobs_bots.prompts.defaults import (
-    _collect_all_bots_keys,
+    get_all_bots_keys,
     get_default_prompt_library,
     get_full_prompt_library,
 )
@@ -159,7 +159,7 @@ class TestPromptResolverWithOverrides:
 
     def test_override_fragment_changes_meta_output(self) -> None:
         """Overriding a fragment changes the composed meta-prompt."""
-        custom_keys = dict(_collect_all_bots_keys())
+        custom_keys = dict(get_all_bots_keys())
         custom_keys["wizard.clarification.instructions"] = {
             "template": "Please be VERY formal and concise.",
             "template_syntax": "format",

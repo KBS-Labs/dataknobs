@@ -4,7 +4,9 @@ This module provides BasePromptLibrary, a concrete implementation of
 AbstractPromptLibrary that includes caching and common utilities.
 """
 
-from typing import Any, Dict, List, Union
+from __future__ import annotations
+
+from typing import Any
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
@@ -29,7 +31,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
     def __init__(
         self,
         enable_cache: bool = True,
-        metadata: Dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None
     ):
         """Initialize the base prompt library.
 
@@ -41,11 +43,11 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self._metadata = metadata or {}
 
         # Caches for loaded prompts and indexes
-        self._system_prompt_cache: Dict[str, PromptTemplateDict] = {}
-        self._user_prompt_cache: Dict[str, PromptTemplateDict] = {}
-        self._message_index_cache: Dict[str, MessageIndex] = {}
-        self._rag_config_cache: Dict[str, RAGConfig] = {}  # Standalone RAG configs
-        self._prompt_rag_cache: Dict[tuple, List[RAGConfig]] = {}  # (name, type)
+        self._system_prompt_cache: dict[str, PromptTemplateDict] = {}
+        self._user_prompt_cache: dict[str, PromptTemplateDict] = {}
+        self._message_index_cache: dict[str, MessageIndex] = {}
+        self._rag_config_cache: dict[str, RAGConfig] = {}  # Standalone RAG configs
+        self._prompt_rag_cache: dict[tuple, list[RAGConfig]] = {}  # (name, type)
 
     # ===== Cache Management =====
 
@@ -69,7 +71,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Metadata =====
 
-    def get_metadata(self) -> Dict[str, Any]:
+    def get_metadata(self) -> dict[str, Any]:
         """Get metadata about this prompt library.
 
         Returns:
@@ -179,7 +181,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str
-    ) -> List[RAGConfig] | None:
+    ) -> list[RAGConfig] | None:
         """Get prompt RAG configs from cache if caching is enabled.
 
         Args:
@@ -197,7 +199,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str,
-        configs: List[RAGConfig]
+        configs: list[RAGConfig]
     ) -> None:
         """Cache prompt RAG configurations if caching is enabled.
 
@@ -211,7 +213,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Common Parsing Methods =====
 
-    def _parse_validation_config(self, data: Union[Dict, ValidationConfig]) -> ValidationConfig:
+    def _parse_validation_config(self, data: dict | ValidationConfig) -> ValidationConfig:
         """Parse validation configuration from dict or ValidationConfig.
 
         This method is shared by all library implementations for consistent
@@ -254,7 +256,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             optional_params=optional_params
         )
 
-    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
+    def _parse_rag_config(self, data: dict[str, Any]) -> RAGConfig:
         """Parse RAG configuration from dict.
 
         This method is shared by all library implementations for consistent
@@ -391,7 +393,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_system_prompt()"
         )
 
-    def list_system_prompts(self) -> List[str]:
+    def list_system_prompts(self) -> list[str]:
         """List all available system prompt names.
 
         Subclasses must implement this method.
@@ -414,7 +416,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_user_prompt()"
         )
 
-    def list_user_prompts(self) -> List[str]:
+    def list_user_prompts(self) -> list[str]:
         """List available user prompts.
 
         Subclasses must implement this method.
@@ -436,7 +438,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_message_index()"
         )
 
-    def list_message_indexes(self) -> List[str]:
+    def list_message_indexes(self) -> list[str]:
         """List all available message index names.
 
         Subclasses must implement this method.
@@ -464,7 +466,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         prompt_type: str = "user",
         index: int = 0,
         **kwargs: Any
-    ) -> List[RAGConfig]:
+    ) -> list[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
 
         Subclasses must implement this method.

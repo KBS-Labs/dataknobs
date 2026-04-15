@@ -1,7 +1,12 @@
 """Memory implementations for DynaBot."""
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .artifact_bank import ArtifactBank
 from .artifact_io import (
@@ -56,7 +61,7 @@ __all__ = [
 async def create_memory_from_config(
     config: dict[str, Any],
     llm_provider: Any | None = None,
-    prompt_resolver: Any | None = None,
+    prompt_resolver: PromptResolver | None = None,
 ) -> Memory:
     """Create memory instance from configuration.
 
