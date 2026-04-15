@@ -357,3 +357,153 @@ def normalize_to_jinja2(template: str, syntax: TemplateSyntax) -> str:
     if syntax == TemplateSyntax.JINJA2:
         return template
     return format_to_jinja2(template)
+
+
+# ============================================================================
+# CLI entry point
+# ============================================================================
+
+def _cli_main() -> None:  # pragma: no cover
+    """CLI for prompt syntax operations.
+
+    Subcommands:
+        convert  — Convert a prompt between format and jinja2 syntax
+        detect   — Detect the syntax of a prompt file or string
+        validate — Validate placeholders in a prompt against a key's requirements
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python -m dataknobs_llm.prompts.syntax",
+        description="Prompt template syntax utilities",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # --- convert ---
+    convert_p = sub.add_parser(
+        "convert",
+        help="Convert a prompt between syntaxes",
+    )
+    convert_p.add_argument(
+        "--from", dest="from_syntax", required=True,
+        choices=["format", "jinja2"],
+        help="Source syntax",
+    )
+    convert_p.add_argument(
+        "--to", dest="to_syntax", required=True,
+        choices=["format", "jinja2"],
+        help="Target syntax",
+    )
+    convert_p.add_argument(
+        "input",
+        nargs="?",
+        help="Input file (reads from stdin if omitted)",
+    )
+
+    # --- detect ---
+    detect_p = sub.add_parser(
+        "detect",
+        help="Detect the syntax of a prompt",
+    )
+    detect_p.add_argument(
+        "input",
+        nargs="?",
+        help="Input file (reads from stdin if omitted)",
+    )
+
+    # --- validate ---
+    validate_p = sub.add_parser(
+        "validate",
+        help="Validate a prompt against a key's placeholder requirements",
+    )
+    validate_p.add_argument(
+        "--key", required=True,
+        help="Prompt key to validate against (e.g. wizard.clarification.issues)",
+    )
+    validate_p.add_argument(
+        "input",
+        nargs="?",
+        help="Input file (reads from stdin if omitted)",
+    )
+
+    args = parser.parse_args()
+
+    def _read_input() -> str:
+        if args.input:
+            with open(args.input) as f:
+                return f.read()
+        return sys.stdin.read()
+
+    if args.command == "convert":
+        text = _read_input()
+        if args.from_syntax == args.to_syntax:
+            print(text, end="")
+        elif args.from_syntax == "format" and args.to_syntax == "jinja2":
+            print(format_to_jinja2(text), end="")
+        elif args.from_syntax == "jinja2" and args.to_syntax == "format":
+            try:
+                print(jinja2_to_format(text), end="")
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    elif args.command == "detect":
+        text = _read_input()
+        syntax = detect_syntax(text)
+        print(syntax.value)
+
+    elif args.command == "validate":
+        text = _read_input()
+        # Look up the key in the default prompt library
+        try:
+            from dataknobs_bots.prompts.defaults import get_default_prompt_library
+            library = get_default_prompt_library()
+            template_dict = library.get_system_prompt(args.key)
+        except ImportError:
+            # Fall back to extraction library if bots not installed
+            from dataknobs_llm.extraction.prompts import get_extraction_prompt_library
+            library = get_extraction_prompt_library()
+            template_dict = library.get_system_prompt(args.key)
+
+        if template_dict is None:
+            print(f"Error: Unknown prompt key: {args.key}", file=sys.stderr)
+            sys.exit(1)
+
+        # Detect syntax of the input and extract placeholders
+        detected = detect_syntax(text)
+        print(f"Input syntax: {detected.value}")
+        print(f"Key: {args.key}")
+        print(f"Key syntax: {template_dict.get('template_syntax', 'unknown')}")
+
+        # Extract placeholders from the default template for comparison
+        default_template = template_dict.get("template", "")
+        default_syntax = template_dict.get("template_syntax", "format")
+
+        if default_syntax == "format":
+            import string
+            formatter = string.Formatter()
+            try:
+                default_placeholders = {
+                    fname
+                    for _, fname, _, _ in formatter.parse(default_template)
+                    if fname is not None
+                }
+            except (ValueError, KeyError):
+                default_placeholders = set()
+        else:
+            # Jinja2 — extract {{ var }} patterns (simple heuristic)
+            default_placeholders = set(
+                re.findall(r'\{\{\s*(\w+)\s*\}\}', default_template)
+            )
+
+        if default_placeholders:
+            print(f"Expected placeholders: {', '.join(sorted(default_placeholders))}")
+        else:
+            print("No placeholders expected (static template)")
+
+        print("OK")
+
+
+if __name__ == "__main__":
+    _cli_main()
