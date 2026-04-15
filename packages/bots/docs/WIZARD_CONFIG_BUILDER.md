@@ -175,8 +175,11 @@ builder.set_settings(
 | `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Composes with the built-in grounding check (grounding runs first, then the custom filter). |
 | `skip_builtin_grounding` | `bool` | `False` | When `True` and a `merge_filter` is set, bypass the built-in grounding check entirely — only the custom filter runs. |
 | `extraction_hints` | `dict` | `{}` | Class-level extraction hints. `enum_normalize` (default `true`): normalize extracted enum values to canonical entries. `normalize_threshold` (default `0.7`): fuzzy match threshold. `reject_unmatched` (default `true`): reject enum values that don't match any entry. `boolean_recovery` (default `true`): enable signal-word recovery for boolean fields that extraction fails to fill; only active when `"boolean_recovery"` is in the recovery pipeline. |
+| `expansion_config` | `dict \| None` | `None` | Algorithm parameters for value expansion (conjunction sets, phrase-break characters, field-boundary patterns). Uses sensible defaults when absent. Only affects fields with `x-extraction.expand_from_message: true`. |
 
-See [Extraction Grounding](context-aware-wizards.md#extraction-grounding) and [Enum Normalization](context-aware-wizards.md#enum-normalization) for full documentation.
+**Per-field `x-extraction` hints:** Individual schema properties support `x-extraction` annotations for fine-grained control over grounding, normalization, and expansion. Key options include `grounding` (`"exact"` / `"fuzzy"` / `"skip"`), `require_grounded`, `expand_from_message`, `empty_allowed`, and `overlap_threshold`. See [Extraction Grounding](context-aware-wizards.md#extraction-grounding) for the full reference.
+
+See also: [Enum Normalization](context-aware-wizards.md#enum-normalization), [Value Expansion](context-aware-wizards.md#value-expansion).
 
 ### Stage Methods
 

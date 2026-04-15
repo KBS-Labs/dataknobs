@@ -152,6 +152,11 @@ def expand_value_in_message(
         if pos == -1:
             break
 
+        # Require word boundaries — don't match inside longer words
+        if not _at_word_boundary(msg_lower, pos, len(val_lower)):
+            search_start = pos + 1
+            continue
+
         # Use original-case message for output, lowercase for matching
         original_value = message[pos:pos + len(val_lower)]
         after_original = message[pos + len(val_lower):]
@@ -170,6 +175,16 @@ def expand_value_in_message(
             return override
 
     return best
+
+
+def _at_word_boundary(text: str, pos: int, length: int) -> bool:
+    """Check that the match at ``pos`` is at word boundaries on both sides."""
+    if pos > 0 and text[pos - 1].isalnum():
+        return False
+    end = pos + length
+    if end < len(text) and text[end].isalnum():
+        return False
+    return True
 
 
 def _expand_right(
@@ -207,6 +222,8 @@ def _expand_right(
             break
 
         if cleaned in config.conjunctions:
+            if has_break:
+                break
             has_conjunction = True
             pending_connectors.append(raw_word)
         elif cleaned in stopwords or len(cleaned) <= 2:

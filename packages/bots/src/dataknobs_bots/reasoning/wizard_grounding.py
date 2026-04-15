@@ -196,11 +196,15 @@ class SchemaGroundingFilter:
       descriptive fields like tone, style, or mood where
       compound values are common)
 
+    Note: ``grounding: "skip"`` bypasses expansion as well as
+    grounding — the value is accepted as-is without any processing.
+
     Args:
         overlap_threshold: Default minimum word-overlap ratio for
             string grounding (0.0-1.0).  Defaults to 0.5.
         expansion_config: Algorithm parameters for value expansion.
-            Uses defaults when ``None``.
+            Uses defaults when ``None``.  Configurable via
+            ``expansion_config`` in wizard settings YAML.
     """
 
     def __init__(

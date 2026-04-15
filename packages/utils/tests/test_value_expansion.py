@@ -174,6 +174,38 @@ class TestNoExpansionCases:
         result = _expand("", "Set the tone to formal and academic")
         assert result is None
 
+    def test_substring_match_inside_word(self):
+        """Value found as substring of a longer word — should not match.
+
+        'form' appears inside 'formal' but is not a word boundary match.
+        Without word-boundary checking, this would produce garbage like
+        'form al and academic'.
+        """
+        result = _expand("form", "Set the tone to formal and academic")
+        assert result is None
+
+    def test_short_value_substring_of_word(self):
+        """Short value 'or' inside 'laboratory' — should not match."""
+        result = _expand("or", "The laboratory and research center")
+        assert result is None
+
+    def test_value_at_word_boundary_still_expands(self):
+        """Value at a proper word boundary should still expand normally."""
+        result = _expand("formal", "Set the tone to formal and academic")
+        assert result == "formal and academic"
+
+    def test_conjunction_with_attached_punctuation(self):
+        """Conjunction with punctuation (e.g., 'and,') should stop expansion.
+
+        The comma is a phrase-break character; expansion should not
+        continue through a conjunction that has punctuation attached.
+        """
+        result = _expand(
+            "formal",
+            "Set the tone to formal and, academic",
+        )
+        assert result is None
+
 
 # ──────────────────────────────────────────────────────────────────
 # Config overrides
