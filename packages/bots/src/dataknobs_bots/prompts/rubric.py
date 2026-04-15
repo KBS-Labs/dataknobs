@@ -10,6 +10,12 @@ The rubric prompts are more dynamic than other prompts — the user message
 for feedback summary and the classification prompt are assembled from
 runtime data (rubric criteria, evaluation results). The templates here
 capture the static instructional portions that can be overridden by consumers.
+
+Consumers:
+- ``RubricExecutor._build_decode_system_message()`` resolves
+  ``rubric.classification`` via the prompt resolver.
+- ``_generate_llm_summary()`` resolves ``rubric.feedback_summary.*``
+  keys via the prompt resolver.
 """
 
 from dataknobs_llm.prompts.base.types import PromptTemplateDict

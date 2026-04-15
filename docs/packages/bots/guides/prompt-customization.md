@@ -215,6 +215,11 @@ and renders it with the provided variables:
 {{ prompt_ref("key.name", var1=value1, var2=value2) }}
 ```
 
+Referenced templates **inherit the parent template's variables** (matching
+Jinja2 `{% include %}` semantics). This means fragments automatically
+see variables from the calling template without requiring manual
+threading. Explicit arguments override inherited values.
+
 Resolution is recursive -- a `prompt_ref`'d prompt can itself contain
 `prompt_ref()` calls. Cycle detection prevents infinite loops.
 
@@ -232,9 +237,15 @@ echo "Hello {name}" | uv run python -m dataknobs_llm.prompts.syntax \
 uv run python -m dataknobs_llm.prompts.syntax detect prompt.txt
 # Output: format
 
-# Validate a prompt against a key's placeholder requirements
+# Validate a prompt against an extraction key's placeholder requirements
 uv run python -m dataknobs_llm.prompts.syntax validate \
-  --key wizard.clarification.issues prompt.txt
+  --key extraction.default.instructions prompt.txt
+
+# Validate against bots-level keys using --library
+uv run python -m dataknobs_llm.prompts.syntax validate \
+  --key wizard.clarification.issues \
+  --library dataknobs_bots.prompts.defaults:get_full_prompt_library \
+  prompt.txt
 ```
 
 ## Programmatic Access

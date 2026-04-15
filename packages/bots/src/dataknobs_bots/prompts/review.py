@@ -15,6 +15,10 @@ Per-persona fragments (pattern: ``review.persona.{name}.*``):
 Built-in personas: adversarial, skeptical, insightful, minimalist, downstream.
 Consumers can add custom personas by registering additional keys matching
 the ``review.persona.{name}`` pattern.
+
+Consumer: ``ReviewExecutor._run_persona_review()`` resolves
+``review.persona.{persona_id}`` via the prompt resolver with inline
+fallback to the persona's ``prompt_template`` field.
 """
 
 from dataknobs_llm.prompts.base.types import PromptTemplateDict

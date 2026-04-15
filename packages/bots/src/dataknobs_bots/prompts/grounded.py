@@ -9,6 +9,9 @@ Prompt keys defined here:
 
 The grounded synthesis meta-prompt uses Jinja2 conditionals to include
 fragments based on configuration (require_citations, allow_parametric, etc.).
+
+Consumer: ``GroundedReasoning.build_synthesis_system_prompt()`` resolves
+these keys via the prompt resolver with inline fallback.
 """
 
 from dataknobs_llm.prompts.base.types import PromptTemplateDict

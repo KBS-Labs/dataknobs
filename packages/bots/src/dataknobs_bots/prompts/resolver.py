@@ -67,5 +67,14 @@ class PromptResolver:
         if template_dict is None:
             return None
 
-        result = self._renderer.render_prompt_template(template_dict, variables)
-        return result.content
+        try:
+            result = self._renderer.render_prompt_template(
+                template_dict, variables,
+            )
+            return result.content
+        except Exception:
+            logger.exception(
+                "Failed to render prompt key %r — falling back to inline",
+                key,
+            )
+            return None

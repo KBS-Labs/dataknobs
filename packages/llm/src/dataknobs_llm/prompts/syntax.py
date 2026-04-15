@@ -419,7 +419,17 @@ def _cli_main() -> None:  # pragma: no cover
     )
     validate_p.add_argument(
         "--key", required=True,
-        help="Prompt key to validate against (e.g. wizard.clarification.issues)",
+        help="Prompt key to validate against (e.g. extraction.default.instructions)",
+    )
+    validate_p.add_argument(
+        "--library",
+        default=None,
+        help=(
+            "Python callable that returns an AbstractPromptLibrary, "
+            "in 'module:function' format. "
+            "Example: dataknobs_bots.prompts.defaults:get_full_prompt_library. "
+            "Defaults to the extraction prompt library (dataknobs-llm)."
+        ),
     )
     validate_p.add_argument(
         "input",
@@ -455,16 +465,36 @@ def _cli_main() -> None:  # pragma: no cover
 
     elif args.command == "validate":
         text = _read_input()
-        # Look up the key in the default prompt library
-        try:
-            from dataknobs_bots.prompts.defaults import get_default_prompt_library
-            library = get_default_prompt_library()
-            template_dict = library.get_system_prompt(args.key)
-        except ImportError:
-            # Fall back to extraction library if bots not installed
+        # Resolve the prompt library to validate against.
+        # Default: extraction library (owned by llm package).
+        # --library: user-specified callable in 'module:function' format,
+        # allowing validation against any library (e.g. bots defaults)
+        # without an inverted package dependency.
+        if args.library:
+            import importlib
+
+            try:
+                mod_path, func_name = args.library.rsplit(":", 1)
+            except ValueError:
+                print(
+                    f"Error: --library must be 'module:function', "
+                    f"got {args.library!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            try:
+                mod = importlib.import_module(mod_path)
+                factory = getattr(mod, func_name)
+                library = factory()
+            except (ImportError, AttributeError) as e:
+                print(f"Error: Cannot load library {args.library!r}: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
             from dataknobs_llm.extraction.prompts import get_extraction_prompt_library
+
             library = get_extraction_prompt_library()
-            template_dict = library.get_system_prompt(args.key)
+
+        template_dict = library.get_system_prompt(args.key)
 
         if template_dict is None:
             print(f"Error: Unknown prompt key: {args.key}", file=sys.stderr)

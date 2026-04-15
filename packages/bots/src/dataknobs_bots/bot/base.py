@@ -570,7 +570,8 @@ class DynaBot:
         memory = None
         if "memory" in config:
             memory = await create_memory_from_config(
-                config["memory"], llm_provider=llm
+                config["memory"], llm_provider=llm,
+                prompt_resolver=prompt_resolver,
             )
 
         # Create knowledge base BEFORE tools — tools may declare a

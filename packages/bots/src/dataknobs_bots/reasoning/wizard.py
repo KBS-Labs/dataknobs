@@ -1383,7 +1383,10 @@ class WizardReasoning(ReasoningStrategy):
                     protocols[proto_id] = ReviewProtocolDefinition.from_config(
                         proto_id, proto_config
                     )
-                review_executor = ReviewExecutor(protocols=protocols)
+                review_executor = ReviewExecutor(
+                    protocols=protocols,
+                    prompt_resolver=kwargs.get("prompt_resolver"),
+                )
                 logger.info(
                     "Created review executor with %d protocols", len(protocols)
                 )

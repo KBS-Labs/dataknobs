@@ -508,7 +508,9 @@ class FocusGuard:
         )
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> FocusGuard:
+    def from_config(
+        cls, config: dict[str, Any], **kwargs: Any,
+    ) -> FocusGuard:
         """Create FocusGuard from configuration.
 
         Config format:
@@ -521,6 +523,9 @@ class FocusGuard:
 
         Args:
             config: Configuration dict
+            **kwargs: Additional keyword arguments. Recognized keys:
+                ``prompt_resolver`` — optional PromptResolver for resolving
+                focus prompts from the prompt library.
 
         Returns:
             Configured FocusGuard
@@ -530,4 +535,5 @@ class FocusGuard:
             drift_threshold=config.get("drift_threshold", 0.5),
             use_keyword_detection=config.get("use_keyword_detection", True),
             use_llm_evaluation=config.get("use_llm_evaluation", False),
+            prompt_resolver=kwargs.get("prompt_resolver"),
         )

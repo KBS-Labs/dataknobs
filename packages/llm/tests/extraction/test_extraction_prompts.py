@@ -188,3 +188,63 @@ class TestMetaPromptComposition:
         assert meta is not None
         # The meta-prompt should reference the default schema_section
         assert 'extraction.default.schema_section' in meta["template"]
+
+
+class TestFlatFragmentConsistency:
+    """Verify flat backward-compat prompts produce identical output to composed fragments.
+
+    The flat constants (DEFAULT_EXTRACTION_PROMPT, EXTRACTION_WITH_ASSUMPTIONS_PROMPT)
+    and the fragment decomposition must stay in sync. This test catches drift.
+    """
+
+    def test_default_extraction_flat_matches_composed(self) -> None:
+        """DEFAULT_EXTRACTION_PROMPT.format() == composed meta-prompt render."""
+        test_vars = {
+            "schema": '{"type": "object", "properties": {"name": {"type": "string"}}}',
+            "context": "Stage: gather_info",
+            "text": "My name is Alice and I am 30 years old",
+        }
+
+        flat_output = DEFAULT_EXTRACTION_PROMPT.format(**test_vars)
+
+        library = get_extraction_prompt_library()
+        renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
+        renderer.set_prompt_library(library)
+
+        meta = library.get_system_prompt("extraction.default")
+        assert meta is not None
+        composed_output = renderer.render(
+            meta["template"], test_vars, mode=TemplateMode.JINJA2,
+        ).content
+
+        assert flat_output == composed_output, (
+            f"Flat and composed outputs diverged.\n"
+            f"--- Flat ---\n{flat_output}\n"
+            f"--- Composed ---\n{composed_output}"
+        )
+
+    def test_assumptions_flat_matches_composed(self) -> None:
+        """EXTRACTION_WITH_ASSUMPTIONS_PROMPT.format() == composed meta-prompt render."""
+        test_vars = {
+            "schema": '{"type": "object", "properties": {"age": {"type": "integer"}}}',
+            "context": "Collecting demographics",
+            "text": "I think I'm about thirty",
+        }
+
+        flat_output = EXTRACTION_WITH_ASSUMPTIONS_PROMPT.format(**test_vars)
+
+        library = get_extraction_prompt_library()
+        renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
+        renderer.set_prompt_library(library)
+
+        meta = library.get_system_prompt("extraction.with_assumptions")
+        assert meta is not None
+        composed_output = renderer.render(
+            meta["template"], test_vars, mode=TemplateMode.JINJA2,
+        ).content
+
+        assert flat_output == composed_output, (
+            f"Flat and composed outputs diverged.\n"
+            f"--- Flat ---\n{flat_output}\n"
+            f"--- Composed ---\n{composed_output}"
+        )

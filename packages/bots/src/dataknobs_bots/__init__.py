@@ -30,6 +30,7 @@ from .config import (
 )
 from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
 from .memory import BufferMemory, CompositeMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
+from .prompts.resolver import PromptResolver
 from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
 from .reasoning import (
     PhasedReasoningProtocol,
@@ -98,6 +99,7 @@ __all__ = [
     "PROVIDER_ROLE_MEMORY_EMBEDDING",
     "PROVIDER_ROLE_SUMMARY_LLM",
     "PreviewConfigTool",
+    "PromptResolver",
     "RAGKnowledgeBase",
     "ReActReasoning",
     "ReasoningStrategy",

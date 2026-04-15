@@ -251,7 +251,10 @@ class GroundedReasoning(ReasoningStrategy):
             Configured GroundedReasoning instance.
         """
         grounded_config = GroundedReasoningConfig.from_dict(config)
-        strategy = cls(config=grounded_config)
+        strategy = cls(
+            config=grounded_config,
+            prompt_resolver=kwargs.get("prompt_resolver"),
+        )
         # Auto-wrap knowledge_base as a VectorKnowledgeSource — but
         # only when the config doesn't already declare a vector_kb
         # source.  Otherwise the same KB gets wrapped twice: once
@@ -270,6 +273,7 @@ class GroundedReasoning(ReasoningStrategy):
         config: GroundedReasoningConfig,
         sources: list[GroundedSource] | None = None,
         query_provider: Any | None = None,
+        prompt_resolver: Any | None = None,
     ) -> None:
         """Initialize the grounded reasoning strategy.
 
@@ -281,9 +285,12 @@ class GroundedReasoning(ReasoningStrategy):
             query_provider: Optional separate LLM provider for query
                 generation.  When ``None`` the bot's main LLM (passed
                 as ``llm`` to :meth:`generate`) is used.
+            prompt_resolver: Optional PromptResolver for resolving
+                synthesis and provenance prompts from the prompt library.
         """
         super().__init__(greeting_template=config.greeting_template)
         self._config = config
+        self._prompt_resolver = prompt_resolver
         self._sources: list[GroundedSource] = list(sources) if sources else []
         self._source_weights: dict[str, int] = {
             sc.name: sc.weight for sc in config.sources
@@ -1347,6 +1354,29 @@ class GroundedReasoning(ReasoningStrategy):
                 When ``None``, uses ``self._config.synthesis``.
         """
         cfg = synthesis_config or self._config.synthesis
+
+        # Try library-based prompt resolution.  The meta-prompt uses Jinja2
+        # conditionals to replicate the inline if/elif/else logic below.
+        if self._prompt_resolver is not None:
+            kb_section = self._prompt_resolver.resolve(
+                "grounded.synthesis.kb_wrapper", kb_context=kb_context,
+            ) if kb_context else ""
+            synthesis_text = self._prompt_resolver.resolve(
+                "grounded.synthesis",
+                require_citations=cfg.require_citations,
+                citation_format=cfg.citation_format,
+                allow_parametric=cfg.allow_parametric,
+            )
+            if synthesis_text is not None:
+                parts_resolved = [original_system_prompt]
+                if kb_section:
+                    parts_resolved.append(kb_section)
+                parts_resolved.append(synthesis_text)
+                if cfg.instruction:
+                    parts_resolved.append(cfg.instruction)
+                return "\n".join(parts_resolved)
+
+        # Inline fallback
         parts = [original_system_prompt]
 
         if kb_context:

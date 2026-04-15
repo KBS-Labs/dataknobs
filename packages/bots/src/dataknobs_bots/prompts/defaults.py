@@ -35,22 +35,31 @@ from dataknobs_bots.prompts.focus import FOCUS_PROMPT_KEYS
 logger = logging.getLogger(__name__)
 
 
+_MODULES: list[tuple[str, dict[str, PromptTemplateDict]]] = [
+    ("wizard", WIZARD_PROMPT_KEYS),
+    ("memory", MEMORY_PROMPT_KEYS),
+    ("rubric", RUBRIC_PROMPT_KEYS),
+    ("review", REVIEW_PROMPT_KEYS),
+    ("grounded", GROUNDED_PROMPT_KEYS),
+    ("focus", FOCUS_PROMPT_KEYS),
+]
+
+# Lazily collected on first access — avoids hard ImportError on key collision.
+_all_bots_keys: dict[str, PromptTemplateDict] | None = None
+
+
 def _collect_all_bots_keys() -> dict[str, PromptTemplateDict]:
     """Merge all bots prompt key registries into a single dict.
 
     Raises ``ValueError`` if any key appears in more than one module
     (namespacing should prevent this, but we verify defensively).
     """
+    global _all_bots_keys  # noqa: PLW0603
+    if _all_bots_keys is not None:
+        return _all_bots_keys
+
     all_keys: dict[str, PromptTemplateDict] = {}
-    modules = [
-        ("wizard", WIZARD_PROMPT_KEYS),
-        ("memory", MEMORY_PROMPT_KEYS),
-        ("rubric", RUBRIC_PROMPT_KEYS),
-        ("review", REVIEW_PROMPT_KEYS),
-        ("grounded", GROUNDED_PROMPT_KEYS),
-        ("focus", FOCUS_PROMPT_KEYS),
-    ]
-    for module_name, keys in modules:
+    for module_name, keys in _MODULES:
         for key, template in keys.items():
             if key in all_keys:
                 raise ValueError(
@@ -63,13 +72,10 @@ def _collect_all_bots_keys() -> dict[str, PromptTemplateDict]:
     logger.debug(
         "Collected %d bots prompt keys from %d modules",
         len(all_keys),
-        len(modules),
+        len(_MODULES),
     )
-    return all_keys
-
-
-# Eagerly collected so the dict is built once at import time.
-ALL_BOTS_PROMPT_KEYS: dict[str, PromptTemplateDict] = _collect_all_bots_keys()
+    _all_bots_keys = all_keys
+    return _all_bots_keys
 
 
 def get_default_prompt_library() -> ConfigPromptLibrary:
@@ -83,7 +89,7 @@ def get_default_prompt_library() -> ConfigPromptLibrary:
         A ``ConfigPromptLibrary`` with all bots prompt keys registered
         as system prompts.
     """
-    return ConfigPromptLibrary(config={"system": ALL_BOTS_PROMPT_KEYS})
+    return ConfigPromptLibrary(config={"system": _collect_all_bots_keys()})
 
 
 def get_full_prompt_library() -> CompositePromptLibrary:
