@@ -219,6 +219,32 @@ class TestNormalizeExtractedData:
         )
         assert result["name"] is None
 
+    # --- Coercion + type-mismatch interaction ---
+
+    def test_coercion_then_type_check_passes(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """String 'yes' for boolean field is coerced to True before type check."""
+        schema: dict[str, Any] = {
+            "properties": {"enabled": {"type": "boolean"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"enabled": "yes"}, StageSchema.from_dict(schema)
+        )
+        assert result["enabled"] is True
+
+    def test_failed_coercion_then_type_check_rejects(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """String 'abc' for integer field — coercion fails, type check rejects."""
+        schema: dict[str, Any] = {
+            "properties": {"count": {"type": "integer"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"count": "abc"}, StageSchema.from_dict(schema)
+        )
+        assert result["count"] is None
+
     # --- Skip behavior ---
 
     def test_internal_keys_skipped(

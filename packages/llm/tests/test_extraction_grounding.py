@@ -293,6 +293,19 @@ class TestIsFieldGrounded:
         assert result.grounded is True
         assert result.strategy == "array"
 
+    def test_no_explicit_type_skips_type_guard(self) -> None:
+        """Field without a 'type' key bypasses the type-mismatch guard.
+
+        The default ``field_type`` is ``"string"`` for dispatch purposes,
+        but the type-mismatch guard should only reject when the schema
+        explicitly declares a type.  An int value on an untyped field
+        should fall through to string grounding, not be rejected.
+        """
+        prop: dict[str, Any] = {"description": "some field"}  # no "type" key
+        result = is_field_grounded("data", 42, "I want 42 items", prop)
+        # Should NOT be rejected as type_mismatch — no explicit type declared
+        assert result.strategy != "type_mismatch"
+
 
 # ──────────────────────────────────────────────────────────────────
 # TestXExtractionOverrides

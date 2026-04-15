@@ -15,6 +15,7 @@ querying extraction history.
 from dataknobs_llm.extraction.grounding import (
     DEFAULT_NEGATION_KEYWORDS,
     DEFAULT_STOPWORDS,
+    SCHEMA_TYPE_CHECKS,
     FieldGroundingResult,
     GroundingConfig,
     detect_boolean_signal,
@@ -23,6 +24,7 @@ from dataknobs_llm.extraction.grounding import (
     has_negation,
     is_field_grounded,
     significant_words,
+    value_matches_schema_type,
 )
 from dataknobs_llm.extraction.observability import (
     ExtractionHistoryQuery,
@@ -51,6 +53,7 @@ __all__ = [
     # Grounding
     "DEFAULT_NEGATION_KEYWORDS",
     "DEFAULT_STOPWORDS",
+    "SCHEMA_TYPE_CHECKS",
     "FieldGroundingResult",
     "GroundingConfig",
     "detect_boolean_signal",
@@ -59,6 +62,7 @@ __all__ = [
     "has_negation",
     "is_field_grounded",
     "significant_words",
+    "value_matches_schema_type",
     # Observability
     "ExtractionRecord",
     "ExtractionStats",

@@ -72,14 +72,37 @@ DEFAULT_NEGATION_KEYWORDS: frozenset[str] = frozenset({
 # Used by is_field_grounded to reject values whose Python type doesn't
 # match the declared schema type BEFORE dispatching to type-specific
 # handlers (e.g. bool value for a string field, string for an integer).
-# Must stay in sync with WizardExtractor._SCHEMA_TYPE_MAP.
-_KNOWN_TYPE_CHECKS: dict[str, tuple[type, ...]] = {
+# This is the canonical definition — consumers (e.g. WizardExtractor)
+# should import this rather than maintaining a local copy.
+SCHEMA_TYPE_CHECKS: dict[str, tuple[type, ...]] = {
     "string": (str,),
     "boolean": (bool,),
     "integer": (int,),
     "number": (int, float),
     "array": (list,),
 }
+
+
+def value_matches_schema_type(value: Any, schema_type: str) -> bool:
+    """Check if a Python value matches a JSON Schema type declaration.
+
+    Returns ``True`` if the value is compatible, ``False`` if it's a
+    type mismatch.  Returns ``True`` for unknown schema types
+    (permissive for extensibility).
+
+    Note: Python's ``bool`` is a subclass of ``int``, so
+    ``isinstance(True, int)`` is ``True``.  This function explicitly
+    rejects booleans for ``"integer"`` and ``"number"`` fields.
+    """
+    expected = SCHEMA_TYPE_CHECKS.get(schema_type)
+    if expected is None:
+        return True  # Unknown schema type — don't reject
+
+    # bool is a subclass of int in Python; reject booleans for int/number
+    if isinstance(value, bool) and schema_type in ("integer", "number"):
+        return False
+
+    return isinstance(value, expected)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -402,24 +425,18 @@ def is_field_grounded(
     # the declared schema type BEFORE dispatching to type-specific handlers.
     # This is defense-in-depth alongside normalization-layer checks in
     # WizardExtractor._normalize_extracted_data.
-    # NOTE: bool is a subclass of int, so isinstance(True, int) is True.
-    # We must explicitly exclude bools for integer/number fields.
-    known_types = _KNOWN_TYPE_CHECKS.get(field_type)
-    if known_types is not None:
-        is_type_match = isinstance(value, known_types)
-        if is_type_match and isinstance(value, bool) and field_type in (
-            "integer", "number",
-        ):
-            is_type_match = False
-        if not is_type_match:
-            return FieldGroundingResult(
-                field=field_name, grounded=False,
-                reason=(
-                    f"type mismatch: field '{field_name}' expects {field_type}, "
-                    f"got {type(value).__name__}"
-                ),
-                strategy="type_mismatch",
-            )
+    # Only enforce when the schema explicitly declares a type — fields
+    # without a "type" key fall through to the string-grounding default.
+    has_explicit_type = "type" in schema_property
+    if has_explicit_type and not value_matches_schema_type(value, field_type):
+        return FieldGroundingResult(
+            field=field_name, grounded=False,
+            reason=(
+                f"type mismatch: field '{field_name}' expects {field_type}, "
+                f"got {type(value).__name__}"
+            ),
+            strategy="type_mismatch",
+        )
 
     if field_type == "boolean":
         grounded = _ground_boolean(
