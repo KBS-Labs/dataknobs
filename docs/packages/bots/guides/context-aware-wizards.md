@@ -1279,6 +1279,16 @@ Re-extraction is silently skipped when:
 - No user message is available (e.g., greet)
 - The target stage has no schema
 
+### Interaction with auto_advance: false {#re-extraction-auto-advance}
+
+`auto_advance: false` means "don't auto-advance during normal turn processing" — it does **not** mean "never advance under any circumstances". After re-extraction captures data at a stage, the auto-advance gate is relaxed for that stage because the user has already expressed intent via the triggering message.
+
+This relaxation applies only to the **immediate landing stage** (the stage where re-extraction ran). If auto-advance chains through additional stages, those stages' own `auto_advance` settings apply normally.
+
+All other auto-advance gates remain in effect: required fields must be filled, the stage must not be an end stage, and at least one transition condition must be satisfied. The relaxation only bypasses the `auto_advance: false` check — it does not force advancement.
+
+If re-extraction produces **no data** (empty extraction result), the `auto_advance: false` gate is **not** relaxed and the wizard stays at the landing stage.
+
 **Limitation:** Re-extraction runs only once per turn, for the stage entered by the initial transition. If re-extraction fills the target stage's required fields and auto-advance fires to a subsequent stage that also has `re_extract_on_entry`, that subsequent stage does **not** re-extract. Design edit-back flows so the re-extraction target is the final destination, not a waypoint.
 
 The `advance()` API also supports re-extraction when called with string input (extract mode). Dict input has no raw message to re-extract from, so `re_extract_on_entry` is a no-op.

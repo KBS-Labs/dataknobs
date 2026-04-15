@@ -473,7 +473,11 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         )
 
     def can_auto_advance(
-        self, wizard_state: WizardState, stage: dict[str, Any]
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
+        *,
+        after_re_extraction: bool = False,
     ) -> bool:
         """Check if a stage can be auto-advanced.
 
@@ -491,9 +495,19 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         - absent (``None``)       — defers to global
           ``auto_advance_filled_stages``
 
+        When ``after_re_extraction`` is ``True``, the ``auto_advance``
+        gate is relaxed.  ``auto_advance: false`` means "don't
+        auto-advance during normal turn processing" — after
+        re-extraction, the user has expressed intent via the triggering
+        message and the wizard should honor it.  All other gates
+        (required fields, transition conditions) still apply.
+
         Args:
             wizard_state: Current wizard state
             stage: Stage configuration dict
+            after_re_extraction: When ``True``, relax the
+                ``auto_advance`` gate because re-extraction just
+                captured data at this stage.
 
         Returns:
             True if stage can be auto-advanced
@@ -501,11 +515,17 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         # Check if auto-advance is enabled for this stage.
         # Stage-level setting takes precedence over global when explicitly set.
         stage_auto_advance = stage.get("auto_advance")
-        if stage_auto_advance is False:
-            # Explicitly disabled at stage level — respect regardless of global
+        if stage_auto_advance is False and not after_re_extraction:
+            # Explicitly disabled at stage level — respect unless we just
+            # re-extracted data (re-extraction implies user intent to advance)
             return False
-        if not stage_auto_advance and not self._auto_advance_filled_stages:
-            # Not explicitly enabled at stage level, and global is off
+        if (
+            not stage_auto_advance
+            and not self._auto_advance_filled_stages
+            and not after_re_extraction
+        ):
+            # Not explicitly enabled at stage level, and global is off —
+            # respect unless we just re-extracted data
             return False
 
         # Don't auto-advance end stages
@@ -563,6 +583,7 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         *,
         skip_first_render: bool = False,
         llm: Any | None = None,
+        after_re_extraction: bool = False,
     ) -> list[str]:
         """Run the auto-advance loop, collecting rendered templates.
 
@@ -584,6 +605,10 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
                 stage response is already captured)
             llm: LLM provider for auto-advance transforms (``None``
                 when no LLM is available).
+            after_re_extraction: When ``True``, relax the
+                ``auto_advance`` gate on the **first iteration only**.
+                Subsequent stages in the chain follow their own
+                ``auto_advance`` setting.
 
         Returns:
             List of rendered template strings from auto-advanced stages
@@ -598,7 +623,10 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
         while (
             count < max_advances
             and not wizard_state.completed
-            and self.can_auto_advance(wizard_state, stage)
+            and self.can_auto_advance(
+                wizard_state, stage,
+                after_re_extraction=after_re_extraction and count == 0,
+            )
         ):
             # Render template of the stage being advanced past
             if not (skip_first_render and count == 0):

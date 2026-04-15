@@ -25,6 +25,7 @@ def _edit_back_config(
     re_extract: bool | None = True,
     auto_advance_filled: bool = True,
     target_has_schema: bool = True,
+    target_auto_advance: bool | None = None,
 ) -> dict[str, Any]:
     """Build a wizard config for edit-back re-extraction tests.
 
@@ -43,6 +44,7 @@ def _edit_back_config(
             "target",
             prompt="Enter value.",
             re_extract_on_entry=re_extract,
+            auto_advance=target_auto_advance,
         )
     )
     if target_has_schema:
@@ -312,9 +314,157 @@ class TestReExtractAdvancePath:
             "Route and set value to formal", state, llm=provider,
         )
 
-        # Transitioned source → target, re-extraction captured value_field
+        # Transitioned source → target, re-extraction captured value_field,
+        # then auto-advance chained target → done (Item 92: re-extraction
+        # relaxes the auto_advance gate).
         assert result.transitioned is True
         assert state.data.get("routing_field") == "go"
         assert state.data.get("value_field") == "formal"
-        # skip_extraction was cleared by re-extraction
-        assert state.skip_extraction is False
+        assert state.current_stage == "done"
+        assert state.completed is True
+        # skip_extraction is True because auto-advance set it — harmless
+        # since the wizard is complete.  The re-extraction DID clear it
+        # (allowing extraction to run), then auto-advance re-set it.
+        assert state.skip_extraction is True
+
+
+class TestReExtractAutoAdvanceFalse:
+    """Item 92: re-extraction should chain-advance past auto_advance: false.
+
+    ``auto_advance: false`` means "don't auto-advance during normal turn
+    processing" — NOT "never advance under any circumstances".  After
+    re-extraction captures data satisfying the transition condition, the
+    wizard should advance.
+    """
+
+    @pytest.mark.asyncio
+    async def test_re_extract_advances_past_auto_advance_false(self) -> None:
+        """Bug 92: re-extraction should chain-advance past auto_advance: false.
+
+        auto_advance: false means 'don't auto-advance during normal flow',
+        not 'never advance'.  After re-extraction captures data satisfying
+        the transition condition, the wizard should advance.
+        """
+        config = _edit_back_config(
+            re_extract=True,
+            target_auto_advance=False,
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                # Turn 1 at source: extracts routing_field → transitions
+                [{"routing_field": "go"}],
+                # Re-extraction at target: extracts value_field
+                [{"value_field": "formal"}],
+            ],
+        ) as harness:
+            await harness.chat("Route and set value to formal")
+            assert harness.wizard_data.get("routing_field") == "go"
+            assert harness.wizard_data.get("value_field") == "formal"
+            # Should chain-advance: source → target (re-extract) → done
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_re_extract_no_data_stays_at_auto_advance_false(
+        self,
+    ) -> None:
+        """auto_advance: false stage stays when re-extraction produces no data."""
+        config = _edit_back_config(
+            re_extract=True,
+            target_auto_advance=False,
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Please enter a value."],
+            extraction_results=[
+                [{"routing_field": "go"}],
+                # Re-extraction at target: no data captured
+                [{}],
+            ],
+        ) as harness:
+            await harness.chat("Route to target")
+            assert harness.wizard_stage == "target"
+            assert harness.wizard_data.get("value_field") is None
+
+    @pytest.mark.asyncio
+    async def test_auto_advance_false_blocks_without_re_extraction(
+        self,
+    ) -> None:
+        """auto_advance: false blocks auto-advance when data is pre-filled.
+
+        Regression guard: auto_advance: false must block the auto-advance
+        loop regardless of how the data was filled.  Here, value_field is
+        captured at the source stage (in state.data via extraction), but
+        auto-advance at target should still be blocked because no
+        re-extraction occurred.
+        """
+        config = _edit_back_config(
+            re_extract=False,
+            target_auto_advance=False,
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!", "Enter value."],
+            extraction_results=[
+                # Source extraction captures both fields
+                [{"routing_field": "go", "value_field": "formal"}],
+            ],
+        ) as harness:
+            await harness.chat("Route and set value to formal")
+            assert harness.wizard_data.get("routing_field") == "go"
+            assert harness.wizard_data.get("value_field") == "formal"
+            # auto_advance: false blocks — stays at target
+            assert harness.wizard_stage == "target"
+
+    @pytest.mark.asyncio
+    async def test_re_extract_advances_global_off_no_explicit_stage(
+        self,
+    ) -> None:
+        """Re-extraction advances even when global auto_advance_filled=False
+        and stage has no explicit auto_advance setting.
+
+        This exercises the second gate in can_auto_advance (global off +
+        no stage-level setting) — distinct from the first gate (explicit
+        auto_advance: false).
+        """
+        config = _edit_back_config(
+            re_extract=True,
+            auto_advance_filled=False,
+            target_auto_advance=None,
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"routing_field": "go"}],
+                [{"value_field": "formal"}],
+            ],
+        ) as harness:
+            await harness.chat("Route and set value to formal")
+            assert harness.wizard_data.get("value_field") == "formal"
+            assert harness.wizard_stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_re_extract_with_explicit_auto_advance_true(self) -> None:
+        """Explicit auto_advance: true + re-extraction chains as before."""
+        config = _edit_back_config(
+            re_extract=True,
+            target_auto_advance=True,
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[
+                [{"routing_field": "go"}],
+                [{"value_field": "formal"}],
+            ],
+        ) as harness:
+            await harness.chat("Route and set value to formal")
+            assert harness.wizard_data.get("value_field") == "formal"
+            assert harness.wizard_stage == "done"
