@@ -145,17 +145,79 @@ class TestNormalizeExtractedData:
         assert result["price"] == pytest.approx(3.14)
         assert isinstance(result["price"], float)
 
-    def test_number_invalid_leaves_unchanged(
+    def test_number_invalid_rejected(
         self, wizard_reasoning: WizardReasoning
     ) -> None:
-        """Non-numeric string for number field is left as-is."""
+        """Non-numeric string for number field is rejected (type mismatch)."""
         schema: dict[str, Any] = {
             "properties": {"price": {"type": "number"}},
         }
         result = wizard_reasoning._extraction._normalize_extracted_data(
             {"price": "not-a-number"}, StageSchema.from_dict(schema)
         )
-        assert result["price"] == "not-a-number"
+        assert result["price"] is None
+
+    # --- Type mismatch rejection ---
+
+    def test_bool_for_integer_rejected(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Bool True for integer field is rejected (bool is subclass of int)."""
+        schema: dict[str, Any] = {
+            "properties": {"count": {"type": "integer"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"count": True}, StageSchema.from_dict(schema)
+        )
+        assert result["count"] is None
+
+    def test_bool_for_number_rejected(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Bool False for number field is rejected."""
+        schema: dict[str, Any] = {
+            "properties": {"price": {"type": "number"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"price": False}, StageSchema.from_dict(schema)
+        )
+        assert result["price"] is None
+
+    def test_bool_for_string_rejected(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Bool for string field is rejected, not coerced."""
+        schema: dict[str, Any] = {
+            "properties": {"tone": {"type": "string"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"tone": True}, StageSchema.from_dict(schema)
+        )
+        assert result["tone"] is None
+
+    def test_int_for_string_rejected(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Int for string field is rejected, not coerced."""
+        schema: dict[str, Any] = {
+            "properties": {"name": {"type": "string"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"name": 42}, StageSchema.from_dict(schema)
+        )
+        assert result["name"] is None
+
+    def test_list_for_string_rejected(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """List for string field is rejected."""
+        schema: dict[str, Any] = {
+            "properties": {"name": {"type": "string"}},
+        }
+        result = wizard_reasoning._extraction._normalize_extracted_data(
+            {"name": ["a", "b"]}, StageSchema.from_dict(schema)
+        )
+        assert result["name"] is None
 
     # --- Skip behavior ---
 

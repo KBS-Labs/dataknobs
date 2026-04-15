@@ -68,6 +68,19 @@ DEFAULT_NEGATION_KEYWORDS: frozenset[str] = frozenset({
     "empty", "delete", "disable", "disabled", "off",
 })
 
+# Known schema type → valid Python types for type-mismatch detection.
+# Used by is_field_grounded to reject values whose Python type doesn't
+# match the declared schema type BEFORE dispatching to type-specific
+# handlers (e.g. bool value for a string field, string for an integer).
+# Must stay in sync with WizardExtractor._SCHEMA_TYPE_MAP.
+_KNOWN_TYPE_CHECKS: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "boolean": (bool,),
+    "integer": (int,),
+    "number": (int, float),
+    "array": (list,),
+}
+
 
 # ──────────────────────────────────────────────────────────────────
 # Configuration and result types
@@ -106,7 +119,7 @@ class FieldGroundingResult:
         strategy: Which grounding strategy was applied (e.g.
             ``"enum"``, ``"string_overlap"``, ``"number"``,
             ``"boolean"``, ``"array"``, ``"skip"``, ``"fuzzy"``,
-            ``"exact"``).
+            ``"exact"``, ``"type_mismatch"``).
     """
 
     field: str
@@ -385,6 +398,29 @@ def is_field_grounded(
     # Type-based dispatch
     field_type = schema_property.get("type", "string")
 
+    # Type-mismatch guard: reject values whose Python type doesn't match
+    # the declared schema type BEFORE dispatching to type-specific handlers.
+    # This is defense-in-depth alongside normalization-layer checks in
+    # WizardExtractor._normalize_extracted_data.
+    # NOTE: bool is a subclass of int, so isinstance(True, int) is True.
+    # We must explicitly exclude bools for integer/number fields.
+    known_types = _KNOWN_TYPE_CHECKS.get(field_type)
+    if known_types is not None:
+        is_type_match = isinstance(value, known_types)
+        if is_type_match and isinstance(value, bool) and field_type in (
+            "integer", "number",
+        ):
+            is_type_match = False
+        if not is_type_match:
+            return FieldGroundingResult(
+                field=field_name, grounded=False,
+                reason=(
+                    f"type mismatch: field '{field_name}' expects {field_type}, "
+                    f"got {type(value).__name__}"
+                ),
+                strategy="type_mismatch",
+            )
+
     if field_type == "boolean":
         grounded = _ground_boolean(
             field_name, value, schema_property, msg_lower, cfg,
@@ -535,6 +571,8 @@ def _ground_array(
     config: GroundingConfig,
 ) -> bool:
     """Grounded if at least one element appears in the message."""
+    if not isinstance(value, list):
+        return False
     if not value:
         x_ext = schema_property.get("x-extraction", {})
         if x_ext.get("empty_allowed", False):

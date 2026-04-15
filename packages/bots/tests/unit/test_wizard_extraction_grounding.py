@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor
 from dataknobs_bots.reasoning.wizard_grounding import (
     CompositeMergeFilter,
     MergeDecision,
@@ -19,9 +20,10 @@ from dataknobs_bots.reasoning.wizard_grounding import (
     _has_negation,
     significant_words,
 )
+from dataknobs_bots.reasoning.wizard_types import StageSchema
 from dataknobs_bots.reasoning.wizard_utils import word_in_text
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_bots.testing import BotTestHarness
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 from dataknobs_llm.testing import ConfigurableExtractor
 
 # ---------------------------------------------------------------------------
@@ -1406,3 +1408,153 @@ class TestHasNegation:
             field_keywords=None,
             proximity=5,
         )
+
+
+# ---------------------------------------------------------------------------
+# Type-mismatch validation (item 91)
+# ---------------------------------------------------------------------------
+
+
+class TestValueMatchesSchemaType:
+    """Unit tests for WizardExtractor._value_matches_schema_type."""
+
+    def test_string_matches_string(self) -> None:
+        assert WizardExtractor._value_matches_schema_type("hello", "string") is True
+
+    def test_bool_rejects_string(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(True, "string") is False
+
+    def test_int_rejects_string(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(42, "string") is False
+
+    def test_bool_matches_boolean(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(True, "boolean") is True
+
+    def test_string_rejects_boolean(self) -> None:
+        assert WizardExtractor._value_matches_schema_type("yes", "boolean") is False
+
+    def test_int_matches_integer(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(42, "integer") is True
+
+    def test_bool_rejects_integer(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(True, "integer") is False
+
+    def test_float_matches_number(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(3.14, "number") is True
+
+    def test_int_matches_number(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(42, "number") is True
+
+    def test_bool_rejects_number(self) -> None:
+        assert WizardExtractor._value_matches_schema_type(False, "number") is False
+
+    def test_list_matches_array(self) -> None:
+        assert WizardExtractor._value_matches_schema_type([1, 2], "array") is True
+
+    def test_string_rejects_array(self) -> None:
+        assert WizardExtractor._value_matches_schema_type("a", "array") is False
+
+    def test_unknown_type_passes(self) -> None:
+        assert WizardExtractor._value_matches_schema_type({"k": "v"}, "object") is True
+
+
+class TestNormalizeTypeMismatch:
+    """Integration tests for type-mismatch rejection in _normalize_extracted_data."""
+
+    @staticmethod
+    def _make_extractor() -> WizardExtractor:
+        """Create a minimal WizardExtractor for normalization tests."""
+        return WizardExtractor(
+            extractor=None,
+            merge_filter=None,
+            grounding_overlap_threshold=0.5,
+            expansion_config=None,
+            enum_normalize=True,
+            normalize_threshold=0.8,
+            reject_unmatched=True,
+            extraction_scope="current",
+            recent_messages_count=5,
+            conflict_strategy="latest",
+            log_conflicts=False,
+            per_turn_keys=frozenset(),
+            recovery_pipeline=[],
+            boolean_recovery=False,
+            scope_escalation_enabled=False,
+            scope_escalation_scope="recent",
+            focused_retry_enabled=False,
+            focused_retry_max_retries=1,
+            field_derivations=[],
+        )
+
+    def test_normalize_rejects_bool_for_string(self) -> None:
+        ext = self._make_extractor()
+        ss = StageSchema.from_dict({
+            "properties": {"tone": {"type": "string"}},
+        })
+        result = ext._normalize_extracted_data({"tone": True}, ss)
+        assert result["tone"] is None
+
+    def test_normalize_rejects_int_for_string(self) -> None:
+        ext = self._make_extractor()
+        ss = StageSchema.from_dict({
+            "properties": {"tone": {"type": "string"}},
+        })
+        result = ext._normalize_extracted_data({"tone": 42}, ss)
+        assert result["tone"] is None
+
+    def test_normalize_accepts_string_for_string(self) -> None:
+        ext = self._make_extractor()
+        ss = StageSchema.from_dict({
+            "properties": {"tone": {"type": "string"}},
+        })
+        result = ext._normalize_extracted_data({"tone": "formal"}, ss)
+        assert result["tone"] == "formal"
+
+    def test_normalize_coercion_then_validation(self) -> None:
+        """String 'yes' for boolean field is coerced to True, then passes."""
+        ext = self._make_extractor()
+        ss = StageSchema.from_dict({
+            "properties": {"enabled": {"type": "boolean"}},
+        })
+        result = ext._normalize_extracted_data({"enabled": "yes"}, ss)
+        assert result["enabled"] is True
+
+    def test_normalize_failed_coercion_rejects(self) -> None:
+        """String 'abc' for integer field — coercion fails, type check rejects."""
+        ext = self._make_extractor()
+        ss = StageSchema.from_dict({
+            "properties": {"count": {"type": "integer"}},
+        })
+        result = ext._normalize_extracted_data({"count": "abc"}, ss)
+        assert result["count"] is None
+
+
+# ---------------------------------------------------------------------------
+# E2E: type-mismatch rejection through full pipeline (item 91)
+# ---------------------------------------------------------------------------
+
+
+class TestTypeMismatchE2E:
+    """BotTestHarness E2E test for type-mismatch rejection."""
+
+    @pytest.mark.asyncio
+    async def test_bool_for_string_field_rejected_e2e(self) -> None:
+        """Boolean extraction for a string field is rejected end-to-end."""
+        config = (
+            WizardConfigBuilder("test")
+            .stage("gather", is_start=True, prompt="What tone?")
+                .field("tone", field_type="string", required=True)
+                .transition("done", "data.get('tone')")
+            .stage("done", is_end=True, prompt="Done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["What tone would you like?"],
+            extraction_results=[[{"tone": True}]],
+        ) as harness:
+            await harness.chat("Set the tone to formal and academic")
+            # Bool should be rejected — tone stays unset, wizard stays at gather
+            assert harness.wizard_data.get("tone") is None
+            assert harness.wizard_stage == "gather"

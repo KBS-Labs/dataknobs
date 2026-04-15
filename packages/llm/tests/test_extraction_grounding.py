@@ -7,6 +7,8 @@ message, using type-dispatched heuristics and ``x-extraction`` overrides.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from dataknobs_llm.extraction.grounding import (
@@ -190,6 +192,106 @@ class TestIsFieldGrounded:
         result = is_field_grounded("data", {"a": 1}, "anything", prop)
         assert result.grounded is True
         assert result.strategy == "unknown"
+
+    # -- Type-mismatch rejection (item 91) --
+
+    def test_type_mismatch_bool_for_string(self) -> None:
+        prop = _string_prop()
+        result = is_field_grounded("tone", True, "formal and academic", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_int_for_string(self) -> None:
+        prop = _string_prop()
+        result = is_field_grounded("tone", 42, "formal and academic", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_float_for_string(self) -> None:
+        prop = _string_prop()
+        result = is_field_grounded("tone", 3.14, "formal and academic", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_list_for_string(self) -> None:
+        prop = _string_prop()
+        result = is_field_grounded("tone", ["a", "b"], "formal and academic", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_dict_for_string(self) -> None:
+        prop = _string_prop()
+        result = is_field_grounded("tone", {"k": "v"}, "formal and academic", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_bool_for_integer(self) -> None:
+        """bool is a subclass of int but should be rejected for integer fields."""
+        prop = _number_prop(num_type="integer")
+        result = is_field_grounded("count", True, "I want 1 item", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_bool_for_number(self) -> None:
+        prop = _number_prop(num_type="number")
+        result = is_field_grounded("price", False, "price is 0", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_string_for_boolean(self) -> None:
+        """String value for boolean field is type mismatch (not coercion)."""
+        prop = _bool_prop(description="Enable feature")
+        result = is_field_grounded("enabled", "yes", "yes enable it", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_string_for_integer(self) -> None:
+        prop = _number_prop(num_type="integer")
+        result = is_field_grounded("count", "42", "I want 42 items", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_string_for_array(self) -> None:
+        prop = _array_prop()
+        result = is_field_grounded("tags", "python", "tag it python", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_type_mismatch_int_for_array(self) -> None:
+        prop = _array_prop()
+        result = is_field_grounded("tags", 42, "tag it 42", prop)
+        assert result.grounded is False
+        assert result.strategy == "type_mismatch"
+
+    def test_correct_types_unaffected_string(self) -> None:
+        """String value for string field goes through normal string grounding."""
+        prop = _string_prop()
+        result = is_field_grounded("tone", "formal", "use a formal tone", prop)
+        assert result.grounded is True
+        assert result.strategy != "type_mismatch"
+
+    def test_correct_types_unaffected_bool(self) -> None:
+        """Bool value for boolean field goes through normal boolean grounding."""
+        prop = _bool_prop(description="Enable feature")
+        result = is_field_grounded(
+            "enabled", True, "yes enable the feature", prop,
+        )
+        assert result.grounded is True
+        assert result.strategy == "boolean"
+
+    def test_correct_types_unaffected_integer(self) -> None:
+        """Int value for integer field goes through normal number grounding."""
+        prop = _number_prop(num_type="integer")
+        result = is_field_grounded("count", 5, "I want 5 items", prop)
+        assert result.grounded is True
+        assert result.strategy == "number"
+
+    def test_correct_types_unaffected_array(self) -> None:
+        """List value for array field goes through normal array grounding."""
+        prop = _array_prop()
+        result = is_field_grounded("tags", ["python"], "tag it python", prop)
+        assert result.grounded is True
+        assert result.strategy == "array"
 
 
 # ──────────────────────────────────────────────────────────────────

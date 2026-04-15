@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_llm.extraction.schema_extractor import SimpleExtractionResult
 
@@ -54,6 +54,15 @@ class WizardExtractor:
     _BOOL_FALSE = frozenset({"no", "false", "0", "n", "off", "disable", "disabled"})
     _ALL_KEYWORDS = frozenset({"all", "everything", "all of them", "every one"})
     _NONE_KEYWORDS = frozenset({"none", "nothing", "no tools", "empty"})
+
+    # Schema type → valid Python types for post-coercion type validation.
+    _SCHEMA_TYPE_MAP: ClassVar[dict[str, tuple[type, ...]]] = {
+        "string": (str,),
+        "boolean": (bool,),
+        "integer": (int,),
+        "number": (int, float),
+        "array": (list,),
+    }
 
     def __init__(
         self,
@@ -989,7 +998,44 @@ class WizardExtractor:
                             prop["enum"],
                         )
 
+        # Final pass: reject values whose type doesn't match the schema.
+        # Defense-in-depth — grounding also catches this, but normalization
+        # runs unconditionally (even when grounding is disabled).
+        for field_name, value in list(normalized.items()):
+            if field_name.startswith("_") or field_name not in properties:
+                continue
+            if value is None:
+                continue
+            prop = properties[field_name]
+            declared_type = prop.get("type")
+            if declared_type and not self._value_matches_schema_type(
+                value, declared_type,
+            ):
+                logger.debug(
+                    "Type mismatch: %s expects %s, got %s (%r) — rejecting",
+                    field_name, declared_type, type(value).__name__, value,
+                )
+                normalized[field_name] = None
+
         return normalized
+
+    @staticmethod
+    def _value_matches_schema_type(value: Any, schema_type: str) -> bool:
+        """Check if a Python value matches a JSON Schema type declaration.
+
+        Returns ``True`` if the value is compatible, ``False`` if it's a
+        type mismatch.  Returns ``True`` for unknown schema types
+        (permissive for extensibility).
+        """
+        expected = WizardExtractor._SCHEMA_TYPE_MAP.get(schema_type)
+        if expected is None:
+            return True  # Unknown schema type — don't reject
+
+        # bool is a subclass of int in Python; reject booleans for int/number
+        if isinstance(value, bool) and schema_type in ("integer", "number"):
+            return False
+
+        return isinstance(value, expected)
 
     def validate_data(
         self, data: dict[str, Any], ss: StageSchema,
