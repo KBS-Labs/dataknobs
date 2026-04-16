@@ -34,6 +34,8 @@ $(echo -e "${BOLD}Commands:${NC}")
   $(echo -e "${CYAN}diffs${NC}")         Browse commit diffs interactively
   $(echo -e "${CYAN}bump${NC}")          Bump package versions interactively
   $(echo -e "${CYAN}sync-versions${NC}") Sync __init__.py versions from pyproject.toml
+  $(echo -e "${CYAN}verify-deps${NC}")   Check cross-package dependency constraints are current
+  $(echo -e "${CYAN}sync-deps${NC}")     Update all cross-package dependency constraints to current versions
   $(echo -e "${CYAN}notes${NC}")         Generate release notes from commits
   $(echo -e "${CYAN}tag${NC}")           Create release tags (calls tag-releases.sh)
   $(echo -e "${CYAN}publish${NC}")       Publish to PyPI (calls publish-pypi.sh)
@@ -633,6 +635,50 @@ check_changes() {
     fi
 }
 
+# Function to update cross-package dependency constraints
+# When package X is bumped to version Y, update all "dataknobs-X>=..." and
+# "dataknobs-X==..." constraints in sibling packages' pyproject.toml files.
+update_cross_package_deps() {
+    local bumped_package=$1
+    local new_version=$2
+    local pypi_name="dataknobs-${bumped_package}"
+    local updated_deps=()
+
+    # Get all packages
+    local all_packages=($(get_packages_in_order))
+
+    for sibling in "${all_packages[@]}"; do
+        # Skip the bumped package itself
+        if [ "$sibling" = "$bumped_package" ]; then
+            continue
+        fi
+
+        local sibling_pyproject="$ROOT_DIR/packages/$sibling/pyproject.toml"
+        if [ ! -f "$sibling_pyproject" ]; then
+            continue
+        fi
+
+        # Check if this sibling depends on the bumped package (in the dependencies array)
+        # Match patterns like: "dataknobs-utils>=1.2.6", "dataknobs-utils==1.0.0"
+        if grep -qE "\"${pypi_name}>=" "$sibling_pyproject"; then
+            # Update >= constraint to new version
+            sed -i.bak "s/\"${pypi_name}>=[^\"]*\"/\"${pypi_name}>=${new_version}\"/" "$sibling_pyproject"
+            rm -f "${sibling_pyproject}.bak"
+            updated_deps+=("${sibling} (>=)")
+        elif grep -qE "\"${pypi_name}==" "$sibling_pyproject"; then
+            # Update == constraint to new version
+            sed -i.bak "s/\"${pypi_name}==[^\"]*\"/\"${pypi_name}==${new_version}\"/" "$sibling_pyproject"
+            rm -f "${sibling_pyproject}.bak"
+            updated_deps+=("${sibling} (==)")
+        fi
+    done
+
+    if [ ${#updated_deps[@]} -gt 0 ]; then
+        local dep_list=$(IFS=', '; echo "${updated_deps[*]}")
+        echo -e "${BLUE}  ↳ Updated ${pypi_name} dependency in: ${dep_list}${NC}"
+    fi
+}
+
 # Function to bump version
 bump_version() {
     local package=$1
@@ -783,6 +829,9 @@ EOF
         else
             echo -e "${YELLOW}⚠ Updated ${package} to v${new_version} (${updated_files}) - some updates failed${NC}"
         fi
+
+        # Update cross-package dependency constraints in sibling packages
+        update_cross_package_deps "$package" "$new_version"
     fi
 }
 
@@ -902,13 +951,197 @@ bump_versions() {
             ;;
     esac
 
-    # After version bumps, update lock file and documentation
+    # After version bumps, verify and fix cross-package deps, update lock file and docs
     if [ "$choice" != "4" ] && [ "$choice" != "" ]; then
+        echo -e "\n${CYAN}Verifying cross-package dependency constraints...${NC}"
+        if ! verify_deps false; then
+            echo ""
+            echo -n "Update stale dependency constraints? (y/n) [y]: "
+            read -r reply
+            if [[ ! $reply =~ ^[Nn]$ ]]; then
+                sync_deps
+            fi
+        fi
+
         echo -e "\n${CYAN}Updating lock file...${NC}"
         uv lock
 
         echo -e "\n${CYAN}Updating documentation versions...${NC}"
         "$ROOT_DIR/bin/docs-update-versions.sh"
+    fi
+}
+
+# Function to verify cross-package dependency constraints are up-to-date
+# Compares dependency constraints in pyproject.toml files against current
+# versions in packages.json. Returns 0 if all up-to-date, 1 if stale found.
+verify_deps() {
+    local fix_mode="${1:-false}"
+    local packages_json="$ROOT_DIR/.dataknobs/packages.json"
+    local packages_dir="$ROOT_DIR/packages"
+
+    if [ ! -f "$packages_json" ]; then
+        echo -e "${RED}Error: packages.json not found${NC}"
+        return 1
+    fi
+
+    local result exit_code
+    result=$(PACKAGES_JSON="$packages_json" PACKAGES_DIR="$packages_dir" python3 << 'PYEOF'
+import json
+import re
+import os
+
+packages_json = os.environ["PACKAGES_JSON"]
+packages_dir = os.environ["PACKAGES_DIR"]
+
+with open(packages_json) as f:
+    data = json.load(f)
+
+current_versions = {pkg["name"]: pkg["version"] for pkg in data["packages"]}
+dep_pattern = re.compile(r'"dataknobs-([a-z]+)(>=|==)([^"]+)"')
+
+stale = []
+up_to_date = 0
+
+for pkg_name, pkg_ver in current_versions.items():
+    pyproject = os.path.join(packages_dir, pkg_name, "pyproject.toml")
+    if not os.path.isfile(pyproject):
+        continue
+    # Skip deprecated legacy package
+    if pkg_name == "legacy":
+        continue
+
+    with open(pyproject) as f:
+        content = f.read()
+
+    for match in dep_pattern.finditer(content):
+        dep_name, op, constraint_ver = match.groups()
+        # Skip self-references
+        if dep_name == pkg_name:
+            continue
+        expected = current_versions.get(dep_name)
+        if expected is None:
+            continue
+        if constraint_ver == expected:
+            up_to_date += 1
+        else:
+            stale.append((pkg_name, f"dataknobs-{dep_name}", f"{op}{constraint_ver}", f"{op}{expected}"))
+
+if not stale:
+    print(f"UP_TO_DATE:{up_to_date}")
+else:
+    print(f"STALE:{len(stale)}:{up_to_date}")
+    for pkg, dep, old, new in stale:
+        print(f"  {pkg}|{dep}|{old}|{new}")
+PYEOF
+    ) || true
+    exit_code=$(echo "$result" | head -1 | grep -c "^STALE:" || true)
+
+    if [ "$exit_code" -eq 0 ]; then
+        local count
+        count=$(echo "$result" | head -1 | cut -d: -f2)
+        echo -e "${GREEN}All ${count} cross-package dependency constraints are up-to-date${NC}"
+        return 0
+    fi
+
+    local stale_count
+    stale_count=$(echo "$result" | head -1 | cut -d: -f2)
+
+    echo -e "${YELLOW}Found ${stale_count} stale cross-package dependency constraints:${NC}"
+    echo ""
+    printf "  ${BOLD}%-14s %-24s %-12s → %s${NC}\n" "Package" "Dependency" "Current" "Expected"
+    echo "  ─────────────────────────────────────────────────────────────────"
+    echo "$result" | tail -n +2 | while IFS='|' read -r pkg dep old_ver new_ver; do
+        # Trim leading whitespace from pkg
+        pkg=$(echo "$pkg" | sed 's/^ *//')
+        printf "  %-14s %-24s %-12s → %s\n" "$pkg" "$dep" "$old_ver" "$new_ver"
+    done
+    echo ""
+
+    if [ "$fix_mode" = "true" ]; then
+        sync_deps
+    else
+        echo -e "Run ${CYAN}$0 sync-deps${NC} to update them all."
+    fi
+
+    return 1
+}
+
+# Function to sync all cross-package dependency constraints to current versions
+sync_deps() {
+    local packages_json="$ROOT_DIR/.dataknobs/packages.json"
+    local packages_dir="$ROOT_DIR/packages"
+
+    if [ ! -f "$packages_json" ]; then
+        echo -e "${RED}Error: packages.json not found${NC}"
+        return 1
+    fi
+
+    local result
+    result=$(PACKAGES_JSON="$packages_json" PACKAGES_DIR="$packages_dir" python3 << 'PYEOF'
+import json
+import re
+import os
+
+packages_json = os.environ["PACKAGES_JSON"]
+packages_dir = os.environ["PACKAGES_DIR"]
+
+with open(packages_json) as f:
+    data = json.load(f)
+
+current_versions = {pkg["name"]: pkg["version"] for pkg in data["packages"]}
+dep_pattern = re.compile(r'"dataknobs-([a-z]+)(>=|==)([^"]+)"')
+
+updated_count = 0
+updated_packages = []
+
+for pkg_name in current_versions:
+    pyproject = os.path.join(packages_dir, pkg_name, "pyproject.toml")
+    if not os.path.isfile(pyproject):
+        continue
+    # Skip deprecated legacy package
+    if pkg_name == "legacy":
+        continue
+
+    with open(pyproject) as f:
+        content = f.read()
+
+    new_content = content
+    package_updated = False
+
+    for match in dep_pattern.finditer(content):
+        dep_name, op, constraint_ver = match.groups()
+        if dep_name == pkg_name:
+            continue
+        expected = current_versions.get(dep_name)
+        if expected is None or constraint_ver == expected:
+            continue
+        old_str = f'"dataknobs-{dep_name}{op}{constraint_ver}"'
+        new_str = f'"dataknobs-{dep_name}{op}{expected}"'
+        new_content = new_content.replace(old_str, new_str)
+        package_updated = True
+        updated_count += 1
+
+    if package_updated:
+        with open(pyproject, "w") as f:
+            f.write(new_content)
+        updated_packages.append(pkg_name)
+
+print(f"UPDATED:{updated_count}")
+for pkg in updated_packages:
+    print(pkg)
+PYEOF
+    )
+
+    local updated_count
+    updated_count=$(echo "$result" | head -1 | cut -d: -f2)
+
+    if [ "$updated_count" -gt 0 ]; then
+        echo "$result" | tail -n +2 | while IFS= read -r pkg; do
+            echo -e "${GREEN}  ✓ Updated ${pkg}/pyproject.toml${NC}"
+        done
+        echo -e "\n${GREEN}Updated ${updated_count} dependency constraint(s)${NC}"
+    else
+        echo -e "${GREEN}All dependency constraints already up-to-date${NC}"
     fi
 }
 
@@ -1236,6 +1469,12 @@ case "${1:-help}" in
         ;;
     sync-versions)
         sync_versions
+        ;;
+    verify-deps)
+        verify_deps false
+        ;;
+    sync-deps)
+        sync_deps
         ;;
     notes)
         generate_notes
