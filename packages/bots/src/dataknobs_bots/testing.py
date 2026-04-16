@@ -120,7 +120,7 @@ class WizardConfigBuilder:
         skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
         recovery_enabled: bool | None = None,
-        re_extract_on_entry: bool | None = None,
+        re_extract_on_entry: bool | str | None = None,
         confirm_first_render: bool | None = None,
         confirm_on_new_data: bool | None = None,
         can_skip: bool | None = None,
@@ -1054,6 +1054,35 @@ class BotTestHarness:
     def extractor(self) -> ConfigurableExtractor | None:
         """The ConfigurableExtractor (for call verification)."""
         return self._extractor
+
+    def seed_wizard_data(self, data: dict[str, Any]) -> None:
+        """Pre-populate wizard data to simulate a prior visit.
+
+        Must be called after ``greet()`` or ``chat()`` has initialized the
+        conversation manager.  Modifies the persisted wizard state data
+        dict directly so the next turn sees pre-existing field values.
+
+        This method centralizes the storage-format coupling so test files
+        don't need to navigate internal metadata structures.
+
+        Args:
+            data: Field name/value pairs to merge into wizard state data.
+
+        Raises:
+            RuntimeError: If no conversation manager exists (no prior turn).
+        """
+        manager = self._bot.get_conversation_manager(
+            self._context.conversation_id,
+        )
+        if manager is None:
+            msg = (
+                "seed_wizard_data() requires a prior greet() or chat() call "
+                "to initialize the conversation manager"
+            )
+            raise RuntimeError(msg)
+        wizard_meta = manager.metadata.get("wizard", {})
+        fsm_state = wizard_meta.get("fsm_state", {})
+        fsm_state.setdefault("data", {}).update(data)
 
     async def close(self) -> None:
         """Close the bot and release resources."""

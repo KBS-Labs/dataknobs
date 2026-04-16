@@ -190,7 +190,7 @@ class StageConfig:
     extraction_grounding: str | None = None
     derivation_enabled: bool | None = None
     recovery_enabled: bool | None = None
-    re_extract_on_entry: bool | None = None
+    re_extract_on_entry: bool | str | None = None
     # Routing transforms
     routing_transforms: tuple[str, ...] = ()
     # Post-extraction tool calls with result-to-state mapping

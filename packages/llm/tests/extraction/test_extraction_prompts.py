@@ -10,11 +10,43 @@ Verifies:
 
 from dataknobs_llm.extraction.prompts import (
     DEFAULT_EXTRACTION_PROMPT,
+    EXTRACTION_ASSUMPTIONS_INSTRUCTIONS,
+    EXTRACTION_DEFAULT_INSTRUCTIONS,
     EXTRACTION_WITH_ASSUMPTIONS_PROMPT,
     get_extraction_prompt_library,
 )
 from dataknobs_llm.prompts import TemplateRenderer
 from dataknobs_llm.prompts.base.types import TemplateMode
+
+
+class TestPhrasingPreservationInstruction:
+    """Item 93: extraction prompts include phrasing-preservation instruction."""
+
+    def test_default_instructions_include_phrasing_preservation(self) -> None:
+        """Instruction 10 tells the LLM to preserve user phrasing."""
+        template = EXTRACTION_DEFAULT_INSTRUCTIONS["template"]
+        assert "exact words" in template
+        assert "Do not reformat conjunctions" in template
+
+    def test_assumptions_instructions_include_phrasing_preservation(
+        self,
+    ) -> None:
+        """Assumptions variant also includes phrasing-preservation."""
+        template = EXTRACTION_ASSUMPTIONS_INSTRUCTIONS["template"]
+        assert "exact words" in template
+        assert "Do not reformat conjunctions" in template
+
+    def test_backward_compat_default_prompt_includes_phrasing(self) -> None:
+        """The flat DEFAULT_EXTRACTION_PROMPT also includes instruction 10."""
+        assert "exact words" in DEFAULT_EXTRACTION_PROMPT
+        assert "Do not reformat conjunctions" in DEFAULT_EXTRACTION_PROMPT
+
+    def test_backward_compat_assumptions_prompt_includes_phrasing(
+        self,
+    ) -> None:
+        """The flat EXTRACTION_WITH_ASSUMPTIONS_PROMPT also includes it."""
+        assert "exact words" in EXTRACTION_WITH_ASSUMPTIONS_PROMPT
+        assert "Do not reformat conjunctions" in EXTRACTION_WITH_ASSUMPTIONS_PROMPT
 
 
 class TestBackwardCompatibleConstants:

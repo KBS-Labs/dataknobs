@@ -516,8 +516,9 @@ class WizardResponder:
         A stage can be auto-advanced if:
         1. Auto-advance is enabled for this stage (see precedence below)
         2. The stage has a schema with required fields (or all properties
-           if no required list)
+           if no required list) — *skipped when* ``after_re_extraction``
         3. All required fields have non-empty values in wizard_state.data
+           — *skipped when* ``after_re_extraction``
         4. The stage is not an end stage
         5. At least one transition condition is satisfied
 
@@ -527,19 +528,19 @@ class WizardResponder:
         - absent (``None``)       — defers to global
           ``auto_advance_filled_stages``
 
-        When ``after_re_extraction`` is ``True``, the ``auto_advance``
-        gate is relaxed.  ``auto_advance: false`` means "don't
-        auto-advance during normal turn processing" — after
-        re-extraction, the user has expressed intent via the triggering
-        message and the wizard should honor it.  All other gates
-        (required fields, transition conditions) still apply.
+        When ``after_re_extraction`` is ``True``, both the
+        ``auto_advance`` gate (Gate 1) and the required-fields gate
+        (Gate 2) are relaxed.  Only the transition-condition check
+        (Gate 3) is enforced — this is the correct safety boundary
+        because it encodes the domain logic about when advancement
+        is appropriate.
 
         Args:
             wizard_state: Current wizard state
             stage: Stage configuration dict
             after_re_extraction: When ``True``, relax the
-                ``auto_advance`` gate because re-extraction just
-                captured data at this stage.
+                ``auto_advance`` gate and the required-fields gate
+                because re-extraction just captured data at this stage.
 
         Returns:
             True if stage can be auto-advanced
@@ -564,36 +565,42 @@ class WizardResponder:
         if stage.get("is_end", False):
             return False
 
-        # Get schema to check required fields
-        ss = StageSchema.from_stage(stage)
-        properties = ss.properties
-        required_fields = ss.required_fields
+        # Gate 2: required fields — skip when after_re_extraction.
+        # After re-extraction, the transition condition (Gate 3) is the
+        # correct arbiter.  The required-fields check blocks on unfilled
+        # optional fields (e.g., llm_model='') that are irrelevant to
+        # whether the user's intent should be honored.
+        if not after_re_extraction:
+            # Get schema to check required fields
+            ss = StageSchema.from_stage(stage)
+            properties = ss.properties
+            required_fields = ss.required_fields
 
-        # If no required fields specified, treat all properties as required
-        if not required_fields:
-            required_fields = list(properties.keys())
+            # If no required fields specified, treat all properties as required
+            if not required_fields:
+                required_fields = list(properties.keys())
 
-        # If no fields at all:
-        # - Per-stage auto_advance: true → can advance (message/display stage)
-        #   Still requires a satisfied transition condition (checked below).
-        # - Global auto_advance_filled_stages only → cannot advance
-        #   (that setting means "skip stages whose fields are already filled",
-        #   not "skip stages that have no fields to fill").
-        if not required_fields and not stage_auto_advance:
-            return False
-
-        # Check if all required fields have non-empty values
-        for field_name in required_fields:
-            if field_name not in wizard_state.data:
-                return False
-            value = wizard_state.data[field_name]
-            if value is None:
-                return False
-            # Empty strings don't count as filled
-            if isinstance(value, str) and not value.strip():
+            # If no fields at all:
+            # - Per-stage auto_advance: true → can advance (message/display stage)
+            #   Still requires a satisfied transition condition (checked below).
+            # - Global auto_advance_filled_stages only → cannot advance
+            #   (that setting means "skip stages whose fields are already filled",
+            #   not "skip stages that have no fields to fill").
+            if not required_fields and not stage_auto_advance:
                 return False
 
-        # Check if any transition condition is satisfied
+            # Check if all required fields have non-empty values
+            for field_name in required_fields:
+                if field_name not in wizard_state.data:
+                    return False
+                value = wizard_state.data[field_name]
+                if value is None:
+                    return False
+                # Empty strings don't count as filled
+                if isinstance(value, str) and not value.strip():
+                    return False
+
+        # Gate 3: transition condition — always checked
         transitions = stage.get("transitions", [])
         for transition in transitions:
             condition = transition.get("condition")
