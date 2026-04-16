@@ -414,7 +414,20 @@ class WizardConfigLoader:
                             )
                             break
 
-            # 4. Python str.format() syntax in templates and prompts
+            # 4. Invalid re_extract_on_entry values
+            re_extract = stage.get("re_extract_on_entry")
+            if re_extract is not None and re_extract is not True and (
+                re_extract is not False and re_extract != "capture_only"
+            ):
+                logger.warning(
+                    "Stage '%s': re_extract_on_entry=%r is not a "
+                    "recognized value. Use True, False, or "
+                    "'capture_only'.",
+                    stage_name,
+                    re_extract,
+                )
+
+            # 5. Python str.format() syntax in templates and prompts
             for field_name in ("response_template", "prompt"):
                 text = stage.get(field_name, "")
                 if text and _PYTHON_FORMAT_PATTERN.search(text):

@@ -1123,7 +1123,7 @@ Enable re-extraction on a stage with the `re_extract_on_entry` field:
 ```yaml
 stages:
   - name: configure_options
-    re_extract_on_entry: true   # Re-extract from the triggering message
+    re_extract_on_entry: true   # Re-extract + relax auto-advance gates
     schema:
       properties:
         tone: { type: string, enum: [formal, casual, academic] }
@@ -1133,7 +1133,17 @@ stages:
         condition: "data.get('tone')"
 ```
 
-Default: disabled (absent). When `true`, the wizard re-runs the full extraction pipeline against this stage's schema using the same user message that triggered the transition. The extraction pipeline includes normalization, grounded merge, defaults, derivations, and recovery — the same steps as a normal extraction.
+Default: disabled (absent). Accepted values:
+
+| Value | Extraction | Auto-advance gates |
+|-------|------------|-------------------|
+| `true` | Runs | Relaxed (Gate 1 + Gate 2 bypassed; only Gate 3 enforced) |
+| `"capture_only"` | Runs | **Not relaxed** — all gates remain enforced |
+| `false` / absent | Does not run | N/A |
+
+When enabled (`true` or `"capture_only"`), the wizard re-runs the full extraction pipeline against this stage's schema using the same user message that triggered the transition. The extraction pipeline includes normalization, grounded merge, defaults, derivations, and recovery — the same steps as a normal extraction.
+
+Use `"capture_only"` when the stage should absorb data from the transition message but the user must explicitly proceed — for example, confirmation or review stages where the bot should display the captured data before advancing.
 
 ### How It Works {#re-extraction-how-it-works}
 
@@ -1163,13 +1173,15 @@ Re-extraction is silently skipped when:
 
 ### Interaction with auto_advance: false {#re-extraction-auto-advance}
 
-`auto_advance: false` means "don't auto-advance during normal turn processing" — it does **not** mean "never advance under any circumstances". After re-extraction captures data at a stage, the auto-advance gate is relaxed for that stage because the user has already expressed intent via the triggering message.
+`auto_advance: false` means "don't auto-advance during normal turn processing" — it does **not** mean "never advance under any circumstances". When `re_extract_on_entry: true` captures data at a stage, both the `auto_advance` gate and the **required-fields gate** are relaxed for that stage because the user has already expressed intent via the triggering message.
 
-This relaxation applies only to the **immediate landing stage** (the stage where re-extraction ran). If auto-advance chains through additional stages, those stages' own `auto_advance` settings apply normally.
+This relaxation applies only to the **immediate landing stage** (the stage where re-extraction ran). If auto-advance chains through additional stages, those stages' own `auto_advance` settings and required-fields checks apply normally.
 
-All other auto-advance gates remain in effect: required fields must be filled, the stage must not be an end stage, and at least one transition condition must be satisfied. The relaxation only bypasses the `auto_advance: false` check — it does not force advancement.
+Only the **transition condition** gate remains in effect after re-extraction — it encodes the domain logic about when advancement is appropriate. The stage must also not be an end stage. The `auto_advance` and required-fields checks are bypassed because unfilled optional fields (e.g., `llm_model = ''` in a stage with `required: []`) should not block advancement when the transition condition is satisfied. Note: stages with unconditional transitions (no `condition` on the transition) will always advance after re-extraction when using `re_extract_on_entry: true`, since Gate 3 passes unconditionally.
 
-If re-extraction produces **no data** (empty extraction result), the `auto_advance: false` gate is **not** relaxed and the wizard stays at the landing stage.
+**`"capture_only"` mode:** If you want re-extraction to capture data but NOT relax auto-advance gates, use `re_extract_on_entry: "capture_only"`. This is useful for stages where the user should review captured data before proceeding — for example, confirmation stages or progressive-disclosure forms where you want the bot to display what was captured and let the user decide when to continue.
+
+If re-extraction produces **no data** (empty extraction result), the `auto_advance: false` gate is **not** relaxed and the wizard stays at the landing stage (regardless of `true` vs. `"capture_only"`).
 
 **Limitation:** Re-extraction runs only once per turn, for the stage entered by the initial transition. If re-extraction fills the target stage's required fields and auto-advance fires to a subsequent stage that also has `re_extract_on_entry`, that subsequent stage does **not** re-extract. Design edit-back flows so the re-extraction target is the final destination, not a waypoint.
 

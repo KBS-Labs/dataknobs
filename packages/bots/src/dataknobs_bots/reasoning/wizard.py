@@ -3083,9 +3083,11 @@ class WizardReasoning(ReasoningStrategy):
             state: Wizard state (mutated in place).
             llm: LLM provider for auto-advance transforms (``None``
                 when no LLM is available).
-            after_re_extraction: When ``True``, relax the
-                ``auto_advance`` gate on the landing stage because
-                re-extraction just captured data.
+            after_re_extraction: When ``True``, relax both the
+                ``auto_advance`` gate (Gate 1) and the required-fields
+                gate (Gate 2) on the landing stage because
+                re-extraction just captured data.  Gate 3 (transition
+                condition) is always enforced.
 
         Returns:
             List of rendered template strings from auto-advanced stages.
@@ -3134,6 +3136,19 @@ class WizardReasoning(ReasoningStrategy):
         single-turn edit-back flows where a user's message contains
         data relevant to both the source and target stages.
 
+        The stage's ``re_extract_on_entry`` field controls behavior:
+
+        - ``True`` — extract AND relax auto-advance gates (Gate 1 and
+          Gate 2) on the landing stage.  The transition condition
+          (Gate 3) remains the safety boundary.
+        - ``"capture_only"`` — extract but do NOT relax gates.  Data
+          is captured at the landing stage, but ``auto_advance: false``
+          and required-fields checks remain enforced.  Use this when
+          the stage should absorb data from the transition message but
+          the user must explicitly proceed (e.g., confirmation or
+          review stages).
+        - ``False`` / absent — no re-extraction.
+
         If ``state.skip_extraction`` is set (from a prior auto-advance),
         this method clears it — re-extraction supersedes the skip.  In
         the conversational path, ``process_input`` clears
@@ -3148,7 +3163,8 @@ class WizardReasoning(ReasoningStrategy):
             manager: Conversation manager for extraction context.
 
         Returns:
-            ``True`` if re-extraction ran and produced data, ``False``
+            ``True`` if re-extraction ran and produced data **and** the
+            mode is ``True`` (not ``"capture_only"``).  ``False``
             otherwise.
         """
         # Defensive guard — _run_post_transition_sequence() already gates
@@ -3161,13 +3177,13 @@ class WizardReasoning(ReasoningStrategy):
             return False
 
         # Check if landing stage wants re-extraction.
-        # Uses ``is not True`` because re_extract_on_entry is default-off:
-        # None (absent) and False both skip re-extraction; only True
-        # enables it.  Contrast with derivation_enabled / recovery_enabled,
-        # which are default-on and use ``is False`` to disable explicitly.
+        # Accepts ``True`` (extract + relax auto-advance gates) or
+        # ``"capture_only"`` (extract but do NOT relax gates).
+        # None (absent) and False both skip re-extraction.
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
-        if stage.get("re_extract_on_entry") is not True:
+        re_extract_mode = stage.get("re_extract_on_entry")
+        if re_extract_mode is not True and re_extract_mode != "capture_only":
             return False
 
         # Stage has no schema — nothing to extract against
@@ -3205,6 +3221,15 @@ class WizardReasoning(ReasoningStrategy):
                 len(pipeline_result.new_data_keys),
                 sorted(pipeline_result.new_data_keys),
             )
+
+        # "capture_only" mode: data is captured but auto-advance gates
+        # are NOT relaxed — the stage keeps its normal gate enforcement.
+        if re_extract_mode == "capture_only":
+            logger.debug(
+                "capture_only mode at '%s': gates not relaxed",
+                stage.get("name"),
+            )
+            return False
 
         return produced_data
 

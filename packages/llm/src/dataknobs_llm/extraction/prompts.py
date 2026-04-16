@@ -59,7 +59,10 @@ EXTRACTION_DEFAULT_INSTRUCTIONS: PromptTemplateDict = {
         "7. Negations count as explicit values: \"no knowledge base\" → kb_enabled: false\n"
         "8. For array fields with enum constraints, \"all\" means include every enum "
         "value; \"none\" means an empty array\n"
-        "9. For array fields, always return a JSON array (e.g. [\"value\"]), never a bare string"
+        "9. For array fields, always return a JSON array (e.g. [\"value\"]), never a bare string\n"
+        "10. For string values, use the user's exact words and phrasing. "
+        "Do not reformat conjunctions, lists, or separators "
+        "(e.g., keep \"formal and academic\" as-is, do not change to \"formal, academic\")"
     ),
     "template_syntax": "format",
 }
@@ -102,7 +105,10 @@ EXTRACTION_ASSUMPTIONS_INSTRUCTIONS: PromptTemplateDict = {
         "6. For array fields with enum constraints, \"all\" means include every enum "
         "value; \"none\" means an empty array\n"
         "7. For array fields, always return a JSON array (e.g. [\"value\"]), never a bare string\n"
-        "8. Return a JSON object with two keys:\n"
+        "8. For string values, use the user's exact words and phrasing. "
+        "Do not reformat conjunctions, lists, or separators "
+        "(e.g., keep \"formal and academic\" as-is, do not change to \"formal, academic\")\n"
+        "9. Return a JSON object with two keys:\n"
         "   - \"data\": The extracted data matching the schema\n"
         "   - \"assumptions\": Array of assumption objects with:\n"
         "     - \"content\": Description of the assumption\n"
@@ -184,6 +190,7 @@ Extract data matching this JSON Schema:
 7. Negations count as explicit values: "no knowledge base" → kb_enabled: false
 8. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
 9. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
+10. For string values, use the user's exact words and phrasing. Do not reformat conjunctions, lists, or separators (e.g., keep "formal and academic" as-is, do not change to "formal, academic")
 
 ## User Message
 {text}
@@ -213,7 +220,8 @@ Extract data matching this JSON Schema:
 5. Negations count as explicit values: "no knowledge base" → kb_enabled: false
 6. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
 7. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
-8. Return a JSON object with two keys:
+8. For string values, use the user's exact words and phrasing. Do not reformat conjunctions, lists, or separators (e.g., keep "formal and academic" as-is, do not change to "formal, academic")
+9. Return a JSON object with two keys:
    - "data": The extracted data matching the schema
    - "assumptions": Array of assumption objects with:
      - "content": Description of the assumption
