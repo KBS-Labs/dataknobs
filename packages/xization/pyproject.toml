@@ -8,9 +8,9 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common>=1.0.0",
-    "dataknobs-structures>=1.0.0",
-    "dataknobs-utils>=1.0.0",
+    "dataknobs-common>=1.3.9",
+    "dataknobs-structures>=1.0.6",
+    "dataknobs-utils>=1.2.7",
     "beautifulsoup4>=4.12.0",
     "nltk>=3.9.1",
     "more-itertools>=8.10.0",

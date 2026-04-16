@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.6.15",
+      "version": "0.6.16",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "Unified LLM abstraction with prompt management and conversations",
-      "version": "0.5.6",
+      "version": "0.5.7",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utilities for file I/O, JSON processing, HTTP requests, and integrations",
-      "version": "1.2.6",
+      "version": "1.2.7",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
