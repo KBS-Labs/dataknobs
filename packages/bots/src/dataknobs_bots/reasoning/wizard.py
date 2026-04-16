@@ -3083,9 +3083,11 @@ class WizardReasoning(ReasoningStrategy):
             state: Wizard state (mutated in place).
             llm: LLM provider for auto-advance transforms (``None``
                 when no LLM is available).
-            after_re_extraction: When ``True``, relax the
-                ``auto_advance`` gate on the landing stage because
-                re-extraction just captured data.
+            after_re_extraction: When ``True``, relax both the
+                ``auto_advance`` gate (Gate 1) and the required-fields
+                gate (Gate 2) on the landing stage because
+                re-extraction just captured data.  Gate 3 (transition
+                condition) is always enforced.
 
         Returns:
             List of rendered template strings from auto-advanced stages.

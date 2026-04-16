@@ -160,10 +160,14 @@ class WizardConfigBuilder:
                 Set to ``False`` to suppress derivation on this stage.
             recovery_enabled: Per-stage recovery pipeline override.
                 Set to ``False`` to suppress all recovery on this stage.
-            re_extract_on_entry: When ``True``, re-extract from the
+            re_extract_on_entry: Controls re-extraction from the
                 triggering message against this stage's schema after
-                entering via a mid-turn transition.  Enables single-turn
-                edit-back flows.
+                entering via a mid-turn transition.  ``True`` extracts
+                and relaxes auto-advance gates (enables single-turn
+                edit-back flows).  ``"capture_only"`` extracts but
+                keeps all gates enforced (useful for confirmation or
+                review stages).  ``False`` / absent disables
+                re-extraction.
             confirm_first_render: Whether to pause for confirmation on
                 first render when new data is extracted. Default ``True``.
                 Set to ``False`` to skip confirmation and evaluate
@@ -1080,7 +1084,14 @@ class BotTestHarness:
                 "to initialize the conversation manager"
             )
             raise RuntimeError(msg)
-        wizard_meta = manager.metadata.get("wizard", {})
+        wizard_meta = manager.metadata.get("wizard")
+        if wizard_meta is None:
+            msg = (
+                "seed_wizard_data() requires wizard state to be "
+                "initialized — call greet() first to run the wizard "
+                "lifecycle"
+            )
+            raise RuntimeError(msg)
         fsm_state = wizard_meta.get("fsm_state", {})
         fsm_state.setdefault("data", {}).update(data)
 

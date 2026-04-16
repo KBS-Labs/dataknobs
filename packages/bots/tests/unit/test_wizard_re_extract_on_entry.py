@@ -1402,3 +1402,34 @@ class TestCaptureOnlyMode:
         ) as harness:
             await harness.chat("Go to details and set priority to high")
             assert harness.wizard_stage == "complete"  # advances
+
+
+class TestSeedWizardDataErrorPaths:
+    """Tests for BotTestHarness.seed_wizard_data() error paths."""
+
+    @pytest.mark.asyncio
+    async def test_seed_before_any_turn_raises(self) -> None:
+        """Calling seed_wizard_data before greet/chat raises RuntimeError."""
+        config = _edit_back_config()
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Hello!"],
+        ) as harness:
+            with pytest.raises(RuntimeError, match="requires a prior greet"):
+                harness.seed_wizard_data({"tone": "formal"})
+
+    @pytest.mark.asyncio
+    async def test_seed_without_wizard_state_raises(self) -> None:
+        """seed_wizard_data raises when manager exists but wizard is uninitialized."""
+        # Use a non-wizard bot so the manager has no wizard metadata.
+        async with await BotTestHarness.create(
+            bot_config={
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "reasoning": {"strategy": "simple"},
+            },
+            main_responses=["Hello!", "Sure!"],
+        ) as harness:
+            await harness.chat("hi")
+            with pytest.raises(RuntimeError, match="wizard state to be initialized"):
+                harness.seed_wizard_data({"key": "value"})

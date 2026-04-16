@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-16T01:00:27Z",
+  "timestamp": "2026-04-16T01:16:33Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.6 (Homebrew 2026-04-09 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fix-required-fields-re-extraction",
-  "git_commit": "31ae3f1ccb4a2e97f56104d795dafc483ede84e2",
+  "git_commit": "7e150e59c75c61597c895197d4da0db09cd99392",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
