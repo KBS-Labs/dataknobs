@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -111,7 +112,12 @@ def _make_vector_fn(
     embeddings: dict[str, list[float]],
 ) -> ...:
     """Create a vector query fn that returns chunks matching query words."""
-    async def vector_fn(query: str, top_k: int) -> list[SourceResult]:
+    async def vector_fn(
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
         query_lower = query.lower()
         matches = []
         for c in chunks:

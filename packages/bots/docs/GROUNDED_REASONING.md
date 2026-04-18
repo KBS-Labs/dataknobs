@@ -251,6 +251,89 @@ strategy.add_source(my_custom_source)
 strategy.set_knowledge_base(my_knowledge_base)  # Wraps as VectorKnowledgeSource
 ```
 
+### Vector KB Source Options
+
+The `vector_kb` source wraps a `KnowledgeBase` and exposes two classes of options beyond the basic `name` / `weight` fields.
+
+#### Filter passthrough
+
+`RetrievalIntent.filters` is a dict keyed by source name. `VectorKnowledgeSource` reads the slice keyed by its own name and forwards it to the underlying KB as `filter_metadata=…`, matching the convention used by `DatabaseSource`. The slice flows end-to-end: `RAGKnowledgeBase.query(filter_metadata=…)` → `VectorStore.search(filter=…)`.
+
+Filter semantics are **scalar-on-scalar equality** across all built-in vector store backends (Memory, FAISS, pgvector). Sources that need richer semantics (list-contains, boolean composition, ranges) should compose a separate `GroundedSource` implementation alongside the vector source.
+
+An empty slice (`{}`) is treated as "no filter" — the KB is queried without a filter. A missing slice is the same. This preserves existing behavior for consumers that don't populate `intent.filters`.
+
+```python
+# Intent extractor populates intent.filters by source name:
+intent = RetrievalIntent(
+    text_queries=["product warranty"],
+    filters={
+        "catalog": {"category": "appliance"},   # slice for the 'catalog' source
+    },
+)
+# VectorKnowledgeSource(name="catalog") forwards {"category": "appliance"}
+# as filter_metadata to the KB; other sources with different names are unaffected.
+```
+
+#### Identity, dedup, and metadata callables
+
+By default, `VectorKnowledgeSource` assumes a markdown-chunked corpus: dedup by `(source_file, chunk_index)`, synthesize `source_id` as `"{source}:chunk_{chunk_index}"`, and surface `heading_path` + `source` + raw metadata on `SourceResult.metadata`. Non-markdown corpora (product catalogs, research-paper citations, code symbol indexes, FAQ entries, issue records, transcript utterances) would otherwise be forced to stuff synthetic file/chunk values into metadata.
+
+Three optional callables override these defaults:
+
+| Callable | Role | Default |
+|----------|------|---------|
+| `dedup_key(raw)` | Return a hashable key used to deduplicate results across text queries. | `(raw.get("source", ""), raw.get("metadata", {}).get("chunk_index", id(raw)))` — safe access, falls back to `id(raw)` when no chunk index is present |
+| `source_id_fn(raw)` | Return the `SourceResult.source_id` string for the emitted result. | `f"{raw.get('source', '')}:chunk_{raw.get('metadata', {}).get('chunk_index', '')}"` |
+| `metadata_fn(raw)` | Return the `SourceResult.metadata` dict attached to the emitted result. | `{"heading_path": raw.get("heading_path", ""), "source": raw.get("source", ""), **raw.get("metadata", {})}` |
+
+If a consumer-supplied callable raises for a given record, the offending record is skipped with a warning (exception traceback logged) and retrieval continues with the remaining results — one misbehaving record does not collapse the entire turn.
+
+When `topic_index` is configured (heading-tree or cluster retrieval), `source_id_fn` and `metadata_fn` are threaded through the topic-index path as well so its emitted `SourceResult`s follow the same identity rule. `dedup_key` is not threaded — topic-index callers handle their own dedup.
+
+**Filter passthrough with `topic_index`:** When both `topic_index` and `intent.filters[source_name]` are present, the filter slice is threaded to the topic index's internal vector seeding and forwarded to the underlying KB as `filter_metadata=…`. Scalar-equality semantics match the main path — filters narrow the seed pool before topic-region expansion or cluster matching.
+
+**Programmatic wiring** — pass the callables to the constructor:
+
+```python
+from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
+
+def sku_as_id(r):
+    return r["metadata"].get("sku", "")
+
+def dedup_by_sku(r):
+    return r["metadata"].get("sku") or id(r)
+
+def product_metadata(r):
+    m = r.get("metadata", {})
+    return {"sku": m.get("sku"), "category": m.get("category")}
+
+source = VectorKnowledgeSource(
+    kb=kb,
+    name="catalog",
+    dedup_key=dedup_by_sku,
+    source_id_fn=sku_as_id,
+    metadata_fn=product_metadata,
+)
+```
+
+**Config-driven wiring** — specify any of the three as dotted-import strings in the source's config. Both `"module.path:attr"` (preferred) and `"module.path.attr"` styles are accepted.
+
+```yaml
+reasoning:
+  strategy: grounded
+  sources:
+    - type: vector_kb
+      name: catalog
+      dedup_key: acme.catalog.identity:dedup_by_sku
+      source_id_fn: acme.catalog.identity:sku_as_id
+      metadata_fn: acme.catalog.identity:product_metadata
+```
+
+Invalid references raise `ValueError` at source-construction time with the source name and field name in the message (e.g. `Source 'catalog': failed to resolve metadata_fn='acme.catalog.identity:typo'`).
+
+If a consumer's corpus already has natural structural identity (SKU, symbol name, URL, record ID), passing all three callables produces clean `source_id`s and metadata surfaces without downstream workarounds.
+
 ### Multi-Source Behavior
 
 When multiple sources are configured:

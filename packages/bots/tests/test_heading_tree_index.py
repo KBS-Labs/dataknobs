@@ -77,7 +77,12 @@ def _make_vector_fn(
     chunks: list[SourceResult],
 ) -> Any:
     """Create a simple vector query fn that returns chunks matching query words."""
-    async def vector_fn(query: str, top_k: int) -> list[SourceResult]:
+    async def vector_fn(
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
         query_lower = query.lower()
         matches = []
         for c in chunks:
@@ -238,7 +243,12 @@ class TestVectorStrategy:
         """'safety' doesn't match 'Security' headings but vector search bridges the gap."""
         chunks = _rfc_chunks()
 
-        async def safety_to_security(query: str, top_k: int) -> list[SourceResult]:
+        async def safety_to_security(
+            query: str,
+            top_k: int,
+            *,
+            filter_metadata: dict[str, Any] | None = None,
+        ) -> list[SourceResult]:
             # Simulates vector search bridging 'safety' → security content
             if "safety" in query.lower():
                 return [c for c in chunks if "security" in c.content.lower()][:top_k]
@@ -307,7 +317,12 @@ class TestLazyMode:
     @pytest.mark.asyncio
     async def test_lazy_no_heading_metadata_returns_empty(self) -> None:
         """Seeds with no heading metadata produce no tree."""
-        async def no_heading_fn(query: str, top_k: int) -> list[SourceResult]:
+        async def no_heading_fn(
+            query: str,
+            top_k: int,
+            *,
+            filter_metadata: dict[str, Any] | None = None,
+        ) -> list[SourceResult]:
             return [_chunk("c1", content="some content")]
 
         index = HeadingTreeIndex(vector_query_fn=no_heading_fn)
@@ -728,7 +743,12 @@ class TestResultLimits:
         """Vector seeds below the threshold are dropped."""
         chunks = _rfc_chunks()
 
-        async def low_score_fn(query: str, top_k: int) -> list[SourceResult]:
+        async def low_score_fn(
+            query: str,
+            top_k: int,
+            *,
+            filter_metadata: dict[str, Any] | None = None,
+        ) -> list[SourceResult]:
             return [
                 _chunk("weak", ["10. Security Considerations", "10.3 Token Leakage"], [1, 2],
                        relevance=0.1),  # Below threshold

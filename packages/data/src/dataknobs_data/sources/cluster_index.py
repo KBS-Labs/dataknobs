@@ -22,7 +22,7 @@ import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from .base import RetrievalIntent, SourceResult
 from .processing import agglomerative_cluster, cosine_similarity
@@ -36,9 +36,25 @@ EmbedFn = Callable[[str], Awaitable[list[float]]]
 # Type alias for a batch embed function: texts -> list of embedding vectors.
 BatchEmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
-# Type alias for a vector query function (same as HeadingTreeIndex).
-# Accepts (query_text, top_k) and returns scored results.
-VectorQueryFn = Callable[[str, int], Awaitable[list[SourceResult]]]
+
+class VectorQueryFn(Protocol):
+    """Protocol for vector-search closures used by topic indices.
+
+    Called by topic-index seeding to fetch candidate chunks via
+    similarity search. Implementations forward ``filter_metadata`` to
+    the underlying KB (scalar-equality semantics across built-in vector
+    stores) so that ``RetrievalIntent.filters`` is honored on the
+    topic-index path — not silently dropped.
+    """
+
+    async def __call__(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
+        ...
 
 DEFAULT_LABEL_MIN_WORD_LENGTH: int = 3
 """Default minimum word length for auto-generated cluster labels."""
@@ -378,8 +394,18 @@ class ClusterTopicIndex:
             )
             return []
 
+        # Pick up the filter slice keyed by our source name and forward
+        # it through vector-seed fetching, matching the convention the
+        # main VectorKnowledgeSource.query path uses. Empty/missing slice
+        # → no filter (preserves historical behavior).
+        filter_metadata: dict[str, Any] | None = None
+        if intent is not None:
+            filter_metadata = intent.filters.get(self._source_name) or None
+
         # Get chunks, embeddings, and clusters for this turn
-        chunks, embeddings, clusters = await self._get_clusters(query, params)
+        chunks, embeddings, clusters = await self._get_clusters(
+            query, params, filter_metadata=filter_metadata,
+        )
 
         if not clusters:
             logger.info(
@@ -488,6 +514,7 @@ class ClusterTopicIndex:
         self,
         query: str,
         params: _EffectiveParams,
+        filter_metadata: dict[str, Any] | None = None,
     ) -> tuple[list[SourceResult], list[list[float]], list[_Cluster]]:
         """Get chunks, embeddings, and clusters for this turn.
 
@@ -502,7 +529,9 @@ class ClusterTopicIndex:
             return self._chunks, self._embeddings, self._clusters
 
         # Lazy mode: fetch seeds and cluster per-turn
-        seed_results = await self._fetch_vector_seeds(query, params)
+        seed_results = await self._fetch_vector_seeds(
+            query, params, filter_metadata=filter_metadata,
+        )
         if not seed_results:
             return [], [], []
 
@@ -521,6 +550,8 @@ class ClusterTopicIndex:
         self,
         query: str,
         params: _EffectiveParams,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
     ) -> list[SourceResult]:
         """Fetch seed results via vector search."""
         if self._vector_query_fn is None:
@@ -533,7 +564,9 @@ class ClusterTopicIndex:
 
         try:
             results = await self._vector_query_fn(
-                query, params.seed_max_results,
+                query,
+                params.seed_max_results,
+                filter_metadata=filter_metadata,
             )
         except Exception:
             logger.warning(

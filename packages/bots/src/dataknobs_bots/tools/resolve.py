@@ -46,3 +46,46 @@ def resolve_callable(ref: str) -> Callable[..., Any]:
         )
 
     return attr  # type: ignore[return-value]
+
+
+def resolve_optional_callable(
+    ref: Any,
+    *,
+    field_name: str,
+    owner: str,
+) -> Callable[..., Any] | None:
+    """Resolve an optional dotted-import reference to a callable.
+
+    Thin wrapper over :func:`resolve_callable` that (a) returns
+    ``None`` when ``ref`` is ``None`` (config field omitted), and
+    (b) wraps the underlying import/lookup errors in a ``ValueError``
+    that includes the owning object's name and the config field name.
+    This is the standard lift consumers reach for when a config block
+    accepts callable references under several optional keys — identity
+    callables on a source, transform hooks on a bot, on-save handlers
+    on a tool, etc.
+
+    Args:
+        ref: Dotted-import string (``"module.path:attr"`` or
+            ``"module.path.attr"``), or ``None``.
+        field_name: Name of the config field (for error messages).
+        owner: Name of the owning object being built — typically a
+            source name, bot name, tool name, etc. Included in the
+            error message so misconfigured refs point back to their
+            config site.
+
+    Returns:
+        The resolved callable, or ``None`` if ``ref`` is ``None``.
+
+    Raises:
+        ValueError: If ``ref`` is not ``None`` and cannot be resolved
+            to a callable.
+    """
+    if ref is None:
+        return None
+    try:
+        return resolve_callable(ref)
+    except (ImportError, AttributeError, ValueError) as e:
+        raise ValueError(
+            f"{owner!r}: failed to resolve {field_name}={ref!r}: {e}"
+        ) from e

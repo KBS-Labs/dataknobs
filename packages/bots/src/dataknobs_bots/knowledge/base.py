@@ -19,6 +19,7 @@ class KnowledgeBase(ABC):
         self,
         query: str,
         k: int = 5,
+        filter_metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Query the knowledge base for relevant content.
@@ -26,6 +27,13 @@ class KnowledgeBase(ABC):
         Args:
             query: Query text to search for.
             k: Number of results to return.
+            filter_metadata: Optional scalar-equality metadata filters.
+                Implementations that cannot honor structured filters must
+                either raise or return an empty result list — silently
+                ignoring a non-``None`` filter is a contract violation
+                because consumers (e.g.,
+                :class:`~dataknobs_bots.knowledge.sources.vector.VectorKnowledgeSource`)
+                rely on the filter being applied.
             **kwargs: Implementation-specific parameters.
 
         Returns:

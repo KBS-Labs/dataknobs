@@ -49,6 +49,7 @@ class InMemoryKnowledgeBase(KnowledgeBase):
         self,
         query: str,
         k: int = 5,
+        filter_metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         self.queries.append(query)
