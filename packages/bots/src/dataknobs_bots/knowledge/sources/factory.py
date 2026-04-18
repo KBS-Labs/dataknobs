@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_data.sources.base import GroundedSource
@@ -92,6 +93,8 @@ def _create_vector_kb_source(
     knowledge_base: Any | None,
 ) -> GroundedSource:
     """Wrap a KnowledgeBase as a VectorKnowledgeSource."""
+    from dataknobs_bots.tools.resolve import resolve_optional_callable
+
     from .vector import VectorKnowledgeSource
 
     if knowledge_base is None:
@@ -102,11 +105,39 @@ def _create_vector_kb_source(
             f"source type."
         )
 
+    # Resolve optional identity callables from dotted import paths.
+    # Defaults are applied inside VectorKnowledgeSource and
+    # _build_vector_query_fn when these are None.
+    opts = config.options
+    dedup_key = resolve_optional_callable(
+        opts.get("dedup_key"),
+        field_name="dedup_key",
+        owner=config.name,
+    )
+    source_id_fn = resolve_optional_callable(
+        opts.get("source_id_fn"),
+        field_name="source_id_fn",
+        owner=config.name,
+    )
+    metadata_fn = resolve_optional_callable(
+        opts.get("metadata_fn"),
+        field_name="metadata_fn",
+        owner=config.name,
+    )
+
     topic_index = build_topic_index(
-        config.topic_index, knowledge_base, source_name=config.name,
+        config.topic_index, knowledge_base,
+        source_name=config.name,
+        source_id_fn=source_id_fn,
+        metadata_fn=metadata_fn,
     )
     return VectorKnowledgeSource(
-        knowledge_base, name=config.name, topic_index=topic_index,
+        knowledge_base,
+        name=config.name,
+        topic_index=topic_index,
+        dedup_key=dedup_key,
+        source_id_fn=source_id_fn,
+        metadata_fn=metadata_fn,
     )
 
 
@@ -115,6 +146,8 @@ def build_topic_index(
     kb: Any,
     *,
     source_name: str = "knowledge_base",
+    source_id_fn: Callable[[dict[str, Any]], str] | None = None,
+    metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Any | None:
     """Build a topic index from config + KnowledgeBase.
 
@@ -130,6 +163,13 @@ def build_topic_index(
             ``None`` means no topic index is configured.
         kb: KnowledgeBase instance for wiring query/embed functions.
         source_name: Source name for logging and provenance.
+        source_id_fn: Optional identity callable forwarded to the
+            underlying ``vector_query_fn`` so topic-index retrieval
+            emits the same ``source_id`` as the main
+            :class:`VectorKnowledgeSource.query` path.
+        metadata_fn: Optional metadata callable forwarded to the
+            underlying ``vector_query_fn`` so topic-index retrieval
+            emits the same ``SourceResult.metadata`` as the main path.
 
     Returns:
         A ``HeadingTreeIndex`` or ``ClusterTopicIndex``, or ``None``
@@ -140,8 +180,14 @@ def build_topic_index(
 
     index_type = topic_index_config.get("type", "heading_tree")
 
-    # Build a vector_query_fn from the KB
-    vector_query_fn = _build_vector_query_fn(kb, source_name)
+    # Build a vector_query_fn from the KB, threading the identity
+    # callables so the topic-index path uses the same identity rule as
+    # the main VectorKnowledgeSource.query path.
+    vector_query_fn = _build_vector_query_fn(
+        kb, source_name,
+        source_id_fn=source_id_fn,
+        metadata_fn=metadata_fn,
+    )
 
     if index_type == "heading_tree":
         from dataknobs_bots.knowledge.sources.heading_tree import (
@@ -200,30 +246,47 @@ def build_topic_index(
 def _build_vector_query_fn(
     kb: Any,
     source_name: str,
+    *,
+    source_id_fn: Callable[[dict[str, Any]], str] | None = None,
+    metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Any:
-    """Build a vector_query_fn closure from a KnowledgeBase."""
+    """Build a vector_query_fn closure from a KnowledgeBase.
+
+    Uses the same identity callables as :class:`VectorKnowledgeSource`
+    when provided, falling back to the shared module-level defaults.
+    Consumers who customize identity on the source get the same
+    behavior on the topic-index path without extra configuration.
+    """
     from dataknobs_data.sources.base import SourceResult
 
-    async def vector_query_fn(query: str, top_k: int) -> list[SourceResult]:
-        raw_results = await kb.query(query, k=top_k)
-        return [
-            SourceResult(
-                content=r.get("text", ""),
-                source_id=(
-                    f"{r.get('source', '')}:chunk_"
-                    f"{r.get('metadata', {}).get('chunk_index', idx)}"
-                ),
+    from .vector import build_source_result, default_metadata, default_source_id
+
+    sid_fn = source_id_fn or default_source_id
+    md_fn = metadata_fn or default_metadata
+
+    async def vector_query_fn(
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
+        raw_results = await kb.query(
+            query, k=top_k, filter_metadata=filter_metadata,
+        )
+        results: list[SourceResult] = []
+        for r in raw_results:
+            result = build_source_result(
+                r,
                 source_name=source_name,
-                source_type="vector_kb",
+                source_id_fn=sid_fn,
+                metadata_fn=md_fn,
                 relevance=r.get("similarity", 1.0),
-                metadata={
-                    "heading_path": r.get("heading_path", ""),
-                    "source": r.get("source", ""),
-                    **r.get("metadata", {}),
-                },
+                log_query=query,
+                log_context="a topic-index result",
             )
-            for idx, r in enumerate(raw_results)
-        ]
+            if result is not None:
+                results.append(result)
+        return results
 
     return vector_query_fn
 

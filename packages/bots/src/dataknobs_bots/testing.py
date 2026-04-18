@@ -68,6 +68,7 @@ from dataknobs_llm.testing import (
     llm_response_from_dict,
 )
 
+from .knowledge.base import KnowledgeBase
 from .reasoning.base import ReasoningManagerProtocol, ReasoningStrategy
 
 logger = logging.getLogger(__name__)
@@ -1500,3 +1501,92 @@ class StubManager:
             yield  # pragma: no cover
 
         return _empty()
+
+
+# =============================================================================
+# ScriptedKnowledgeBase — reusable KnowledgeBase test double
+# =============================================================================
+
+
+class ScriptedKnowledgeBase(KnowledgeBase):
+    """Reusable :class:`KnowledgeBase` test double.
+
+    Returns a scripted list of records on every :meth:`query` call,
+    optionally applying ``filter_metadata`` with scalar-equality AND
+    semantics that mirror :class:`MemoryVectorStore` /
+    :class:`RAGKnowledgeBase`. Records the last filter received and a
+    running query count for assertion-level introspection.
+
+    Use this when a test needs precise control over the exact record
+    shape a :class:`KnowledgeBase` returns — e.g., exercising
+    :class:`VectorKnowledgeSource` identity callables, dedup keys, or
+    filter passthrough. For integration tests that exercise the RAG
+    pipeline end-to-end, construct a real :class:`RAGKnowledgeBase`
+    backed by :class:`MemoryVectorStore` + :class:`EchoProvider`
+    instead (see ``tests/test_knowledge.py`` for the pattern).
+
+    Attributes:
+        last_filter: ``filter_metadata`` from the most recent
+            :meth:`query` call (``None`` if not provided).
+        query_count: Number of :meth:`query` calls since construction.
+
+    Example:
+        ```python
+        kb = ScriptedKnowledgeBase([
+            {"text": "a", "source": "doc.md",
+             "metadata": {"chunk_index": 0, "tag": "x"}},
+            {"text": "b", "source": "doc.md",
+             "metadata": {"chunk_index": 1, "tag": "y"}},
+        ])
+        results = await kb.query("q", k=5, filter_metadata={"tag": "x"})
+        assert len(results) == 1
+        assert kb.last_filter == {"tag": "x"}
+        ```
+    """
+
+    def __init__(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        apply_filter: bool = True,
+    ) -> None:
+        """Create a scripted KB.
+
+        Args:
+            records: Records returned from :meth:`query`. Each record
+                should include at minimum ``"text"``, ``"source"``,
+                and ``"metadata"`` to match the shape
+                :class:`RAGKnowledgeBase` produces.
+            apply_filter: When ``True`` (default), narrow ``records``
+                by ``filter_metadata`` using scalar-equality AND
+                semantics. When ``False``, ignore ``filter_metadata``
+                entirely and return ``records[:k]`` (still recording
+                the filter on :attr:`last_filter`).
+        """
+        self._records = records
+        self._apply_filter = apply_filter
+        self.last_filter: dict[str, Any] | None = None
+        self.query_count = 0
+
+    async def query(
+        self,
+        query: str,
+        k: int = 5,
+        filter_metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        self.query_count += 1
+        self.last_filter = filter_metadata
+        if not filter_metadata or not self._apply_filter:
+            return self._records[:k]
+        matched = [
+            r for r in self._records
+            if all(
+                r.get("metadata", {}).get(fk) == fv
+                for fk, fv in filter_metadata.items()
+            )
+        ]
+        return matched[:k]
+
+    async def close(self) -> None:
+        return None

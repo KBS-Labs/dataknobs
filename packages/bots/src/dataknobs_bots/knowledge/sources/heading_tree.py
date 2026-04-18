@@ -25,9 +25,8 @@ Three entry strategies seed the heading identification:
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from dataknobs_data.sources.base import RetrievalIntent, SourceResult
 from dataknobs_data.sources.topic_index import (
@@ -41,9 +40,25 @@ from dataknobs_llm.llm.base import LLMMessage
 
 logger = logging.getLogger(__name__)
 
-# Type alias for a vector query function that can be injected.
-# Accepts (query_text, top_k) and returns scored results.
-VectorQueryFn = Callable[[str, int], Awaitable[list[SourceResult]]]
+
+class VectorQueryFn(Protocol):
+    """Protocol for vector-search closures used by topic indices.
+
+    Called by topic-index seeding to fetch candidate chunks via
+    similarity search. Implementations forward ``filter_metadata`` to
+    the underlying KB (scalar-equality semantics across built-in vector
+    stores) so that ``RetrievalIntent.filters`` is honored on the
+    topic-index path — not silently dropped.
+    """
+
+    async def __call__(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
+        ...
 
 
 # ------------------------------------------------------------------
@@ -329,8 +344,18 @@ class HeadingTreeIndex:
             self._source_name, params.entry_strategy, params.expansion_mode,
         )
 
+        # Pick up the filter slice keyed by our source name and forward
+        # it through vector-seed fetching, matching the convention the
+        # main VectorKnowledgeSource.query path uses. Empty/missing slice
+        # → no filter (preserves historical behavior).
+        filter_metadata: dict[str, Any] | None = None
+        if intent is not None:
+            filter_metadata = intent.filters.get(self._source_name) or None
+
         # Steps 2-3: Get chunk pool and heading tree for this turn
-        chunks_by_id, tree = await self._get_tree_and_chunks(query, params)
+        chunks_by_id, tree = await self._get_tree_and_chunks(
+            query, params, filter_metadata=filter_metadata,
+        )
 
         if tree is None:
             logger.info(
@@ -438,6 +463,7 @@ class HeadingTreeIndex:
         self,
         query: str,
         params: _EffectiveParams,
+        filter_metadata: dict[str, Any] | None = None,
     ) -> tuple[dict[str, SourceResult], TopicNode | None]:
         """Get the heading tree and chunk pool for this turn.
 
@@ -450,7 +476,9 @@ class HeadingTreeIndex:
             return self._chunks_by_id, self._tree
 
         # Lazy mode: fetch seeds and build per-turn
-        seed_results = await self._fetch_vector_seeds(query, params)
+        seed_results = await self._fetch_vector_seeds(
+            query, params, filter_metadata=filter_metadata,
+        )
         if not seed_results:
             return {}, None
 
@@ -467,6 +495,8 @@ class HeadingTreeIndex:
         self,
         query: str,
         params: _EffectiveParams,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
     ) -> list[SourceResult]:
         """Fetch seed results via vector search."""
         if self._vector_query_fn is None:
@@ -479,7 +509,9 @@ class HeadingTreeIndex:
 
         try:
             results = await self._vector_query_fn(
-                query, params.seed_max_results,
+                query,
+                params.seed_max_results,
+                filter_metadata=filter_metadata,
             )
         except Exception:
             logger.warning(

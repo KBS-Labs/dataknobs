@@ -7,6 +7,7 @@ using ``text_queries`` from :class:`RetrievalIntent` for semantic search.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Hashable
 from typing import Any
 
 from dataknobs_data.sources.base import (
@@ -21,22 +22,189 @@ from dataknobs_bots.knowledge.base import KnowledgeBase
 logger = logging.getLogger(__name__)
 
 
+def default_dedup_key(r: dict[str, Any]) -> Hashable:
+    """Default dedup key: ``(source, chunk_index)`` tuple.
+
+    Matches the historical hardcoded behavior for markdown-chunked
+    corpora produced by :class:`RAGKnowledgeBase` + ``MarkdownChunker``.
+    Uses safe ``.get`` access so records missing either key do not raise
+    — the ``id(r)`` fallback for missing ``chunk_index`` disables dedup
+    entirely for results whose metadata doesn't carry chunk positions.
+    """
+    source = r.get("source", "")
+    chunk_index = r.get("metadata", {}).get("chunk_index", id(r))
+    return (source, chunk_index)
+
+
+def default_source_id(r: dict[str, Any]) -> str:
+    """Default source_id template: ``"{source}:chunk_{chunk_index}"``.
+
+    Matches the historical hardcoded behavior. Consumers with
+    non-markdown corpora should pass a custom ``source_id_fn`` to
+    construct identities from their own structural keys.
+    """
+    source = r.get("source", "")
+    chunk_index = r.get("metadata", {}).get("chunk_index", "")
+    return f"{source}:chunk_{chunk_index}"
+
+
+def default_metadata(r: dict[str, Any]) -> dict[str, Any]:
+    """Default metadata surface: ``heading_path`` + ``source`` + raw metadata.
+
+    Matches the historical hardcoded behavior. Non-markdown consumers
+    reading ``result.metadata["heading_path"]`` / ``["source"]`` get
+    empty strings (same as before). Consumers who want a clean
+    non-markdown surface should pass a custom ``metadata_fn`` to
+    replace this dict entirely.
+    """
+    return {
+        "heading_path": r.get("heading_path", ""),
+        "source": r.get("source", ""),
+        **r.get("metadata", {}),
+    }
+
+
+def build_source_result(
+    r: dict[str, Any],
+    *,
+    source_name: str,
+    source_id_fn: Callable[[dict[str, Any]], str],
+    metadata_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    relevance: float,
+    log_query: str,
+    log_context: str,
+) -> SourceResult | None:
+    """Apply identity callables and build a :class:`SourceResult`.
+
+    Shared helper for the main :class:`VectorKnowledgeSource.query`
+    path and the topic-index ``vector_query_fn`` closure in
+    ``factory._build_vector_query_fn``. Consumer-supplied callables
+    may raise — on failure, log the offending record and return
+    ``None`` so callers can skip it without aborting surrounding
+    retrieval (including sibling sources on the same turn).
+
+    Args:
+        r: Raw KB result dict.
+        source_name: Source name used in the emitted result and log
+            context.
+        source_id_fn: Callable computing ``SourceResult.source_id``.
+        metadata_fn: Callable computing ``SourceResult.metadata``.
+        relevance: Similarity score for the emitted result.
+        log_query: Query string included in the warning log.
+        log_context: Short phrase describing where the record came
+            from (e.g. ``"a result"``, ``"a topic-index result"``) —
+            plugged into the warning message.
+
+    Returns:
+        A populated :class:`SourceResult`, or ``None`` if an identity
+        callable raised.
+    """
+    try:
+        source_id = source_id_fn(r)
+        metadata = metadata_fn(r)
+    except Exception:
+        logger.warning(
+            "Identity callable raised for %s in source '%s' "
+            "(query=%r); skipping record",
+            log_context, source_name, log_query, exc_info=True,
+        )
+        return None
+    return SourceResult(
+        content=r.get("text", ""),
+        source_id=source_id,
+        source_name=source_name,
+        source_type="vector_kb",
+        relevance=relevance,
+        metadata=metadata,
+    )
+
+
 class VectorKnowledgeSource(GroundedSource):
     """Grounded source backed by a :class:`KnowledgeBase`.
 
-    Uses ``intent.text_queries`` for semantic similarity search.  Has
-    no filter schema — all filtering is similarity-based.  This is the
-    adapter that makes existing ``RAGKnowledgeBase`` instances usable
-    in the grounded source pipeline.
+    Uses ``intent.text_queries`` for semantic similarity search. Raw
+    KB results are translated into :class:`SourceResult` instances via
+    a small identity layer that can be customized for non-markdown
+    corpora.
+
+    Filters:
+        Structured filters keyed by this source's name in
+        ``intent.filters`` are passed through to the vector store as
+        metadata filters. Filter semantics are scalar-on-scalar equality
+        across all built-in vector store backends (Memory, FAISS,
+        pgvector). Sources that need richer filter semantics
+        (list-contains, boolean composition, ranges) should compose a
+        separate :class:`GroundedSource` implementation alongside the
+        vector source.
+
+    Identity, dedup, and metadata surface:
+        Three callables control how raw KB results are translated:
+
+        - ``dedup_key(raw)`` returns a hashable key used to deduplicate
+          results across multiple text queries. Default: the historical
+          ``(source, chunk_index)`` tuple, matching markdown-chunked
+          corpora from :class:`RAGKnowledgeBase`.
+        - ``source_id_fn(raw)`` returns the string ``source_id`` that
+          appears on the emitted :class:`SourceResult`. Default: the
+          historical ``f"{source}:chunk_{chunk_index}"`` template.
+        - ``metadata_fn(raw)`` returns the ``metadata`` dict attached to
+          the emitted :class:`SourceResult`. Default: ``heading_path`` +
+          ``source`` keys spread with the raw metadata (matches
+          historical behavior — non-markdown consumers see empty strings
+          for the first two keys).
+
+        Consumers whose corpus has a natural structural identity
+        (entity id, symbol name, URL, etc.) should pass all three
+        callables so the vector source emits real identity and clean
+        metadata rather than synthetic file/chunk pairs and empty-string
+        surface keys.
 
     Optionally carries a :attr:`topic_index` for heading-tree or
-    cluster-based retrieval.  When present, the grounded strategy
-    uses the topic index instead of standard text_queries.
+    cluster-based retrieval. When present, the grounded strategy uses
+    the topic index instead of standard text_queries. The same
+    ``source_id_fn`` and ``metadata_fn`` callables are threaded through
+    the topic-index path (``dedup_key`` is not — topic-index callers
+    do their own dedup).
+
+    Example — a product catalog where each record is a product with
+    its own SKU (no markdown chunking)::
+
+        def dedup_by_sku(r):
+            return r["metadata"].get("sku") or id(r)
+
+        def sku_as_id(r):
+            return r["metadata"].get("sku", "")
+
+        def product_metadata(r):
+            m = r.get("metadata", {})
+            return {
+                "sku": m.get("sku"),
+                "category": m.get("category"),
+                "price": m.get("price"),
+            }
+
+        source = VectorKnowledgeSource(
+            kb=kb,
+            name="catalog",
+            dedup_key=dedup_by_sku,
+            source_id_fn=sku_as_id,
+            metadata_fn=product_metadata,
+        )
 
     Args:
         kb: The knowledge base to query.
         name: Unique source name for provenance tracking.
         topic_index: Optional topic index for structured retrieval.
+        dedup_key: Optional callable to extract a hashable dedup key
+            from a raw KB result dict. Default: historical
+            ``(source, chunk_index)``.
+        source_id_fn: Optional callable to format the ``source_id`` on
+            the emitted :class:`SourceResult`. Default: historical
+            ``"{source}:chunk_{index}"`` template.
+        metadata_fn: Optional callable to build the metadata dict
+            attached to the emitted :class:`SourceResult`. Default:
+            historical ``heading_path`` + ``source`` keys plus raw
+            metadata spread.
     """
 
     def __init__(
@@ -45,10 +213,16 @@ class VectorKnowledgeSource(GroundedSource):
         *,
         name: str = "knowledge_base",
         topic_index: Any | None = None,
+        dedup_key: Callable[[dict[str, Any]], Hashable] | None = None,
+        source_id_fn: Callable[[dict[str, Any]], str] | None = None,
+        metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self._kb = kb
         self._name = name
         self.topic_index = topic_index
+        self._dedup_key = dedup_key or default_dedup_key
+        self._source_id_fn = source_id_fn or default_source_id
+        self._metadata_fn = metadata_fn or default_metadata
 
     @property
     def name(self) -> str:
@@ -72,7 +246,9 @@ class VectorKnowledgeSource(GroundedSource):
         """Execute each text query via KB semantic search.
 
         Args:
-            intent: Only ``text_queries`` is used.
+            intent: Uses ``text_queries`` for semantic search and the
+                ``filters[self.name]`` slice as metadata filters for the
+                underlying vector store.
             top_k: Max results per query.
             score_threshold: Minimum similarity score.
 
@@ -80,44 +256,56 @@ class VectorKnowledgeSource(GroundedSource):
             Deduplicated results sorted by similarity (descending).
         """
         all_results: list[SourceResult] = []
-        seen: set[tuple[str, int]] = set()
+        seen: set[Hashable] = set()
+
+        # Pick up the filter slice keyed by our source name, matching the
+        # convention DatabaseSource uses (database.py:300). Empty slice
+        # or missing slice both mean "no filter" — fall through to the
+        # KB's no-filter path so existing consumers see unchanged
+        # behavior.
+        source_filters = intent.filters.get(self._name) or None
 
         for tq in intent.text_queries:
-            try:
-                raw_results = await self._kb.query(tq, k=top_k)
-            except Exception:
-                logger.warning(
-                    "KB query failed for '%s' in source '%s'",
-                    tq, self._name, exc_info=True,
-                )
-                continue
+            raw_results = await self._kb.query(
+                tq, k=top_k, filter_metadata=source_filters,
+            )
 
             for r in raw_results:
                 similarity = r.get("similarity", 1.0)
                 if similarity < score_threshold:
                     continue
 
-                # Deduplicate by (source_file, chunk_index)
-                source_file = r.get("source", "")
-                metadata = r.get("metadata", {})
-                chunk_index = metadata.get("chunk_index", id(r))
-                key = (source_file, chunk_index)
+                # dedup_key is isolated from source_id_fn/metadata_fn so
+                # a failure in the latter doesn't poison ``seen`` — the
+                # dedup key is only added after the SourceResult is
+                # fully built (test_raising_metadata_fn_does_not_pollute_dedup).
+                try:
+                    key = self._dedup_key(r)
+                except Exception:
+                    logger.warning(
+                        "Identity callable raised for a result in "
+                        "source '%s' (query=%r); skipping record",
+                        self._name, tq, exc_info=True,
+                    )
+                    continue
+
                 if key in seen:
                     continue
-                seen.add(key)
 
-                all_results.append(SourceResult(
-                    content=r.get("text", ""),
-                    source_id=f"{source_file}:chunk_{chunk_index}",
+                result = build_source_result(
+                    r,
                     source_name=self._name,
-                    source_type="vector_kb",
+                    source_id_fn=self._source_id_fn,
+                    metadata_fn=self._metadata_fn,
                     relevance=similarity,
-                    metadata={
-                        "heading_path": r.get("heading_path", ""),
-                        "source": source_file,
-                        **metadata,
-                    },
-                ))
+                    log_query=tq,
+                    log_context="a result",
+                )
+                if result is None:
+                    continue
+
+                seen.add(key)
+                all_results.append(result)
 
         # Sort by relevance descending
         all_results.sort(key=lambda r: r.relevance, reverse=True)
