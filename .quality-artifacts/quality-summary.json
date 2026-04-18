@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-04-18T22:31:53Z",
+  "timestamp": "2026-04-18T23:06:29Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots data fsm llm",
   "tested_packages": ["bots", "data", "fsm", "llm"],
   "package_hashes": {
-  "bots": "5eb5747fe7504e572be0c08fbcb264a357d6f0a098cf04519ace6f3b022574b5",
+  "bots": "568d74538cd10e2be7f865f55156b40e3e1941f79d0f50ad97e39756aaa7b3c1",
   "common": "fb00bc8d957003bd77738ce7b585ff6c46c23c08eedb6fd72d508e0c2ae160ba",
   "config": "37e3257da96063af779ec8b69431ded4d07b3a286ffe33954ae1f60115685ded",
   "data": "d49dc00cccc73dcb58bd56df5e91b299d028c60633145fcb1c9e61b31146eaf8",

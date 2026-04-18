@@ -16,7 +16,6 @@ import pytest
 
 from dataknobs_data.sources.base import RetrievalIntent
 
-from dataknobs_bots.knowledge.base import KnowledgeBase
 from dataknobs_bots.knowledge.sources.factory import (
     _build_vector_query_fn,
     _create_vector_kb_source,
@@ -29,6 +28,7 @@ from dataknobs_bots.knowledge.sources.vector import (
     default_source_id,
 )
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
+from dataknobs_bots.testing import ScriptedKnowledgeBase
 
 
 # -------------------------------------------------------------------
@@ -50,31 +50,8 @@ def _md_by_entity_ref(r: dict[str, Any]) -> dict[str, Any]:
 
 
 # -------------------------------------------------------------------
-# Test doubles
+# Test helpers
 # -------------------------------------------------------------------
-
-
-class ScriptedKnowledgeBase(KnowledgeBase):
-    """Test KB that returns a fixed record list for every query."""
-
-    def __init__(self, records: list[dict[str, Any]]) -> None:
-        self._records = records
-        self.query_count = 0
-        self.last_filter: dict[str, Any] | None = None
-
-    async def query(
-        self,
-        query: str,
-        k: int = 5,
-        filter_metadata: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        self.query_count += 1
-        self.last_filter = filter_metadata
-        return self._records[:k]
-
-    async def close(self) -> None:
-        pass
 
 
 def _record(
@@ -182,20 +159,20 @@ class TestCustomCallables:
         kb = ScriptedKnowledgeBase([
             _record(
                 "first",
-                source="fd-02.md",
+                source="doc-1.md",
                 chunk_index=0,
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
             _record(
                 "second",
-                source="other.md",
+                source="doc-2.md",
                 chunk_index=5,
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
         ])
         source = VectorKnowledgeSource(
             kb,
-            name="claims",
+            name="catalog",
             dedup_key=_dedup_by_entity_ref,
         )
 
@@ -207,41 +184,41 @@ class TestCustomCallables:
     async def test_custom_source_id_fn(self) -> None:
         kb = ScriptedKnowledgeBase([
             _record(
-                "claim",
-                source="whatever.md",
+                "entry",
+                source="doc.md",
                 chunk_index=0,
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
         ])
         source = VectorKnowledgeSource(
             kb,
-            name="claims",
+            name="catalog",
             source_id_fn=_id_by_entity_ref,
         )
 
         results = await source.query(RetrievalIntent(text_queries=["q"]))
 
-        assert results[0].source_id == "FD-02"
+        assert results[0].source_id == "REF-001"
 
     async def test_custom_metadata_fn_replaces_surface(self) -> None:
         kb = ScriptedKnowledgeBase([
             _record(
-                "claim",
-                source="whatever.md",
+                "entry",
+                source="doc.md",
                 chunk_index=0,
                 heading_path="Sec > Sub",
-                metadata={"entity_ref": "FD-02", "noise": "ignore"},
+                metadata={"entity_ref": "REF-001", "noise": "ignore"},
             ),
         ])
         source = VectorKnowledgeSource(
             kb,
-            name="claims",
+            name="catalog",
             metadata_fn=_md_by_entity_ref,
         )
 
         results = await source.query(RetrievalIntent(text_queries=["q"]))
 
-        assert results[0].metadata == {"entity_ref": "FD-02"}
+        assert results[0].metadata == {"entity_ref": "REF-001"}
         assert "heading_path" not in results[0].metadata
         assert "source" not in results[0].metadata
 
@@ -249,26 +226,26 @@ class TestCustomCallables:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="file1.md",
+                source="doc-1.md",
                 chunk_index=0,
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
             _record(
                 "b",
-                source="file2.md",
+                source="doc-2.md",
                 chunk_index=7,
-                metadata={"entity_ref": "FD-02"},  # duplicate by entity_ref
+                metadata={"entity_ref": "REF-001"},  # duplicate by entity_ref
             ),
             _record(
                 "c",
-                source="file3.md",
+                source="doc-3.md",
                 chunk_index=2,
-                metadata={"entity_ref": "FD-03"},
+                metadata={"entity_ref": "REF-002"},
             ),
         ])
         source = VectorKnowledgeSource(
             kb,
-            name="claims",
+            name="catalog",
             dedup_key=_dedup_by_entity_ref,
             source_id_fn=_id_by_entity_ref,
             metadata_fn=_md_by_entity_ref,
@@ -278,7 +255,7 @@ class TestCustomCallables:
 
         assert len(results) == 2
         ids = sorted(r.source_id for r in results)
-        assert ids == ["FD-02", "FD-03"]
+        assert ids == ["REF-001", "REF-002"]
         for r in results:
             assert set(r.metadata.keys()) == {"entity_ref"}
 
@@ -412,11 +389,11 @@ class TestTopicIndexFilterPassthrough:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="whatever.md",
+                source="doc.md",
                 chunk_index=0,
                 heading_path="Security",
                 metadata={
-                    "entity_ref": "FD-02",
+                    "entity_ref": "REF-001",
                     "headings": ["Security"],
                     "heading_levels": [1],
                 },
@@ -425,7 +402,7 @@ class TestTopicIndexFilterPassthrough:
         ])
         cfg = GroundedSourceConfig(
             source_type="vector_kb",
-            name="claims",
+            name="catalog",
             topic_index={
                 "type": "heading_tree",
                 "seed_score_threshold": 0.0,
@@ -440,11 +417,11 @@ class TestTopicIndexFilterPassthrough:
             top_k=5,
             intent=RetrievalIntent(
                 text_queries=["security"],
-                filters={"claims": {"entity_ref": "FD-02"}},
+                filters={"catalog": {"entity_ref": "REF-001"}},
             ),
         )
 
-        assert kb.last_filter == {"entity_ref": "FD-02"}
+        assert kb.last_filter == {"entity_ref": "REF-001"}
 
     async def test_topic_index_no_filter_preserves_legacy_behavior(
         self,
@@ -453,7 +430,7 @@ class TestTopicIndexFilterPassthrough:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="whatever.md",
+                source="doc.md",
                 chunk_index=0,
                 heading_path="Security",
                 metadata={
@@ -465,7 +442,7 @@ class TestTopicIndexFilterPassthrough:
         ])
         cfg = GroundedSourceConfig(
             source_type="vector_kb",
-            name="claims",
+            name="catalog",
             topic_index={
                 "type": "heading_tree",
                 "seed_score_threshold": 0.0,
@@ -543,36 +520,36 @@ class TestTopicIndexPath:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="whatever.md",
+                source="doc.md",
                 chunk_index=0,
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
         ])
         fn = _build_vector_query_fn(
-            kb, "claims", source_id_fn=_id_by_entity_ref,
+            kb, "catalog", source_id_fn=_id_by_entity_ref,
         )
 
         results = await fn("q", top_k=5)
 
-        assert results[0].source_id == "FD-02"
+        assert results[0].source_id == "REF-001"
 
     async def test_topic_index_custom_metadata_fn(self) -> None:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="whatever.md",
+                source="doc.md",
                 chunk_index=0,
                 heading_path="Sec",
-                metadata={"entity_ref": "FD-02", "noise": "x"},
+                metadata={"entity_ref": "REF-001", "noise": "x"},
             ),
         ])
         fn = _build_vector_query_fn(
-            kb, "claims", metadata_fn=_md_by_entity_ref,
+            kb, "catalog", metadata_fn=_md_by_entity_ref,
         )
 
         results = await fn("q", top_k=5)
 
-        assert results[0].metadata == {"entity_ref": "FD-02"}
+        assert results[0].metadata == {"entity_ref": "REF-001"}
 
 
 # -------------------------------------------------------------------
@@ -665,16 +642,16 @@ class TestFactoryResolution:
         kb = ScriptedKnowledgeBase([
             _record(
                 "a",
-                source="whatever.md",
+                source="doc.md",
                 chunk_index=0,
                 heading_path="Sec",
-                metadata={"entity_ref": "FD-02"},
+                metadata={"entity_ref": "REF-001"},
             ),
         ])
         topic_index = build_topic_index(
             {"type": "heading_tree", "seed_score_threshold": 0.0},
             kb,
-            source_name="claims",
+            source_name="catalog",
             source_id_fn=_id_by_entity_ref,
             metadata_fn=_md_by_entity_ref,
         )
@@ -691,5 +668,5 @@ class TestFactoryResolution:
         )
 
         assert len(seeds) == 1
-        assert seeds[0].source_id == "FD-02"
-        assert seeds[0].metadata == {"entity_ref": "FD-02"}
+        assert seeds[0].source_id == "REF-001"
+        assert seeds[0].metadata == {"entity_ref": "REF-001"}

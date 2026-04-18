@@ -64,6 +64,61 @@ def default_metadata(r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_source_result(
+    r: dict[str, Any],
+    *,
+    source_name: str,
+    source_id_fn: Callable[[dict[str, Any]], str],
+    metadata_fn: Callable[[dict[str, Any]], dict[str, Any]],
+    relevance: float,
+    log_query: str,
+    log_context: str,
+) -> SourceResult | None:
+    """Apply identity callables and build a :class:`SourceResult`.
+
+    Shared helper for the main :class:`VectorKnowledgeSource.query`
+    path and the topic-index ``vector_query_fn`` closure in
+    ``factory._build_vector_query_fn``. Consumer-supplied callables
+    may raise — on failure, log the offending record and return
+    ``None`` so callers can skip it without aborting surrounding
+    retrieval (including sibling sources on the same turn).
+
+    Args:
+        r: Raw KB result dict.
+        source_name: Source name used in the emitted result and log
+            context.
+        source_id_fn: Callable computing ``SourceResult.source_id``.
+        metadata_fn: Callable computing ``SourceResult.metadata``.
+        relevance: Similarity score for the emitted result.
+        log_query: Query string included in the warning log.
+        log_context: Short phrase describing where the record came
+            from (e.g. ``"a result"``, ``"a topic-index result"``) —
+            plugged into the warning message.
+
+    Returns:
+        A populated :class:`SourceResult`, or ``None`` if an identity
+        callable raised.
+    """
+    try:
+        source_id = source_id_fn(r)
+        metadata = metadata_fn(r)
+    except Exception:
+        logger.warning(
+            "Identity callable raised for %s in source '%s' "
+            "(query=%r); skipping record",
+            log_context, source_name, log_query, exc_info=True,
+        )
+        return None
+    return SourceResult(
+        content=r.get("text", ""),
+        source_id=source_id,
+        source_name=source_name,
+        source_type="vector_kb",
+        relevance=relevance,
+        metadata=metadata,
+    )
+
+
 class VectorKnowledgeSource(GroundedSource):
     """Grounded source backed by a :class:`KnowledgeBase`.
 
@@ -211,33 +266,21 @@ class VectorKnowledgeSource(GroundedSource):
         source_filters = intent.filters.get(self._name) or None
 
         for tq in intent.text_queries:
-            try:
-                raw_results = await self._kb.query(
-                    tq, k=top_k, filter_metadata=source_filters,
-                )
-            except Exception:
-                logger.warning(
-                    "KB query failed for '%s' in source '%s'",
-                    tq, self._name, exc_info=True,
-                )
-                continue
+            raw_results = await self._kb.query(
+                tq, k=top_k, filter_metadata=source_filters,
+            )
 
             for r in raw_results:
                 similarity = r.get("similarity", 1.0)
                 if similarity < score_threshold:
                     continue
 
-                # Identity callables are consumer-supplied and therefore
-                # may raise. Isolate each record: on failure, log and
-                # skip the record so retrieval degrades gracefully rather
-                # than aborting the entire turn (dropping results from
-                # sibling sources too).
+                # dedup_key is isolated from source_id_fn/metadata_fn so
+                # a failure in the latter doesn't poison ``seen`` — the
+                # dedup key is only added after the SourceResult is
+                # fully built (test_raising_metadata_fn_does_not_pollute_dedup).
                 try:
                     key = self._dedup_key(r)
-                    if key in seen:
-                        continue
-                    source_id = self._source_id_fn(r)
-                    metadata = self._metadata_fn(r)
                 except Exception:
                     logger.warning(
                         "Identity callable raised for a result in "
@@ -246,15 +289,23 @@ class VectorKnowledgeSource(GroundedSource):
                     )
                     continue
 
-                seen.add(key)
-                all_results.append(SourceResult(
-                    content=r.get("text", ""),
-                    source_id=source_id,
+                if key in seen:
+                    continue
+
+                result = build_source_result(
+                    r,
                     source_name=self._name,
-                    source_type="vector_kb",
+                    source_id_fn=self._source_id_fn,
+                    metadata_fn=self._metadata_fn,
                     relevance=similarity,
-                    metadata=metadata,
-                ))
+                    log_query=tq,
+                    log_context="a result",
+                )
+                if result is None:
+                    continue
+
+                seen.add(key)
+                all_results.append(result)
 
         # Sort by relevance descending
         all_results.sort(key=lambda r: r.relevance, reverse=True)

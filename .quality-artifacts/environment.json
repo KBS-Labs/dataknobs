@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-18T22:31:53Z",
+  "timestamp": "2026-04-18T23:06:29Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.7 (Homebrew 2026-04-15 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/vector-knowledge-source-fixes",
-  "git_commit": "f92452c97ec2fbb66e0065f0bc98d707cda1d52c",
+  "git_commit": "09c93b4ddf87990f9480324d1e9687e12ea45004",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

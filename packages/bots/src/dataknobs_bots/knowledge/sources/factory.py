@@ -259,7 +259,7 @@ def _build_vector_query_fn(
     """
     from dataknobs_data.sources.base import SourceResult
 
-    from .vector import default_metadata, default_source_id
+    from .vector import build_source_result, default_metadata, default_source_id
 
     sid_fn = source_id_fn or default_source_id
     md_fn = metadata_fn or default_metadata
@@ -275,27 +275,17 @@ def _build_vector_query_fn(
         )
         results: list[SourceResult] = []
         for r in raw_results:
-            # Identity callables are consumer-supplied and may raise.
-            # Mirror VectorKnowledgeSource.query: skip failing records
-            # rather than aborting the entire topic-index lookup.
-            try:
-                source_id = sid_fn(r)
-                metadata = md_fn(r)
-            except Exception:
-                logger.warning(
-                    "Identity callable raised for a topic-index "
-                    "result in source '%s' (query=%r); skipping record",
-                    source_name, query, exc_info=True,
-                )
-                continue
-            results.append(SourceResult(
-                content=r.get("text", ""),
-                source_id=source_id,
+            result = build_source_result(
+                r,
                 source_name=source_name,
-                source_type="vector_kb",
+                source_id_fn=sid_fn,
+                metadata_fn=md_fn,
                 relevance=r.get("similarity", 1.0),
-                metadata=metadata,
-            ))
+                log_query=query,
+                log_context="a topic-index result",
+            )
+            if result is not None:
+                results.append(result)
         return results
 
     return vector_query_fn

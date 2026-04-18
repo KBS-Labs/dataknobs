@@ -330,7 +330,7 @@ reasoning:
       metadata_fn: acme.catalog.identity:product_metadata
 ```
 
-Invalid references raise `ValueError` at source-construction time with the source name and field name in the message (e.g. `Source 'catalog': failed to resolve metadata_fn='acme.catalog.identity:typo'`).
+Invalid references raise `ValueError` at source-construction time with the source name and field name in the message (e.g. `'catalog': failed to resolve metadata_fn='acme.catalog.identity:typo'`).
 
 If a consumer's corpus already has natural structural identity (SKU, symbol name, URL, record ID), passing all three callables produces clean `source_id`s and metadata surfaces without downstream workarounds.
 
