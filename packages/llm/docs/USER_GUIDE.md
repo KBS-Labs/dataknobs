@@ -937,8 +937,8 @@ async with manager.scoped_middleware(outer, inner):
 
 `scoped_middleware` is not safe for concurrent use on the same manager
 instance. `ConversationManager` is already single-turn / single-caller;
-multi-user concurrency is handled at a higher layer (e.g. DynaBot caches
-one manager per `conversation_id`).
+multi-user concurrency is handled at a higher layer (e.g. an
+application that caches one manager per session or conversation id).
 
 **Streaming caveat.** With `stream_complete`, `process_response` runs
 only after the stream generator is fully drained (it is invoked in the

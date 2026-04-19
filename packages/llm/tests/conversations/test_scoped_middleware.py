@@ -284,3 +284,46 @@ class TestScopedMiddleware:
             await manager.complete()
 
         assert manager.middleware == []
+
+    @pytest.mark.asyncio
+    async def test_stream_complete_full_drain_runs_process_response(
+        self, manager_factory
+    ):
+        """Fully draining stream_complete fires process_response in onion order."""
+        manager = await manager_factory()
+        events: list[str] = []
+        mw = RecordingMiddleware("s", events)
+
+        async with manager.scoped_middleware(mw):
+            await manager.add_message(role="user", content="Hello")
+            async for _chunk in manager.stream_complete():
+                pass
+
+        assert events == ["s:request", "s:response"]
+        assert manager.middleware == []
+
+    @pytest.mark.asyncio
+    async def test_stream_complete_early_break_skips_process_response_but_detaches(
+        self, manager_factory
+    ):
+        """Early break skips process_response but still detaches scoped middleware.
+
+        Documented caveat: with stream_complete, _finalize_completion (and
+        therefore process_response) runs only after the generator exits
+        normally. On early break the generator never reaches the post-loop
+        finalization, so process_response is not called — but the scoped
+        middleware is still detached via the async-with finally.
+        """
+        manager = await manager_factory()
+        events: list[str] = []
+        mw = RecordingMiddleware("s", events)
+
+        async with manager.scoped_middleware(mw):
+            await manager.add_message(role="user", content="Hello")
+            stream = manager.stream_complete()
+            async for _chunk in stream:
+                break
+            await stream.aclose()
+
+        assert events == ["s:request"]
+        assert manager.middleware == []
