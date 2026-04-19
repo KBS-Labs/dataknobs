@@ -99,12 +99,37 @@ from dataknobs_llm.conversations import LoggingMiddleware, ValidationMiddleware
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
-    middlewares=[
+    middleware=[
         LoggingMiddleware(),
         ValidationMiddleware(rules=my_rules)
     ]
 )
 ```
+
+#### Per-Turn (Scoped) Middleware
+
+For middleware whose internal state must be fresh for each turn (e.g. a
+post-processor that holds that turn's retrieval candidates), attach it
+via `ConversationManager.scoped_middleware()` rather than the permanent
+`middleware=[...]` argument. The context manager appends on entry and
+removes on exit — including on exception — preserving onion ordering
+relative to the permanent stack.
+
+```python
+async with manager.scoped_middleware(citation_mw):
+    response = await manager.complete()
+# citation_mw is removed here, even if complete() raised.
+```
+
+Response mutations performed inside the scope flow to the persisted
+assistant node, because `process_response` runs before the tree snapshot
+in `_finalize_completion`. Not safe for concurrent use on the same
+manager instance.
+
+With `stream_complete`, `process_response` runs only after the stream
+is fully drained. Consumers that `break` out of the stream early skip
+`process_response` (the scoped middleware is still detached correctly);
+use `complete()` or drain the stream if you rely on that behavior.
 
 ## Detailed Documentation
 

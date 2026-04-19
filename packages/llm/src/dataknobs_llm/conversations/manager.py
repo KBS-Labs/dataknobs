@@ -84,6 +84,7 @@ See Also:
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, AsyncIterator
 from datetime import datetime
 
@@ -642,6 +643,71 @@ class ConversationManager:
         for mw in self.middleware:
             messages = await mw.process_request(messages, self.state)
         return messages
+
+    @asynccontextmanager
+    async def scoped_middleware(
+        self,
+        *middleware: ConversationMiddleware,
+    ) -> AsyncIterator[None]:
+        """Attach middleware for the duration of a ``with`` block.
+
+        The middleware is appended to :attr:`middleware` on entry and
+        removed on exit (including on exception), preserving the prior
+        ordering of the permanent stack. Use this for per-turn middleware
+        whose internal state must be fresh for each call — e.g. a
+        post-synthesis processor that holds the turn's retrieval candidate
+        pool in its closure.
+
+        Example:
+            ```python
+            citation_mw = CitationRenderingMiddleware(
+                candidates=retrieval_results,
+                config=cull_config,
+            )
+            async with manager.scoped_middleware(citation_mw):
+                response = await manager.complete()
+            # citation_mw.audit now exposes what was rendered
+            ```
+
+        Args:
+            *middleware: Middleware instances to attach for the scope.
+                Order within the tuple matches the onion-execution order
+                relative to any middleware already attached: permanent
+                middleware wraps around scoped middleware, and within the
+                scope, earlier arguments wrap later ones.
+
+        Yields:
+            None. The context body performs the actual LLM call(s).
+
+        Note:
+            Not safe for concurrent use on the same manager. Each manager
+            instance is already single-turn / single-caller; consumers
+            that need concurrency should use separate managers per turn.
+
+            With :meth:`stream_complete`, ``process_response`` runs only
+            after the consumer fully drains the stream (since
+            :meth:`_finalize_completion` is invoked after the generator
+            exits normally). If the consumer abandons iteration early —
+            e.g. ``break`` inside ``async for`` — ``process_response``
+            is not called, though the scoped middleware is still
+            detached correctly via ``finally``. Use :meth:`complete`
+            when the scoped middleware's ``process_response`` behavior
+            is required.
+        """
+        for mw in middleware:
+            self.middleware.append(mw)
+        try:
+            yield
+        finally:
+            for mw in reversed(middleware):
+                try:
+                    self.middleware.remove(mw)
+                except ValueError:
+                    logger.warning(
+                        "scoped_middleware: %s was not in manager.middleware "
+                        "on exit; skipping removal",
+                        type(mw).__name__,
+                    )
 
     async def _finalize_completion(
         self,

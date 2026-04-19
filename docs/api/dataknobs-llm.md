@@ -642,25 +642,27 @@ Add processing layers to conversations:
 
 ```python
 from dataknobs_llm.conversations import (
+    ConversationManager,
     LoggingMiddleware,
     ContentFilterMiddleware,
-    ValidationMiddleware,
-    MetadataMiddleware
+    MetadataMiddleware,
+    RateLimitMiddleware,
 )
 
-# Create middleware stack
-middlewares = [
+# Create middleware stack (onion order: first item wraps outermost)
+middleware = [
     LoggingMiddleware(),
-    ContentFilterMiddleware(banned_words=["spam", "abuse"]),
-    ValidationMiddleware(max_message_length=5000),
-    MetadataMiddleware(default_metadata={"app": "chatbot"})
+    RateLimitMiddleware(max_requests=60, window_seconds=60),
+    ContentFilterMiddleware(filter_words=["spam", "abuse"]),
+    MetadataMiddleware(request_metadata={"app": "chatbot"}),
 ]
 
 # Use with conversation manager
-manager = ConversationManager(
+manager = await ConversationManager.create(
     llm=llm,
+    prompt_builder=builder,
     storage=storage,
-    middlewares=middlewares
+    middleware=middleware,
 )
 ```
 

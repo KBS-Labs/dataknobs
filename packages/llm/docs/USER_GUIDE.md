@@ -898,6 +898,57 @@ response = await manager.complete()
 print(f"Total tokens: {response.metadata['total_tokens']}")
 ```
 
+### Per-Turn (Scoped) Middleware
+
+Some middleware must be constructed fresh for each turn — for example a
+post-processor that depends on that turn's retrieval candidates or captures
+per-turn audit state in its closure. For these cases, attach middleware via
+`ConversationManager.scoped_middleware()` instead of the permanent
+`middleware=[...]` constructor argument.
+
+`scoped_middleware()` is an async context manager that appends the given
+middleware on entry and removes it on exit — including when an exception
+is raised inside the `with` block. Onion ordering is preserved: permanent
+middleware wraps around scoped middleware.
+
+```python
+# Build a fresh per-turn middleware holding this turn's retrieval context
+citation_mw = CitationRenderingMiddleware(
+    candidates=retrieval_results,
+    config=cull_config,
+)
+
+async with manager.scoped_middleware(citation_mw):
+    response = await manager.complete(...)
+
+# After the `with` block, citation_mw is removed from manager.middleware.
+# The scoped middleware's process_response runs before the assistant-node
+# snapshot, so any response mutations it makes are persisted.
+```
+
+Multiple middleware can be attached in one call; they detach in reverse
+order:
+
+```python
+async with manager.scoped_middleware(outer, inner):
+    # Execution: outer.request → inner.request → LLM → inner.response → outer.response
+    await manager.complete()
+```
+
+`scoped_middleware` is not safe for concurrent use on the same manager
+instance. `ConversationManager` is already single-turn / single-caller;
+multi-user concurrency is handled at a higher layer (e.g. an
+application that caches one manager per session or conversation id).
+
+**Streaming caveat.** With `stream_complete`, `process_response` runs
+only after the stream generator is fully drained (it is invoked in the
+post-stream finalization step). If the consumer breaks out of the
+`async for` loop early, `process_response` is never called, so any
+mutation the scoped middleware performs there will not land on the
+persisted assistant node. The middleware is still detached correctly
+via `finally`, so there is no leak — but if you rely on scoped
+`process_response` behavior, use `complete()` or drain the stream.
+
 ---
 
 ## Advanced Features
