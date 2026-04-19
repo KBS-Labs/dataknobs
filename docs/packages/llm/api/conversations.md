@@ -20,6 +20,7 @@ The conversations API provides a powerful system for managing multi-turn convers
         - create
         - add_message
         - complete
+        - scoped_middleware
         - switch_to_node
         - branch_from
         - get_tree_structure
@@ -83,10 +84,8 @@ The conversations API provides a powerful system for managing multi-turn convers
       show_source: true
       heading_level: 3
       members:
-        - before_add_message
-        - after_add_message
-        - before_complete
-        - after_complete
+        - process_request
+        - process_response
 
 ### Built-in Middleware
 
@@ -252,9 +251,12 @@ class TokenCounterMiddleware(ConversationMiddleware):
     def __init__(self):
         self.total_tokens = 0
 
-    async def after_complete(self, manager, response):
+    async def process_request(self, messages, state):
+        return messages
+
+    async def process_response(self, response, state):
         if response.usage:
-            self.total_tokens += response.usage.total_tokens
+            self.total_tokens += response.usage.get("total_tokens", 0)
         return response
 
 # Use middleware
@@ -262,7 +264,7 @@ token_counter = TokenCounterMiddleware()
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
-    middlewares=[
+    middleware=[
         LoggingMiddleware(),
         token_counter
     ]

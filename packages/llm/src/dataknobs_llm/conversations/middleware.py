@@ -127,6 +127,15 @@ class ConversationMiddleware(ABC):
         - **Monitoring**: Collect metrics and analytics
         - **Security**: Filter sensitive information
 
+    Per-turn Middleware:
+        If the middleware's behavior depends on turn-specific content
+        (e.g. a response post-processor that needs this turn's retrieval
+        candidates), construct a fresh instance per turn and attach it
+        via :meth:`ConversationManager.scoped_middleware` rather than
+        via the permanent stack. The scoped API handles attachment,
+        exception-safe detachment, and preserves onion ordering relative
+        to the permanent middleware.
+
     Example:
         ```python
         from dataknobs_llm.conversations import ConversationMiddleware
