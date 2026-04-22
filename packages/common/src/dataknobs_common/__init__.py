@@ -59,6 +59,9 @@ from dataknobs_common.exceptions import (
     TimeoutError,
     ValidationError,
 )
+from dataknobs_common.postgres_config import (
+    normalize_postgres_connection_config,
+)
 from dataknobs_common.ratelimit import (
     InMemoryRateLimiter,
     RateLimit,
@@ -139,6 +142,8 @@ __all__ = [
     "SerializationError",
     "TimeoutError",
     "RateLimitError",
+    # Postgres config
+    "normalize_postgres_connection_config",
     # Rate Limiting
     "RateLimiter",
     "create_rate_limiter",

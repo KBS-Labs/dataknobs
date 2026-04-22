@@ -5,6 +5,72 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### dataknobs-common
+
+#### Added
+- `normalize_postgres_connection_config` — canonical postgres connection
+  config normalizer used by every postgres-using construct in dataknobs
+  (PgVectorStore, Sync/AsyncPostgresDatabase, PostgresPoolConfig,
+  PostgresEventBus). Accepts `connection_string`, individual host/
+  port/database/user/password keys, `DATABASE_URL` env var,
+  `POSTGRES_*` env vars, and values from `.env` / `.project_vars`
+  files (when `python-dotenv` is installed). Explicit config always
+  wins over env; individual keys always override the same field from
+  a `connection_string`.
+
+#### Changed
+- `PostgresEventBus` now accepts the unified config dict (individual
+  keys, env-var fallbacks) in addition to the legacy positional
+  `connection_string` argument. `create_event_bus({"backend":
+  "postgres", ...})` passes the full config through unchanged.
+
+### dataknobs-data
+
+#### Changed
+- **Behavior change (Defect A):** `PgVectorStore` `id_type` default
+  changed from `"uuid"` to `"text"`. RAG consumers passing chunk ids
+  such as `"01-fundamentals_0"` now work out-of-the-box. **No data
+  migration is required** — `CREATE TABLE IF NOT EXISTS` is a no-op
+  on existing tables. **A config update IS required** for pre-flip
+  consumers whose tables use a UUID `id` column: add
+  `id_type: "uuid"` to the store config, otherwise inserts and
+  lookups will fail with a guided `ValueError` pointing at the fix.
+- `PgVectorStore`, `PostgresPoolConfig`, `AsyncPostgresDatabase`, and
+  `SyncPostgresDatabase` now accept individual `host`/`port`/
+  `database`/`user`/`password` keys plus `POSTGRES_*` env-var
+  fallbacks. `DATABASE_URL` env fallback now works uniformly across
+  all postgres-using constructs (previously only PgVectorStore).
+- `SyncPostgresDatabase._open_connection` no longer uses
+  `DotenvPostgresConnector` directly; the connection path goes through
+  `normalize_postgres_connection_config`, which reads `.env` /
+  `.project_vars` files as an additional env fallback layer
+  (preserving the retired connector's auto-loading behavior for
+  developers who keep secrets in those files).
+
+#### Fixed
+- **Defect C:** `asyncpg.DataError` raised by a `PgVectorStore` when
+  the configured `id_type` disagrees with the actual id value or
+  column type is now wrapped as a guided `ValueError`. Both
+  directions are covered: `id_type="uuid"` + non-UUID id, and
+  `id_type="text"` + UUID-typed column (the common post-Defect-A
+  migration case). The message names the offending id, the table, and
+  the exact config or schema change required.
+- `PgVectorStore.delete_vectors` now validates ids client-side when
+  `id_type="uuid"` so a bulk delete containing one malformed id
+  surfaces that specific id in the error instead of dumping the
+  full list.
+
+#### Breaking
+- Individual keys now override the same field from a
+  `connection_string` (restoring the historical
+  `_parse_postgres_config` precedence). A caller passing
+  `{"connection_string": "postgresql://.../dbA", "database": "dbB"}`
+  now connects to `dbB`, not `dbA`. Pre-Unreleased releases had
+  briefly inverted this.
+
+
 ## Release - 2026-04-15
 
 ### dataknobs-utils [1.2.7]

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 import asyncpg
 from dataknobs_config import ConfigurableBase
 
-from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
+from dataknobs_utils.sql_utils import PostgresDB
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..pooling import ConnectionPoolManager
@@ -121,20 +121,23 @@ class SyncPostgresDatabase(
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
 
     def _open_connection(self) -> None:
-        """Open the PostgresDB connection using stored config."""
-        if not any(key in self._conn_config for key in ["host", "database", "user"]):
-            # Use dotenv connector for environment-based config
-            connector = DotenvPostgresConnector()
-            self.db = PostgresDB(connector)
-        else:
-            # Direct configuration - map 'database' to 'db' for PostgresDB
-            self.db = PostgresDB(
-                host=self._conn_config.get("host", "localhost"),
-                db=self._conn_config.get("database", "postgres"),  # Note: PostgresDB expects 'db' not 'database'
-                user=self._conn_config.get("user", "postgres"),
-                pwd=self._conn_config.get("password"),  # Note: PostgresDB expects 'pwd' not 'password'
-                port=self._conn_config.get("port", 5432),
-            )
+        """Open the PostgresDB connection using stored config.
+
+        The config dict is normalized up-front by
+        ``normalize_postgres_connection_config`` (via
+        ``_parse_postgres_config``), so ``host``/``database``/``user``/
+        ``port`` are already populated from ``connection_string``, explicit
+        keys, or ``POSTGRES_*`` env-var fallbacks. No secondary dotenv
+        lookup is needed here — the normalizer is the single env-var
+        contract.
+        """
+        self.db = PostgresDB(
+            host=self._conn_config.get("host", "localhost"),
+            db=self._conn_config.get("database", "postgres"),
+            user=self._conn_config.get("user", "postgres"),
+            pwd=self._conn_config.get("password"),
+            port=self._conn_config.get("port", 5432),
+        )
 
     @staticmethod
     def _is_invalid_catalog_error(exc: Exception) -> bool:

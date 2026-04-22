@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from dataknobs_common import normalize_postgres_connection_config
 
 from ..types import DistanceMetric
 from .base import VectorStore
@@ -39,7 +41,13 @@ class PgVectorStore(VectorStore):
         pool_max_size: Maximum connection pool size (default: 10)
         columns: Column name mappings (optional)
         auto_create_table: Create table if missing (default: True)
-        id_type: ID column type - 'uuid' or 'text' (default: 'uuid')
+        id_type: ID column type - 'uuid' or 'text' (default: 'text')
+
+        .. note::
+            The ``id_type`` default is ``"text"`` so that RAG consumers
+            passing chunk ids such as ``"01-fundamentals_0"`` work
+            out-of-the-box. Set ``id_type: "uuid"`` explicitly to
+            opt into server-generated UUID columns.
 
         Index configuration:
         index_type: Type of vector index - 'none', 'hnsw', or 'ivfflat' (default: 'none')
@@ -125,23 +133,26 @@ class PgVectorStore(VectorStore):
 
     def _parse_backend_config(self) -> None:
         """Parse pgvector-specific configuration."""
-        import os
-
-        self.connection_string = self.config.get("connection_string")
-        if not self.connection_string:
-            self.connection_string = os.environ.get("DATABASE_URL")
-
-        if not self.connection_string:
+        # Route through the shared normalizer so pgvector accepts every
+        # input shape the rest of dataknobs supports (``connection_string``,
+        # individual host/port/database/user/password keys, ``DATABASE_URL``
+        # env var, ``POSTGRES_*`` env vars, and ``.env`` / ``.project_vars``
+        # files). We call with ``require=False`` + manual ``ValueError``
+        # on ``None`` to preserve the public ``ValueError`` contract (the
+        # normalizer itself raises ``ConfigurationError``); consumers and
+        # tests rely on the ``ValueError`` type for this construction
+        # failure mode.
+        normalized = normalize_postgres_connection_config(
+            self.config, require=False,
+        )
+        if normalized is None:
             raise ValueError(
-                "connection_string required for pgvector backend. "
-                "Set in config or DATABASE_URL environment variable."
+                "PgVectorStore requires a postgres connection. Provide one of: "
+                "'connection_string', individual host/port/database/user/password "
+                "keys, 'DATABASE_URL' env var, or POSTGRES_HOST/POSTGRES_PORT/"
+                "POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD env vars."
             )
-
-        # Normalize connection string format
-        if self.connection_string.startswith("postgresql+asyncpg://"):
-            self.connection_string = self.connection_string.replace(
-                "postgresql+asyncpg://", "postgresql://"
-            )
+        self.connection_string = normalized["connection_string"]
 
         self.table_name = self.config.get("table_name", "knowledge_embeddings")
         self.schema = self.config.get("schema", "edubot")
@@ -157,7 +168,11 @@ class PgVectorStore(VectorStore):
 
         # Table creation options
         self.auto_create_table = self.config.get("auto_create_table", True)
-        self.id_type = self.config.get("id_type", "uuid")
+        # Defect A: default is ``"text"`` so RAG consumers passing chunk ids
+        # like ``"01-fundamentals_0"`` work without any config override.
+        # Pre-flip consumers using server-generated UUIDs must set
+        # ``id_type="uuid"`` explicitly.
+        self.id_type = self.config.get("id_type", "text")
         if self.id_type not in ("uuid", "text"):
             raise ValueError(f"id_type must be 'uuid' or 'text', got: {self.id_type}")
 
@@ -174,6 +189,116 @@ class PgVectorStore(VectorStore):
     def _col(self, name: str) -> str:
         """Get the actual column name for a logical field name."""
         return self.columns.get(name, name)
+
+    async def _exec_with_id_type_guard(
+        self,
+        conn: asyncpg.Connection,
+        method: str,
+        query: str,
+        *args: Any,
+        vec_id: Any = None,
+    ) -> Any:
+        """Run a pgvector query, wrapping id-type mismatch errors.
+
+        Wraps raw ``asyncpg.DataError`` for the common failure modes
+        where the configured ``id_type`` disagrees with the actual
+        table column type or the passed id value:
+
+        * ``id_type="uuid"`` but caller passed a non-UUID id —
+          Postgres rejects the bind with "invalid input syntax for
+          type uuid". The guided ValueError tells the caller to
+          either flip the config to ``"text"`` or supply a UUID.
+        * ``id_type="text"`` but the table column is actually UUID
+          (e.g., a pre-flip consumer who did not add
+          ``id_type: "uuid"`` to config after the default flip) —
+          Postgres rejects the bind the same way. The guided
+          ValueError points at adding ``id_type: "uuid"`` and notes
+          that the schema cannot be changed in place.
+
+        Detection prefers ``asyncpg.exceptions.InvalidTextRepresentation``
+        (SQLSTATE ``22P02``) — the specific error raised for
+        "invalid input syntax for type uuid" — and falls back to a
+        case-insensitive string match on the message for older
+        asyncpg versions or unusual error subclasses.
+
+        Args:
+            conn: Active asyncpg connection.
+            method: One of ``"execute"``, ``"fetchrow"``, or ``"fetch"``.
+            query: SQL statement to run.
+            *args: Parameters bound to ``$1``..``$N``.
+            vec_id: The id value being bound; included verbatim in the
+                guided error message. For bulk operations
+                (``delete_vectors``) this is a list — callers that can
+                identify the specific offending id should validate
+                client-side and pass the single bad id.
+
+        Returns:
+            Whatever the underlying asyncpg method returns.
+
+        Raises:
+            ValueError: When the id-type mismatch is detected.
+            asyncpg.DataError: For any other data error (unchanged).
+        """
+        try:
+            callable_ = getattr(conn, method)
+            return await callable_(query, *args)
+        except asyncpg.DataError as e:
+            if self._is_uuid_parse_error(e):
+                raise self._guided_id_type_error(vec_id, e) from e
+            raise
+
+    def _is_uuid_parse_error(self, exc: BaseException) -> bool:
+        """Return True when ``exc`` is Postgres's UUID parse error.
+
+        Prefers the specific ``InvalidTextRepresentationError`` class
+        (SQLSTATE ``22P02``), falling back to a string-match heuristic
+        for forward-compat with asyncpg versions that restructure the
+        exception hierarchy.
+        """
+        invalid_text_cls = getattr(
+            asyncpg.exceptions, "InvalidTextRepresentationError", None,
+        )
+        if invalid_text_cls is not None and isinstance(exc, invalid_text_cls):
+            return True
+        sqlstate = getattr(exc, "sqlstate", None)
+        if sqlstate == "22P02":
+            return True
+        msg = str(exc).lower()
+        return "invalid" in msg and "uuid" in msg
+
+    def _guided_id_type_error(
+        self, vec_id: Any, cause: BaseException,
+    ) -> ValueError:
+        """Build the guided ValueError for an id-type mismatch.
+
+        The direction of the mismatch drives the remediation hint:
+
+        * ``id_type="uuid"`` + non-UUID id → flip to text or supply UUID.
+        * ``id_type="text"`` + UUID-typed column → add ``id_type: "uuid"``
+          and note that swapping an existing UUID table to text
+          requires a DROP + re-ingest (``CREATE TABLE IF NOT EXISTS``
+          is a no-op on the existing schema).
+        """
+        location = f"table={self.schema}.{self.table_name}"
+        if self.id_type == "uuid":
+            return ValueError(
+                f"PgVectorStore id_type={self.id_type!r} but received "
+                f"non-UUID id {vec_id!r}. Either set `id_type: \"text\"` "
+                f"in the vector store config, or pass UUID-formatted "
+                f"string ids. Note: flipping to ``text`` only affects "
+                f"new deployments — existing UUID-typed tables require "
+                f"DROP + re-ingest to accept text ids. "
+                f"({location})"
+            )
+        # id_type="text" but the table column is UUID — this is the
+        # common post-flip migration case.
+        return ValueError(
+            f"PgVectorStore id_type={self.id_type!r} but the underlying "
+            f"table column is UUID. Add `id_type: \"uuid\"` to the vector "
+            f"store config so id values are cast to uuid, or migrate the "
+            f"table (DROP + re-ingest) to use a text id column. "
+            f"Offending id: {vec_id!r}. ({location})"
+        )
 
     def _get_operator_class(self) -> str:
         """Get the pgvector operator class for the configured metric."""
@@ -479,7 +604,9 @@ class PgVectorStore(VectorStore):
 
                 # Upsert: update all columns on conflict except created_at
                 # (preserve original insertion timestamp on re-ingestion).
-                await conn.execute(
+                await self._exec_with_id_type_guard(
+                    conn,
+                    "execute",
                     f"""
                     INSERT INTO {self.schema}.{self.table_name}
                         ({self._col('id')}, {self._col('domain_id')},
@@ -502,6 +629,7 @@ class PgVectorStore(VectorStore):
                     content,
                     f"[{','.join(str(x) for x in vec.tolist())}]",
                     json.dumps(meta),
+                    vec_id=vec_id,
                 )
 
         logger.debug(f"Added {len(ids)} vectors to pgvector")
@@ -526,13 +654,16 @@ class PgVectorStore(VectorStore):
         results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         async with self._pool.acquire() as conn:
             for vec_id in ids:
-                row = await conn.fetchrow(
+                row = await self._exec_with_id_type_guard(
+                    conn,
+                    "fetchrow",
                     f"""
                     SELECT {col_embedding}::text as embedding, {col_metadata} as metadata
                     FROM {self.schema}.{self.table_name}
                     WHERE {col_id} = $1{id_cast}
                     """,
                     vec_id,
+                    vec_id=vec_id,
                 )
 
                 if row is None:
@@ -566,19 +697,58 @@ class PgVectorStore(VectorStore):
         id_array_cast = "::uuid[]" if self.id_type == "uuid" else "::text[]"
         col_id = self._col("id")
 
+        # When id_type="uuid", validate client-side so bulk errors
+        # name the specific offending id. Without this, asyncpg's
+        # error surface is "invalid input for array element at index
+        # N" on a potentially large array — the full list would leak
+        # into the guided error message and offer no way to identify
+        # which id is malformed.
+        if self.id_type == "uuid":
+            self._validate_uuid_ids(ids)
+
         async with self._pool.acquire() as conn:
-            result = await conn.execute(
+            result = await self._exec_with_id_type_guard(
+                conn,
+                "execute",
                 f"""
                 DELETE FROM {self.schema}.{self.table_name}
                 WHERE {col_id} = ANY($1{id_array_cast})
                 """,
                 ids,
+                vec_id=ids,
             )
             # Parse "DELETE n" to get count
             count = int(result.split()[-1])
 
         logger.debug(f"Deleted {count} vectors from pgvector")
         return count
+
+    def _validate_uuid_ids(self, ids: list[str]) -> None:
+        """Validate ids are UUID-formatted when ``id_type="uuid"``.
+
+        Called before bulk operations so the guided error names the
+        specific offending id(s) instead of dumping the whole list.
+        Collects up to three bad ids so a batch with multiple
+        problems surfaces meaningful context.
+        """
+        bad: list[str] = []
+        for candidate in ids:
+            try:
+                UUID(str(candidate))
+            except (ValueError, AttributeError, TypeError):
+                bad.append(str(candidate))
+                if len(bad) >= 3:
+                    break
+        if bad:
+            sample = ", ".join(repr(b) for b in bad)
+            more = "" if len(bad) < 3 else " (and possibly more)"
+            raise ValueError(
+                f"PgVectorStore id_type={self.id_type!r} but received "
+                f"non-UUID id(s) in bulk operation: {sample}{more}. "
+                f"Either set `id_type: \"text\"` in the vector store "
+                f"config, or supply UUID-formatted string ids. "
+                f"(table={self.schema}.{self.table_name})"
+            )
 
     async def search(
         self,
@@ -695,7 +865,9 @@ class PgVectorStore(VectorStore):
         updated = 0
         async with self._pool.acquire() as conn:
             for vec_id, meta in zip(ids, metadata):
-                result = await conn.execute(
+                result = await self._exec_with_id_type_guard(
+                    conn,
+                    "execute",
                     f"""
                     UPDATE {self.schema}.{self.table_name}
                     SET {col_metadata} = $2::jsonb
@@ -703,6 +875,7 @@ class PgVectorStore(VectorStore):
                     """,
                     vec_id,
                     json.dumps(meta),
+                    vec_id=vec_id,
                 )
                 if result == "UPDATE 1":
                     updated += 1

@@ -30,6 +30,12 @@ config = {
 db = PostgresDatabase(config)
 ```
 
+The postgres backends (sync and async) accept any input shape
+supported by the shared
+[Postgres connection config normalizer](../common/postgres-config.md):
+a `connection_string`, individual keys as shown above, `DATABASE_URL`,
+or `POSTGRES_*` env vars. Explicit config always wins over env vars.
+
 ## Schema Setup
 
 ```sql

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from dataknobs_common import normalize_postgres_connection_config
+
 from .base import BasePoolConfig
 
 
@@ -33,43 +35,47 @@ class PostgresPoolConfig(BasePoolConfig):
     def from_dict(cls, config: dict) -> PostgresPoolConfig:
         """Create from configuration dictionary.
 
-        Supports either a connection_string parameter or individual parameters.
+        Accepts any input shape supported by
+        ``normalize_postgres_connection_config``:
+
+        - ``connection_string`` (parsed into individual keys)
+        - Individual ``host``/``port``/``database``/``user``/``password`` keys
+        - ``DATABASE_URL`` env var
+        - ``POSTGRES_HOST``/``POSTGRES_PORT``/``POSTGRES_DB``/
+          ``POSTGRES_USER``/``POSTGRES_PASSWORD`` env var fallbacks
+        - ``.env`` / ``.project_vars`` files (when ``python-dotenv`` is
+          installed)
+
+        When nothing is configured anywhere, the dataclass defaults
+        (``localhost``/``5432``/``postgres``/``postgres``/``""``) are
+        used — preserving the historical "useful for local-dev"
+        behavior that matches the underlying dataclass defaults.
+
+        Normalization is run unconditionally. It is idempotent for
+        already-normalized inputs and cheap relative to the cost of
+        opening a real pool, so skipping it on a heuristic risks
+        silent data loss (e.g. dropping a ``connection_string``'s
+        password when the caller happens to omit the ``password``
+        key).
 
         Args:
-            config: Configuration dict with either:
-                - connection_string: PostgreSQL connection string (postgresql://user:pass@host:port/db)
-                - OR individual parameters: host, port, database, user, password
+            config: Configuration dict (may be empty).
 
         Returns:
-            PostgresPoolConfig instance
+            PostgresPoolConfig instance.
         """
-        # Check if connection_string is provided
-        connection_string = config.get("connection_string")
-
-        if connection_string:
-            from urllib.parse import urlparse
-            parsed = urlparse(connection_string)
-
-            # Extract connection parameters from connection string
-            host = parsed.hostname or "localhost"
-            port = parsed.port or 5432
-            database = parsed.path[1:] if parsed.path and len(parsed.path) > 1 else "postgres"
-            user = parsed.username or "postgres"
-            password = parsed.password or ""
-        else:
-            # Use individual parameters
-            host = config.get("host", "localhost")
-            port = config.get("port", 5432)
-            database = config.get("database", "postgres")
-            user = config.get("user", "postgres")
-            password = config.get("password", "")
-
+        normalized = normalize_postgres_connection_config(
+            config, require=False,
+        )
+        source: dict[str, Any] = (
+            normalized if normalized is not None else config
+        )
         return cls(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password,
+            host=source.get("host", "localhost"),
+            port=int(source.get("port", 5432)),
+            database=source.get("database", "postgres"),
+            user=source.get("user", "postgres"),
+            password=source.get("password", ""),
             min_size=config.get("min_pool_size", 2),
             max_size=config.get("max_pool_size", 5),
             command_timeout=config.get("command_timeout"),

@@ -105,7 +105,7 @@ def _register_vector_backends(
                     "pool_max_size": "Max connection pool size (default: 10)",
                     "columns": "Column name mappings dict (optional)",
                     "auto_create_table": "Create table if missing (default: True)",
-                    "id_type": "ID column type: uuid or text (default: uuid)",
+                    "id_type": "ID column type: uuid or text (default: text)",
                 },
             },
         )

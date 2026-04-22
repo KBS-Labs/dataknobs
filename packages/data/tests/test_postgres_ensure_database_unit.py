@@ -15,6 +15,29 @@ from dataknobs_data.pooling.postgres import PostgresPoolConfig
 class TestPoolConfigNoEnsureDatabase:
     """ensure_database is a setup flag, not a pool parameter."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_postgres_env(self, monkeypatch):
+        """Isolate from ambient POSTGRES_*/DATABASE_URL env vars and
+        ``.env`` / ``.project_vars`` files in the repo tree.
+
+        These tests assert dataclass-level defaults and explicit-value
+        wiring; env or dotenv fallbacks in the normalizer would
+        otherwise bleed shell/workspace config into the assertions.
+        """
+        for key in (
+            "DATABASE_URL",
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_DB",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(
+            "dataknobs_common.postgres_config._load_dotenv_fallbacks",
+            lambda start_path=None: {},
+        )
+
     def test_pool_config_has_no_ensure_database_field(self) -> None:
         config = PostgresPoolConfig()
         assert not hasattr(config, "ensure_database")
@@ -140,12 +163,20 @@ class TestParsePostgresConfigConnectionString:
         assert "connection_string" in conn_config
 
     def test_individual_keys_win_over_connection_string(self) -> None:
+        """When both are present, individual keys override URL fields.
+
+        The normalizer documents this precedence: individual keys >
+        ``connection_string`` > env. This preserves the historical
+        "use this URL, but override the database" pattern — a common
+        way to aim a test suite at a non-default database while
+        reusing a shared URL for the other fields.
+        """
         mixin = PostgresBaseConfig()
         _, _, conn_config, _ = mixin._parse_postgres_config({
             "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
             "database": "override_db",
         })
-        assert conn_config["database"] == "override_db"
+        assert conn_config["database"] == "override_db"  # individual key wins
         assert conn_config["host"] == "dbhost"  # from connection_string
 
     def test_connection_string_with_ensure_database(self) -> None:

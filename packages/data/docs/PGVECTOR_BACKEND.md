@@ -49,7 +49,8 @@ await store.close()
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `connection_string` | str | `DATABASE_URL` env | PostgreSQL connection URL |
+| `connection_string` | str | env fallback | PostgreSQL connection URL |
+| `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions |
 | `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
 | `schema` | str | `"edubot"` | Database schema |
@@ -57,14 +58,33 @@ await store.close()
 | `pool_min_size` | int | 2 | Min connection pool size |
 | `pool_max_size` | int | 10 | Max connection pool size |
 
+The connection is resolved by the shared
+[Postgres connection config normalizer](../../common/docs/guides/postgres-config.md)
+— any combination of `connection_string`, individual keys,
+`DATABASE_URL`, or `POSTGRES_*` env vars is accepted, with explicit
+config always winning over env.
+
 ### Table Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `auto_create_table` | bool | `True` | Auto-create table if missing |
-| `id_type` | str | `"uuid"` | ID type: `uuid` or `text` |
+| `id_type` | str | `"text"` | ID type: `uuid` or `text`. See note below. |
 | `columns` | dict | Default mappings | Column name overrides |
 | `domain_id` | str | None | Multi-tenant domain filter |
+
+#### `id_type` default
+
+`id_type` defaults to `"text"` so that RAG consumers passing chunk ids
+such as `"01-fundamentals_0"` work out-of-the-box without any config
+override. If you previously relied on server-generated UUID columns,
+set `id_type: "uuid"` explicitly — pre-existing UUID-typed tables keep
+working because `CREATE TABLE IF NOT EXISTS` is a no-op on existing
+tables.
+
+Mismatches between `id_type="uuid"` and non-UUID id values raise a
+guided `ValueError` (not a raw `asyncpg.DataError`) pointing at the
+config change required to accept text ids.
 
 ### Index Options
 

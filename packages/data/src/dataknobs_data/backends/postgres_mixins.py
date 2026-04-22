@@ -8,6 +8,8 @@ import logging
 import re
 from typing import Any
 
+from dataknobs_common import normalize_postgres_connection_config
+
 from ..records import Record
 from .vector_config_mixin import VectorConfigMixin
 
@@ -69,21 +71,25 @@ class PostgresBaseConfig(VectorConfigMixin):
         else:
             ensure_database = bool(raw_ensure)
 
-        # Normalize connection_string into individual keys so that all
-        # downstream code (both sync and async) can read host/port/database
-        # etc. from the dict without needing their own URL parsing.
-        connection_string = config.get("connection_string")
-        if connection_string:
-            from urllib.parse import urlparse
-            parsed = urlparse(connection_string)
-            config.setdefault("host", parsed.hostname or "localhost")
-            config.setdefault("port", parsed.port or 5432)
-            config.setdefault(
-                "database",
-                parsed.path[1:] if parsed.path and len(parsed.path) > 1 else "postgres",
-            )
-            config.setdefault("user", parsed.username or "postgres")
-            config.setdefault("password", parsed.password or "")
+        # Normalize connection config via the shared helper so that every
+        # downstream postgres site reads host/port/database/... from the
+        # same canonical shape.
+        #
+        # ``require=False`` is intentional here — this is an internal
+        # helper called from ``__init__``, where database-backend
+        # contracts historically defer "is the connection resolvable"
+        # to ``connect()``. Direct postgres entry points
+        # (``PgVectorStore``, ``PostgresEventBus``) use ``require=True``
+        # and fail at construction; backend ``__init__`` stays
+        # permissive so consumers can construct, inspect, and swap
+        # implementations without triggering config errors. Connection
+        # failures surface at ``connect()`` time with asyncpg's native
+        # errors.
+        normalized = normalize_postgres_connection_config(
+            config, require=False,
+        )
+        if normalized is not None:
+            config.update(normalized)
 
         return table_name, schema_name, config, ensure_database
 
