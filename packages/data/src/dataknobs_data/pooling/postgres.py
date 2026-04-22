@@ -51,12 +51,12 @@ class PostgresPoolConfig(BasePoolConfig):
         used — preserving the historical "useful for local-dev"
         behavior that matches the underlying dataclass defaults.
 
-        Performance: if ``config`` has already been passed through
-        ``normalize_postgres_connection_config`` (detected by the
-        presence of both ``connection_string`` and ``host`` keys),
-        the normalizer is skipped to avoid re-parsing. This keeps
-        ``AsyncPostgresDatabase.__init__`` from paying the
-        normalization cost twice.
+        Normalization is run unconditionally. It is idempotent for
+        already-normalized inputs and cheap relative to the cost of
+        opening a real pool, so skipping it on a heuristic risks
+        silent data loss (e.g. dropping a ``connection_string``'s
+        password when the caller happens to omit the ``password``
+        key).
 
         Args:
             config: Configuration dict (may be empty).
@@ -64,19 +64,12 @@ class PostgresPoolConfig(BasePoolConfig):
         Returns:
             PostgresPoolConfig instance.
         """
-        already_normalized = (
-            "connection_string" in config
-            and all(config.get(k) is not None for k in (
-                "host", "port", "database", "user",
-            ))
+        normalized = normalize_postgres_connection_config(
+            config, require=False,
         )
-        if already_normalized:
-            source: dict[str, Any] = config
-        else:
-            normalized = normalize_postgres_connection_config(
-                config, require=False,
-            )
-            source = normalized if normalized is not None else config
+        source: dict[str, Any] = (
+            normalized if normalized is not None else config
+        )
         return cls(
             host=source.get("host", "localhost"),
             port=int(source.get("port", 5432)),

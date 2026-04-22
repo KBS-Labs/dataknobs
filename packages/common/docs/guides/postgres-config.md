@@ -47,10 +47,16 @@ config = {
 `user` and `password` are URL-encoded when a canonical
 `connection_string` is synthesized, so values containing `@`, `/`, or
 `:` (common in secrets-manager output) produce a valid URI. `host` and
-`database` are rejected if they contain those same characters —
+`database` are rejected if they contain `@`, `/`, or whitespace —
 URL-encoding them would distort legitimate values, and the intent is
 to surface misconfiguration loudly rather than produce a malformed
 URI.
+
+IPv6 literal host addresses (e.g. `::1`, `2001:db8::1`) are not
+supported via individual keys because the synthesizer does not add
+the `[...]` brackets that a bare-IPv6 authority requires. Pass them
+through `connection_string` instead, pre-bracketed:
+`postgresql://u:p@[::1]:5432/db`.
 
 Individual keys can also be mixed with `connection_string` to
 override specific fields — see Precedence below.

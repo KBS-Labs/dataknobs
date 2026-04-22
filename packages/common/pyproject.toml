@@ -9,6 +9,13 @@ authors = [
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+# Optional ``.env`` / ``.project_vars`` fallback layer for
+# ``normalize_postgres_connection_config``. Absent this extra the
+# dotenv layer is silently skipped (os.environ + config still work),
+# so it stays opt-in to keep the base install lean.
+dotenv = ["python-dotenv>=1.0.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

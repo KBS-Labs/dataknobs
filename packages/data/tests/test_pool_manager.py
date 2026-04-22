@@ -149,6 +149,29 @@ class TestPostgresPoolConfig:
         assert config.database == "db"
         assert "asyncpg" not in config.to_connection_string()
 
+    def test_from_dict_preserves_url_password_when_only_url_given(self):
+        """A raw ``connection_string``-only dict keeps the URL's password.
+
+        Regression: a previous ``already_normalized`` fast-path skipped
+        ``normalize_postgres_connection_config`` whenever the dict
+        carried ``connection_string`` plus host/port/database/user — but
+        intentionally omitted ``password`` from that check so empty
+        passwords stayed valid. The shortcut then pulled
+        ``source.get("password", "")`` from the raw dict, silently
+        dropping the password parsed from the URL. Authentication
+        failed downstream with no hint about why.
+        """
+        config = PostgresPoolConfig.from_dict({
+            "connection_string": "postgresql://u:secret@h:5432/db",
+            "host": "h",
+            "port": 5432,
+            "database": "db",
+            "user": "u",
+        })
+        assert config.password == "secret"
+        assert config.host == "h"
+        assert config.user == "u"
+
 
 @dataclass
 class MockPoolConfig(BasePoolConfig):
