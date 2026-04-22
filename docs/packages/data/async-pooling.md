@@ -91,15 +91,27 @@ Each backend has its own configuration class:
 
     ```python
     from dataknobs_data.pooling.s3 import S3PoolConfig
-    
+
+    # Region omitted → boto's default chain resolves it. See
+    # the S3 Session Configuration page for the full chain.
     config = S3PoolConfig(
         bucket="my-bucket",
-        region="us-east-1",
         endpoint_url="http://localhost:4566",  # For LocalStack
         aws_access_key_id="key",
-        aws_secret_access_key="secret"
+        aws_secret_access_key="secret",
+    )
+
+    # Or pin region explicitly when overriding the deployment env:
+    config = S3PoolConfig(
+        bucket="my-bucket",
+        region_name="eu-west-1",
     )
     ```
+
+    See [S3 Session Configuration](s3-session.md) for the full
+    region resolution chain and the unified config shape used by
+    both sync (`SyncS3Database`, `S3KnowledgeBackend`) and async
+    (`AsyncS3Database`) S3 constructs.
 
 === "PostgreSQL"
 
@@ -156,11 +168,13 @@ The S3 implementation uses aioboto3 with session pooling:
 ```python
 from dataknobs_data.backends.s3_async import AsyncS3Database
 
-# Create database instance
+# Create database instance — region omitted to defer to boto's
+# default chain (AWS_DEFAULT_REGION env, ~/.aws/config, IMDS,
+# then us-east-1 terminal fallback). Pin via "region" or
+# "region_name" only when overriding the deployment environment.
 db = AsyncS3Database({
     "bucket": "my-bucket",
     "prefix": "data/",
-    "region": "us-east-1"
 })
 
 # Connect (gets or creates session for current event loop)

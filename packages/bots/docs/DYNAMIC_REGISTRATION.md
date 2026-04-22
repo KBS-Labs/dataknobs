@@ -394,14 +394,26 @@ Directory structure:
 
 #### S3KnowledgeBackend
 
-Production S3 storage:
+Production S3 storage. `region` (or its `region_name` alias) is
+optional — when omitted, boto's default chain
+(`AWS_DEFAULT_REGION` env, `~/.aws/config`, IMDS, then `us-east-1`
+terminal fallback) resolves the value. See
+[S3 Session Configuration](../../data/s3-session.md) for the full
+chain and unified config shape:
 
 ```python
+# Defer to boto's chain (recommended for env-driven deployments).
 backend = create_knowledge_backend("s3", {
     "bucket": "my-bucket",
     "prefix": "knowledge/",
-    "region": "us-east-1",
-    "endpoint_url": None,  # For S3-compatible services
+})
+
+# Or pin explicitly when overriding the deployment env.
+backend = create_knowledge_backend("s3", {
+    "bucket": "my-bucket",
+    "prefix": "knowledge/",
+    "region": "eu-west-1",
+    "endpoint_url": "http://localhost:4566",  # LocalStack / MinIO
 })
 ```
 
@@ -740,7 +752,9 @@ resources:
     backend: s3
     bucket: ${KNOWLEDGE_BUCKET}
     prefix: knowledge/
-    region: ${AWS_REGION}
+    # `region` omitted — boto's default chain resolves
+    # AWS_DEFAULT_REGION env / ~/.aws/config / IMDS at connect time.
+    # Pin explicitly here only when you need to override the env.
 
 settings:
   log_level: WARNING
