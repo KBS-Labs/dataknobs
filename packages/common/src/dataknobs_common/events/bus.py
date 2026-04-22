@@ -153,8 +153,12 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
     elif backend == "postgres":
         from .postgres import PostgresEventBus
 
+        # Pass the full config through so the bus can accept any input
+        # shape supported by ``normalize_postgres_connection_config``
+        # (connection_string, individual host/port/... keys, DATABASE_URL
+        # env var, or POSTGRES_* env vars).
         return PostgresEventBus(
-            connection_string=config.get("connection_string", ""),
+            config=config,
             channel_prefix=config.get("channel_prefix", "events"),
         )
     elif backend == "redis":

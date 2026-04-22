@@ -73,11 +73,18 @@ await store.close()
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `connection_string` | str | None | PostgreSQL connection URL. Falls back to `DATABASE_URL` env var |
+| `connection_string` | str | env fallback | PostgreSQL connection URL |
+| `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions (e.g., 768 for sentence-transformers) |
 | `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
 | `schema` | str | `"edubot"` | Database schema name |
 | `table_name` | str | `"knowledge_embeddings"` | Table name for vectors |
+
+The connection is resolved by the shared
+[Postgres connection config normalizer](../common/postgres-config.md)
+— `connection_string`, individual keys, `DATABASE_URL`, or
+`POSTGRES_*` env vars all work, with explicit config always winning
+over env.
 
 ### Connection Pool Configuration
 
@@ -91,8 +98,23 @@ await store.close()
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `auto_create_table` | bool | `True` | Create table if it doesn't exist |
-| `id_type` | str | `"uuid"` | ID column type: `uuid` or `text` |
+| `id_type` | str | `"text"` | ID column type: `uuid` or `text`. See note below. |
 | `columns` | dict | See below | Column name mappings |
+
+#### `id_type` default
+
+`id_type` defaults to `"text"` so that RAG consumers passing chunk ids
+such as `"01-fundamentals_0"` work out-of-the-box. Set
+`id_type: "uuid"` explicitly to opt into server-generated UUID columns.
+
+Pre-existing UUID-typed tables keep working without change because
+`CREATE TABLE IF NOT EXISTS` is a no-op on existing tables. Callers
+that rely on UUID ids must add `id_type: "uuid"` to their config.
+
+When `id_type="uuid"` is set but a caller passes a non-UUID id, the
+error path raises a guided `ValueError` (not a raw
+`asyncpg.DataError`) that names the id value, the table, and the
+config change required to accept text ids.
 
 ### Index Configuration
 

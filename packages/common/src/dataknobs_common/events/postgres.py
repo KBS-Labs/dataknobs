@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .types import Event, Subscription
 
@@ -67,18 +67,48 @@ class PostgresEventBus:
 
     def __init__(
         self,
-        connection_string: str,
+        connection_string: str | None = None,
         channel_prefix: str = "events",
+        *,
+        config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the Postgres event bus.
 
         Args:
-            connection_string: PostgreSQL connection string
-            channel_prefix: Prefix for NOTIFY channels (default: "events")
+            connection_string: PostgreSQL connection string. Retained
+                for backward compatibility — new callers should prefer
+                ``config`` for the unified shape (individual keys +
+                env-var fallbacks).
+            channel_prefix: Prefix for NOTIFY channels (default: "events").
+            config: Optional config dict accepted by
+                ``normalize_postgres_connection_config`` — supports
+                ``connection_string``, individual host/port/database/
+                user/password keys, ``DATABASE_URL`` env var, and
+                ``POSTGRES_*`` env-var fallbacks.
+
+        Raises:
+            ConfigurationError: If no postgres connection is resolvable
+                from ``config``, ``connection_string``, or env vars.
         """
         import re
 
-        self._connection_string = connection_string
+        from dataknobs_common.postgres_config import (
+            normalize_postgres_connection_config,
+        )
+
+        merged: dict[str, Any] = dict(config or {})
+        if connection_string is not None:
+            # Explicit arg wins over any value inside ``config`` so the
+            # legacy positional shape keeps behaving as callers expect.
+            merged["connection_string"] = connection_string
+        # ``require=True`` raises ``ConfigurationError`` when nothing is
+        # resolvable; the cast narrows the return type for the type
+        # checker without the runtime-stripped ``assert`` idiom.
+        normalized = cast(
+            "dict[str, Any]",
+            normalize_postgres_connection_config(merged, require=True),
+        )
+        self._connection_string = normalized["connection_string"]
         # Sanitize prefix the same way we sanitize topics — it is
         # interpolated into LISTEN/UNLISTEN SQL statements which do
         # not support parameterized queries.

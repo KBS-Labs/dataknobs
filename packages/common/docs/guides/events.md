@@ -138,11 +138,30 @@ bus = create_event_bus({"backend": "memory"})
 
 Uses PostgreSQL's LISTEN/NOTIFY for real-time event delivery. Works with local PostgreSQL and AWS RDS.
 
+Accepts any input shape supported by the shared
+[Postgres connection config normalizer](postgres-config.md):
+`connection_string`, individual `host`/`port`/`database`/`user`/`password`
+keys, `DATABASE_URL`, or `POSTGRES_*` env vars.
+
 ```python
+# Connection string
 bus = create_event_bus({
     "backend": "postgres",
     "connection_string": "postgresql://user:pass@host:5432/database"
 })
+
+# Individual keys
+bus = create_event_bus({
+    "backend": "postgres",
+    "host": "host",
+    "port": 5432,
+    "database": "database",
+    "user": "user",
+    "password": "pass",
+})
+
+# Environment variables (POSTGRES_* or DATABASE_URL)
+bus = create_event_bus({"backend": "postgres"})
 ```
 
 **Use when:**
@@ -349,8 +368,15 @@ def create_event_bus(config: dict) -> EventBus:
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `backend` | str | Yes | `"postgres"` |
-| `connection_string` | str | Yes | PostgreSQL connection URL |
+| `connection_string` | str | No† | PostgreSQL connection URL |
+| `host` / `port` / `database` / `user` / `password` | various | No† | Individual connection keys |
 | `channel_prefix` | str | No | Prefix for NOTIFY channels (default: `"events"`) |
+
+† At least one postgres connection form must be resolvable: a
+`connection_string`, individual keys, `DATABASE_URL` env var, or
+`POSTGRES_*` env vars. See the
+[Postgres connection config reference](postgres-config.md) for the
+full precedence rules.
 
 ### Redis Backend
 

@@ -141,6 +141,97 @@ class TestChannelPrefixSanitization:
             )
 
 
+class TestConfigShapeSupport:
+    """Tests for the expanded config input shapes on __init__.
+
+    The bus now accepts the same unified shape as the other dataknobs
+    postgres constructs (connection_string, individual keys, env-var
+    fallbacks) via the shared ``normalize_postgres_connection_config``
+    helper.
+    """
+
+    _POSTGRES_ENV_KEYS = (
+        "DATABASE_URL",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch):
+        for key in self._POSTGRES_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+        # Disable ``.env`` / ``.project_vars`` loading — the normalizer
+        # would otherwise read workspace dotenv files and shadow the
+        # "nothing configured" assertions below.
+        monkeypatch.setattr(
+            "dataknobs_common.postgres_config._load_dotenv_fallbacks",
+            lambda start_path=None: {},
+        )
+
+    def test_accepts_positional_connection_string(self):
+        bus = PostgresEventBus("postgresql://u:p@h/db")
+        assert bus._connection_string == "postgresql://u:p@h/db"
+
+    def test_accepts_individual_keys_via_config(self):
+        bus = PostgresEventBus(
+            config={
+                "host": "h",
+                "port": 5433,
+                "database": "db",
+                "user": "u",
+                "password": "p",
+            }
+        )
+        assert (
+            bus._connection_string
+            == "postgresql://u:p@h:5433/db"
+        )
+
+    def test_accepts_database_url_env_fallback(self, monkeypatch):
+        monkeypatch.setenv(
+            "DATABASE_URL", "postgresql://u:p@env-h/env-db"
+        )
+        bus = PostgresEventBus(config={})
+        assert (
+            bus._connection_string == "postgresql://u:p@env-h/env-db"
+        )
+
+    def test_accepts_postgres_env_vars(self, monkeypatch):
+        monkeypatch.setenv("POSTGRES_HOST", "env-h")
+        monkeypatch.setenv("POSTGRES_DB", "env-db")
+        monkeypatch.setenv("POSTGRES_USER", "env-u")
+        monkeypatch.setenv("POSTGRES_PASSWORD", "env-p")
+        bus = PostgresEventBus(config={})
+        assert "env-h" in bus._connection_string
+        assert "env-db" in bus._connection_string
+
+    def test_raises_when_nothing_configured(self):
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError):
+            PostgresEventBus(config={})
+
+    def test_factory_routes_full_config_without_connection_string(self):
+        """create_event_bus passes full config dict; individual keys work."""
+        from dataknobs_common.events import create_event_bus
+
+        bus = create_event_bus(
+            {
+                "backend": "postgres",
+                "host": "h",
+                "database": "db",
+                "user": "u",
+                "password": "p",
+                "channel_prefix": "myapp",
+            }
+        )
+        assert bus._connection_string == "postgresql://u:p@h:5432/db"
+        assert bus._channel_prefix == "myapp"
+
+
 class TestPublishSqlConstruction:
     """Tests verifying publish uses pg_notify with parameterized queries.
 

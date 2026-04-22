@@ -6,6 +6,7 @@ Set TEST_POSTGRES=true to enable these tests.
 
 import os
 import uuid
+from typing import Any
 
 import numpy as np
 import pytest
@@ -136,7 +137,9 @@ class TestPgVectorStoreConfiguration:
         assert store.pool_min_size == 2
         assert store.pool_max_size == 10
         assert store.auto_create_table is True
-        assert store.id_type == "uuid"
+        # Defect A: default flipped from "uuid" to "text" so RAG consumers
+        # with chunk-style ids work out of the box.
+        assert store.id_type == "text"
         assert store.domain_id is None
 
     def test_config_custom_values(self, ensure_pgvector_extension):
@@ -169,11 +172,26 @@ class TestPgVectorStoreConfiguration:
             PgVectorStore(pgvector_config)
 
     def test_config_missing_connection_string(self):
-        """Test that missing connection string raises ValueError."""
-        # Clear DATABASE_URL if set
+        """Test that missing connection string raises ValueError.
+
+        The PgVectorStore config path now uses
+        ``normalize_postgres_connection_config`` which resolves connections
+        from ``connection_string``, individual keys, ``DATABASE_URL``, or
+        ``POSTGRES_*`` env vars. We must clear *all* of these to assert
+        the bare "no connection configured" error path.
+        """
+        postgres_env_keys = (
+            "DATABASE_URL",
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_DB",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+        )
         with pytest.MonkeyPatch().context() as m:
-            m.delenv("DATABASE_URL", raising=False)
-            with pytest.raises(ValueError, match="connection_string required"):
+            for key in postgres_env_keys:
+                m.delenv(key, raising=False)
+            with pytest.raises(ValueError, match="postgres"):
                 PgVectorStore({"dimensions": 768})
 
     def test_config_normalizes_asyncpg_url(self, ensure_pgvector_extension):
@@ -599,6 +617,331 @@ class TestPgVectorStoreTextIds:
 
 @pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
+class TestPgVectorStoreIdTypeDefaults:
+    """Defect A + C: id_type default flip + guided error wrapping.
+
+    Covers the RAG-consumer fix where chunk ids like ``"01-fundamentals_0"``
+    are non-UUID strings. The default must accept text; explicit ``"uuid"``
+    still works; mismatches produce a guided ``ValueError`` (not raw
+    ``asyncpg.DataError``) so consumers can act on the error message.
+    """
+
+    async def test_default_id_type_is_text(self, ensure_pgvector_extension):
+        """Defect A reproducer: ``add_vectors`` must accept text ids by default.
+
+        Reproduces the consumer-visible failure: a RAG caller that does
+        NOT set ``id_type`` and passes chunk ids like ``"abc_0"``. Before
+        the flip this raised ``asyncpg.DataError: invalid input ... uuid``.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_default_idtype_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+            # NB: intentionally no ``id_type`` — tests the default.
+        }
+        store = PgVectorStore(config)
+        assert store.id_type == "text", (
+            "Default id_type must be 'text' so RAG chunk ids work out-of-box"
+        )
+        await store.initialize()
+
+        try:
+            vectors = np.random.rand(2, 128).astype(np.float32)
+            ids = ["01-fundamentals_0", "01-fundamentals_1"]
+            result_ids = await store.add_vectors(vectors, ids=ids)
+            assert result_ids == ids
+
+            # Roundtrip verifies the text ids actually land and come back.
+            retrieved = await store.get_vectors(ids)
+            assert retrieved[0][0] is not None
+            assert retrieved[1][0] is not None
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_text_ids_accept_uuid_values(self, ensure_pgvector_extension):
+        """UUID-formatted strings work transparently under the text default.
+
+        Ensures consumers that happen to pass UUID strings as text ids
+        are not forced to migrate to ``id_type="uuid"``.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_text_uuidvals_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            uuid_str = str(uuid.uuid4())
+            vectors = np.random.rand(1, 128).astype(np.float32)
+            await store.add_vectors(vectors, ids=[uuid_str])
+            retrieved = await store.get_vectors([uuid_str])
+            assert retrieved[0][0] is not None
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_explicit_uuid_type_still_works(self, ensure_pgvector_extension):
+        """Regression guard: opting into ``id_type="uuid"`` still works.
+
+        Pre-flip consumers that have UUID-typed id columns and server-
+        generated UUIDs must continue functioning unchanged.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_uuid_idtype_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            ids = [str(uuid.uuid4()) for _ in range(3)]
+            vectors = np.random.rand(3, 128).astype(np.float32)
+            result_ids = await store.add_vectors(vectors, ids=ids)
+            assert result_ids == ids
+            retrieved = await store.get_vectors(ids)
+            assert all(row[0] is not None for row in retrieved)
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_uuid_type_with_text_id_raises_guided_error(
+        self, ensure_pgvector_extension
+    ):
+        """Defect C: uuid-typed store + non-UUID id → guided ``ValueError``.
+
+        The raw ``asyncpg.DataError`` is wrapped in a ``ValueError`` whose
+        message points the caller at the config change to make for
+        text-id consumers.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_uuid_wrong_id_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            vectors = np.random.rand(1, 128).astype(np.float32)
+            with pytest.raises(ValueError) as excinfo:
+                await store.add_vectors(vectors, ids=["not-a-uuid"])
+            msg = str(excinfo.value)
+            assert "id_type" in msg
+            assert "text" in msg
+            assert "not-a-uuid" in msg
+            assert store.table_name in msg
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_guided_error_from_get_vectors(self, ensure_pgvector_extension):
+        """Defect C: guided error also fires on the read path."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_get_bad_id_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                await store.get_vectors(["not-a-uuid"])
+            msg = str(excinfo.value)
+            assert "id_type" in msg
+            assert "not-a-uuid" in msg
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_guided_error_from_delete_vectors(self, ensure_pgvector_extension):
+        """Defect C: guided error also fires on the delete path.
+
+        ``delete_vectors`` now validates client-side for
+        ``id_type="uuid"`` so the error surfaces the specific bad
+        id rather than dumping the whole array.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_del_bad_id_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                await store.delete_vectors(["not-a-uuid"])
+            msg = str(excinfo.value)
+            assert "id_type" in msg
+            assert "not-a-uuid" in msg
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_guided_error_from_update_metadata(self, ensure_pgvector_extension):
+        """Defect C: guided error also fires on the update_metadata path."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_upd_bad_id_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                await store.update_metadata(
+                    ["not-a-uuid"], [{"tag": "updated"}],
+                )
+            msg = str(excinfo.value)
+            assert "id_type" in msg
+            assert "not-a-uuid" in msg
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_delete_vectors_names_specific_bad_id(
+        self, ensure_pgvector_extension,
+    ):
+        """Bulk delete names the offending id, not the whole list.
+
+        Regression guard for the "dump the entire list in the error"
+        anti-pattern — a batch containing one bad id now surfaces a
+        pointed error with that id, not a repr of the full array.
+        """
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_del_mixed_{uuid.uuid4().hex[:8]}",
+            "id_type": "uuid",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            good_ids = [str(uuid.uuid4()) for _ in range(10)]
+            with pytest.raises(ValueError) as excinfo:
+                await store.delete_vectors(
+                    [*good_ids, "definitely-not-a-uuid"],
+                )
+            msg = str(excinfo.value)
+            assert "'definitely-not-a-uuid'" in msg
+            # The good ids should NOT appear in the error — that's
+            # the whole point of client-side validation.
+            for good in good_ids:
+                assert good not in msg
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                )
+            await store.close()
+
+    async def test_guided_error_for_text_config_against_uuid_table(
+        self, ensure_pgvector_extension,
+    ):
+        """Defect C inverse: id_type='text' but table column is UUID.
+
+        Simulates the post-Defect-A migration case where an upgrader
+        has an existing UUID-typed table but forgot to add
+        ``id_type: "uuid"`` to their config. The guard must point
+        them at the right remediation — adding the config flag or
+        migrating the schema.
+        """
+        table_name = f"test_text_vs_uuid_tbl_{uuid.uuid4().hex[:8]}"
+
+        # Pre-create a table with a UUID id column (simulating a
+        # pre-flip deployment).
+        uuid_store = PgVectorStore({
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": table_name,
+            "id_type": "uuid",
+            "auto_create_table": True,
+        })
+        await uuid_store.initialize()
+        await uuid_store.close()
+
+        # Now instantiate against the same table with id_type="text"
+        # — add_vectors should raise the inverse guided error.
+        text_store = PgVectorStore({
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": table_name,
+            "id_type": "text",
+            "auto_create_table": True,
+        })
+        await text_store.initialize()
+
+        try:
+            vectors = np.random.rand(1, 128).astype(np.float32)
+            with pytest.raises(ValueError) as excinfo:
+                await text_store.add_vectors(
+                    vectors, ids=["01-fundamentals_0"],
+                )
+            msg = str(excinfo.value)
+            # Inverse guidance: point at adding id_type: "uuid"
+            assert "uuid" in msg.lower()
+            assert "01-fundamentals_0" in msg
+        finally:
+            async with text_store._pool.acquire() as conn:
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS public.{table_name}"
+                )
+            await text_store.close()
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+@pytest.mark.asyncio
 class TestPgVectorStoreCustomColumns:
     """Test custom column mappings."""
 
@@ -703,11 +1046,19 @@ class TestPgVectorStoreEdgeCases:
             metadata=[{"source_text": "updated content", "document_id": "doc2"}],
         )
 
-        # Verify the content column was updated (not just metadata)
+        # Verify the dedicated content column was updated (not just
+        # the metadata blob). The id-column cast depends on the store's
+        # configured ``id_type`` — do not hardcode ``::uuid`` here.
+        id_cast = "::uuid" if pgvector_store.id_type == "uuid" else ""
+        id_value: Any = (
+            uuid.UUID(id_) if pgvector_store.id_type == "uuid" else id_
+        )
         async with pgvector_store._pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT content, document_id FROM {pgvector_store.schema}.{pgvector_store.table_name} WHERE id = $1::uuid",
-                uuid.UUID(id_),
+                f"SELECT content, document_id FROM "
+                f"{pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1{id_cast}",
+                id_value,
             )
             assert row["content"] == "updated content"
             assert row["document_id"] == "doc2"
