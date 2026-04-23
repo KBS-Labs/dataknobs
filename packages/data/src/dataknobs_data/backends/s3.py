@@ -13,6 +13,7 @@ from uuid import uuid4
 from dataknobs_config import ConfigurableBase
 
 from dataknobs_data.database import SyncDatabase
+from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
@@ -67,17 +68,30 @@ class SyncS3Database(  # type: ignore[misc]
 
         # Optional configuration with defaults
         self.prefix = self.config.get("prefix", "records/").rstrip("/") + "/"
-        self.region = self.config.get("region", "us-east-1")
-        self.endpoint_url = self.config.get("endpoint_url")
-        self.max_workers = self.config.get("max_workers", 10)
-        self.multipart_threshold = self.config.get("multipart_threshold", 8 * 1024 * 1024)
-        self.multipart_chunksize = self.config.get("multipart_chunksize", 8 * 1024 * 1024)
-        self.max_retries = self.config.get("max_retries", 3)
+        self.multipart_threshold = self.config.get(
+            "multipart_threshold", 8 * 1024 * 1024
+        )
+        self.multipart_chunksize = self.config.get(
+            "multipart_chunksize", 8 * 1024 * 1024
+        )
 
-        # AWS credentials (will use environment/IAM role if not provided)
-        self.aws_access_key_id = self.config.get("access_key_id")
-        self.aws_secret_access_key = self.config.get("secret_access_key")
-        self.aws_session_token = self.config.get("session_token")
+        # Single normalized session config — accepts both ``region`` and
+        # ``region_name``, both legacy and canonical credential keys, and
+        # ``max_workers`` / ``max_retries`` aliases.
+        self._session_config = S3SessionConfig.from_dict(self.config)
+
+        # Backward-compat attributes used elsewhere in this file and by
+        # downstream consumers reading ``db.region`` / ``db.endpoint_url``
+        # / ``db.max_workers``. ``self.region`` may be ``None`` until
+        # ``connect()`` runs; resolved-region reads should prefer
+        # ``self.s3_client.meta.region_name`` post-connect.
+        self.region = self._session_config.region_name
+        self.endpoint_url = self._session_config.endpoint_url
+        self.max_workers = self._session_config.max_pool_connections
+        self.max_retries = self._session_config.max_attempts
+        self.aws_access_key_id = self._session_config.aws_access_key_id
+        self.aws_secret_access_key = self._session_config.aws_secret_access_key
+        self.aws_session_token = self._session_config.aws_session_token
 
         # Initialize vector support
         self._parse_vector_config(config or {})
@@ -93,41 +107,21 @@ class SyncS3Database(  # type: ignore[misc]
         if self._connected:
             return  # Already connected
 
-        import boto3
-        from botocore.config import Config as BotoConfig
         from botocore.exceptions import ClientError
 
-        # Configure boto3 client
-        boto_config = BotoConfig(
-            region_name=self.region,
-            max_pool_connections=self.max_workers,
-            retries={'max_attempts': self.max_retries}
-        )
-
-        client_kwargs = {
-            "config": boto_config,
-            "use_ssl": not bool(self.endpoint_url)  # Disable SSL for local testing
-        }
-
-        if self.endpoint_url:
-            client_kwargs["endpoint_url"] = self.endpoint_url
-
-        if self.aws_access_key_id and self.aws_secret_access_key:
-            client_kwargs["aws_access_key_id"] = self.aws_access_key_id
-            client_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
-
-        if self.aws_session_token:
-            client_kwargs["aws_session_token"] = self.aws_session_token
-
-        # Create S3 client
-        self.s3_client = boto3.client("s3", **client_kwargs)
+        self.s3_client = create_boto3_s3_client(self._session_config)
         self.ClientError = ClientError
 
         # Verify bucket exists or create it
         self._ensure_bucket_exists()
 
         self._connected = True
-        logger.info(f"Connected to S3 with bucket={self.bucket}, prefix={self.prefix}")
+        logger.info(
+            "Connected to S3 with bucket=%s, prefix=%s, region=%s",
+            self.bucket,
+            self.prefix,
+            self.s3_client.meta.region_name,
+        )
 
     def close(self) -> None:
         """Close the S3 connection."""
@@ -154,14 +148,21 @@ class SyncS3Database(  # type: ignore[misc]
         except self.ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == '404':
-                # Bucket doesn't exist, create it
                 logger.info(f"Creating bucket {self.bucket}")
-                if self.region == 'us-east-1':
+                # ``self.region`` may be ``None`` if config relies on
+                # boto's default chain; the constructed client always
+                # has a concrete region in ``meta.region_name``.
+                effective_region = (
+                    self.region or self.s3_client.meta.region_name
+                )
+                if effective_region == 'us-east-1':
                     self.s3_client.create_bucket(Bucket=self.bucket)
                 else:
                     self.s3_client.create_bucket(
                         Bucket=self.bucket,
-                        CreateBucketConfiguration={'LocationConstraint': self.region}
+                        CreateBucketConfiguration={
+                            'LocationConstraint': effective_region
+                        },
                     )
             else:
                 raise

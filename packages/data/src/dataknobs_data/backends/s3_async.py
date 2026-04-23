@@ -75,7 +75,9 @@ class AsyncS3Database(  # type: ignore[misc]
         self._session = await _session_manager.get_pool(
             self._pool_config,
             cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_aioboto3_session),
-            lambda session: validate_s3_session(session, self._pool_config)
+            lambda session: validate_s3_session(
+                session, self._pool_config.bucket, self._pool_config
+            ),
         )
 
         self._connected = True

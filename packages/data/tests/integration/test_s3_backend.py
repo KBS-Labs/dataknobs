@@ -469,13 +469,18 @@ class TestS3Configuration:
             SyncS3Database({})
     
     def test_default_values(self):
-        """Test default configuration values."""
+        """Test default configuration values.
+
+        ``region`` now defaults to ``None`` so boto's resolution chain
+        (env → AWS config file → IMDS → ``us-east-1`` terminal
+        fallback) decides the effective region at ``connect()`` time.
+        """
         with mock_aws():
             config = {"bucket": "test-bucket"}
             db = SyncS3Database(config)
-            
+
             assert db.prefix == "records/"
-            assert db.region == "us-east-1"
+            assert db.region is None
             assert db.max_workers == 10
             assert db.multipart_threshold == 8 * 1024 * 1024
     
@@ -506,6 +511,100 @@ class TestS3Configuration:
         
         assert db.endpoint_url == f"http://{default_host}:4566"
         assert db.bucket == "test-bucket"
+
+
+class TestS3RegionFallback:
+    """Tests for the shared ``S3SessionConfig`` factory routing.
+
+    Covers the bug-fix path where ``region`` is unset in config and the
+    effective region must be resolved from the boto chain
+    (``AWS_DEFAULT_REGION`` env, ``~/.aws/config``, IMDS, terminal
+    ``us-east-1`` fallback) at ``connect()`` time, with bucket
+    creation using the resolved value for ``LocationConstraint``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_aws_env(self, monkeypatch):
+        """Clear ambient AWS env so resolved-region assertions are deterministic.
+
+        ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT_URL_S3`` / ``LOCALSTACK_ENDPOINT``
+        are cleared because botocore 1.34+ honors them as global default
+        endpoints — including inside ``mock_aws()``. ``bin/test.sh``
+        exports these for integration tests against a running LocalStack
+        container, and without clearing them, boto3 here would route
+        to LocalStack instead of moto.
+        """
+        for key in (
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_ENDPOINT_URL",
+            "AWS_ENDPOINT_URL_S3",
+            "LOCALSTACK_ENDPOINT",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+        monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+        monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+    def test_bucket_create_uses_resolved_region_when_region_unset(
+        self, monkeypatch
+    ):
+        """Bucket creation honors AWS_DEFAULT_REGION when no explicit region."""
+        with mock_aws():
+            monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+            db = SyncS3Database({"bucket": "fallback-bucket"})
+            assert db.region is None
+            db.connect()
+            assert db.s3_client.meta.region_name == "eu-west-1"
+            location = db.s3_client.get_bucket_location(
+                Bucket="fallback-bucket"
+            )["LocationConstraint"]
+            assert location == "eu-west-1"
+            db.close()
+
+    def test_bucket_create_no_location_constraint_for_us_east_1(
+        self, monkeypatch
+    ):
+        """us-east-1 buckets are created without LocationConstraint."""
+        with mock_aws():
+            monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+            db = SyncS3Database({"bucket": "us-east-1-bucket"})
+            db.connect()
+            # us-east-1's get_bucket_location returns None per AWS API
+            location = db.s3_client.get_bucket_location(
+                Bucket="us-east-1-bucket"
+            )["LocationConstraint"]
+            assert location is None
+            db.close()
+
+    def test_sync_db_region_attribute_is_none_when_unset(self):
+        """``db.region`` exposes the configured value (None when unset)."""
+        with mock_aws():
+            db = SyncS3Database({"bucket": "x", "max_workers": 5})
+            assert db.region is None
+            assert db.max_workers == 5
+
+    def test_legacy_credential_keys_still_accepted(self):
+        """Legacy credential keys feed the canonical session_config slots."""
+        with mock_aws():
+            db = SyncS3Database(
+                {
+                    "bucket": "x",
+                    "access_key_id": "AK",
+                    "secret_access_key": "SK",
+                    "session_token": "ST",
+                }
+            )
+            assert db.aws_access_key_id == "AK"
+            assert db.aws_secret_access_key == "SK"
+            assert db.aws_session_token == "ST"
+            assert db._session_config.aws_access_key_id == "AK"
+            assert db._session_config.aws_secret_access_key == "SK"
+            assert db._session_config.aws_session_token == "ST"
 
 
 @pytest.mark.integration

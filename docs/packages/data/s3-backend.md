@@ -19,14 +19,36 @@ pip install dataknobs-data[s3]
 
 ## Configuration
 
+### Region Resolution
+
+`region` (or its `region_name` alias) is **optional** and defaults to
+`None`. When unset, the backend defers to boto's resolution chain:
+`AWS_DEFAULT_REGION` env → `~/.aws/config` → EC2/ECS metadata →
+`us-east-1` as boto's terminal fallback. See
+[S3 Session Configuration](s3-session.md) for the full chain and
+configuration shape.
+
+> **Behavior change:** Older versions hardcoded `region` to
+> `"us-east-1"`, which silently overrode `AWS_DEFAULT_REGION` env
+> values. Consumers that set `AWS_DEFAULT_REGION` will now have it
+> honored; consumers that explicitly pass `region: "us-east-1"` see
+> no change.
+
 ### Basic Configuration
 ```python
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
-db = S3Database.from_config({
+# Region omitted → boto's default chain resolves it.
+db = SyncS3Database.from_config({
     "bucket": "my-data-bucket",
     "prefix": "records/",
-    "region": "us-east-1"
+})
+
+# Or pin explicitly:
+db = SyncS3Database.from_config({
+    "bucket": "my-data-bucket",
+    "prefix": "records/",
+    "region": "eu-west-1",
 })
 ```
 
@@ -35,10 +57,12 @@ db = S3Database.from_config({
 # config.yaml
 databases:
   - name: archive
-    class: dataknobs_data.backends.s3.S3Database
+    class: dataknobs_data.backends.s3.SyncS3Database
     bucket: ${S3_BUCKET}
     prefix: ${S3_PREFIX:data/}
-    region: ${AWS_REGION:us-east-1}
+    # Omit `region` to defer to boto's chain (AWS_DEFAULT_REGION,
+    # ~/.aws/config, IMDS, then us-east-1). Pin only when you need
+    # to override the deployment environment.
     endpoint_url: ${S3_ENDPOINT:}  # Empty for AWS
     max_workers: ${S3_MAX_WORKERS:10}
 ```

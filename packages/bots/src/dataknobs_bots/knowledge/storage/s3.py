@@ -12,13 +12,16 @@ import logging
 import mimetypes
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
+
 from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+
+if TYPE_CHECKING:
+    import boto3
 
 logger = logging.getLogger(__name__)
 
@@ -65,27 +68,44 @@ class S3KnowledgeBackend:
         self,
         bucket: str,
         prefix: str = "knowledge/",
-        region: str = "us-east-1",
+        region: str | None = None,
         endpoint_url: str | None = None,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
+        *,
+        session_config: S3SessionConfig | None = None,
     ) -> None:
         """Initialize the S3 backend.
 
         Args:
-            bucket: S3 bucket name
-            prefix: Key prefix for all objects (default: "knowledge/")
-            region: AWS region (default: "us-east-1")
-            endpoint_url: Custom endpoint URL (for S3-compatible services)
-            aws_access_key_id: AWS access key (optional, uses default chain)
-            aws_secret_access_key: AWS secret key (optional, uses default chain)
+            bucket: S3 bucket name.
+            prefix: Key prefix for all objects (default: ``"knowledge/"``).
+            region: AWS region. Defaults to ``None`` — boto's default
+                chain (``AWS_DEFAULT_REGION`` env, ``~/.aws/config``,
+                EC2/ECS instance metadata, then ``us-east-1`` as
+                terminal fallback) resolves the value. Note that
+                botocore reads ``AWS_DEFAULT_REGION``, not ``AWS_REGION``.
+            endpoint_url: Custom endpoint URL (for S3-compatible services).
+            aws_access_key_id: AWS access key (optional, uses default chain).
+            aws_secret_access_key: AWS secret key (optional, uses default chain).
+            aws_session_token: AWS session token for temporary credentials
+                (optional, uses default chain when unset).
+            session_config: Pre-built :class:`S3SessionConfig`. When
+                provided, it wins over the individual kwargs above —
+                useful for sharing one config across multiple backends.
         """
         self._bucket = bucket
         self._prefix = prefix.rstrip("/") + "/" if prefix else ""
-        self._region = region
-        self._endpoint_url = endpoint_url
-        self._aws_access_key_id = aws_access_key_id
-        self._aws_secret_access_key = aws_secret_access_key
+        if session_config is None:
+            session_config = S3SessionConfig(
+                region_name=region,
+                endpoint_url=endpoint_url,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+            )
+        self._session_config = session_config
         self._client: boto3.client | None = None
         self._initialized = False
 
@@ -93,37 +113,21 @@ class S3KnowledgeBackend:
     def from_config(cls, config: dict) -> S3KnowledgeBackend:
         """Create from configuration dict.
 
-        Args:
-            config: Configuration with bucket, prefix, region, endpoint_url keys
-
-        Returns:
-            New S3KnowledgeBackend instance
+        Accepts both ``region`` (legacy) and ``region_name``
+        (boto-native) keys, plus the canonical ``aws_*`` credential
+        keys. Routes through :meth:`S3SessionConfig.from_dict` so the
+        accepted shape stays in sync with the rest of dataknobs' S3
+        constructs.
         """
         return cls(
             bucket=config["bucket"],
             prefix=config.get("prefix", "knowledge/"),
-            region=config.get("region", "us-east-1"),
-            endpoint_url=config.get("endpoint_url"),
-            aws_access_key_id=config.get("aws_access_key_id"),
-            aws_secret_access_key=config.get("aws_secret_access_key"),
+            session_config=S3SessionConfig.from_dict(config),
         )
 
     async def initialize(self) -> None:
         """Initialize the S3 client and verify bucket access."""
-        boto_config = Config(
-            region_name=self._region,
-            retries={"max_attempts": 3, "mode": "standard"},
-        )
-
-        kwargs: dict = {"config": boto_config}
-        if self._endpoint_url:
-            kwargs["endpoint_url"] = self._endpoint_url
-        if self._aws_access_key_id:
-            kwargs["aws_access_key_id"] = self._aws_access_key_id
-        if self._aws_secret_access_key:
-            kwargs["aws_secret_access_key"] = self._aws_secret_access_key
-
-        self._client = boto3.client("s3", **kwargs)
+        self._client = create_boto3_s3_client(self._session_config)
 
         # Verify bucket exists
         try:

@@ -70,6 +70,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now connects to `dbB`, not `dbA`. Pre-Unreleased releases had
   briefly inverted this.
 
+#### Added
+- `S3SessionConfig` and `create_boto3_s3_client` in
+  `dataknobs_data.pooling.s3` — single canonical layer for boto3 /
+  aioboto3 S3 client construction. Used by `SyncS3Database`,
+  `AsyncS3Database` (via `S3PoolConfig.to_session_config()`), and
+  `S3KnowledgeBackend`. `S3SessionConfig.from_dict` accepts both
+  `region`/`region_name` and both legacy (`access_key_id`,
+  `max_workers`, `max_retries`) and canonical (`aws_access_key_id`,
+  `max_pool_connections`, `max_attempts`) key shapes so one config
+  dict feeds every S3 construct.
+
+#### Changed
+- **Behavior change:** `SyncS3Database` and `S3KnowledgeBackend` no
+  longer default `region` to `"us-east-1"`. Both now defer to
+  boto's resolution chain (`AWS_DEFAULT_REGION` env →
+  `~/.aws/config` → IMDS → `us-east-1` terminal fallback) when no
+  region is configured. Consumers who set `AWS_DEFAULT_REGION`
+  previously had it silently overridden — it is now honored.
+  Consumers explicitly passing `region: "us-east-1"` see no change.
+  Consumers with no AWS config anywhere still terminate at
+  `us-east-1` (boto's fallback), preserving existing behavior.
+- `S3PoolConfig.from_dict` now accepts `region` (in addition to
+  `region_name`), so the same config dict feeds sync and async S3
+  paths without rename.
+- `SyncS3Database._ensure_bucket_exists` now resolves the effective
+  region from `client.meta.region_name` when `region` is unset, so
+  bucket creation correctly applies `LocationConstraint` for
+  env-derived regions.
+- `S3SessionConfig.to_client_kwargs()` and `validate_s3_session`
+  automatically add `use_ssl=False` when `endpoint_url` starts with
+  `http://` (LocalStack, MinIO, dev S3-compatible servers),
+  preserving the previous `SyncS3Database` behavior. `https://`
+  endpoints leave `use_ssl` unset so boto's default (`True`) applies
+  — a slight tightening of the prior code, which set `use_ssl=False`
+  for *all* custom endpoints regardless of scheme. Callers can
+  override either case via
+  `extra_client_kwargs={"use_ssl": ...}`.
+
+#### Fixed
+- `validate_s3_session` no longer passes an empty `endpoint_url`
+  kwarg to boto when none is configured.
+
+### dataknobs-bots
+
+#### Added
+- `S3KnowledgeBackend` accepts a pre-built
+  `session_config: S3SessionConfig` kwarg for sharing a single S3
+  configuration across multiple backends.
+
+#### Changed
+- `S3KnowledgeBackend` `region` default flipped from `"us-east-1"`
+  to `None`; client routes through `create_boto3_s3_client`. See
+  `dataknobs-data` notes above for the behavior-change details and
+  migration guidance.
+- `S3KnowledgeBackend.from_config` accepts both `region` and
+  `region_name` keys (parity with `SyncS3Database` /
+  `AsyncS3Database`).
+
 
 ## Release - 2026-04-15
 

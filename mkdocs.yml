@@ -98,6 +98,7 @@ nav:
       - Advanced Features:
         - packages/data/async-pooling-quickstart.md
         - packages/data/async-pooling.md
+        - packages/data/s3-session.md
         - packages/data/hybrid-search.md
         - packages/data/dedup.md
         - packages/data/performance-tuning.md
