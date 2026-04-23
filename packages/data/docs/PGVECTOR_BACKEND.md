@@ -155,7 +155,7 @@ store = factory.create(
 )
 ```
 
-Default column names: `id`, `embedding`, `content`, `metadata`, `domain_id`, `document_id`, `chunk_index`, `created_at`
+Default column names: `id`, `embedding`, `content`, `metadata`, `domain_id`, `document_id`, `chunk_index`, `created_at`, `updated_at`
 
 ## Multi-tenant Usage
 
@@ -187,13 +187,15 @@ results = await store.search(
     query_vector,               # np.ndarray
     k=10,                       # Number of results
     filter=None,                # Metadata filter dict
-    include_metadata=True
+    include_metadata=True,
+    include_timestamps=False    # See "Timestamp Exposure" below
 )  # Returns list[tuple[id, score, metadata]]
 
 # Get vectors
 results = await store.get_vectors(
     ids,                        # list[str]
-    include_metadata=True
+    include_metadata=True,
+    include_timestamps=False    # See "Timestamp Exposure" below
 )  # Returns list[tuple[vector, metadata]]
 
 # Delete vectors
@@ -242,11 +244,63 @@ CREATE TABLE IF NOT EXISTS {schema}.{table_name} (
     content TEXT,
     embedding vector({dimensions}),
     metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
+## Upsert Semantics
+
+`add_vectors` performs an upsert on `ON CONFLICT (id)`. All content
+columns (`embedding`, `metadata`, `content`, `domain_id`,
+`document_id`, `chunk_index`) are refreshed from the new row,
+`updated_at` is set to `NOW()`, and `created_at` is **preserved** to
+retain the original insertion time. `update_metadata` also refreshes
+`updated_at = NOW()` — any write is a re-ingestion signal.
+
+## Schema Migration — `updated_at` Column
+
+When `auto_create_table=True` (the default), `initialize()` applies an
+idempotent migration that adds `updated_at TIMESTAMP` to pre-existing
+tables via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. The migration
+runs unconditionally on every `initialize()`, both after
+`CREATE TABLE IF NOT EXISTS` (no-op when the column is already
+present) and when the table pre-existed without the column.
+
+**Pre-existing rows retain `NULL` in `updated_at`** — an honest "not
+re-ingested since the column was added" signal — until the next
+upsert or `update_metadata` populates the column with `NOW()`. The
+column is added without a default in the `ADD COLUMN` step and then
+wired up with `ALTER COLUMN ... SET DEFAULT NOW()` in a second,
+catalog-only step, so Postgres does not rewrite the table to backfill
+legacy rows with a volatile default.
+
+### When `auto_create_table=False`
+
+Consumers who manage their own schema must apply the migration
+manually once, before pointing the store at an existing table:
+
+```sql
+ALTER TABLE <schema>.<table>
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+ALTER TABLE <schema>.<table>
+  ALTER COLUMN updated_at SET DEFAULT NOW();
+```
+
+Both statements are idempotent — safe to re-run.
+
+## Timestamp Exposure
+
+Pass `include_timestamps=True` to `get_vectors()` or `search()` to
+return `created_at` / `updated_at` (formatted per the configured
+`timestamps.format`) as `_created_at` / `_updated_at` keys in the
+result metadata. Pre-migration rows surface as `None` on
+`_updated_at`. See the [Vector Store Timestamp Exposure](vector-timestamps.md)
+shared concept doc for configuration, formats, collision policy, and
+cross-backend semantics.
+
 ## See Also
 
+- [Vector Store Timestamp Exposure](vector-timestamps.md)
 - [Vector Store Design](history/vector-implementation/VECTOR_STORE_DESIGN_V2.md)
 - [API Reference](API_REFERENCE.md)

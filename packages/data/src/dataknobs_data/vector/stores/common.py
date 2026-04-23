@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,6 +14,8 @@ from ..types import DistanceMetric
 
 if TYPE_CHECKING:
     import numpy as np
+
+
 
 
 class VectorStoreBase(ConfigurableBase):
@@ -34,6 +38,13 @@ class VectorStoreBase(ConfigurableBase):
         self._parse_common_config()
         self._parse_backend_config()
         self._initialized = False
+        # Per-instance set of configured timestamp keys for which a
+        # collision warning has already been emitted. Lives on the
+        # instance (not module scope) so lifetime matches the store —
+        # avoids the CPython id() reuse hazard where a new store could
+        # inherit a dead store's warning state at the same memory
+        # address.
+        self._timestamp_collision_warned: set[str] = set()
 
     def _parse_common_config(self) -> None:
         """Parse common configuration parameters.
@@ -73,6 +84,27 @@ class VectorStoreBase(ConfigurableBase):
 
         # Store any additional metadata
         self.metadata = self.config.get("metadata", {})
+
+        # Timestamp exposure config (Item 36). All vector stores expose
+        # created_at / updated_at metadata via include_timestamps=True
+        # on get_vectors() and search(). Backends that don't natively
+        # persist timestamps (MVS, FAISS) track them in-process. Format
+        # and key names are configurable; defaults are consistent
+        # across backends so runtime-swap produces identical metadata
+        # surfaces.
+        ts_cfg = self.config.get("timestamps", {})
+        self.timestamps_format: str = ts_cfg.get("format", "iso")
+        if self.timestamps_format not in ("iso", "epoch", "datetime"):
+            raise ValueError(
+                "timestamps.format must be 'iso', 'epoch', or 'datetime'; "
+                f"got {self.timestamps_format!r}"
+            )
+        self.timestamps_created_key: str = ts_cfg.get(
+            "created_key", "_created_at"
+        )
+        self.timestamps_updated_key: str = ts_cfg.get(
+            "updated_key", "_updated_at"
+        )
 
     def _parse_backend_config(self) -> None:
         """Parse backend-specific configuration.
@@ -235,6 +267,81 @@ class VectorStoreBase(ConfigurableBase):
                 filtered.append((item_id, metadata))
 
         return filtered
+
+    def _format_timestamp(self, dt: datetime | None) -> Any:
+        """Format a timestamp per the configured ``timestamps.format``.
+
+        Supported formats:
+
+        * ``"iso"`` — ISO-8601 string (e.g. ``"2026-04-22T14:23:45.123456+00:00"``)
+        * ``"epoch"`` — seconds since epoch as a ``float``
+        * ``"datetime"`` — native ``datetime`` object
+
+        Returns ``None`` when input is ``None`` (e.g. a pgvector row
+        with ``updated_at IS NULL`` from pre-migration data or an
+        MVS/FAISS legacy pickle without tracked timestamps).
+        """
+        if dt is None:
+            return None
+        if self.timestamps_format == "datetime":
+            return dt
+        if self.timestamps_format == "iso":
+            return dt.isoformat()
+        if self.timestamps_format == "epoch":
+            # .timestamp() on naive datetimes treats as local time; on
+            # aware datetimes uses the tzinfo. Documented as backend-
+            # dependent — pgvector uses naive server time, MVS/FAISS
+            # use aware UTC.
+            return dt.timestamp()
+        # Unreachable — validated in _parse_common_config.
+        raise ValueError(
+            f"Unknown timestamps.format: {self.timestamps_format!r}"
+        )
+
+    def _inject_timestamps(
+        self,
+        meta: dict[str, Any] | None,
+        created: datetime | None,
+        updated: datetime | None,
+    ) -> dict[str, Any]:
+        """Return a new dict with timestamp keys injected.
+
+        Uses the configured ``timestamps_created_key`` /
+        ``timestamps_updated_key`` as the injection keys and
+        ``_format_timestamp`` for the values.
+
+        Collision policy: if ``meta`` already contains one of the
+        configured keys, the consumer's value wins and framework
+        injection for that key is skipped. A WARNING is logged once
+        per store instance per colliding key (tracked on the instance,
+        so warning state is GC'd with the store).
+
+        Args:
+            meta: Consumer metadata (may be ``None``).
+            created: Created timestamp from the backend (may be ``None``).
+            updated: Updated timestamp from the backend (may be ``None``).
+
+        Returns:
+            New dict — never mutates the input.
+        """
+        result: dict[str, Any] = dict(meta) if meta else {}
+        for key, value in (
+            (self.timestamps_created_key, created),
+            (self.timestamps_updated_key, updated),
+        ):
+            if key in result:
+                if key not in self._timestamp_collision_warned:
+                    self._timestamp_collision_warned.add(key)
+                    logging.getLogger(__name__).warning(
+                        "VectorStore timestamp injection skipped — "
+                        "consumer metadata already contains key %r. "
+                        "Rename via timestamps.created_key / "
+                        "timestamps.updated_key config to avoid collision.",
+                        key,
+                    )
+                continue
+            result[key] = self._format_timestamp(value)
+        return result
 
     def __repr__(self) -> str:
         """String representation."""

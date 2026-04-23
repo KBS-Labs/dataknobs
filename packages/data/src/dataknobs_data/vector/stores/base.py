@@ -58,13 +58,18 @@ class VectorStore(ABC, VectorStoreBase):
         self,
         ids: list[str],
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[np.ndarray, dict[str, Any] | None]]:
         """Retrieve vectors by ID.
-        
+
         Args:
             ids: Vector IDs to retrieve
             include_metadata: Whether to include metadata
-            
+            include_timestamps: When True, inject ``_created_at`` and
+                ``_updated_at`` (or configured keys) into each returned
+                metadata dict, formatted per ``timestamps.format``
+                config. Silently no-op when ``include_metadata=False``.
+
         Returns:
             List of (vector, metadata) tuples
         """
@@ -89,15 +94,20 @@ class VectorStore(ABC, VectorStoreBase):
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
         """Search for similar vectors.
-        
+
         Args:
             query_vector: Query vector
             k: Number of results
             filter: Optional metadata filter
             include_metadata: Whether to include metadata
-            
+            include_timestamps: When True, inject ``_created_at`` and
+                ``_updated_at`` (or configured keys) into each returned
+                metadata dict, formatted per ``timestamps.format``
+                config. Silently no-op when ``include_metadata=False``.
+
         Returns:
             List of (id, score, metadata) tuples
         """

@@ -106,6 +106,7 @@ nav:
         - packages/data/validation.md
         - packages/data/pandas-integration.md
         - packages/data/grounded-sources.md
+        - packages/data/vector-timestamps.md
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md
