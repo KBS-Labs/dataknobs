@@ -131,6 +131,72 @@ is fully drained. Consumers that `break` out of the stream early skip
 `process_response` (the scoped middleware is still detached correctly);
 use `complete()` or drain the stream if you rely on that behavior.
 
+#### Persisting Middleware Audit Data
+
+Middleware writes to `response.metadata` are **ephemeral by default** —
+they live on the `LLMResponse` for this call but do not flow to the
+persisted assistant conversation node. To opt in to persistence, write
+into the `_persist` sub-dictionary:
+
+```python
+class CitationAuditMiddleware(ConversationMiddleware):
+    async def process_response(self, response, state):
+        if response.metadata is None:
+            response.metadata = {}
+        # `_persist` is the single opt-in gate for persistence.
+        persist = response.metadata.setdefault("_persist", {})
+        persist["citation_audit"] = self._outcome
+        return response
+```
+
+Keys inside `_persist` are merged into the assistant node's metadata by
+`ConversationManager._finalize_completion` — `_persist` itself is not
+propagated. Canonical framework fields (`usage`, `model`, `provider`,
+`finish_reason`, cost, config overrides) and the caller's `metadata=`
+kwarg win on key conflict; non-dict `_persist` values are skipped with a
+WARNING log.
+
+To persist keys written as **flat** `response.metadata` entries by a
+provider or an existing middleware (e.g. an Ollama-style provider's
+`eval_duration`, `RateLimitMiddleware`'s `rate_limit_count`) without
+modifying the writer's source, use `PromoteToPersistMiddleware` at
+position `[0]` of the `middleware` list:
+
+```python
+from dataknobs_llm.conversations import (
+    PromoteToPersistMiddleware,
+    RateLimitMiddleware,
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    middleware=[
+        # Position-[0] = runs LAST on response, after other middleware
+        # have written their flat keys. Place the promoter at position
+        # [0] so it captures those writes. Provider writes are already
+        # in response.metadata before any middleware runs, so position
+        # is irrelevant for provider-sourced keys.
+        PromoteToPersistMiddleware(keys=[
+            "rate_limit_count",
+            "eval_duration",
+        ]),
+        RateLimitMiddleware(max_requests=10, window_seconds=60),
+    ],
+)
+```
+
+The promoter uses `setdefault` into `_persist`, so a same-named key
+already written by a native `_persist` writer takes precedence over
+passive promotion. (Native-vs-native `_persist` collisions instead
+follow onion ordering — the outer middleware's write wins.)
+
+For one-shot promotion on a single call, register the promoter via
+`manager.scoped_middleware(PromoteToPersistMiddleware(keys=[...]))`
+instead of adding it to the permanent `middleware=[...]` list.
+
+See `packages/llm/docs/USER_GUIDE.md` for the full contract.
+
 ## Detailed Documentation
 
 For comprehensive conversation management documentation:

@@ -61,6 +61,7 @@ from dataknobs_llm.conversations.middleware import (
     ValidationMiddleware,
     MetadataMiddleware,
     RateLimitMiddleware,
+    PromoteToPersistMiddleware,
     RateLimitError,
 )
 
@@ -86,6 +87,7 @@ __all__ = [
     "ValidationMiddleware",
     "MetadataMiddleware",
     "RateLimitMiddleware",
+    "PromoteToPersistMiddleware",
     "RateLimitError",
 
     # Helper functions
