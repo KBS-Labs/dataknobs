@@ -201,11 +201,7 @@ class MemoryVectorStore(VectorStore):
             # Apply metadata filter
             if filter:
                 meta = self.metadata_store.get(vector_id, {})
-                match = all(
-                    meta.get(key) == value
-                    for key, value in filter.items()
-                )
-                if not match:
+                if not self._match_metadata_filter(meta, filter):
                     continue
 
             candidates.append((vector_id, vector))
@@ -281,11 +277,7 @@ class MemoryVectorStore(VectorStore):
         count = 0
         for vector_id in self.vectors:
             meta = self.metadata_store.get(vector_id, {})
-            match = all(
-                meta.get(key) == value
-                for key, value in filter.items()
-            )
-            if match:
+            if self._match_metadata_filter(meta, filter):
                 count += 1
 
         return count

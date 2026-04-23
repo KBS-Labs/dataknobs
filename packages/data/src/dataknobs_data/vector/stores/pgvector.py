@@ -200,6 +200,89 @@ class PgVectorStore(VectorStore):
         """Get the actual column name for a logical field name."""
         return self.columns.get(name, name)
 
+    def _build_jsonb_filter_sql(
+        self,
+        filter: dict[str, Any],
+        start_param: int,
+        col_metadata: str,
+    ) -> tuple[list[str], list[Any], int]:
+        """Translate a filter dict into JSONB-native WHERE clauses.
+
+        Encodes each filter value as ``jsonb`` and uses the ``@>``
+        containment operator. ``@>`` is type-preserving (booleans stay
+        booleans, numbers stay numbers).
+
+        Each filter element ``v`` is emitted as a *pair* of
+        ``@>`` checks ORed together:
+
+        * ``metadata @> {key: v}`` — matches when the stored value at
+          ``key`` is scalar-equal to ``v``.
+        * ``metadata @> {key: [v]}`` — matches when the stored value at
+          ``key`` is an array containing ``v``. Postgres ``@>`` requires
+          shape-matching at the leaf, so the array form is the only way
+          to express "scalar appears as element of stored array."
+
+        Together this covers the four quadrants matching
+        ``VectorStoreBase._match_metadata_filter``:
+
+        * ``scalar`` filter, ``scalar`` metadata — first form.
+        * ``scalar`` filter, ``list`` metadata — second form.
+        * ``list`` filter, ``scalar`` metadata — OR-of-per-element first
+          form (reduces to ``IN``).
+        * ``list`` filter, ``list`` metadata — OR-of-per-element second
+          form (reduces to non-empty intersection).
+
+        The filter key is bound as a parameter (not inlined into the
+        SQL string) so untrusted dict keys cannot break out of the
+        identifier. ``jsonb_build_object`` is safe against injection
+        for both key and value.
+
+        Args:
+            filter: Key/value filter dict. Values are scalars or lists.
+            start_param: First $N placeholder index to use (1-based,
+                per asyncpg/libpq convention).
+            col_metadata: Fully-qualified or column-aliased metadata
+                column reference (e.g. ``"metadata"``).
+
+        Returns:
+            ``(where_clauses, params, next_param_idx)``.
+        """
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        idx = start_param
+
+        def _element_clause(filter_key: str, v: Any) -> str:
+            nonlocal idx
+            scalar_clause = (
+                f"{col_metadata} @> jsonb_build_object("
+                f"${idx}::text, ${idx + 1}::jsonb)"
+            )
+            params.append(filter_key)
+            params.append(json.dumps(v))
+            idx += 2
+            array_clause = (
+                f"{col_metadata} @> jsonb_build_object("
+                f"${idx}::text, jsonb_build_array(${idx + 1}::jsonb))"
+            )
+            params.append(filter_key)
+            params.append(json.dumps(v))
+            idx += 2
+            return f"({scalar_clause} OR {array_clause})"
+
+        for key, value in filter.items():
+            if isinstance(value, list):
+                if not value:
+                    # Empty-list filter never matches under
+                    # four-quadrant semantics (intersection with the
+                    # empty set is empty). Emit a false predicate.
+                    where_clauses.append("FALSE")
+                    continue
+                or_parts = [_element_clause(key, v) for v in value]
+                where_clauses.append("(" + " OR ".join(or_parts) + ")")
+            else:
+                where_clauses.append(_element_clause(key, value))
+        return where_clauses, params, idx
+
     async def _exec_with_id_type_guard(
         self,
         conn: asyncpg.Connection,
@@ -921,12 +1004,16 @@ class PgVectorStore(VectorStore):
             params.append(self.domain_id)
             param_idx += 1
 
-        # Add metadata filters
+        # Add metadata filters — JSONB-native via @> containment.
+        # See _build_jsonb_filter_sql for four-quadrant semantics.
         if filter:
-            for key, value in filter.items():
-                where_clauses.append(f"{col_metadata}->>'{key}' = ${param_idx}")
-                params.append(str(value))
-                param_idx += 1
+            filter_clauses, filter_params, param_idx = (
+                self._build_jsonb_filter_sql(
+                    filter, param_idx, col_metadata
+                )
+            )
+            where_clauses.extend(filter_clauses)
+            params.extend(filter_params)
 
         where_sql = ""
         if where_clauses:
@@ -1030,10 +1117,13 @@ class PgVectorStore(VectorStore):
             param_idx += 1
 
         if filter:
-            for key, value in filter.items():
-                where_clauses.append(f"{col_metadata}->>'{key}' = ${param_idx}")
-                params.append(str(value))
-                param_idx += 1
+            filter_clauses, filter_params, param_idx = (
+                self._build_jsonb_filter_sql(
+                    filter, param_idx, col_metadata
+                )
+            )
+            where_clauses.extend(filter_clauses)
+            params.extend(filter_params)
 
         where_sql = ""
         if where_clauses:

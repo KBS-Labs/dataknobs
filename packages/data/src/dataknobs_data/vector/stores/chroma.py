@@ -203,6 +203,64 @@ class ChromaVectorStore(VectorStore):
 
         return 0
 
+    @staticmethod
+    def _filter_is_unsatisfiable(filter: dict[str, Any] | None) -> bool:
+        """Return True when ``filter`` can never match any record.
+
+        A filter element with an empty-list value rejects everything
+        under four-quadrant semantics (intersection with the empty set
+        is empty). Used at every Chroma read entry point — ``search``,
+        ``search_documents``, ``count`` — to short-circuit before
+        Chroma is touched, avoiding a pointless ``k * 4`` over-fetch
+        that would be entirely rejected by the post-filter.
+
+        The optimization is Chroma-specific: Memory/FAISS post-filter
+        only (no over-fetch), and pgvector emits ``FALSE`` in SQL so
+        Postgres short-circuits the scan itself.
+        """
+        if not filter:
+            return False
+        return any(isinstance(v, list) and not v for v in filter.values())
+
+    def _partition_filter_for_chroma(
+        self, filter: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Split filter into (native_where, python_postfilter).
+
+        Chroma's metadata match operates on scalar metadata fields
+        only. For list-valued metadata, ``$eq`` returns zero rows — a
+        real bug for consumers whose metadata carries tag/category/
+        domain lists. This helper partitions the filter so:
+
+        * Scalar filter values: **not** pushed into Chroma ``$eq``
+          (which would mis-match list metadata). Kept for Python-side
+          post-filtering via ``_match_metadata_filter``. Chroma still
+          ranks the top-k by similarity — we only relax the metadata
+          gate.
+        * List filter values: pushed as ``$in`` (correct for both
+          scalar and list metadata on Chroma's side — returns a
+          superset that post-filter narrows to non-empty-intersection
+          semantics).
+
+        An empty/``None`` filter returns ``(None, {})``.
+        """
+        if not filter:
+            return None, {}
+        native: dict[str, Any] = {}
+        post: dict[str, Any] = {}
+        for key, value in filter.items():
+            if isinstance(value, list):
+                # Empty-list filter never matches under four-quadrant
+                # semantics. Drop the native predicate (Chroma's $in
+                # rejects empty lists) and let the post-filter — which
+                # also rejects empty-list filters — narrow to nothing.
+                if value:
+                    native[key] = {"$in": value}
+                post[key] = value
+            else:
+                post[key] = value
+        return (native or None), post
+
     async def search(
         self,
         query_vector: np.ndarray,
@@ -218,45 +276,63 @@ class ChromaVectorStore(VectorStore):
         if hasattr(query_vector, "tolist"):
             query_vector = query_vector.tolist()
 
-        # Build where clause for metadata filtering
-        where = None
-        if filter:
-            # Chroma uses a different filter syntax
-            # Convert simple key-value filter to Chroma format
-            where = {}
-            for key, value in filter.items():
-                if isinstance(value, list):
-                    where[key] = {"$in": value}
-                else:
-                    where[key] = {"$eq": value}
+        if self._filter_is_unsatisfiable(filter):
+            return []
 
-        # Search
+        where, post_filter = self._partition_filter_for_chroma(filter or {})
+
+        # Over-fetch when post-filtering: the native ``where`` is looser
+        # than the effective filter, so naive ``n_results=k`` may return
+        # zero post-filter matches. 4x is a pragmatic default; not made
+        # configurable in this item.
+        over_k = k * 4 if post_filter else k
+
+        # Always fetch metadata when post-filtering (we need it for the
+        # Python-side check) even if the caller didn't ask for it.
+        need_metadata = include_metadata or bool(post_filter)
+        include = ["metadatas", "distances"] if need_metadata else ["distances"]
+
         results = self.collection.query(
             query_embeddings=[query_vector],
-            n_results=k,
+            n_results=over_k,
             where=where,
-            include=["metadatas", "distances"] if include_metadata else ["distances"]
+            include=include,
         )
 
-        # Convert results
-        search_results = []
+        search_results: list[tuple[str, float, dict[str, Any] | None]] = []
         if results["ids"] and len(results["ids"]) > 0:
             ids = results["ids"][0]
-            distances = results["distances"][0] if results.get("distances") else [0] * len(ids)
-            metadatas = results["metadatas"][0] if include_metadata and results.get("metadatas") else [None] * len(ids)
+            distances = (
+                results["distances"][0]
+                if results.get("distances")
+                else [0] * len(ids)
+            )
+            metadatas = (
+                results["metadatas"][0]
+                if need_metadata and results.get("metadatas")
+                else [None] * len(ids)
+            )
 
-            for id_val, distance, metadata in zip(ids, distances, metadatas, strict=False):
-                # Convert distance to similarity score
+            for id_val, distance, metadata in zip(
+                ids, distances, metadatas, strict=False
+            ):
+                if post_filter and not self._match_metadata_filter(
+                    metadata, post_filter
+                ):
+                    continue
+
                 if self.metric == DistanceMetric.COSINE:
-                    # Chroma returns cosine distance (1 - similarity)
                     score = 1.0 - distance
                 elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-                    # Convert distance to similarity
                     score = 1.0 / (1.0 + distance)
                 else:
                     score = float(distance)
 
-                search_results.append((id_val, score, metadata))
+                search_results.append(
+                    (id_val, score, metadata if include_metadata else None)
+                )
+                if len(search_results) >= k:
+                    break
 
         return search_results
 
@@ -292,34 +368,38 @@ class ChromaVectorStore(VectorStore):
         return 0
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
-        """Count vectors in the collection."""
+        """Count vectors in the collection.
+
+        Uses ``collection.get(where=...)`` to enumerate matching
+        metadata and post-filter through ``_match_metadata_filter``.
+        Replaces the previous dummy-vector query path which was capped
+        at one result and therefore fundamentally wrong as a count.
+
+        Trade-off: for very large collections this materializes all
+        matching metadata in process. A first-class filtered-count API
+        is a Chroma upstream limitation. See
+        ``VECTOR_FILTER_SEMANTICS.md`` for details.
+        """
         if not self._initialized:
             await self.initialize()
 
         if filter is None:
-            # Get total count
             return self.collection.count()
 
-        # Count with filter
-        where = {}
-        for key, value in filter.items():
-            if isinstance(value, list):
-                where[key] = {"$in": value}
-            else:
-                where[key] = {"$eq": value}
+        if self._filter_is_unsatisfiable(filter):
+            return 0
 
-        # Query with limit 1 to get count efficiently
-        results = self.collection.query(
-            query_embeddings=[[0.0] * self.dimensions],  # Dummy query
-            n_results=1,
-            where=where,
-            include=[]
+        where, post_filter = self._partition_filter_for_chroma(filter)
+
+        result = self.collection.get(where=where, include=["metadatas"])
+        metadatas = result.get("metadatas") or []
+        if not post_filter:
+            return len(metadatas)
+        return sum(
+            1
+            for m in metadatas
+            if self._match_metadata_filter(m, post_filter)
         )
-
-        # The actual count would need a different approach
-        # For now, return the number of results (limited approach)
-        # In production, you might want to maintain counts separately
-        return len(results["ids"][0]) if results["ids"] else 0
 
     async def metadata_fields(self) -> set[str]:
         """Discover metadata field names across all stored vectors."""
@@ -386,35 +466,49 @@ class ChromaVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        # Build where clause
-        where = None
-        if filter:
-            where = {}
-            for key, value in filter.items():
-                if isinstance(value, list):
-                    where[key] = {"$in": value}
-                else:
-                    where[key] = {"$eq": value}
+        if self._filter_is_unsatisfiable(filter):
+            return []
 
-        # Query with text
+        where, post_filter = self._partition_filter_for_chroma(filter or {})
+
+        over_k = k * 4 if post_filter else k
+
+        # Always need metadata when post-filtering — caller-visible
+        # surface still respects include_metadata.
         results = self.collection.query(
             query_texts=[query_text],
-            n_results=k,
+            n_results=over_k,
             where=where,
-            include=["documents", "metadatas", "distances"]
+            include=["documents", "metadatas", "distances"],
         )
 
-        # Convert results
-        search_results = []
+        search_results: list[tuple[str, float, str, dict[str, Any] | None]] = []
         if results["ids"] and len(results["ids"]) > 0:
             ids = results["ids"][0]
             distances = results["distances"][0]
-            documents = results["documents"][0] if results.get("documents") else [None] * len(ids)
-            metadatas = results["metadatas"][0] if include_metadata and results.get("metadatas") else [None] * len(ids)
+            documents = (
+                results["documents"][0]
+                if results.get("documents")
+                else [None] * len(ids)
+            )
+            metadatas = (
+                results["metadatas"][0]
+                if results.get("metadatas")
+                else [None] * len(ids)
+            )
 
-            for id_val, distance, doc, metadata in zip(ids, distances, documents, metadatas, strict=False):
-                # Convert distance to similarity score
+            for id_val, distance, doc, metadata in zip(
+                ids, distances, documents, metadatas, strict=False
+            ):
+                if post_filter and not self._match_metadata_filter(
+                    metadata, post_filter
+                ):
+                    continue
                 score = 1.0 - distance  # Cosine distance to similarity
-                search_results.append((id_val, score, doc, metadata))
+                search_results.append(
+                    (id_val, score, doc, metadata if include_metadata else None)
+                )
+                if len(search_results) >= k:
+                    break
 
         return search_results

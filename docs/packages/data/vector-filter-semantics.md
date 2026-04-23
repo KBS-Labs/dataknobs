@@ -1,0 +1,1 @@
+--8<-- "packages/data/docs/VECTOR_FILTER_SEMANTICS.md"

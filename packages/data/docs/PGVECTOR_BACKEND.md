@@ -221,6 +221,31 @@ created = await store.create_index(
 await store.close()
 ```
 
+## Metadata Filters
+
+`search()` and `count()` accept a `filter: dict[str, Any] | None` that
+is translated to JSONB-native predicates using `jsonb_build_object`
+and the `@>` containment operator. Booleans, numbers, and lists are
+type-preserved — the prior text-cast translation
+(`metadata->>'key' = '...'`) silently returned zero rows for these
+types.
+
+```python
+# Stored: {"type": "tension", "tags": ["urgent"], "active": True, "count": 5}
+
+await store.search(q, k=10, filter={"type": "tension"})  # scalar EQ
+await store.search(q, k=10, filter={"tags": "urgent"})   # in list
+await store.search(q, k=10, filter={"type": ["tension", "gap"]})  # IN
+await store.search(q, k=10, filter={"tags": ["urgent", "later"]}) # intersection
+await store.count(filter={"active": True})   # → 1   (boolean roundtrip)
+await store.count(filter={"count": 5})       # → 1   (numeric roundtrip)
+await store.count(filter={"count": "5"})     # → 0   (no implicit coercion)
+```
+
+See [Vector Store Metadata Filter Semantics](vector-filter-semantics.md)
+for the canonical four-quadrant table, per-backend implementation
+notes, and constraints (hashability, flat shape, follow-ups).
+
 ## Distance Metrics
 
 | Metric | pgvector Op | Score Conversion |

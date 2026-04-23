@@ -283,18 +283,16 @@ class FaissVectorStore(VectorStore):
             # Get external ID
             ext_id = reverse_id_map.get(internal_id, str(internal_id))
 
-            # Apply metadata filter if provided
-            metadata = self.metadata_store.get(internal_id) if include_metadata else None
-            if filter and metadata:
-                # Simple key-value matching
-                match = all(
-                    metadata.get(key) == value
-                    for key, value in filter.items()
-                )
-                if not match:
-                    continue
+            # Apply metadata filter if provided. Fetch metadata even
+            # when not returning it to the caller so the filter can be
+            # evaluated post-top-k.
+            metadata = self.metadata_store.get(internal_id)
+            if filter and not self._match_metadata_filter(metadata, filter):
+                continue
 
-            results.append((ext_id, score, metadata))
+            results.append(
+                (ext_id, score, metadata if include_metadata else None)
+            )
 
         return results
 
@@ -327,11 +325,7 @@ class FaissVectorStore(VectorStore):
         # Count with filter
         count = 0
         for metadata in self.metadata_store.values():
-            match = all(
-                metadata.get(key) == value
-                for key, value in filter.items()
-            )
-            if match:
+            if self._match_metadata_filter(metadata, filter):
                 count += 1
 
         return count

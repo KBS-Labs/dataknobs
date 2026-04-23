@@ -243,30 +243,73 @@ class VectorStoreBase(ConfigurableBase):
 
         return cast("np.ndarray", vector)
 
-    def _apply_metadata_filter(self, candidates: list[tuple[Any, dict]], filter: dict[str, Any]) -> list[tuple[Any, dict]]:
-        """Apply metadata filter to candidates.
-        
-        Args:
-            candidates: List of (id, metadata) tuples
-            filter: Filter criteria as key-value pairs
-            
-        Returns:
-            Filtered list of candidates
+    def _match_metadata_filter(
+        self,
+        metadata: dict[str, Any] | None,
+        filter: dict[str, Any],
+    ) -> bool:
+        """Check whether a record's metadata satisfies every filter key.
+
+        Per-key semantics:
+
+        * ``scalar`` filter, ``scalar`` metadata — equality.
+        * ``scalar`` filter, ``list`` metadata — membership (is the
+          scalar in the list?).
+        * ``list`` filter, ``scalar`` metadata — IN (is the scalar any
+          filter element?).
+        * ``list`` filter, ``list`` metadata — non-empty intersection.
+
+        A missing metadata key fails the filter (``None`` is treated as
+        absence). All keys must match (AND across keys). An empty
+        filter dict matches everything.
+
+        Elements of list filter values and list metadata values must be
+        hashable. Nested dicts or lists are unsupported; consumers
+        storing such values should compose a separate filter source.
+        A ``TypeError`` from ``set()`` propagates as caller error.
+        """
+        if not filter:
+            return True
+        if metadata is None:
+            return False
+        for key, filter_val in filter.items():
+            meta_val = metadata.get(key)
+            if meta_val is None:
+                return False
+            filter_is_list = isinstance(filter_val, list)
+            meta_is_list = isinstance(meta_val, list)
+            if filter_is_list and meta_is_list:
+                if not set(filter_val).intersection(meta_val):
+                    return False
+            elif filter_is_list:
+                if meta_val not in filter_val:
+                    return False
+            elif meta_is_list:
+                if filter_val not in meta_val:
+                    return False
+            else:
+                if meta_val != filter_val:
+                    return False
+        return True
+
+    def _apply_metadata_filter(
+        self,
+        candidates: list[tuple[Any, dict]],
+        filter: dict[str, Any],
+    ) -> list[tuple[Any, dict]]:
+        """Apply metadata filter to (id, metadata) candidate tuples.
+
+        Delegates to ``_match_metadata_filter`` for the per-record
+        decision. Retained as a separate method because the filter +
+        candidate-list shape is convenient for post-hoc filtering paths.
         """
         if not filter:
             return candidates
-
-        filtered = []
-        for item_id, metadata in candidates:
-            # Check if all filter conditions match
-            match = all(
-                metadata.get(key) == value
-                for key, value in filter.items()
-            )
-            if match:
-                filtered.append((item_id, metadata))
-
-        return filtered
+        return [
+            (item_id, metadata)
+            for item_id, metadata in candidates
+            if self._match_metadata_filter(metadata, filter)
+        ]
 
     def _format_timestamp(self, dt: datetime | None) -> Any:
         """Format a timestamp per the configured ``timestamps.format``.
