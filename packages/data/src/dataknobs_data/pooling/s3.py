@@ -84,19 +84,19 @@ class S3SessionConfig:
     def to_boto_config_kwargs(self) -> dict[str, Any]:
         """Return kwargs for ``botocore.config.Config(...)``.
 
-        ``region_name`` is omitted when unset so boto's default chain
-        can resolve it.
+        Only retry / pool-connection settings belong here. ``region_name``
+        is carried on the client kwargs (see :meth:`to_client_kwargs`)
+        rather than ``BotoConfig`` to avoid passing it through both
+        channels — the direct client kwarg wins, so the ``BotoConfig``
+        copy was dead weight.
         """
-        kwargs: dict[str, Any] = {
+        return {
             "retries": {
                 "max_attempts": self.max_attempts,
                 "mode": self.retry_mode,
             },
             "max_pool_connections": self.max_pool_connections,
         }
-        if self.region_name:
-            kwargs["region_name"] = self.region_name
-        return kwargs
 
     def to_client_kwargs(self) -> dict[str, Any]:
         """Return kwargs for ``boto3.client('s3', ...)`` / aioboto3 client.
@@ -188,21 +188,24 @@ class S3PoolConfig(BasePoolConfig):
     def from_dict(cls, config: dict) -> S3PoolConfig:
         """Create from configuration dictionary.
 
-        Accepts both ``region`` (legacy) and ``region_name`` (boto-native)
-        for the region field; ``region_name`` wins when both are present.
+        Delegates to :meth:`S3SessionConfig.from_dict` for all shared
+        session fields (credentials, region, endpoint) so legacy and
+        canonical aliases stay consistent across sync and async paths.
+        Only ``bucket`` and ``prefix`` are pool-specific.
         """
         bucket = config.get("bucket")
         if bucket is None:
             raise ValueError("S3 bucket configuration is required")
 
+        sess = S3SessionConfig.from_dict(config)
         return cls(
             bucket=bucket,
             prefix=config.get("prefix", ""),
-            region_name=config.get("region_name") or config.get("region"),
-            aws_access_key_id=config.get("aws_access_key_id"),
-            aws_secret_access_key=config.get("aws_secret_access_key"),
-            aws_session_token=config.get("aws_session_token"),
-            endpoint_url=config.get("endpoint_url"),
+            region_name=sess.region_name,
+            aws_access_key_id=sess.aws_access_key_id,
+            aws_secret_access_key=sess.aws_secret_access_key,
+            aws_session_token=sess.aws_session_token,
+            endpoint_url=sess.endpoint_url,
         )
 
     def to_session_config(self) -> S3SessionConfig:
@@ -254,17 +257,35 @@ async def create_aioboto3_session(
     return aioboto3.Session(**session_kwargs)
 
 
-async def validate_s3_session(session: Any, config: S3PoolConfig) -> None:
+async def validate_s3_session(
+    session: Any,
+    bucket: str,
+    config: S3PoolConfig | S3SessionConfig | None = None,
+) -> None:
     """Validate an S3 session by checking bucket access.
+
+    ``bucket`` is passed separately since it is not part of the shared
+    session layer (``S3SessionConfig`` has no bucket field). ``config``
+    is optional and supplies only endpoint-shaping — credentials and
+    region live on the session object itself. Accepts either an
+    :class:`S3PoolConfig` or an :class:`S3SessionConfig`; the former is
+    projected onto the session shape internally, matching the pattern
+    used by :func:`create_aioboto3_session`.
 
     Omits ``endpoint_url`` from client kwargs when none is configured
     (so we don't pass an empty-string override to boto), and adds
     ``use_ssl=False`` when the endpoint uses plain ``http://`` so the
     behavior matches the sync ``create_boto3_s3_client`` path.
     """
+    sess_cfg: S3SessionConfig | None
+    if isinstance(config, S3PoolConfig):
+        sess_cfg = config.to_session_config()
+    else:
+        sess_cfg = config
+
     client_kwargs: dict[str, Any] = {}
-    if config.endpoint_url:
-        client_kwargs["endpoint_url"] = config.endpoint_url
-        client_kwargs.update(_use_ssl_for_endpoint(config.endpoint_url))
+    if sess_cfg is not None and sess_cfg.endpoint_url:
+        client_kwargs["endpoint_url"] = sess_cfg.endpoint_url
+        client_kwargs.update(_use_ssl_for_endpoint(sess_cfg.endpoint_url))
     async with session.client("s3", **client_kwargs) as s3:
-        await s3.head_bucket(Bucket=config.bucket)
+        await s3.head_bucket(Bucket=bucket)

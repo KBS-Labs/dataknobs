@@ -12,14 +12,16 @@ import logging
 import mimetypes
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
-import boto3
 from botocore.exceptions import ClientError
 
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 
 from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+
+if TYPE_CHECKING:
+    import boto3
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,7 @@ class S3KnowledgeBackend:
         endpoint_url: str | None = None,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
+        aws_session_token: str | None = None,
         *,
         session_config: S3SessionConfig | None = None,
     ) -> None:
@@ -86,6 +89,8 @@ class S3KnowledgeBackend:
             endpoint_url: Custom endpoint URL (for S3-compatible services).
             aws_access_key_id: AWS access key (optional, uses default chain).
             aws_secret_access_key: AWS secret key (optional, uses default chain).
+            aws_session_token: AWS session token for temporary credentials
+                (optional, uses default chain when unset).
             session_config: Pre-built :class:`S3SessionConfig`. When
                 provided, it wins over the individual kwargs above —
                 useful for sharing one config across multiple backends.
@@ -98,6 +103,7 @@ class S3KnowledgeBackend:
                 endpoint_url=endpoint_url,
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
             )
         self._session_config = session_config
         self._client: boto3.client | None = None

@@ -148,6 +148,18 @@ def test_to_boto_config_kwargs_omits_region_when_none() -> None:
     assert kwargs["retries"] == {"max_attempts": 3, "mode": "standard"}
 
 
+def test_to_boto_config_kwargs_never_includes_region_name() -> None:
+    """``region_name`` belongs on the client kwargs, not ``BotoConfig``.
+
+    Passing it via both channels is redundant — the direct client
+    kwarg wins, so the ``BotoConfig`` copy is dead weight. This test
+    locks in that ``to_boto_config_kwargs`` never emits it, even when
+    the session config has a region set.
+    """
+    kwargs = S3SessionConfig(region_name="eu-west-1").to_boto_config_kwargs()
+    assert "region_name" not in kwargs
+
+
 def test_extra_client_kwargs_passthrough() -> None:
     cfg = S3SessionConfig.from_dict({"extra_client_kwargs": {"verify": False}})
     assert cfg.to_client_kwargs() == {"verify": False}
@@ -247,6 +259,29 @@ def test_pool_config_from_dict_accepts_both_region_keys() -> None:
     assert cfg_native.region_name == "eu-west-1"
 
 
+def test_pool_config_from_dict_accepts_legacy_credential_keys() -> None:
+    """``S3PoolConfig.from_dict`` must honor short-form credential keys.
+
+    Without this, a config dict using ``access_key_id`` / etc. would
+    work for ``SyncS3Database`` (which routes through
+    ``S3SessionConfig.from_dict``) but silently drop credentials on
+    the async path (``AsyncS3Database``, which routes through
+    ``S3PoolConfig.from_dict``) — violating the module-level
+    sync/async alignment contract.
+    """
+    cfg = S3PoolConfig.from_dict(
+        {
+            "bucket": "b",
+            "access_key_id": "AK",
+            "secret_access_key": "SK",
+            "session_token": "ST",
+        }
+    )
+    assert cfg.aws_access_key_id == "AK"
+    assert cfg.aws_secret_access_key == "SK"
+    assert cfg.aws_session_token == "ST"
+
+
 # ---------------------------------------------------------------------------
 # validate_s3_session — omit empty endpoint_url
 # ---------------------------------------------------------------------------
@@ -298,13 +333,15 @@ async def test_validate_s3_session_kwarg_shaping() -> None:
             return _client_cm(**kwargs)
 
     # Case 1: no endpoint_url
-    await validate_s3_session(_Session(), S3PoolConfig(bucket="b"))
+    await validate_s3_session(_Session(), "b", S3PoolConfig(bucket="b"))
     assert "endpoint_url" not in captured_kwargs
     assert "use_ssl" not in captured_kwargs
 
     # Case 2: https:// endpoint — use_ssl left to boto default
     await validate_s3_session(
-        _Session(), S3PoolConfig(bucket="b", endpoint_url="https://example.com")
+        _Session(),
+        "b",
+        S3PoolConfig(bucket="b", endpoint_url="https://example.com"),
     )
     assert captured_kwargs.get("endpoint_url") == "https://example.com"
     assert "use_ssl" not in captured_kwargs
@@ -312,7 +349,23 @@ async def test_validate_s3_session_kwarg_shaping() -> None:
     # Case 3: http:// endpoint — use_ssl forced False
     await validate_s3_session(
         _Session(),
+        "b",
         S3PoolConfig(bucket="b", endpoint_url="http://localhost:4566"),
     )
     assert captured_kwargs.get("endpoint_url") == "http://localhost:4566"
     assert captured_kwargs.get("use_ssl") is False
+
+    # Case 4: S3SessionConfig (no bucket on the config itself) — bucket
+    # comes from the explicit arg, endpoint shaping from the session.
+    await validate_s3_session(
+        _Session(),
+        "b",
+        S3SessionConfig(endpoint_url="http://localhost:4566"),
+    )
+    assert captured_kwargs.get("endpoint_url") == "http://localhost:4566"
+    assert captured_kwargs.get("use_ssl") is False
+
+    # Case 5: config=None → bucket-only HEAD with no endpoint overrides.
+    await validate_s3_session(_Session(), "b")
+    assert "endpoint_url" not in captured_kwargs
+    assert "use_ssl" not in captured_kwargs

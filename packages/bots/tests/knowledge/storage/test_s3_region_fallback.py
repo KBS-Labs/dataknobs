@@ -169,3 +169,22 @@ async def test_initialize_succeeds_with_no_aws_config() -> None:
         assert backend._client is not None
         assert backend._client.meta.region_name == "us-east-1"
         await backend.close()
+
+
+def test_aws_session_token_kwarg_threads_through_to_session_config() -> None:
+    """``aws_session_token`` kwarg must flow into the underlying session config.
+
+    Prior to exposing it on ``__init__``, callers with temporary
+    credentials had to drop down to ``session_config=`` to pass a
+    session token — an interface gap relative to the other credential
+    kwargs (``aws_access_key_id``, ``aws_secret_access_key``).
+    """
+    backend = S3KnowledgeBackend(
+        bucket="token-bucket",
+        aws_access_key_id="AK",
+        aws_secret_access_key="SK",
+        aws_session_token="ST",
+    )
+    assert backend._session_config.aws_access_key_id == "AK"
+    assert backend._session_config.aws_secret_access_key == "SK"
+    assert backend._session_config.aws_session_token == "ST"
