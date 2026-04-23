@@ -185,6 +185,43 @@ patterns:
             with pytest.raises(IngestionConfigError, match="Failed to load"):
                 KnowledgeBaseConfig.load(tmpdir)
 
+    def test_load_from_metadata_subdirectory_fallback(self):
+        """Fallback: load from ``_metadata/knowledge_base.*`` when
+        the directory root has no config file.
+
+        Symmetric with the backend-side lookup in
+        ``RAGKnowledgeBase._load_kb_config_from_backend`` — a corpus
+        should load the same way whether its config is co-located
+        with documents or segregated under ``_metadata/``.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            metadata_dir = root / "_metadata"
+            metadata_dir.mkdir()
+            with open(metadata_dir / "knowledge_base.json", "w") as f:
+                json.dump({"name": "meta-kb"}, f)
+
+            config = KnowledgeBaseConfig.load(root)
+            assert config.name == "meta-kb"
+
+    def test_load_root_config_takes_precedence_over_metadata(self):
+        """Root-level config wins when both root and ``_metadata/``
+        contain a config file — matches the candidate order in
+        ``_find_config_file``.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with open(root / "knowledge_base.json", "w") as f:
+                json.dump({"name": "root-kb"}, f)
+
+            metadata_dir = root / "_metadata"
+            metadata_dir.mkdir()
+            with open(metadata_dir / "knowledge_base.json", "w") as f:
+                json.dump({"name": "meta-kb"}, f)
+
+            config = KnowledgeBaseConfig.load(root)
+            assert config.name == "root-kb"
+
     def test_get_pattern_config_matches(self):
         """Test pattern matching for files."""
         config = KnowledgeBaseConfig(
@@ -277,11 +314,13 @@ class TestProcessedDocument:
         """Test creating a processed document."""
         doc = ProcessedDocument(
             source_file="/path/to/file.md",
+            source_path="file.md",
             document_type="markdown",
             chunks=[{"text": "Hello", "chunk_index": 0}],
             metadata={"source": "file.md"},
         )
         assert doc.source_file == "/path/to/file.md"
+        assert doc.source_path == "file.md"
         assert doc.document_type == "markdown"
         assert doc.chunk_count == 1
         assert doc.has_errors is False
@@ -290,6 +329,7 @@ class TestProcessedDocument:
         """Test chunk count property."""
         doc = ProcessedDocument(
             source_file="test.md",
+            source_path="test.md",
             document_type="markdown",
             chunks=[{"text": f"Chunk {i}"} for i in range(5)],
         )
@@ -299,6 +339,7 @@ class TestProcessedDocument:
         """Test error detection property."""
         doc_no_errors = ProcessedDocument(
             source_file="test.md",
+            source_path="test.md",
             document_type="markdown",
             chunks=[],
         )
@@ -306,6 +347,7 @@ class TestProcessedDocument:
 
         doc_with_errors = ProcessedDocument(
             source_file="test.md",
+            source_path="test.md",
             document_type="markdown",
             chunks=[],
             errors=["Failed to parse"],

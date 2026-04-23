@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import IO, Any, Iterator, Literal
 
 # Patterns for detecting technical/non-text fields
 UUID_PATTERN = re.compile(
@@ -149,8 +149,10 @@ class JSONChunker:
 
     def stream_chunks(
         self,
-        source: str | Path,
+        source: str | Path | IO[str] | IO[bytes],
         timeout: int = 10,
+        is_jsonl: bool | None = None,
+        source_file: str | None = None,
     ) -> Iterator[JSONChunk]:
         """Stream chunks from large JSON files without loading into memory.
 
@@ -160,23 +162,52 @@ class JSONChunker:
         - JSON arrays: Each top-level element becomes a chunk source
         - JSONL files: Each line is a complete JSON object
         - Compressed files: .gz files auto-detected and decompressed
+          (only when ``source`` is a path; file-like sources must be
+          pre-decompressed by the caller)
         - URLs: Remote JSON fetched with streaming
+        - File-like objects: any object with a ``read()`` method is
+          streamed forward-sequentially; ``is_jsonl`` is required to
+          select JSONL vs JSON-array parsing.
 
         Args:
-            source: File path, URL, or JSON string
-            timeout: Request timeout for URLs (seconds)
+            source: File path, URL, JSON string, or file-like object.
+            timeout: Request timeout for URLs (seconds).
+            is_jsonl: Override automatic JSONL detection. Ignored when
+                ``source`` is a path or URL (detection uses the
+                extension). Required when ``source`` is a file-like
+                object; defaults to ``False`` (JSON array) when omitted.
+            source_file: Logical identifier attached to emitted chunks
+                as ``source_file``. When ``source`` is a path, defaults
+                to the path string; when ``source`` is file-like,
+                defaults to an empty string.
 
         Yields:
-            JSONChunk objects as they are processed
+            JSONChunk objects as they are processed.
         """
-        source_str = str(source)
         self._chunk_index = 0
 
-        # Detect format and process accordingly
-        if self._is_jsonl_file(source_str):
-            yield from self._stream_jsonl(source_str)
+        if hasattr(source, "read") and callable(source.read):  # type: ignore[union-attr]
+            jsonl = bool(is_jsonl)
+            source_label = source_file or ""
+            if jsonl:
+                yield from self._stream_jsonl(source, source_file=source_label)
+            else:
+                yield from self._stream_json_array(
+                    source, timeout, source_file=source_label
+                )
+            return
+
+        source_str = str(source)
+        source_label = source_file if source_file is not None else source_str
+        jsonl = (
+            is_jsonl if is_jsonl is not None else self._is_jsonl_file(source_str)
+        )
+        if jsonl:
+            yield from self._stream_jsonl(source_str, source_file=source_label)
         else:
-            yield from self._stream_json_array(source_str, timeout)
+            yield from self._stream_json_array(
+                source_str, timeout, source_file=source_label
+            )
 
     def _is_jsonl_file(self, source: str) -> bool:
         """Check if source is a JSONL file based on extension."""
@@ -188,38 +219,70 @@ class JSONChunker:
             or lower.endswith(".ndjson.gz")
         )
 
-    def _stream_jsonl(self, source: str) -> Iterator[JSONChunk]:
-        """Stream from a JSONL file (one JSON object per line)."""
+    def _stream_jsonl(
+        self,
+        source: str | IO[str] | IO[bytes],
+        source_file: str | None = None,
+    ) -> Iterator[JSONChunk]:
+        """Stream from a JSONL file or file-like object.
+
+        One JSON object per line. Path sources auto-decompress
+        ``.gz``; file-like sources are consumed as-is (callers
+        pre-decompress).
+        """
         import gzip
 
-        source_path = Path(source)
+        label = source_file if source_file is not None else (
+            source if isinstance(source, str) else ""
+        )
 
-        # Handle gzip
+        if hasattr(source, "read") and callable(source.read):  # type: ignore[union-attr]
+            yield from self._iter_jsonl_lines(source, label)  # type: ignore[arg-type]
+            return
+
+        source_str = str(source)
+        source_path = Path(source_str)
+
         def open_gzip(p: Path) -> Any:
             return gzip.open(p, "rt", encoding="utf-8")
 
         def open_text(p: Path) -> Any:
             return open(p, encoding="utf-8")
 
-        opener = open_gzip if source.lower().endswith(".gz") else open_text
+        opener = open_gzip if source_str.lower().endswith(".gz") else open_text
 
         with opener(source_path) as f:
-            for line_num, line in enumerate(f):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                    if isinstance(item, dict):
-                        yield self._process_item(
-                            item,
-                            source_path=f"[{line_num}]",
-                            source_file=source,
-                        )
-                except json.JSONDecodeError:
-                    continue  # Skip malformed lines
+            yield from self._iter_jsonl_lines(f, label)
 
-    def _stream_json_array(self, source: str, timeout: int) -> Iterator[JSONChunk]:
+    def _iter_jsonl_lines(
+        self,
+        stream: IO[str] | IO[bytes],
+        source_label: str,
+    ) -> Iterator[JSONChunk]:
+        """Yield chunks from each non-empty JSONL line in ``stream``."""
+        for line_num, raw in enumerate(stream):
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                yield self._process_item(
+                    item,
+                    source_path=f"[{line_num}]",
+                    source_file=source_label,
+                )
+
+    def _stream_json_array(
+        self,
+        source: str | IO[str] | IO[bytes],
+        timeout: int,
+        source_file: str | None = None,
+    ) -> Iterator[JSONChunk]:
         """Stream from a JSON array file using json_utils infrastructure."""
         try:
             from dataknobs_utils.json_utils import (
@@ -231,8 +294,17 @@ class JSONChunker:
             )
         except ImportError:
             # Fall back to loading entire file if streaming utils not available
-            yield from self._fallback_load(source)
+            if isinstance(source, (str, Path)):
+                yield from self._fallback_load(str(source))
+            else:
+                label = source_file if source_file is not None else ""
+                data = json.load(source)
+                yield from self.chunk(data, source=label)
             return
+
+        label = source_file if source_file is not None else (
+            source if isinstance(source, str) else ""
+        )
 
         # Use PathSorter to group paths into records
         sorter = PathSorter(
@@ -265,7 +337,7 @@ class JSONChunker:
                                 yield self._process_item(
                                     item,
                                     source_path=f".{root_key}[{idx}]",
-                                    source_file=source,
+                                    source_file=label,
                                 )
 
     def _fallback_load(self, source: str) -> Iterator[JSONChunk]:

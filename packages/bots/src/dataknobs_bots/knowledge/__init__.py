@@ -2,43 +2,12 @@
 
 from typing import Any
 
-from .base import KnowledgeBase
-from .rag import RAGKnowledgeBase
-from .retrieval import (
-    ChunkMerger,
-    ContextFormatter,
-    FormatterConfig,
-    MergedChunk,
-    MergerConfig,
+# Re-export hybrid search types
+from dataknobs_data.vector.hybrid import (
+    FusionStrategy,
+    HybridSearchConfig,
+    HybridSearchResult,
 )
-from .query import (
-    ContextualExpander,
-    Message,
-    QueryTransformer,
-    TransformerConfig,
-    create_transformer,
-    is_ambiguous_query,
-)
-from .storage import (
-    create_knowledge_backend,
-    FileKnowledgeBackend,
-    IngestionStatus,
-    InMemoryKnowledgeBackend,
-    KnowledgeBaseInfo,
-    KnowledgeFile,
-    KnowledgeResourceBackend,
-)
-from .ingestion import (
-    IngestionResult,
-    KnowledgeIngestionManager,
-)
-from .service import (
-    EnsureIngestionResult,
-    KnowledgeIngestionService,
-    ensure_knowledge_base_ingested,
-    get_ingestion_service,
-)
-from .registry_mixin import AutoIngestionMixin
 
 # Re-export ingestion types for convenience
 from dataknobs_xization.ingestion import (
@@ -48,11 +17,43 @@ from dataknobs_xization.ingestion import (
     ProcessedDocument,
 )
 
-# Re-export hybrid search types
-from dataknobs_data.vector.hybrid import (
-    FusionStrategy,
-    HybridSearchConfig,
-    HybridSearchResult,
+from .base import KnowledgeBase
+from .ingestion import (
+    IngestionResult,
+    KnowledgeIngestionManager,
+)
+from .orchestration import IngestOrchestrator
+from .query import (
+    ContextualExpander,
+    Message,
+    QueryTransformer,
+    TransformerConfig,
+    create_transformer,
+    is_ambiguous_query,
+)
+from .rag import RAGKnowledgeBase
+from .registry_mixin import AutoIngestionMixin
+from .retrieval import (
+    ChunkMerger,
+    ContextFormatter,
+    FormatterConfig,
+    MergedChunk,
+    MergerConfig,
+)
+from .service import (
+    EnsureIngestionResult,
+    KnowledgeIngestionService,
+    ensure_knowledge_base_ingested,
+    get_ingestion_service,
+)
+from .storage import (
+    FileKnowledgeBackend,
+    IngestionStatus,
+    InMemoryKnowledgeBackend,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+    KnowledgeResourceBackend,
+    create_knowledge_backend,
 )
 
 __all__ = [
@@ -85,6 +86,8 @@ __all__ = [
     # Ingestion manager (file-backend to vector-store)
     "KnowledgeIngestionManager",
     "IngestionResult",
+    # Event-driven orchestration
+    "IngestOrchestrator",
     # High-level ingestion service
     "KnowledgeIngestionService",
     "EnsureIngestionResult",

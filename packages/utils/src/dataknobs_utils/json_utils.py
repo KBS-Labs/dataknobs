@@ -11,7 +11,7 @@ import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Dict, List, Set, TextIO, Tuple, Union
+from typing import IO, Any, Dict, List, Set, TextIO, Tuple, Union
 
 import json_stream.requests
 import pandas as pd
@@ -103,23 +103,29 @@ def get_value(
 
 
 def stream_json_data(
-    json_data: str,
+    json_data: Union[str, IO[str], IO[bytes]],
     visitor_fn: Callable[[Any, Tuple[Any, ...]], None],
     timeout: int = TIMEOUT,
 ) -> None:
     """Stream JSON data and call a visitor function for each value.
 
-    Supports multiple input formats: file paths (including .gz), URLs, or JSON strings.
-    Automatically detects and handles gzip-compressed files.
+    Supports multiple input formats: file paths (including .gz), URLs, JSON strings,
+    or file-like objects. Automatically detects and handles gzip-compressed files.
 
     Args:
         json_data: The JSON data source - can be a file path, URL (starting with
-            'http'), or JSON string.
+            'http'), JSON string, or any file-like object with a ``read()`` method.
+            File-like objects are passed directly to the streaming parser; callers
+            are responsible for gzip decompression if the bytes are compressed.
         visitor_fn: Function called for each JSON value with signature
             visitor_fn(item, path) where item is the value and path is a tuple
             of elements identifying the path to the item.
         timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
+    # File-like: forward-sequential stream — pass through directly.
+    if hasattr(json_data, "read") and callable(json_data.read):  # type: ignore[union-attr]
+        json_stream.visit(json_data, visitor_fn)
+        return
     if os.path.exists(json_data):
         if dk_futils.is_gzip_file(json_data):
             with gzip.open(json_data, "rt", encoding="utf-8") as f:

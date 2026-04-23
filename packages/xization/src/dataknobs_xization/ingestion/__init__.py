@@ -14,6 +14,12 @@ from dataknobs_xization.ingestion.processor import (
     ProcessedDocument,
     process_directory,
 )
+from dataknobs_xization.ingestion.source import (
+    BackendDocumentSource,
+    DocumentFileRef,
+    DocumentSource,
+    LocalDocumentSource,
+)
 
 __all__ = [
     # Config
@@ -24,4 +30,9 @@ __all__ = [
     "DirectoryProcessor",
     "ProcessedDocument",
     "process_directory",
+    # Source
+    "BackendDocumentSource",
+    "DocumentFileRef",
+    "DocumentSource",
+    "LocalDocumentSource",
 ]

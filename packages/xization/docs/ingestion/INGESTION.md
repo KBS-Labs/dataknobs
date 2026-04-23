@@ -2,12 +2,20 @@
 
 This module provides configuration and processing utilities for ingesting documents from directories into knowledge bases. It supports markdown, JSON, and JSONL files with configurable chunking, patterns, and metadata.
 
+The pipeline is **async-primary** and **storage-agnostic**. See
+[DirectoryProcessor](directory-processor.md) for the async API and
+[DocumentSource](document-source.md) for the protocol that lets it
+drive any storage backend (local, in-memory, S3).
+
 ## Overview
 
-The ingestion system consists of two main components:
+The ingestion system has three primary components:
 
 1. **KnowledgeBaseConfig**: Configuration for how documents should be processed
-2. **DirectoryProcessor**: Processes documents according to the configuration
+2. **DirectoryProcessor**: Async-primary processor (sync wrapper available)
+3. **DocumentSource**: Async protocol for file enumeration and reads —
+   decouples the processor from the local filesystem so the same
+   pipeline drives local directories, in-memory backends, and S3
 
 ## Key Features
 
@@ -17,6 +25,7 @@ The ingestion system consists of two main components:
 - **Streaming for large files**: JSONL files processed without loading into memory
 - **Automatic type detection**: Handles markdown, JSON, and JSONL automatically
 - **Document-level metadata**: Attach metadata to all chunks from a file
+- **Storage-agnostic**: Any `DocumentSource` — local, backend, custom
 
 ## Installation
 
@@ -430,6 +439,8 @@ for how to write and register custom chunkers and transforms.
 
 ## Related
 
+- [DirectoryProcessor](directory-processor.md) - Async-primary API
+- [DocumentSource](document-source.md) - Storage-agnostic protocol
 - [JSON Chunking](../json/JSON_CHUNKING.md) - JSON-specific chunking
 - [Markdown Chunking](../markdown/MARKDOWN_CHUNKING.md) - Markdown-specific chunking
 - [Quality Filtering](../markdown/RAG_QUALITY_FILTERING.md) - Filtering low-quality chunks
