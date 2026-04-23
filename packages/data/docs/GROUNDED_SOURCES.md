@@ -203,6 +203,8 @@ results = await source.query(intent)
 
 For each text query, `DatabaseSource` searches all configured `text_search_fields` for matching records. Structured filters from `intent.filters[source_name]` are also applied when present.
 
+`VectorKnowledgeSource` follows the same `intent.filters[source_name]` convention and forwards the dict to `RAGKnowledgeBase.query(filter_metadata=...)`, which the underlying `VectorStore` interprets per the four-quadrant semantics documented in [Vector Store Metadata Filter Semantics](vector-filter-semantics.md).
+
 #### Relevance Scoring
 
 `DatabaseSource` computes a term-coverage relevance score for each result rather than returning a flat 1.0. The score reflects what fraction of the query terms appear in the record's searchable fields:

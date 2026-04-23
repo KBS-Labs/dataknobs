@@ -333,6 +333,29 @@ for id, score, metadata in results:
     print(f"Content: {metadata.get('content', '')[:100]}...")
 ```
 
+Filters are translated to JSONB-native predicates using
+`jsonb_build_object` and the `@>` containment operator, preserving
+metadata types (booleans stay booleans, numbers stay numbers).
+Per-key match semantics:
+
+| Filter value | Metadata value | Match when |
+|---|---|---|
+| scalar | scalar | values are equal |
+| scalar | list | scalar appears in the list |
+| list | scalar | scalar is one of the filter elements |
+| list | list | the two lists have a non-empty intersection |
+
+```python
+await store.count(filter={"active": True})   # → 1   (boolean roundtrip)
+await store.count(filter={"count": 5})       # → 1   (numeric roundtrip)
+await store.count(filter={"count": "5"})     # → 0   (no implicit coercion)
+await store.search(q, k=10, filter={"tags": "urgent"})  # scalar in list
+```
+
+See [Vector Store Metadata Filter Semantics](vector-filter-semantics.md)
+for the canonical four-quadrant table, per-backend implementation
+notes, and constraints.
+
 ### Using with Context Manager
 
 ```python
