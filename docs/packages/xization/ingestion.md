@@ -1,13 +1,14 @@
 # Knowledge Base Ingestion
 
-The ingestion module provides configuration and processing utilities for loading documents from directories into knowledge bases.
+The ingestion module provides configuration and processing utilities for loading documents from directories into knowledge bases. The pipeline is **async-primary** and **storage-agnostic** — the same processor drives local directories, in-memory backends, and S3.
 
 ## Overview
 
 The ingestion system provides:
 
 - **KnowledgeBaseConfig**: Configuration for document processing
-- **DirectoryProcessor**: Processes documents according to configuration
+- **DirectoryProcessor**: Async-primary processor (sync wrapper available). See [DirectoryProcessor](ingestion/directory-processor.md).
+- **DocumentSource**: Async protocol that lets the processor drive any backend. See [DocumentSource](ingestion/document-source.md).
 - **Pattern matching**: Glob patterns for file selection
 - **Per-file configuration**: Different settings per file type
 
@@ -168,6 +169,8 @@ See [Chunking Abstraction](chunking-abstraction.md) for full details.
 
 ## Related
 
+- [DirectoryProcessor](ingestion/directory-processor.md) - Async-primary API
+- [DocumentSource](ingestion/document-source.md) - Storage-agnostic protocol
 - [Chunking Abstraction](chunking-abstraction.md) - Pluggable chunker selection
 - [JSON Chunking](json-chunking.md) - JSON-specific chunking
 - [Markdown Chunking](markdown-chunking.md) - Markdown-specific chunking

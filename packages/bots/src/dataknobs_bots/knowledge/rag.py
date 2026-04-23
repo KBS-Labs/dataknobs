@@ -1,8 +1,10 @@
 """RAG (Retrieval-Augmented Generation) knowledge base implementation."""
 
+import logging
 import types
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_xization import (
     ContentTransformer,
@@ -10,6 +12,7 @@ from dataknobs_xization import (
 )
 from dataknobs_xization.chunking.base import Chunker, DocumentInfo
 from dataknobs_xization.ingestion import (
+    BackendDocumentSource,
     DirectoryProcessor,
     KnowledgeBaseConfig,
 )
@@ -20,6 +23,11 @@ from dataknobs_bots.knowledge.retrieval import (
     FormatterConfig,
     MergerConfig,
 )
+
+if TYPE_CHECKING:
+    from dataknobs_bots.knowledge.storage.backend import KnowledgeResourceBackend
+
+logger = logging.getLogger(__name__)
 
 
 class RAGKnowledgeBase(KnowledgeBase):
@@ -398,7 +406,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         self,
         directory: str | Path,
         config: KnowledgeBaseConfig | None = None,
-        progress_callback: Any | None = None,
+        progress_callback: Callable[[str, int], None] | None = None,
     ) -> dict[str, Any]:
         """Load documents from a directory using KnowledgeBaseConfig.
 
@@ -439,109 +447,297 @@ class RAGKnowledgeBase(KnowledgeBase):
             print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")
             ```
         """
-        import numpy as np
-
         directory = Path(directory)
 
-        # Load or use provided config
         if config is None:
             config = KnowledgeBaseConfig.load(directory)
 
-        # Create processor, passing through the injected chunker (if any)
-        # so that load_from_directory respects the same chunker as
-        # load_markdown_text.
         processor = DirectoryProcessor(config, directory, chunker=self._chunker)
+        return await self._ingest_from_processor_async(
+            processor, progress_callback
+        )
 
-        # Track results
+    async def ingest_from_backend(
+        self,
+        backend: "KnowledgeResourceBackend",
+        domain_id: str,
+        config: KnowledgeBaseConfig | None = None,
+        progress_callback: Callable[[str, int], None] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Ingest documents from a :class:`KnowledgeResourceBackend`.
+
+        Equivalent to :meth:`load_from_directory` but drives the same
+        :class:`DirectoryProcessor` pipeline against any backend (local
+        :class:`FileKnowledgeBackend`, :class:`InMemoryKnowledgeBackend`,
+        :class:`S3KnowledgeBackend`). All ``KnowledgeBaseConfig``
+        richness — pattern-based chunking, exclude patterns,
+        per-pattern metadata, streaming JSON — applies.
+
+        When ``config`` is ``None``, looks for a config document in
+        the backend's ``domain_id`` namespace. The domain root is
+        checked first (``knowledge_base.(yaml|yml|json)``, matching the
+        local-corpus convention so a directory can be promoted to a
+        backend without relocation), then ``_metadata/knowledge_base.*``
+        as a fallback. Falls back to defaults when neither is found.
+
+        Args:
+            backend: Storage backend; must already be
+                :meth:`initialize`-d by the caller.
+            domain_id: Domain/KB identifier within the backend.
+            config: Optional :class:`KnowledgeBaseConfig`; see above
+                for resolution when omitted.
+            progress_callback: Optional ``callback(file_path: str,
+                num_chunks: int) -> None`` invoked after each
+                successfully-ingested document.
+            extra_metadata: Optional metadata dict merged into every
+                chunk's metadata (caller-provided entries win over
+                pattern-config / per-chunk entries). Used by
+                :class:`KnowledgeIngestionManager` to thread the
+                ``domain_id`` onto each chunk so that multi-tenant
+                consumers can filter on it at query time.
+
+        Returns:
+            Statistics dict matching :meth:`load_from_directory`:
+            ``{"total_files", "total_chunks", "files_by_type",
+            "errors", "documents"}``.
+        """
+        if config is None:
+            loaded = await self._load_kb_config_from_backend(backend, domain_id)
+            config = loaded if loaded is not None else KnowledgeBaseConfig(
+                name=domain_id
+            )
+
+        source = BackendDocumentSource(backend, domain_id)
+        processor = DirectoryProcessor(config, source, chunker=self._chunker)
+        return await self._ingest_from_processor_async(
+            processor, progress_callback, extra_metadata=extra_metadata
+        )
+
+    async def _load_kb_config_from_backend(
+        self,
+        backend: "KnowledgeResourceBackend",
+        domain_id: str,
+    ) -> KnowledgeBaseConfig | None:
+        """Read a KB config from the backend's domain namespace.
+
+        Checks the domain root first
+        (``knowledge_base.(yaml|yml|json)``), then falls back to the
+        ``_metadata/`` subdirectory. The domain-root location mirrors
+        the local-corpus convention used by
+        :meth:`KnowledgeBaseConfig.load`, so a user promoting a local
+        corpus to a backend doesn't have to relocate the file.
+        ``_metadata/`` remains supported for consumers that prefer to
+        keep metadata visually separated from content in the backend
+        namespace. Returns ``None`` when no config document is present.
+        When a file IS present but fails to parse or does not decode to
+        a dict, raises :class:`IngestionConfigError` so the failure is
+        loud — symmetric with the local-directory path.
+        """
+        import json as json_lib
+
+        from dataknobs_xization.ingestion.config import IngestionConfigError
+
+        for filename in (
+            "knowledge_base.yaml",
+            "knowledge_base.yml",
+            "knowledge_base.json",
+            "_metadata/knowledge_base.yaml",
+            "_metadata/knowledge_base.yml",
+            "_metadata/knowledge_base.json",
+        ):
+            data = await backend.get_file(domain_id, filename)
+            if data is None:
+                continue
+            try:
+                if filename.endswith(".json"):
+                    raw = json_lib.loads(data.decode("utf-8"))
+                else:
+                    try:
+                        import yaml
+                    except ImportError as e:
+                        raise IngestionConfigError(
+                            f"YAML config {filename} found in backend but "
+                            "PyYAML is not installed; install 'pyyaml' or "
+                            "use a .json config"
+                        ) from e
+                    raw = yaml.safe_load(data.decode("utf-8"))
+            except IngestionConfigError:
+                raise
+            except Exception as e:
+                raise IngestionConfigError(
+                    f"Failed to parse knowledge_base config {filename} "
+                    f"for domain {domain_id}: {e}"
+                ) from e
+            if not isinstance(raw, dict):
+                raise IngestionConfigError(
+                    f"knowledge_base config {filename} for domain "
+                    f"{domain_id} did not decode to a dict"
+                )
+            return KnowledgeBaseConfig.from_dict(raw, default_name=domain_id)
+        return None
+
+    async def _ingest_from_processor_async(
+        self,
+        processor: DirectoryProcessor,
+        progress_callback: Callable[[str, int], None] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Drive a :class:`DirectoryProcessor` and embed each chunk.
+
+        Shared implementation for :meth:`load_from_directory` and
+        :meth:`ingest_from_backend`. Iterates the processor's async
+        output and delegates per-file embed+store to
+        :meth:`_embed_and_store_chunks`. Each file is wrapped in its
+        own try/except so that a transient embed/add_vectors failure
+        on one document captures an error entry and lets the batch
+        continue — matching the pre-unification
+        ``KnowledgeIngestionManager._ingest_file`` semantics.
+        """
         results: dict[str, Any] = {
             "total_files": 0,
             "total_chunks": 0,
+            "files_skipped": 0,
             "files_by_type": {"markdown": 0, "json": 0, "jsonl": 0},
             "errors": [],
             "documents": [],
         }
 
-        # Process each document
-        for doc in processor.process():
+        async for doc in processor.process_async():
             doc_info: dict[str, Any] = {
                 "source": doc.source_file,
                 "type": doc.document_type,
                 "chunks": 0,
-                "errors": doc.errors,
+                "errors": list(doc.errors),
             }
 
             if doc.has_errors:
-                results["errors"].extend([
+                results["errors"].extend(
                     {"file": doc.source_file, "error": err}
                     for err in doc.errors
-                ])
+                )
                 results["documents"].append(doc_info)
                 continue
 
-            # Process chunks for this document
-            vectors = []
-            ids = []
-            metadatas = []
-
-            source_stem = Path(doc.source_file).stem
-
-            for chunk in doc.chunks:
-                # Get text for embedding
-                text_for_embedding = chunk.get("embedding_text") or chunk.get("text", "")
-
-                if not text_for_embedding:
-                    continue
-
-                # Generate embedding
-                embedding = await self.embedding_provider.embed(text_for_embedding)
-
-                # Convert to numpy if needed
-                if not isinstance(embedding, np.ndarray):
-                    embedding = np.array(embedding, dtype=np.float32)
-
-                # Build chunk ID
-                chunk_index = chunk.get("chunk_index", len(vectors))
-                chunk_id = f"{source_stem}_{chunk_index}"
-
-                # Build metadata
-                chunk_metadata = {
-                    "text": chunk.get("text", ""),
-                    "source": doc.source_file,
-                    "chunk_index": chunk_index,
-                    "document_type": doc.document_type,
-                }
-
-                # Add chunk-specific metadata
-                if "metadata" in chunk:
-                    chunk_metadata.update(chunk["metadata"])
-
-                # Add document-level metadata
+            try:
+                merged_metadata: dict[str, Any] = {}
                 if doc.metadata:
-                    for key, value in doc.metadata.items():
-                        if key not in chunk_metadata:
-                            chunk_metadata[key] = value
+                    merged_metadata.update(doc.metadata)
+                if extra_metadata:
+                    merged_metadata.update(extra_metadata)
 
-                vectors.append(embedding)
-                ids.append(chunk_id)
-                metadatas.append(chunk_metadata)
-
-            # Batch insert into vector store
-            if vectors:
-                await self.vector_store.add_vectors(
-                    vectors=vectors, ids=ids, metadata=metadatas
+                stored = await self._embed_and_store_chunks(
+                    chunks=doc.chunks,
+                    source_file=doc.source_file,
+                    document_type=doc.document_type,
+                    source_path=doc.source_path,
+                    metadata=merged_metadata or None,
                 )
+            except Exception as e:
+                logger.exception(
+                    "Failed to embed/store chunks for %s", doc.source_file
+                )
+                results["errors"].append(
+                    {"file": doc.source_file, "error": str(e)}
+                )
+                doc_info["errors"].append(str(e))
+                results["documents"].append(doc_info)
+                continue
 
-            doc_info["chunks"] = len(vectors)
+            doc_info["chunks"] = stored
             results["total_files"] += 1
-            results["total_chunks"] += len(vectors)
+            results["total_chunks"] += stored
             results["files_by_type"][doc.document_type] += 1
             results["documents"].append(doc_info)
 
-            # Call progress callback if provided
             if progress_callback:
-                progress_callback(doc.source_file, len(vectors))
+                progress_callback(doc.source_file, stored)
 
+        # DirectoryProcessor tallies config-file, excluded, and
+        # unsupported-extension skips during iteration — read it here
+        # so callers (e.g. KnowledgeIngestionManager) can report
+        # files_skipped in their own result types.
+        results["files_skipped"] = processor.files_skipped
         return results
+
+    async def _embed_and_store_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        source_file: str,
+        document_type: str,
+        source_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Embed chunk dicts and add them to the vector store.
+
+        Shared by :meth:`load_markdown_text` and
+        :meth:`_ingest_from_processor_async`. Chunks with empty
+        ``embedding_text`` and ``text`` are skipped.
+
+        Args:
+            chunks: Chunk dicts (``text``, ``embedding_text``,
+                ``chunk_index``, ``metadata``).
+            source_file: Display path written into each chunk's
+                ``"source"`` metadata field.
+            document_type: Written into each chunk's
+                ``"document_type"`` metadata field (``"markdown"``,
+                ``"json"``, ``"jsonl"``).
+            source_path: Optional source-relative path written into
+                each chunk's ``"source_path"`` metadata field.
+            metadata: Optional metadata merged into every chunk's
+                metadata; caller-provided entries win over per-chunk
+                fields. Used for pattern-level and ``domain_id``
+                injection.
+
+        Returns:
+            Number of chunks actually embedded and stored.
+        """
+        import numpy as np
+
+        vectors: list[Any] = []
+        ids: list[str] = []
+        metadatas: list[dict[str, Any]] = []
+
+        source_stem = Path(source_file).stem if source_file else "doc"
+
+        for i, chunk in enumerate(chunks):
+            text_for_embedding = chunk.get("embedding_text") or chunk.get(
+                "text", ""
+            )
+            if not text_for_embedding:
+                continue
+
+            embedding = await self.embedding_provider.embed(text_for_embedding)
+            if not isinstance(embedding, np.ndarray):
+                embedding = np.array(embedding, dtype=np.float32)
+
+            chunk_index = chunk.get("chunk_index", i)
+            chunk_id = f"{source_stem}_{chunk_index}"
+
+            chunk_metadata: dict[str, Any] = {
+                "text": chunk.get("text", ""),
+                "source": source_file,
+                "chunk_index": chunk_index,
+                "document_type": document_type,
+            }
+            if source_path is not None:
+                chunk_metadata["source_path"] = source_path
+            inner = chunk.get("metadata") or {}
+            if inner:
+                chunk_metadata.update(inner)
+            if metadata:
+                chunk_metadata.update(metadata)
+
+            vectors.append(embedding)
+            ids.append(chunk_id)
+            metadatas.append(chunk_metadata)
+
+        if vectors:
+            await self.vector_store.add_vectors(
+                vectors=vectors, ids=ids, metadata=metadatas
+            )
+
+        return len(vectors)
 
     async def load_markdown_text(
         self,
@@ -551,77 +747,52 @@ class RAGKnowledgeBase(KnowledgeBase):
     ) -> int:
         """Load markdown content from a string.
 
-        Parses, chunks, embeds, and stores the markdown text.  This is
-        the shared implementation used by :meth:`load_markdown_document`,
+        Parses, chunks, embeds, and stores the markdown text. Shared
+        implementation used by :meth:`load_markdown_document`,
         :meth:`load_json_document`, :meth:`load_yaml_document`, and
-        :meth:`load_csv_document`.
+        :meth:`load_csv_document`. Delegates embed+store to
+        :meth:`_embed_and_store_chunks` so ``load_from_directory`` and
+        ``ingest_from_backend`` share the same final stage.
 
         Args:
             markdown_text: Markdown content to load
             source: Source identifier for metadata
-            metadata: Optional metadata to attach to all chunks
+            metadata: Optional metadata merged into every chunk
+                (caller-provided entries win)
 
         Returns:
             Number of chunks created
         """
-        import numpy as np
-
-        # Chunk using the configured chunker
-        doc_info = DocumentInfo(
-            source=source,
-            metadata=metadata or {},
-        )
+        doc_info = DocumentInfo(source=source, metadata=metadata or {})
         chunks = self._chunker.chunk(markdown_text, doc_info)
 
-        # Process and store chunks
-        vectors = []
-        ids = []
-        metadatas = []
-
-        # Generate a base ID from source
-        source_stem = Path(source).stem if source else "doc"
-
+        chunk_dicts: list[dict[str, Any]] = []
         for i, chunk in enumerate(chunks):
-            # Use embedding_text if available, otherwise use chunk text
-            text_for_embedding = chunk.metadata.embedding_text or chunk.text
-
-            # Generate embedding
-            embedding = await self.embedding_provider.embed(text_for_embedding)
-
-            # Convert to numpy if needed
-            if not isinstance(embedding, np.ndarray):
-                embedding = np.array(embedding, dtype=np.float32)
-
-            # Prepare metadata with new fields
-            chunk_id = f"{source_stem}_{i}"
-            chunk_metadata = {
-                "text": chunk.text,
-                "source": source,
-                "chunk_index": i,
-                "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
-                "headings": chunk.metadata.headings,
-                "heading_levels": chunk.metadata.heading_levels,
-                "line_number": chunk.metadata.line_number,
-                "char_start": chunk.metadata.char_start,
-                "char_end": chunk.metadata.char_end,
-                "chunk_size": chunk.metadata.chunk_size,
-                "content_length": chunk.metadata.content_length,
-            }
-
-            # Merge with user metadata
-            if metadata:
-                chunk_metadata.update(metadata)
-
-            vectors.append(embedding)
-            ids.append(chunk_id)
-            metadatas.append(chunk_metadata)
-
-        # Batch insert into vector store
-        if vectors:
-            await self.vector_store.add_vectors(
-                vectors=vectors, ids=ids, metadata=metadatas
+            chunk_dicts.append(
+                {
+                    "text": chunk.text,
+                    "embedding_text": chunk.metadata.embedding_text or chunk.text,
+                    "chunk_index": i,
+                    "metadata": {
+                        "heading_path": chunk.metadata.heading_display
+                        or chunk.metadata.get_heading_path(),
+                        "headings": chunk.metadata.headings,
+                        "heading_levels": chunk.metadata.heading_levels,
+                        "line_number": chunk.metadata.line_number,
+                        "char_start": chunk.metadata.char_start,
+                        "char_end": chunk.metadata.char_end,
+                        "chunk_size": chunk.metadata.chunk_size,
+                        "content_length": chunk.metadata.content_length,
+                    },
+                }
             )
 
+        await self._embed_and_store_chunks(
+            chunks=chunk_dicts,
+            source_file=source,
+            document_type="markdown",
+            metadata=metadata,
+        )
         return len(chunks)
 
     async def query(

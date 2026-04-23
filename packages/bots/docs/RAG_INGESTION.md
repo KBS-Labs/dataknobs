@@ -78,7 +78,7 @@ async def load_from_directory(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `directory` | `str \| Path` | Directory path containing documents |
-| `config` | `KnowledgeBaseConfig \| None` | Configuration for processing. If None, loads from `knowledge_base.json/yaml` in directory or uses defaults |
+| `config` | `KnowledgeBaseConfig \| None` | Configuration for processing. If None, loads from `knowledge_base.(yaml\|yml\|json)` at the directory root, or from `_metadata/knowledge_base.*` as a fallback; uses defaults when no file is found |
 | `progress_callback` | `Callable \| None` | Optional callback `(file_path, num_chunks)` for progress tracking |
 
 ### Returns
@@ -189,6 +189,107 @@ async def load_with_batching(kb, directory: str, batch_size: int = 10):
     print(f"Complete: {results['total_files']} files, {results['total_chunks']} chunks")
     return results
 ```
+
+## ingest_from_backend()
+
+Ingest documents from a `KnowledgeResourceBackend` (file, in-memory, or
+S3). Drives the same `DirectoryProcessor` pipeline as
+`load_from_directory()`, so full `KnowledgeBaseConfig` richness
+(patterns, excludes, per-pattern chunking, streaming JSON) applies.
+
+### Method Signature
+
+```python
+async def ingest_from_backend(
+    self,
+    backend: "KnowledgeResourceBackend",
+    domain_id: str,
+    config: KnowledgeBaseConfig | None = None,
+    progress_callback: Callable[[str, int], None] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `backend` | `KnowledgeResourceBackend` | Storage backend; caller must `initialize()` it first |
+| `domain_id` | `str` | Domain / KB identifier within the backend |
+| `config` | `KnowledgeBaseConfig \| None` | Optional; see below for resolution |
+| `progress_callback` | `Callable[[str, int], None] \| None` | Invoked after each ingested file |
+| `extra_metadata` | `dict[str, Any] \| None` | Optional metadata merged onto every chunk; caller-provided keys win. Used by `KnowledgeIngestionManager` to thread `domain_id` onto chunks for multi-tenant filtering. |
+
+### Config Resolution
+
+When `config` is `None`, the method attempts to load a config document
+from the backend's domain namespace. Both the domain root and a
+`_metadata/` subdirectory are checked, in this order:
+
+1. `knowledge_base.yaml`
+2. `knowledge_base.yml`
+3. `knowledge_base.json`
+4. `_metadata/knowledge_base.yaml`
+5. `_metadata/knowledge_base.yml`
+6. `_metadata/knowledge_base.json`
+
+The domain-root location matches the local-corpus convention used by
+`load_from_directory`, so a corpus can be promoted from a local
+directory to a backend without relocating the config file. The
+`_metadata/` location is available for consumers that prefer to keep
+metadata visually separated from content.
+
+If no config document is found, defaults to
+`KnowledgeBaseConfig(name=domain_id)`. YAML configs require `PyYAML`
+to be installed. If a config file IS present but fails to parse,
+`ingest_from_backend` raises `IngestionConfigError` — symmetric with
+`load_from_directory`, which also fails loudly on a malformed config.
+
+### Example
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    create_knowledge_backend,
+)
+
+backend = create_knowledge_backend("s3", {
+    "bucket": "my-kb-bucket",
+    "prefix": "domains/",
+})
+await backend.initialize()
+
+# First-time setup only — skip if the KB already exists in the bucket.
+# Create the KB and upload documents (caller or upstream process):
+await backend.create_kb("my-domain")
+await backend.put_file("my-domain", "intro.md", b"# Intro\n...")
+# Optional: upload a _metadata/knowledge_base.yaml for pattern/chunking config.
+
+kb = await RAGKnowledgeBase.from_config(rag_config)
+stats = await kb.ingest_from_backend(backend, "my-domain")
+print(f"Ingested {stats['total_chunks']} chunks from {stats['total_files']} files")
+```
+
+### Return Value
+
+Same shape as `load_from_directory()`:
+
+```python
+{
+    "total_files": int,
+    "total_chunks": int,
+    "files_by_type": {"markdown": int, "json": int, "jsonl": int},
+    "errors": list[dict[str, Any]],
+    "documents": list[dict[str, Any]],
+}
+```
+
+### See Also
+
+- [Knowledge Base Ingestion Guide](knowledge/ingestion-guide.md) —
+  when to use each ingestion path
+- [IngestOrchestrator](knowledge/orchestrator.md) — event-driven
+  wrapper for `ingest_if_changed`
 
 ## load_markdown_text()
 
@@ -498,6 +599,9 @@ from dataknobs_bots.knowledge import (
     KnowledgeIngestionManager,
     IngestionResult,
 
+    # Event-driven orchestration
+    IngestOrchestrator,
+
     # Hybrid search types
     FusionStrategy,
     HybridSearchConfig,
@@ -622,6 +726,10 @@ else:
 
 ## Related
 
+- [Knowledge Base Ingestion Guide](knowledge/ingestion-guide.md) -
+  Three ingestion paths end-to-end (local / backend / event-driven)
+- [IngestOrchestrator](knowledge/orchestrator.md) - Event-driven
+  subscriber API
 - [RAG Retrieval](RAG_RETRIEVAL.md) - Chunk merging and formatting
 - [RAG Query](RAG_QUERY.md) - Query transformation and expansion
 - [User Guide](USER_GUIDE.md) - Complete bot usage guide

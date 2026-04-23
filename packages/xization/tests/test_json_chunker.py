@@ -394,6 +394,60 @@ class TestJSONChunkerStreaming:
         assert chunker._is_jsonl_file("data.json") is False
         assert chunker._is_jsonl_file("data.json.gz") is False
 
+    def test_stream_chunks_from_text_io_jsonl(self):
+        """File-like JSONL input matches path-based output."""
+        import io
+
+        body = '{"title": "First"}\n{"title": "Second"}\n'
+        chunker = JSONChunker()
+        chunks = list(
+            chunker.stream_chunks(
+                io.StringIO(body),
+                is_jsonl=True,
+                source_file="virtual.jsonl",
+            )
+        )
+        assert len(chunks) == 2
+        assert "First" in chunks[0].text
+        assert "Second" in chunks[1].text
+        # source_file hint propagates
+        assert all(c.source_file == "virtual.jsonl" for c in chunks)
+
+    def test_stream_chunks_from_bytes_io_jsonl(self):
+        """BytesIO via TextIOWrapper equivalent to StringIO."""
+        import io
+
+        body = b'{"title": "A"}\n{"title": "B"}\n'
+        chunker = JSONChunker()
+        wrapped = io.TextIOWrapper(io.BytesIO(body), encoding="utf-8")
+        try:
+            chunks = list(
+                chunker.stream_chunks(wrapped, is_jsonl=True)
+            )
+        finally:
+            wrapped.detach()
+        assert len(chunks) == 2
+        assert "A" in chunks[0].text
+        assert "B" in chunks[1].text
+
+    def test_stream_chunks_path_branch_unchanged(self):
+        """Regression guard: path-based dispatch still works."""
+        import tempfile
+
+        chunker = JSONChunker()
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".jsonl", delete=False
+        ) as f:
+            f.write('{"title": "One"}\n{"title": "Two"}\n')
+            temp_path = f.name
+        try:
+            chunks = list(chunker.stream_chunks(temp_path))
+            assert len(chunks) == 2
+            assert "One" in chunks[0].text
+            assert "Two" in chunks[1].text
+        finally:
+            Path(temp_path).unlink()
+
 
 class TestJSONChunkerTemplate:
     """Tests for template-based text generation."""

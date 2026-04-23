@@ -122,8 +122,13 @@ class KnowledgeBaseConfig:
     def load(cls, directory: str | Path) -> KnowledgeBaseConfig:
         """Load configuration from a directory.
 
-        Looks for `knowledge_base.yaml`, `knowledge_base.yml`, or
-        `knowledge_base.json` in the directory.
+        Looks for ``knowledge_base.yaml``, ``knowledge_base.yml``, or
+        ``knowledge_base.json`` at the directory root, then falls back
+        to the same filenames under a ``_metadata/`` subdirectory.
+        Symmetric with
+        :meth:`RAGKnowledgeBase._load_kb_config_from_backend` so a
+        corpus can be ingested from a local path or a
+        :class:`KnowledgeResourceBackend` with the same on-disk layout.
 
         Args:
             directory: Directory containing the config file
@@ -188,13 +193,25 @@ class KnowledgeBaseConfig:
     def _find_config_file(cls, directory: Path) -> Path | None:
         """Find the config file in a directory.
 
+        Checks the directory root first, then falls back to
+        ``_metadata/`` — symmetric with the backend-side lookup in
+        :meth:`RAGKnowledgeBase._load_kb_config_from_backend`.
+
         Args:
             directory: Directory to search
 
         Returns:
             Path to config file, or None if not found
         """
-        for name in ["knowledge_base.yaml", "knowledge_base.yml", "knowledge_base.json"]:
+        candidates = [
+            "knowledge_base.yaml",
+            "knowledge_base.yml",
+            "knowledge_base.json",
+            "_metadata/knowledge_base.yaml",
+            "_metadata/knowledge_base.yml",
+            "_metadata/knowledge_base.json",
+        ]
+        for name in candidates:
             path = directory / name
             if path.exists():
                 return path

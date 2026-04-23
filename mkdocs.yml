@@ -208,6 +208,9 @@ nav:
         - packages/bots/guides/bot-manager.md
         - packages/bots/guides/observability.md
         - packages/bots/guides/rag-ingestion.md
+        - Knowledge Base Ingestion:
+          - packages/bots/knowledge/ingestion-guide.md
+          - packages/bots/knowledge/orchestrator.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
         - packages/bots/guides/grounded-reasoning.md
@@ -255,7 +258,10 @@ nav:
         - packages/xization/quality-filtering.md
         - packages/xization/heading-enrichment.md
       - packages/xization/json-chunking.md
-      - packages/xization/ingestion.md
+      - Ingestion:
+        - packages/xization/ingestion.md
+        - packages/xization/ingestion/directory-processor.md
+        - packages/xization/ingestion/document-source.md
       - packages/xization/api.md
     - Legacy:
       - packages/legacy/index.md

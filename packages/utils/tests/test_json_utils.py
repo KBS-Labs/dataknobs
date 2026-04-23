@@ -1,4 +1,7 @@
+import io
 import json
+import tempfile
+from pathlib import Path
 
 import dataknobs_utils.json_utils as jutils
 
@@ -79,3 +82,53 @@ def test_squash_and_explode_data2(test_json_001):
         j
         == '{"a": 1, "b": 2, "c": [{"A": [{"e": [{"f": 3, "g": 4, "h": 5}]}, {"e": [{"f": 8, "g": 9, "h": 10}]}], "B": {"l": 13, "m": 222}}, {"A": [{"e": [{"f": 15, "g": 16, "h": 17}]}, {"e": [{"f": 20, "g": 21, "h": 22}]}], "B": {"l": 25, "m": 223}}]}'
     )
+
+
+def _collect_paths(fn, data, **kwargs):
+    """Helper: invoke stream_json_data and return (item, path) tuples."""
+    visited: list[tuple] = []
+
+    def visitor(item, path):
+        visited.append((item, tuple(path)))
+
+    fn(data, visitor, **kwargs)
+    return visited
+
+
+def test_stream_json_data_accepts_text_io():
+    """StringIO input visits the same items as a path-based call."""
+    body = '{"k": "v", "arr": [1, 2, 3]}'
+    stream = io.StringIO(body)
+    visited = _collect_paths(jutils.stream_json_data, stream)
+    # Visitor is called for each terminal value — at least 4 leaves
+    assert len(visited) >= 4
+    values = [v for v, _ in visited]
+    assert "v" in values
+    assert 1 in values and 2 in values and 3 in values
+
+
+def test_stream_json_data_accepts_bytes_io():
+    """BytesIO wrapped in TextIOWrapper visits equivalent items."""
+    body = b'{"k": "v", "n": 7}'
+    wrapped = io.TextIOWrapper(io.BytesIO(body), encoding="utf-8")
+    try:
+        visited = _collect_paths(jutils.stream_json_data, wrapped)
+    finally:
+        wrapped.detach()
+    values = [v for v, _ in visited]
+    assert "v" in values and 7 in values
+
+
+def test_stream_json_data_path_branch_unchanged():
+    """Regression guard: path input still works as before."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as f:
+        f.write('{"k": "v", "n": 42}')
+        temp_path = f.name
+    try:
+        visited = _collect_paths(jutils.stream_json_data, temp_path)
+        values = [v for v, _ in visited]
+        assert "v" in values and 42 in values
+    finally:
+        Path(temp_path).unlink()

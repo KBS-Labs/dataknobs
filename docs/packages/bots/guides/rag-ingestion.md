@@ -25,6 +25,13 @@ print(f"Files: {results['total_files']}")
 print(f"Chunks: {results['total_chunks']}")
 ```
 
+When `config` is `None`, the method looks for `knowledge_base.(yaml|yml|json)`
+at the directory root, then under a `_metadata/` subdirectory, and falls back
+to `KnowledgeBaseConfig(name=directory.name)` when neither is found. A
+malformed config file raises `IngestionConfigError`. This resolution mirrors
+`ingest_from_backend`'s backend-side lookup, so a corpus can be promoted from
+a local directory to a backend without relocating the config file.
+
 ### With Configuration
 
 ```python
@@ -74,6 +81,51 @@ results = await kb.load_from_directory(
     ]
 }
 ```
+
+## Ingesting From a Backend — `ingest_from_backend`
+
+Use `ingest_from_backend()` for corpora stored in any
+`KnowledgeResourceBackend` (file, in-memory, S3). It drives the same
+`DirectoryProcessor` pipeline as `load_from_directory()`, so full
+`KnowledgeBaseConfig` richness (patterns, excludes, per-pattern
+chunking, streaming JSON) applies.
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    create_knowledge_backend,
+)
+
+backend = create_knowledge_backend("s3", {
+    "bucket": "my-kb-bucket",
+    "prefix": "domains/",
+})
+await backend.initialize()
+
+# First-time setup only — skip if the KB already exists in the bucket.
+# Create the KB and upload documents (caller or upstream process):
+await backend.create_kb("my-domain")
+await backend.put_file("my-domain", "intro.md", b"# Intro\n...")
+# Optional: upload a _metadata/knowledge_base.yaml for pattern/chunking config.
+
+kb = await RAGKnowledgeBase.from_config(rag_config)
+stats = await kb.ingest_from_backend(backend, "my-domain")
+```
+
+When `config` is `None`, the method looks for a config document in
+the backend's `domain_id` namespace at either the domain root or in
+a `_metadata/` subdirectory (the root matches the local-corpus
+convention; `_metadata/` is available for consumers who prefer to
+separate metadata from content). Lookup order is
+`knowledge_base.(yaml|yml|json)` then
+`_metadata/knowledge_base.(yaml|yml|json)`. Falls back to
+`KnowledgeBaseConfig(name=domain_id)` if none is found. A malformed
+config raises `IngestionConfigError` — symmetric with
+`load_from_directory` on a local corpus.
+
+For the full multi-path ingestion walkthrough (local / backend /
+event-driven) see the [Knowledge Base Ingestion Guide](../knowledge/ingestion-guide.md).
+For event-driven ingest, see [IngestOrchestrator](../knowledge/orchestrator.md).
 
 ## Loading Markdown From Strings
 
@@ -279,6 +331,9 @@ from dataknobs_bots.knowledge import (
     KnowledgeIngestionManager,
     IngestionResult,
 
+    # Event-driven orchestration
+    IngestOrchestrator,
+
     # High-level ingestion service
     KnowledgeIngestionService,
     EnsureIngestionResult,
@@ -295,6 +350,10 @@ from dataknobs_bots.knowledge import (
 
 ## Related
 
+- [Knowledge Base Ingestion Guide](../knowledge/ingestion-guide.md) -
+  Three ingestion paths end-to-end
+- [IngestOrchestrator](../knowledge/orchestrator.md) - Event-driven
+  subscriber API
 - [RAG Retrieval](rag-retrieval.md) - Chunk merging and formatting
 - [RAG Query](rag-query.md) - Query transformation and expansion
 - [User Guide](user-guide.md) - Complete tutorials

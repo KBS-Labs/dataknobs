@@ -6,18 +6,15 @@ files from a KnowledgeResourceBackend into a RAGKnowledgeBase.
 
 from __future__ import annotations
 
-import csv
-import gzip
-import io
-import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dataknobs_common.events import EventBus
+    from dataknobs_xization.ingestion import KnowledgeBaseConfig
 
     from .rag import RAGKnowledgeBase
     from .storage import KnowledgeResourceBackend
@@ -71,13 +68,21 @@ class IngestionResult:
 class KnowledgeIngestionManager:
     """Coordinates loading files from storage backend into RAG knowledge base.
 
-    This manager bridges KnowledgeResourceBackend (file storage) and
-    RAGKnowledgeBase (vector storage), handling:
-    - File discovery and download
-    - Decompression of .gz files
-    - Content transformation and chunking
-    - Status tracking
-    - Event publishing for hot-reload
+    This manager bridges :class:`KnowledgeResourceBackend` (file storage)
+    and :class:`RAGKnowledgeBase` (vector storage). It delegates the
+    actual document processing (pattern matching, chunking, streaming
+    JSON, exclude patterns, per-pattern metadata) to
+    :meth:`RAGKnowledgeBase.ingest_from_backend`, and owns:
+
+    - Ingestion status tracking on the source backend
+    - Event-bus publishing for hot-reload consumers
+    - Version-based skip (`ingest_if_changed`)
+
+    When ``config`` is omitted, :meth:`ingest_from_backend` reads any
+    ``_metadata/knowledge_base.(yaml|yml|json)`` in the backend's domain
+    namespace and falls back to defaults. This is a strict superset of
+    the pre-unification behavior, which silently ignored patterns and
+    excludes.
 
     Example:
         ```python
@@ -103,17 +108,6 @@ class KnowledgeIngestionManager:
         ```
     """
 
-    # Supported file extensions and their handlers
-    SUPPORTED_EXTENSIONS: dict[str, str] = {
-        ".md": "markdown",
-        ".markdown": "markdown",
-        ".json": "json",
-        ".yaml": "yaml",
-        ".yml": "yaml",
-        ".csv": "csv",
-        ".txt": "text",
-    }
-
     def __init__(
         self,
         source: KnowledgeResourceBackend,
@@ -136,59 +130,50 @@ class KnowledgeIngestionManager:
         domain_id: str,
         clear_existing: bool = True,
         progress_callback: Callable[[str, int], None] | None = None,
+        config: KnowledgeBaseConfig | None = None,
     ) -> IngestionResult:
-        """Ingest all files from a domain into the knowledge base.
+        """Ingest all documents from a domain into the knowledge base.
+
+        Delegates to :meth:`RAGKnowledgeBase.ingest_from_backend` for
+        the actual processing — pattern-based chunking, exclude
+        patterns, per-pattern metadata, streaming JSON — and wraps the
+        result in an :class:`IngestionResult` for backward compatibility.
 
         Args:
             domain_id: Domain to ingest
-            clear_existing: Clear existing vectors before ingesting (default: True)
-            progress_callback: Optional callback(file_path, chunks_created)
+            clear_existing: Clear existing vectors before ingesting
+                (default: ``True``)
+            progress_callback: Optional callback invoked as
+                ``(file_path, num_chunks)`` after each ingested document
+            config: Optional :class:`KnowledgeBaseConfig` overriding any
+                backend-hosted ``_metadata/knowledge_base.(yaml|yml|json)``
 
         Returns:
-            IngestionResult with statistics
+            :class:`IngestionResult` with aggregate statistics
         """
         result = IngestionResult(domain_id=domain_id)
 
         try:
-            # Update status
             await self._source.set_ingestion_status(domain_id, "ingesting")
             logger.info("Starting ingestion for domain: %s", domain_id)
 
-            # Clear existing content if requested
             if clear_existing:
                 await self._destination.clear()
                 logger.debug("Cleared existing vectors for domain: %s", domain_id)
 
-            # List and process files
-            files = await self._source.list_files(domain_id)
-            logger.info("Found %d files to process for domain: %s", len(files), domain_id)
+            stats = await self._destination.ingest_from_backend(
+                self._source,
+                domain_id,
+                config=config,
+                progress_callback=progress_callback,
+                extra_metadata={"domain_id": domain_id},
+            )
 
-            for file_info in files:
-                try:
-                    chunks = await self._ingest_file(domain_id, file_info.path)
-                    if chunks > 0:
-                        result.files_processed += 1
-                        result.chunks_created += chunks
-                        logger.debug(
-                            "Ingested %s: %d chunks",
-                            file_info.path,
-                            chunks,
-                        )
-                        if progress_callback:
-                            progress_callback(file_info.path, chunks)
-                    else:
-                        result.files_skipped += 1
-                        logger.debug("Skipped %s: unsupported type", file_info.path)
+            result.files_processed = int(stats.get("total_files", 0))
+            result.chunks_created = int(stats.get("total_chunks", 0))
+            result.files_skipped = int(stats.get("files_skipped", 0))
+            result.errors = list(stats.get("errors", []))
 
-                except Exception as e:
-                    logger.warning("Failed to ingest %s: %s", file_info.path, e)
-                    result.errors.append({
-                        "file": file_info.path,
-                        "error": str(e),
-                    })
-
-            # Update status
-            result.completed_at = datetime.now(timezone.utc)
             status = "ready" if result.success else "error"
             error_msg = str(result.errors) if result.errors else None
             await self._source.set_ingestion_status(domain_id, status, error_msg)
@@ -201,7 +186,6 @@ class KnowledgeIngestionManager:
                 len(result.errors),
             )
 
-            # Publish event
             if self._event_bus:
                 await self._publish_ingestion_event(domain_id, result, status)
 
@@ -209,6 +193,8 @@ class KnowledgeIngestionManager:
             logger.error("Ingestion failed for %s: %s", domain_id, e)
             await self._source.set_ingestion_status(domain_id, "error", str(e))
             raise
+        finally:
+            result.completed_at = datetime.now(timezone.utc)
 
         return result
 
@@ -239,155 +225,30 @@ class KnowledgeIngestionManager:
             ),
         )
 
-    async def _ingest_file(self, domain_id: str, path: str) -> int:
-        """Ingest a single file. Returns number of chunks created."""
-        # Get content
-        content = await self._source.get_file(domain_id, path)
-        if content is None:
-            return 0
-
-        # Handle compression
-        actual_path = path
-        if path.endswith(".gz"):
-            content = gzip.decompress(content)
-            actual_path = path[:-3]  # Remove .gz
-
-        # Determine file type
-        suffix = Path(actual_path).suffix.lower()
-        file_type = self.SUPPORTED_EXTENSIONS.get(suffix)
-        if file_type is None:
-            logger.debug("Skipping unsupported file type: %s", path)
-            return 0
-
-        # Dispatch to appropriate loader
-        metadata = {"domain_id": domain_id, "source_path": path}
-
-        if file_type == "markdown":
-            return await self._load_markdown(content, path, metadata)
-        elif file_type == "json":
-            return await self._load_json(content, path, metadata)
-        elif file_type == "yaml":
-            return await self._load_yaml(content, path, metadata)
-        elif file_type == "csv":
-            return await self._load_csv(content, path, metadata)
-        elif file_type == "text":
-            return await self._load_text(content, path, metadata)
-
-        return 0
-
-    async def _load_markdown(
-        self,
-        content: bytes,
-        source: str,
-        metadata: dict[str, Any],
-    ) -> int:
-        """Load markdown content into the knowledge base."""
-        text = content.decode("utf-8")
-        return await self._destination.load_markdown_text(
-            text,
-            source=source,
-            metadata=metadata,
-        )
-
-    async def _load_json(
-        self,
-        content: bytes,
-        source: str,
-        metadata: dict[str, Any],
-    ) -> int:
-        """Load JSON content by converting to markdown first."""
-        from dataknobs_xization import ContentTransformer
-
-        data = json.loads(content)
-        transformer = ContentTransformer()
-        markdown = transformer.transform_json(data)
-
-        return await self._destination.load_markdown_text(
-            markdown,
-            source=source,
-            metadata=metadata,
-        )
-
-    async def _load_yaml(
-        self,
-        content: bytes,
-        source: str,
-        metadata: dict[str, Any],
-    ) -> int:
-        """Load YAML content by converting to markdown first."""
-        import yaml
-
-        from dataknobs_xization import ContentTransformer
-
-        data = yaml.safe_load(content)
-        transformer = ContentTransformer()
-        # YAML loads as dict, same as JSON
-        markdown = transformer.transform_json(data)
-
-        return await self._destination.load_markdown_text(
-            markdown,
-            source=source,
-            metadata=metadata,
-        )
-
-    async def _load_csv(
-        self,
-        content: bytes,
-        source: str,
-        metadata: dict[str, Any],
-    ) -> int:
-        """Load CSV content by converting to markdown table."""
-        reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
-        rows = list(reader)
-        if not rows:
-            return 0
-
-        # Build markdown table
-        headers = list(rows[0].keys())
-        md_lines = ["| " + " | ".join(headers) + " |"]
-        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
-        for row in rows:
-            md_lines.append("| " + " | ".join(str(v) for v in row.values()) + " |")
-        markdown = "\n".join(md_lines)
-
-        return await self._destination.load_markdown_text(
-            markdown,
-            source=source,
-            metadata=metadata,
-        )
-
-    async def _load_text(
-        self,
-        content: bytes,
-        source: str,
-        metadata: dict[str, Any],
-    ) -> int:
-        """Load plain text content."""
-        text = content.decode("utf-8")
-        return await self._destination.load_markdown_text(
-            text,
-            source=source,
-            metadata=metadata,
-        )
-
     async def ingest_if_changed(
         self,
         domain_id: str,
         last_version: str | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
+        config: KnowledgeBaseConfig | None = None,
     ) -> IngestionResult | None:
         """Ingest only if the knowledge base has changed.
 
-        Useful for hot-reload scenarios where you want to skip
-        re-ingestion if nothing has changed.
+        Useful for hot-reload scenarios where re-ingestion should be
+        skipped if nothing has changed.
 
         Args:
             domain_id: Domain to check and potentially ingest
-            last_version: Last known version string (if None, always ingests)
-            progress_callback: Optional callback(file_path, chunks_created)
+            last_version: Last known version string; if ``None``, always
+                ingests
+            progress_callback: Optional callback ``(file_path, chunks)``
+                passed through to :meth:`ingest`
+            config: Optional :class:`KnowledgeBaseConfig` passed through
+                to :meth:`ingest`
 
         Returns:
-            IngestionResult if ingestion occurred, None if skipped
+            :class:`IngestionResult` if ingestion occurred, ``None`` if
+            skipped
         """
         if last_version is not None:
             try:
@@ -400,22 +261,26 @@ class KnowledgeIngestionManager:
                     )
                     return None
             except ValueError:
-                # Domain doesn't exist, skip
                 logger.warning("Domain not found: %s", domain_id)
                 return None
 
-        return await self.ingest(domain_id, progress_callback=progress_callback)
+        return await self.ingest(
+            domain_id,
+            progress_callback=progress_callback,
+            config=config,
+        )
 
     async def get_current_version(self, domain_id: str) -> str | None:
         """Get the current version of a knowledge base.
 
-        Useful for caching the version to use with ingest_if_changed.
+        Useful for caching the version to use with
+        :meth:`ingest_if_changed`.
 
         Args:
             domain_id: Domain to get version for
 
         Returns:
-            Current version string, or None if domain doesn't exist
+            Current version string, or ``None`` if domain doesn't exist
         """
         info = await self._source.get_info(domain_id)
         if info is None:
