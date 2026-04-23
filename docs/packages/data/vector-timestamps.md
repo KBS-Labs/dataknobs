@@ -1,0 +1,1 @@
+--8<-- "packages/data/docs/vector-timestamps.md"

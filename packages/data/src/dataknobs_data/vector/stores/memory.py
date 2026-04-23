@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pickle
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from .base import VectorStore
 
 class MemoryVectorStore(VectorStore):
     """Simple in-memory vector store for testing and development.
-    
+
     This implementation stores vectors in memory using numpy arrays
     and performs brute-force search. Suitable for small datasets
     and testing scenarios.
@@ -23,8 +24,13 @@ class MemoryVectorStore(VectorStore):
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize memory vector store."""
         super().__init__(config)
-        self.vectors = {}  # id -> vector
-        self.metadata_store = {}  # id -> metadata
+        self.vectors: dict[str, np.ndarray] = {}  # id -> vector
+        self.metadata_store: dict[str, dict[str, Any]] = {}  # id -> metadata
+        # id -> (created_at, updated_at). Aware UTC datetimes. Pickle-
+        # persisted alongside vectors/metadata. Legacy pickles without
+        # this key load as an empty dict — matches pgvector's
+        # pre-migration NULL-row semantics.
+        self.timestamps: dict[str, tuple[datetime, datetime]] = {}
 
     async def initialize(self) -> None:
         """Initialize the store."""
@@ -56,6 +62,7 @@ class MemoryVectorStore(VectorStore):
             pickle.dump({
                 "vectors": {k: v.tolist() for k, v in self.vectors.items()},
                 "metadata_store": self.metadata_store,
+                "timestamps": dict(self.timestamps),
                 "config": {
                     "dimensions": self.dimensions,
                     "metric": self.metric.value if hasattr(self.metric, 'value') else str(self.metric),
@@ -72,6 +79,11 @@ class MemoryVectorStore(VectorStore):
             # Convert lists back to numpy arrays
             self.vectors = {k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()}
             self.metadata_store = data["metadata_store"]
+            # .get() for backward-compat with pre-Item-36 pickle files —
+            # those files have no tracked timestamps, so existing rows
+            # return None/None on include_timestamps=True (analogous to
+            # pgvector's pre-migration NULL rows).
+            self.timestamps = data.get("timestamps", {})
 
     async def add_vectors(
         self,
@@ -97,13 +109,21 @@ class MemoryVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
-        # Store vectors and metadata
+        # Store vectors, metadata, and timestamps. Upsert semantics:
+        # preserve created_at across re-adds of the same id; refresh
+        # updated_at every time.
+        now = datetime.now(timezone.utc)
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
             if metadata and i < len(metadata):
                 self.metadata_store[vector_id] = metadata[i]
             else:
                 self.metadata_store[vector_id] = {}
+            if vector_id in self.timestamps:
+                created, _ = self.timestamps[vector_id]
+                self.timestamps[vector_id] = (created, now)
+            else:
+                self.timestamps[vector_id] = (now, now)
 
         return ids
 
@@ -111,16 +131,29 @@ class MemoryVectorStore(VectorStore):
         self,
         ids: list[str],
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[np.ndarray, dict[str, Any] | None]]:
         """Get vectors by ID."""
         if not self._initialized:
             await self.initialize()
 
         results = []
+        inject = include_timestamps and include_metadata
         for vector_id in ids:
             if vector_id in self.vectors:
                 vector = self.vectors[vector_id]
-                meta = self.metadata_store.get(vector_id) if include_metadata else None
+                meta = (
+                    self.metadata_store.get(vector_id)
+                    if include_metadata
+                    else None
+                )
+                if inject:
+                    created, updated = self.timestamps.get(
+                        vector_id, (None, None)
+                    )
+                    meta = self._inject_timestamps(
+                        meta, created=created, updated=updated
+                    )
                 results.append((vector, meta))
             else:
                 results.append((None, None))
@@ -137,6 +170,7 @@ class MemoryVectorStore(VectorStore):
             if vector_id in self.vectors:
                 del self.vectors[vector_id]
                 self.metadata_store.pop(vector_id, None)
+                self.timestamps.pop(vector_id, None)
                 deleted += 1
 
         return deleted
@@ -147,6 +181,7 @@ class MemoryVectorStore(VectorStore):
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
         """Search for similar vectors using brute force."""
         if not self._initialized:
@@ -189,8 +224,20 @@ class MemoryVectorStore(VectorStore):
 
         # Return top k
         results = []
+        inject = include_timestamps and include_metadata
         for vector_id, score in scores[:k]:
-            meta = self.metadata_store.get(vector_id) if include_metadata else None
+            meta = (
+                self.metadata_store.get(vector_id)
+                if include_metadata
+                else None
+            )
+            if inject:
+                created, updated = self.timestamps.get(
+                    vector_id, (None, None)
+                )
+                meta = self._inject_timestamps(
+                    meta, created=created, updated=updated
+                )
             results.append((vector_id, score, meta))
 
         return results
@@ -204,10 +251,20 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        now = datetime.now(timezone.utc)
         updated = 0
         for vector_id, meta in zip(ids, metadata, strict=False):
             if vector_id in self.vectors:
                 self.metadata_store[vector_id] = meta
+                # Pre-Item-36 legacy pickles: IDs loaded before timestamp
+                # tracking was introduced exist in ``self.vectors`` but
+                # not in ``self.timestamps``. Leave ``updated_at`` as
+                # None for those rows, consistent with pgvector's
+                # pre-migration NULL semantics (see vector-timestamps
+                # docs).
+                if vector_id in self.timestamps:
+                    created, _ = self.timestamps[vector_id]
+                    self.timestamps[vector_id] = (created, now)
                 updated += 1
 
         return updated
@@ -250,3 +307,4 @@ class MemoryVectorStore(VectorStore):
 
         self.vectors.clear()
         self.metadata_store.clear()
+        self.timestamps.clear()

@@ -31,6 +31,15 @@ class PgVectorStore(VectorStore):
     Uses PostgreSQL with the pgvector extension for efficient vector storage
     and similarity search. Supports IVFFlat and HNSW indexes.
 
+    Schema contract (auto-created when ``auto_create_table=True``):
+    ``id``, ``domain_id``, ``document_id``, ``chunk_index``,
+    ``content``, ``embedding``, ``metadata``, ``created_at``,
+    ``updated_at``. On upsert (same-ID ``add_vectors``), all content
+    columns are refreshed, ``updated_at = NOW()``, and ``created_at``
+    is preserved. Pre-existing tables gain ``updated_at`` via an
+    idempotent migration during ``initialize()`` — legacy rows keep
+    ``NULL`` until re-ingested.
+
     Configuration:
         connection_string: PostgreSQL connection URL
         table_name: Table name (default: knowledge_embeddings)
@@ -119,6 +128,7 @@ class PgVectorStore(VectorStore):
         "document_id": "document_id",
         "chunk_index": "chunk_index",
         "created_at": "created_at",
+        "updated_at": "updated_at",
     }
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
@@ -492,6 +502,13 @@ class PgVectorStore(VectorStore):
                         "and auto_create_table is disabled."
                     )
 
+            # Apply additive schema migrations for existing tables. Only
+            # runs when auto_create_table=True — consumers managing their
+            # own DDL are expected to apply migrations themselves. Every
+            # step uses IF NOT EXISTS so repeated calls are safe.
+            if self.auto_create_table:
+                await self._migrate_schema(conn)
+
         self._initialized = True
         logger.info("pgvector store initialized successfully")
 
@@ -515,7 +532,8 @@ class PgVectorStore(VectorStore):
                 {self._col('content')} TEXT,
                 {self._col('embedding')} vector({self.dimensions}),
                 {self._col('metadata')} JSONB DEFAULT '{{}}',
-                {self._col('created_at')} TIMESTAMP DEFAULT NOW()
+                {self._col('created_at')} TIMESTAMP DEFAULT NOW(),
+                {self._col('updated_at')} TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -542,6 +560,45 @@ class PgVectorStore(VectorStore):
             f"Created table {self.schema}.{self.table_name} with columns: {self.columns}"
         )
 
+    async def _migrate_schema(self, conn: asyncpg.Connection) -> None:
+        """Apply additive schema migrations to an existing table.
+
+        Runs unconditionally in the ``auto_create_table=True`` path —
+        both after creation (no-op when the column is already present)
+        and when the table pre-existed without the column. Uses
+        ``ADD COLUMN IF NOT EXISTS`` so every step is idempotent.
+
+        All steps here must remain additive (new columns, new indexes);
+        destructive or type-changing migrations require consumer
+        coordination and are out of scope.
+
+        Current steps:
+
+        * Add ``updated_at TIMESTAMP`` (Item 36). The column is added
+          without a default so Postgres does not rewrite the table to
+          backfill existing rows; ``NOW()`` is a volatile default and
+          Postgres would otherwise evaluate it for every pre-existing
+          row, tying up a large table for the duration of the rewrite
+          and producing a misleading "written at migration time"
+          timestamp on rows that were never actually re-ingested.
+          Instead, pre-existing rows keep ``NULL`` in the new column —
+          an honest "not re-ingested since the column was added"
+          signal. A separate ``ALTER COLUMN ... SET DEFAULT NOW()``
+          step then wires up the default for future inserts
+          (catalog-only change, no rewrite). Fresh tables created via
+          ``_create_table`` already have the default inline, so this
+          step is a no-op for them.
+        """
+        col_updated_at = self._col('updated_at')
+        await conn.execute(
+            f"ALTER TABLE {self.schema}.{self.table_name} "
+            f"ADD COLUMN IF NOT EXISTS {col_updated_at} TIMESTAMP"
+        )
+        await conn.execute(
+            f"ALTER TABLE {self.schema}.{self.table_name} "
+            f"ALTER COLUMN {col_updated_at} SET DEFAULT NOW()"
+        )
+
     async def close(self) -> None:
         """Close the connection pool."""
         if self._pool:
@@ -558,10 +615,12 @@ class PgVectorStore(VectorStore):
     ) -> list[str]:
         """Add vectors to the store, upserting on ID conflict.
 
-        When a vector with the same ID already exists, all columns are
-        updated (embedding, metadata, content, domain_id, document_id,
-        chunk_index). The ``created_at`` timestamp is preserved to retain
-        the original insertion time.
+        When a vector with the same ID already exists, all content
+        columns are updated (embedding, metadata, content, domain_id,
+        document_id, chunk_index). The ``created_at`` timestamp is
+        preserved to retain the original insertion time, and the
+        ``updated_at`` timestamp is refreshed to ``NOW()`` to record
+        the re-ingestion.
 
         Args:
             vectors: Vector data as numpy array(s).
@@ -602,8 +661,11 @@ class PgVectorStore(VectorStore):
                 content = meta.get("source_text", meta.get("content", ""))
                 domain_id = meta.get("domain_id", self.domain_id)
 
-                # Upsert: update all columns on conflict except created_at
-                # (preserve original insertion timestamp on re-ingestion).
+                # Upsert: refresh all content columns and updated_at on
+                # conflict; preserve created_at (original insertion
+                # timestamp). Uses explicit NOW() for updated_at rather
+                # than EXCLUDED.updated_at — same wall-clock value, but
+                # intent is unambiguous at the SQL level.
                 await self._exec_with_id_type_guard(
                     conn,
                     "execute",
@@ -620,7 +682,8 @@ class PgVectorStore(VectorStore):
                         {self._col('content')} = EXCLUDED.{self._col('content')},
                         {self._col('domain_id')} = EXCLUDED.{self._col('domain_id')},
                         {self._col('document_id')} = EXCLUDED.{self._col('document_id')},
-                        {self._col('chunk_index')} = EXCLUDED.{self._col('chunk_index')}
+                        {self._col('chunk_index')} = EXCLUDED.{self._col('chunk_index')},
+                        {self._col('updated_at')} = NOW()
                     """,
                     vec_id,
                     domain_id,
@@ -639,8 +702,20 @@ class PgVectorStore(VectorStore):
         self,
         ids: list[str],
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
-        """Retrieve vectors by ID."""
+        """Retrieve vectors by ID.
+
+        Args:
+            ids: Vector IDs to retrieve.
+            include_metadata: Whether to include metadata dicts.
+            include_timestamps: When True, inject ``_created_at`` and
+                ``_updated_at`` (or configured keys) into each returned
+                metadata dict, formatted per ``timestamps.format``
+                config. Requires ``include_metadata=True`` — silently
+                no-op otherwise. Legacy rows with ``updated_at IS NULL``
+                surface as ``None`` (see vector-timestamps docs).
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -650,6 +725,17 @@ class PgVectorStore(VectorStore):
         col_embedding = self._col("embedding")
         col_metadata = self._col("metadata")
         col_id = self._col("id")
+        col_created_at = self._col("created_at")
+        col_updated_at = self._col("updated_at")
+
+        ts_select = ""
+        fetch_timestamps = include_timestamps and include_metadata
+        if fetch_timestamps:
+            ts_select = (
+                f",\n                           "
+                f"{col_created_at} as _ts_created, "
+                f"{col_updated_at} as _ts_updated"
+            )
 
         results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         async with self._pool.acquire() as conn:
@@ -658,7 +744,8 @@ class PgVectorStore(VectorStore):
                     conn,
                     "fetchrow",
                     f"""
-                    SELECT {col_embedding}::text as embedding, {col_metadata} as metadata
+                    SELECT {col_embedding}::text as embedding,
+                           {col_metadata} as metadata{ts_select}
                     FROM {self.schema}.{self.table_name}
                     WHERE {col_id} = $1{id_cast}
                     """,
@@ -685,6 +772,12 @@ class PgVectorStore(VectorStore):
                             meta = json.loads(raw_meta)
                         else:
                             meta = dict(raw_meta)
+                    if fetch_timestamps:
+                        meta = self._inject_timestamps(
+                            meta,
+                            created=row["_ts_created"],
+                            updated=row["_ts_updated"],
+                        )
                     results.append((vec, meta))
 
         return results
@@ -756,8 +849,21 @@ class PgVectorStore(VectorStore):
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
-        """Search for similar vectors using pgvector."""
+        """Search for similar vectors using pgvector.
+
+        Args:
+            query_vector: Query vector.
+            k: Number of results.
+            filter: Optional metadata filter.
+            include_metadata: Whether to include metadata dicts.
+            include_timestamps: When True, inject ``_created_at`` and
+                ``_updated_at`` (or configured keys) into each returned
+                metadata dict, formatted per ``timestamps.format``
+                config. Requires ``include_metadata=True`` — silently
+                no-op otherwise.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -776,6 +882,17 @@ class PgVectorStore(VectorStore):
         col_metadata = self._col("metadata")
         col_content = self._col("content")
         col_domain_id = self._col("domain_id")
+        col_created_at = self._col("created_at")
+        col_updated_at = self._col("updated_at")
+
+        fetch_timestamps = include_timestamps and include_metadata
+        ts_select = ""
+        if fetch_timestamps:
+            ts_select = (
+                f",\n                    "
+                f"{col_created_at} as _ts_created, "
+                f"{col_updated_at} as _ts_updated"
+            )
 
         # Build distance operator based on metric
         if self.metric == DistanceMetric.COSINE:
@@ -823,7 +940,7 @@ class PgVectorStore(VectorStore):
                     {col_id}::text as id,
                     {score_expr} as score,
                     {col_metadata} as metadata,
-                    {col_content} as content
+                    {col_content} as content{ts_select}
                 FROM {self.schema}.{self.table_name}
                 {where_sql}
                 ORDER BY {col_embedding} {distance_op} $1::vector
@@ -845,6 +962,12 @@ class PgVectorStore(VectorStore):
                     meta = dict(raw_meta)
                 # Add content to metadata for convenience
                 meta["content"] = row["content"]
+            if fetch_timestamps:
+                meta = self._inject_timestamps(
+                    meta,
+                    created=row["_ts_created"],
+                    updated=row["_ts_updated"],
+                )
             results.append((row["id"], float(row["score"]), meta))
 
         return results
@@ -854,13 +977,19 @@ class PgVectorStore(VectorStore):
         ids: list[str],
         metadata: list[dict[str, Any]],
     ) -> int:
-        """Update metadata for existing vectors."""
+        """Update metadata for existing vectors.
+
+        Refreshes ``updated_at = NOW()`` alongside the metadata change,
+        mirroring the upsert semantics in ``add_vectors``: any write to
+        a row is a re-ingestion signal.
+        """
         if not self._initialized:
             await self.initialize()
 
         id_cast = "::uuid" if self.id_type == "uuid" else ""
         col_id = self._col("id")
         col_metadata = self._col("metadata")
+        col_updated_at = self._col("updated_at")
 
         updated = 0
         async with self._pool.acquire() as conn:
@@ -870,7 +999,8 @@ class PgVectorStore(VectorStore):
                     "execute",
                     f"""
                     UPDATE {self.schema}.{self.table_name}
-                    SET {col_metadata} = $2::jsonb
+                    SET {col_metadata} = $2::jsonb,
+                        {col_updated_at} = NOW()
                     WHERE {col_id} = $1{id_cast}
                     """,
                     vec_id,

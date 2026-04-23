@@ -250,7 +250,8 @@ Default column names:
 | `domain_id` | `domain_id` | Multi-tenant domain |
 | `document_id` | `document_id` | Source document reference |
 | `chunk_index` | `chunk_index` | Chunk sequence number |
-| `created_at` | `created_at` | Timestamp |
+| `created_at` | `created_at` | Insertion timestamp (preserved on upsert) |
+| `updated_at` | `updated_at` | Last-write timestamp (refreshed on upsert / `update_metadata`) |
 
 ## Multi-tenant Usage
 
@@ -447,9 +448,56 @@ CREATE TABLE IF NOT EXISTS {schema}.{table_name} (
     {content} TEXT,
     {embedding} vector({dimensions}),
     {metadata} JSONB DEFAULT '{}',
-    {created_at} TIMESTAMP DEFAULT NOW()
+    {created_at} TIMESTAMP DEFAULT NOW(),
+    {updated_at} TIMESTAMP DEFAULT NOW()
 );
 ```
+
+#### `updated_at` migration for pre-existing tables
+
+When `auto_create_table=True`, `initialize()` applies an idempotent
+additive migration that adds `updated_at TIMESTAMP` to pre-existing
+tables via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. The migration
+runs unconditionally on every `initialize()` — no-op when the column
+is already present.
+
+Pre-existing rows retain `NULL` in `updated_at` (an honest "not
+re-ingested since the column was added" signal) until the next upsert
+or `update_metadata` populates the column with `NOW()`. The column is
+added without a default in the `ADD COLUMN` step and wired up with a
+separate `ALTER COLUMN ... SET DEFAULT NOW()` step (catalog-only, no
+table rewrite) so Postgres does not backfill legacy rows with a
+volatile default.
+
+When `auto_create_table=False`, consumers who manage their own schema
+must apply the migration manually:
+
+```sql
+ALTER TABLE <schema>.<table>
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+ALTER TABLE <schema>.<table>
+  ALTER COLUMN updated_at SET DEFAULT NOW();
+```
+
+Both statements are idempotent — safe to re-run.
+
+### Upsert Semantics
+
+`add_vectors` performs an upsert on `ON CONFLICT (id)`. All content
+columns (`embedding`, `metadata`, `content`, `domain_id`,
+`document_id`, `chunk_index`) are refreshed from the new row,
+`updated_at` is set to `NOW()`, and `created_at` is **preserved** to
+retain the original insertion time. `update_metadata` also refreshes
+`updated_at = NOW()` — any write is a re-ingestion signal.
+
+### Timestamp Exposure
+
+Pass `include_timestamps=True` to `get_vectors()` or `search()` to
+surface `created_at` / `updated_at` on the returned metadata dicts.
+Pre-migration rows surface as `None` on `_updated_at`. Format and
+key names are configurable via a shared `timestamps` config block;
+see [Vector Store Timestamp Exposure](vector-timestamps.md) for the
+full cross-backend contract.
 
 ## Troubleshooting
 

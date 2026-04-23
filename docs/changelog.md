@@ -80,6 +80,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_workers`, `max_retries`) and canonical (`aws_access_key_id`,
   `max_pool_connections`, `max_attempts`) key shapes so one config
   dict feeds every S3 construct.
+- **`PgVectorStore` now tracks `updated_at`** on each row. The schema
+  gains `updated_at TIMESTAMP DEFAULT NOW()`, refreshed to `NOW()`
+  on every upsert (same-ID `add_vectors`) and on `update_metadata`;
+  `created_at` is preserved on upsert. Pre-existing tables gain the
+  column via idempotent `ALTER TABLE ADD COLUMN IF NOT EXISTS`
+  during `initialize()` when `auto_create_table=True`; pre-existing
+  rows keep `updated_at IS NULL` until re-ingested — treat `NULL` as
+  "not re-ingested since the column was added." Consumers with
+  `auto_create_table=False` must apply the ALTER manually (SQL in
+  the `pgvector-backend.md` doc). Memory (in-process) tracks the
+  same (created, updated) tuple and preserves it through the pickle
+  round-trip.
+- **`VectorStore` timestamp exposure** — `include_timestamps=True`
+  on `get_vectors()` and `search()` returns `_created_at` /
+  `_updated_at` in the metadata dict. Format (`iso` / `epoch` /
+  `datetime`) and key names are configurable via a new `timestamps`
+  config block on every `VectorStoreBase` subclass. Supported by
+  `MemoryVectorStore` and `PgVectorStore`;
+  `FaissVectorStore` and `ChromaVectorStore` do **not** yet accept
+  the `include_timestamps` kwarg (calling it raises `TypeError`) —
+  deferred per Item 36 follow-ups. Collision policy: consumer
+  metadata values for a configured timestamp key always win; a
+  WARNING is logged once per process per colliding key. See
+  `packages/data/docs/vector-timestamps.md` for the full contract.
 
 #### Changed
 - **Behavior change:** `SyncS3Database` and `S3KnowledgeBackend` no

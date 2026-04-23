@@ -1,7 +1,10 @@
 """Tests for specialized vector stores."""
 
+import asyncio
 import os
+import pickle
 import tempfile
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -261,6 +264,199 @@ class TestMemoryVectorStore:
         fields = await store.metadata_fields()
         assert "field_a" not in fields
         assert "field_b" in fields
+
+
+class TestMemoryVectorStoreTimestamps:
+    """Phase 4: timestamp tracking + include_timestamps exposure on MVS."""
+
+    @pytest.fixture
+    def store(self):
+        """Default config: 4 dims, cosine, ISO format timestamps."""
+        return MemoryVectorStore({"dimensions": 4, "metric": "cosine"})
+
+    @pytest.mark.asyncio
+    async def test_add_vectors_tracks_timestamps(self, store):
+        """Fresh add populates self.timestamps; created == updated."""
+        await store.initialize()
+        vec = np.random.rand(4).astype(np.float32)
+        await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
+
+        assert "t1" in store.timestamps
+        created, updated = store.timestamps["t1"]
+        assert isinstance(created, datetime)
+        assert isinstance(updated, datetime)
+        assert created.tzinfo is timezone.utc
+        # Fresh add: created == updated (same now() call).
+        assert created == updated
+
+    @pytest.mark.asyncio
+    async def test_upsert_refreshes_updated_only(self, store):
+        """Re-add same ID: created preserved, updated advances."""
+        await store.initialize()
+        vec1 = np.random.rand(4).astype(np.float32)
+        vec2 = np.random.rand(4).astype(np.float32)
+
+        await store.add_vectors([vec1], ids=["t1"])
+        created_1, updated_1 = store.timestamps["t1"]
+
+        await asyncio.sleep(0.01)
+
+        await store.add_vectors([vec2], ids=["t1"])
+        created_2, updated_2 = store.timestamps["t1"]
+
+        assert created_2 == created_1, "created must be preserved on upsert"
+        assert updated_2 > updated_1, "updated must advance on upsert"
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_refreshes_updated(self, store):
+        """update_metadata advances updated, preserves created."""
+        await store.initialize()
+        vec = np.random.rand(4).astype(np.float32)
+        await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
+        created_1, updated_1 = store.timestamps["t1"]
+
+        await asyncio.sleep(0.01)
+
+        await store.update_metadata(["t1"], [{"k": "v2"}])
+        created_2, updated_2 = store.timestamps["t1"]
+
+        assert created_2 == created_1, "created preserved on update_metadata"
+        assert updated_2 > updated_1, "updated advances on update_metadata"
+
+    @pytest.mark.asyncio
+    async def test_delete_vectors_removes_timestamp(self, store):
+        """delete_vectors removes the timestamp entry."""
+        await store.initialize()
+        vec = np.random.rand(4).astype(np.float32)
+        await store.add_vectors([vec], ids=["t1"])
+        assert "t1" in store.timestamps
+
+        await store.delete_vectors(["t1"])
+        assert "t1" not in store.timestamps
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_timestamps(self, store):
+        """clear() empties the timestamps dict."""
+        await store.initialize()
+        vectors = np.random.rand(3, 4).astype(np.float32)
+        await store.add_vectors(vectors, ids=["a", "b", "c"])
+        assert len(store.timestamps) == 3
+
+        await store.clear()
+        assert len(store.timestamps) == 0
+
+    @pytest.mark.asyncio
+    async def test_save_load_round_trip_preserves_timestamps(self, tmp_path):
+        """Pickle persistence preserves timestamps across save/load."""
+        persist_path = str(tmp_path / "mvs.pkl")
+        store = MemoryVectorStore({
+            "dimensions": 4,
+            "metric": "cosine",
+            "persist_path": persist_path,
+        })
+        await store.initialize()
+
+        vec = np.random.rand(4).astype(np.float32)
+        await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
+        original_created, original_updated = store.timestamps["t1"]
+
+        await store.save()
+
+        # Create a fresh store pointing at the same file and load.
+        new_store = MemoryVectorStore({
+            "dimensions": 4,
+            "metric": "cosine",
+            "persist_path": persist_path,
+        })
+        await new_store.initialize()
+
+        assert "t1" in new_store.timestamps
+        loaded_created, loaded_updated = new_store.timestamps["t1"]
+        assert loaded_created == original_created
+        assert loaded_updated == original_updated
+
+    @pytest.mark.asyncio
+    async def test_get_vectors_include_timestamps(self, store):
+        """include_timestamps=True injects _created_at / _updated_at."""
+        await store.initialize()
+        vec = np.random.rand(4).astype(np.float32)
+        await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
+
+        results = await store.get_vectors(["t1"], include_timestamps=True)
+        _vector, meta = results[0]
+
+        assert meta is not None
+        assert meta["k"] == "v"
+        assert "_created_at" in meta
+        assert "_updated_at" in meta
+        # Default ISO format -> string.
+        assert isinstance(meta["_created_at"], str)
+        assert isinstance(meta["_updated_at"], str)
+
+        # Default path unchanged — no timestamp keys.
+        default_results = await store.get_vectors(["t1"])
+        _, default_meta = default_results[0]
+        assert "_created_at" not in default_meta
+        assert "_updated_at" not in default_meta
+
+    @pytest.mark.asyncio
+    async def test_search_include_timestamps(self, store):
+        """Same include_timestamps semantics on search."""
+        await store.initialize()
+        vectors = np.random.rand(3, 4).astype(np.float32)
+        await store.add_vectors(
+            vectors,
+            ids=["a", "b", "c"],
+            metadata=[{"i": 0}, {"i": 1}, {"i": 2}],
+        )
+
+        query = vectors[0]
+        results = await store.search(query, k=3, include_timestamps=True)
+
+        assert len(results) == 3
+        for _id, _score, meta in results:
+            assert meta is not None
+            assert "_created_at" in meta
+            assert "_updated_at" in meta
+            assert isinstance(meta["_created_at"], str)
+
+    @pytest.mark.asyncio
+    async def test_legacy_pickle_load_has_empty_timestamps(self, tmp_path):
+        """Pre-Item-36 pickle files load cleanly; legacy rows have no tracked ts."""
+        persist_path = str(tmp_path / "legacy.pkl")
+        # Write a legacy pickle file (no "timestamps" key).
+        legacy = {
+            "vectors": {"legacy-id": [0.1, 0.2, 0.3, 0.4]},
+            "metadata_store": {"legacy-id": {"k": "v"}},
+            "config": {"dimensions": 4, "metric": "cosine"},
+        }
+        with open(persist_path, "wb") as f:
+            pickle.dump(legacy, f)
+
+        store = MemoryVectorStore({
+            "dimensions": 4,
+            "metric": "cosine",
+            "persist_path": persist_path,
+        })
+        await store.initialize()
+
+        # Vector + metadata loaded correctly.
+        assert "legacy-id" in store.vectors
+        # No tracked timestamp for legacy rows.
+        assert "legacy-id" not in store.timestamps
+
+        # include_timestamps=True surfaces keys-present-with-None values
+        # (analogous to pgvector pre-migration NULL rows).
+        results = await store.get_vectors(
+            ["legacy-id"], include_timestamps=True
+        )
+        _vector, meta = results[0]
+        assert meta is not None
+        assert meta["k"] == "v"
+        assert "_created_at" in meta
+        assert "_updated_at" in meta
+        assert meta["_created_at"] is None
+        assert meta["_updated_at"] is None
 
 
 # Conditional test classes for optional dependencies

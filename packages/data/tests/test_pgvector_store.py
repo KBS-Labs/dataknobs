@@ -4,8 +4,10 @@ These tests require a running PostgreSQL instance with pgvector extension.
 Set TEST_POSTGRES=true to enable these tests.
 """
 
+import json
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -1387,3 +1389,491 @@ class TestPgVectorStoreMetadataFields:
         fields = await pgvector_store.metadata_fields()
         assert "field_b" in fields
         assert "field_a" not in fields
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+@pytest.mark.asyncio
+class TestPgVectorStoreUpdatedAtColumn:
+    """Test the ``updated_at`` column and migration (Item 36).
+
+    Covers the base defect from PR #185 code review X4: the pgvector
+    table should record when a row was last refreshed. The column is
+    added to fresh tables via ``CREATE TABLE`` and to pre-existing
+    tables via an idempotent ``ALTER TABLE ADD COLUMN IF NOT EXISTS``
+    migration during ``initialize()``.
+    """
+
+    async def test_updated_at_column_populated_on_insert(self, pgvector_store):
+        """Fresh insert: updated_at is set and approximately equals created_at."""
+        vectors = np.random.rand(1, 128).astype(np.float32)
+        ids = ["test-id-1"]
+        await pgvector_store.add_vectors(vectors, ids=ids)
+
+        async with pgvector_store._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT created_at, updated_at "
+                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1",
+                "test-id-1",
+            )
+
+        assert row["created_at"] is not None
+        assert row["updated_at"] is not None
+        assert abs(
+            (row["updated_at"] - row["created_at"]).total_seconds()
+        ) < 1.0
+
+    async def test_updated_at_refreshed_on_upsert(self, pgvector_store):
+        """Second add_vectors with same ID advances updated_at, preserves created_at."""
+        import asyncio
+
+        vectors1 = np.random.rand(1, 128).astype(np.float32)
+        ids = ["test-id-upsert"]
+        await pgvector_store.add_vectors(vectors1, ids=ids)
+
+        async with pgvector_store._pool.acquire() as conn:
+            first = await conn.fetchrow(
+                f"SELECT created_at, updated_at "
+                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1",
+                "test-id-upsert",
+            )
+
+        # Sleep long enough for the NOW() clock to advance past the
+        # truncation granularity of pg TIMESTAMP (microseconds).
+        await asyncio.sleep(0.05)
+
+        vectors2 = np.random.rand(1, 128).astype(np.float32)
+        await pgvector_store.add_vectors(vectors2, ids=ids)
+
+        async with pgvector_store._pool.acquire() as conn:
+            second = await conn.fetchrow(
+                f"SELECT created_at, updated_at "
+                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1",
+                "test-id-upsert",
+            )
+
+        assert second["created_at"] == first["created_at"], (
+            "created_at must be preserved on upsert"
+        )
+        assert second["updated_at"] > first["updated_at"], (
+            "updated_at must advance on upsert"
+        )
+
+    async def test_update_metadata_refreshes_updated_at(self, pgvector_store):
+        """update_metadata advances updated_at, preserves created_at."""
+        import asyncio
+
+        vectors = np.random.rand(1, 128).astype(np.float32)
+        ids = ["test-id-update-meta"]
+        await pgvector_store.add_vectors(vectors, ids=ids, metadata=[{"k": "v1"}])
+
+        async with pgvector_store._pool.acquire() as conn:
+            first = await conn.fetchrow(
+                f"SELECT created_at, updated_at "
+                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1",
+                "test-id-update-meta",
+            )
+
+        await asyncio.sleep(0.05)
+
+        updated_count = await pgvector_store.update_metadata(
+            ids, [{"k": "v2"}]
+        )
+        assert updated_count == 1
+
+        async with pgvector_store._pool.acquire() as conn:
+            second = await conn.fetchrow(
+                f"SELECT created_at, updated_at "
+                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"WHERE id = $1",
+                "test-id-update-meta",
+            )
+
+        assert second["created_at"] == first["created_at"], (
+            "created_at must be preserved on update_metadata"
+        )
+        assert second["updated_at"] > first["updated_at"], (
+            "updated_at must advance on update_metadata"
+        )
+
+    async def test_initialize_is_idempotent(self, pgvector_store):
+        """Re-initializing an already-initialized store does not raise.
+
+        Guards against migration DDL failing when run twice against the
+        same table (``ALTER TABLE ADD COLUMN IF NOT EXISTS`` is
+        idempotent by design).
+        """
+        # Force re-initialize to trigger migration path against an
+        # already-migrated table.
+        pgvector_store._initialized = False
+        await pgvector_store.initialize()
+        assert pgvector_store._initialized is True
+
+    async def test_migration_adds_updated_at_to_preexisting_table(
+        self, pgvector_config
+    ):
+        """Pre-existing table without updated_at gains the column on init.
+
+        Simulates a consumer upgrading from a pre-Item-36 release: their
+        table was created without ``updated_at``. On next
+        ``initialize()``, the migration helper adds the column. Legacy
+        rows have ``NULL`` in ``updated_at`` until re-ingested.
+        """
+        # Create the table manually with the OLD schema (no updated_at).
+        old_schema_table = pgvector_config["table_name"]
+        schema = pgvector_config["schema"]
+        conn_str = pgvector_config["connection_string"]
+
+        conn = await asyncpg.connect(conn_str)
+        try:
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            # Drop table if left from prior flaky test run.
+            await conn.execute(f"DROP TABLE IF EXISTS {schema}.{old_schema_table}")
+            await conn.execute(f"""
+                CREATE TABLE {schema}.{old_schema_table} (
+                    id TEXT PRIMARY KEY,
+                    domain_id VARCHAR(100),
+                    document_id VARCHAR(255),
+                    chunk_index INTEGER,
+                    content TEXT,
+                    embedding vector(128),
+                    metadata JSONB DEFAULT '{{}}',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            # Insert a legacy row pre-migration.
+            await conn.execute(
+                f"INSERT INTO {schema}.{old_schema_table} (id, content) "
+                "VALUES ($1, $2)",
+                "legacy-row",
+                "legacy-content",
+            )
+        finally:
+            await conn.close()
+
+        # Now initialize via PgVectorStore — the migration should add
+        # updated_at idempotently.
+        store = PgVectorStore(pgvector_config)
+        try:
+            await store.initialize()
+
+            # Verify the column now exists.
+            async with store._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT created_at, updated_at "
+                    f"FROM {schema}.{old_schema_table} "
+                    f"WHERE id = $1",
+                    "legacy-row",
+                )
+                # Column is present; legacy row has NULL updated_at
+                # because Postgres does not backfill DEFAULT NOW() on
+                # ADD COLUMN for existing rows.
+                assert "updated_at" in row
+                assert row["updated_at"] is None, (
+                    "Legacy rows should have NULL updated_at — they "
+                    "haven't been re-ingested since the column was added."
+                )
+
+                # A new insert populates updated_at via DEFAULT NOW().
+                vectors = np.random.rand(1, 128).astype(np.float32)
+                await store.add_vectors(vectors, ids=["fresh-row"])
+                fresh = await conn.fetchrow(
+                    f"SELECT updated_at "
+                    f"FROM {schema}.{old_schema_table} "
+                    f"WHERE id = $1",
+                    "fresh-row",
+                )
+                assert fresh["updated_at"] is not None
+        finally:
+            # Cleanup.
+            try:
+                async with store._pool.acquire() as conn:
+                    await conn.execute(
+                        f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+                    )
+            except Exception:
+                pass
+            await store.close()
+
+    async def test_migration_skipped_when_auto_create_disabled(
+        self, pgvector_config
+    ):
+        """auto_create_table=False: migration does NOT run on pre-existing table.
+
+        Consumers with ``auto_create_table=False`` own their DDL. If
+        their table lacks ``updated_at``, initialize() should succeed
+        (existence check passes) but NOT apply the migration — the
+        consumer is responsible for schema management.
+        """
+        table = pgvector_config["table_name"]
+        schema = pgvector_config["schema"]
+        conn_str = pgvector_config["connection_string"]
+
+        conn = await asyncpg.connect(conn_str)
+        try:
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            await conn.execute(f"DROP TABLE IF EXISTS {schema}.{table}")
+            await conn.execute(f"""
+                CREATE TABLE {schema}.{table} (
+                    id TEXT PRIMARY KEY,
+                    domain_id VARCHAR(100),
+                    document_id VARCHAR(255),
+                    chunk_index INTEGER,
+                    content TEXT,
+                    embedding vector(128),
+                    metadata JSONB DEFAULT '{{}}',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+        finally:
+            await conn.close()
+
+        # Build store with auto_create_table=False.
+        config = {**pgvector_config, "auto_create_table": False}
+        store = PgVectorStore(config)
+        try:
+            await store.initialize()
+
+            # Verify updated_at column was NOT added.
+            async with store._pool.acquire() as conn:
+                columns = await conn.fetch(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = $1 AND table_name = $2
+                    """,
+                    schema,
+                    table,
+                )
+                column_names = {row["column_name"] for row in columns}
+                assert "updated_at" not in column_names, (
+                    "Migration must be skipped when auto_create_table=False — "
+                    "consumers own their DDL."
+                )
+        finally:
+            try:
+                conn = await asyncpg.connect(conn_str)
+                try:
+                    await conn.execute(
+                        f"DROP TABLE IF EXISTS {schema}.{table}"
+                    )
+                finally:
+                    await conn.close()
+            except Exception:
+                pass
+            await store.close()
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+@pytest.mark.asyncio
+class TestPgVectorStoreIncludeTimestamps:
+    """Tests for ``include_timestamps`` exposure on get_vectors/search (Item 36, Phase 3).
+
+    Verifies that consumers can opt into per-row created_at/updated_at
+    metadata via the cross-backend ``include_timestamps=True`` kwarg.
+    Timestamps are injected into the returned metadata dict under the
+    configured ``timestamps.created_key`` / ``timestamps.updated_key``
+    (defaults ``_created_at`` / ``_updated_at``), formatted per
+    ``timestamps.format`` (default ``"iso"``).
+    """
+
+    async def test_get_vectors_include_timestamps(self, pgvector_store):
+        """Default format (iso): both keys present, ISO-8601 strings."""
+        vectors = np.random.rand(1, 128).astype(np.float32)
+        ids = ["ts-id-1"]
+        await pgvector_store.add_vectors(
+            vectors, ids=ids, metadata=[{"topic": "math"}]
+        )
+
+        results = await pgvector_store.get_vectors(
+            ids, include_timestamps=True
+        )
+        assert len(results) == 1
+        _, meta = results[0]
+        assert meta is not None
+        assert meta["topic"] == "math", "consumer metadata preserved"
+        assert "_created_at" in meta
+        assert "_updated_at" in meta
+        assert isinstance(meta["_created_at"], str)
+        assert isinstance(meta["_updated_at"], str)
+        # ISO-8601 parseable
+        datetime.fromisoformat(meta["_created_at"])
+        datetime.fromisoformat(meta["_updated_at"])
+
+    async def test_search_include_timestamps(self, pgvector_store):
+        """search() also injects timestamps when include_timestamps=True."""
+        vectors = np.random.rand(3, 128).astype(np.float32)
+        ids = ["ts-search-1", "ts-search-2", "ts-search-3"]
+        await pgvector_store.add_vectors(
+            vectors,
+            ids=ids,
+            metadata=[{"tag": "a"}, {"tag": "b"}, {"tag": "c"}],
+        )
+
+        query = vectors[0]
+        results = await pgvector_store.search(
+            query, k=3, include_timestamps=True
+        )
+        assert len(results) >= 1
+        for _, _, meta in results:
+            assert meta is not None
+            assert "_created_at" in meta
+            assert "_updated_at" in meta
+            assert isinstance(meta["_created_at"], str)
+            assert isinstance(meta["_updated_at"], str)
+
+    async def test_include_timestamps_noop_without_metadata(
+        self, pgvector_store
+    ):
+        """include_metadata=False + include_timestamps=True: no injection, no error."""
+        vectors = np.random.rand(1, 128).astype(np.float32)
+        ids = ["ts-nometa-1"]
+        await pgvector_store.add_vectors(vectors, ids=ids)
+
+        # get_vectors
+        results = await pgvector_store.get_vectors(
+            ids, include_metadata=False, include_timestamps=True
+        )
+        assert len(results) == 1
+        _, meta = results[0]
+        assert meta is None, (
+            "Timestamps must not be injected when metadata is suppressed."
+        )
+
+        # search
+        search_results = await pgvector_store.search(
+            vectors[0], k=1, include_metadata=False, include_timestamps=True
+        )
+        assert len(search_results) >= 1
+        for _, _, meta in search_results:
+            assert meta is None
+
+    async def test_include_timestamps_epoch_format(self, pgvector_config):
+        """Config override timestamps.format=epoch → float seconds."""
+        config = {**pgvector_config, "timestamps": {"format": "epoch"}}
+        store = PgVectorStore(config)
+        try:
+            await store.initialize()
+            vectors = np.random.rand(1, 128).astype(np.float32)
+            await store.add_vectors(vectors, ids=["ts-epoch-1"])
+
+            results = await store.get_vectors(
+                ["ts-epoch-1"], include_timestamps=True
+            )
+            _, meta = results[0]
+            assert meta is not None
+            assert isinstance(meta["_created_at"], float)
+            assert isinstance(meta["_updated_at"], float)
+            # Sanity: a plausible recent epoch (post-2020). Absolute
+            # comparison against datetime.now(UTC).timestamp() is not
+            # meaningful here — pgvector returns naive TIMESTAMP, and
+            # Python's naive-datetime .timestamp() treats the value as
+            # LOCAL time. Cross-clock comparability is documented as
+            # out-of-scope (see vector-timestamps docs).
+            assert meta["_created_at"] > 1_600_000_000
+            assert meta["_updated_at"] > 1_600_000_000
+        finally:
+            await store.close()
+
+    async def test_include_timestamps_custom_keys(self, pgvector_config):
+        """Config override of created_key / updated_key rename injection keys."""
+        config = {
+            **pgvector_config,
+            "timestamps": {
+                "created_key": "freshness.created",
+                "updated_key": "freshness.updated",
+            },
+        }
+        store = PgVectorStore(config)
+        try:
+            await store.initialize()
+            vectors = np.random.rand(1, 128).astype(np.float32)
+            await store.add_vectors(vectors, ids=["ts-custom-1"])
+
+            results = await store.get_vectors(
+                ["ts-custom-1"], include_timestamps=True
+            )
+            _, meta = results[0]
+            assert meta is not None
+            assert "freshness.created" in meta
+            assert "freshness.updated" in meta
+            assert "_created_at" not in meta
+            assert "_updated_at" not in meta
+        finally:
+            await store.close()
+
+    async def test_include_timestamps_legacy_row_nullable(
+        self, pgvector_config
+    ):
+        """Pre-migration row with updated_at=NULL → key present, value None.
+
+        Honest signal: distinguishes "not re-ingested since column was
+        added" from "missing column." Consumers check via
+        ``meta["_updated_at"] is None``.
+        """
+        old_schema_table = pgvector_config["table_name"]
+        schema = pgvector_config["schema"]
+        conn_str = pgvector_config["connection_string"]
+
+        conn = await asyncpg.connect(conn_str)
+        try:
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            await conn.execute(
+                f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+            )
+            await conn.execute(f"""
+                CREATE TABLE {schema}.{old_schema_table} (
+                    id TEXT PRIMARY KEY,
+                    domain_id VARCHAR(100),
+                    document_id VARCHAR(255),
+                    chunk_index INTEGER,
+                    content TEXT,
+                    embedding vector(128),
+                    metadata JSONB DEFAULT '{{}}',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            vec_literal = "[" + ",".join(
+                str(x) for x in np.random.rand(128).astype(np.float32).tolist()
+            ) + "]"
+            await conn.execute(
+                f"INSERT INTO {schema}.{old_schema_table} "
+                f"(id, content, embedding, metadata) "
+                f"VALUES ($1, $2, $3::vector, $4::jsonb)",
+                "legacy-ts-row",
+                "legacy",
+                vec_literal,
+                json.dumps({"legacy": True}),
+            )
+        finally:
+            await conn.close()
+
+        store = PgVectorStore(pgvector_config)
+        try:
+            await store.initialize()
+            results = await store.get_vectors(
+                ["legacy-ts-row"], include_timestamps=True
+            )
+            _, meta = results[0]
+            assert meta is not None
+            assert meta["legacy"] is True
+            assert "_created_at" in meta
+            assert "_updated_at" in meta
+            assert meta["_created_at"] is not None, (
+                "Legacy rows kept the pre-existing created_at."
+            )
+            assert meta["_updated_at"] is None, (
+                "Legacy rows have NULL updated_at until re-ingested — "
+                "the framework surfaces this as None, not a stale value."
+            )
+        finally:
+            try:
+                async with store._pool.acquire() as conn:
+                    await conn.execute(
+                        f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+                    )
+            except Exception:
+                pass
+            await store.close()
