@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-23T13:50:31Z",
+  "timestamp": "2026-04-23T16:51:36Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.7 (Homebrew 2026-04-15 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/rag-backend-ingest-unification",
-  "git_commit": "1eda2fd5c72e5814a6713a6708ae65d0bfb458b3",
+  "git_branch": "sbk/create-release",
+  "git_commit": "73601a00474bf2202218625e9877fbfb341cc249",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
