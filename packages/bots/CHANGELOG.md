@@ -5,7 +5,7 @@ All notable changes to the dataknobs-bots package will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## v0.6.17
 
 ### Added
 - `RAGKnowledgeBase.ingest_from_backend(backend, domain_id,
@@ -38,9 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last_version=None)` returning `IngestionResult | None` —
   returns `None` (and skips the ingest) when `last_version` is
   supplied and the backend reports no changes.
+- `S3KnowledgeBackend` accepts a pre-built
+  `session_config: S3SessionConfig` kwarg for sharing a single S3
+  configuration across multiple backends.
 
 ### Changed
 - `KnowledgeIngestionManager.ingest()` delegates to
   `RAGKnowledgeBase.ingest_from_backend` and threads
   `{"domain_id": domain_id}` into per-chunk metadata so downstream
   queries can filter by tenant.
+- `S3KnowledgeBackend` `region` default flipped from `"us-east-1"`
+  to `None`; client routes through `create_boto3_s3_client`. See
+  `dataknobs-data` notes above for the behavior-change details and
+  migration guidance.
+- `S3KnowledgeBackend.from_config` accepts both `region` and
+  `region_name` keys (parity with `SyncS3Database` /
+  `AsyncS3Database`).
