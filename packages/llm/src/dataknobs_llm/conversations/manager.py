@@ -776,6 +776,32 @@ class ConversationManager:
         # Calculate and track cost
         self._calculate_and_track_cost(response, assistant_metadata)
 
+        # Merge opt-in persistable metadata from middleware / provider writes
+        # into the assistant node.
+        #
+        # Middleware and providers write to response.metadata today; most of
+        # those writes should stay ephemeral (perf counters, thinking logs,
+        # rate-limit internals). Data that should persist onto the assistant
+        # node is opted in under the "_persist" namespace:
+        #
+        #     response.metadata.setdefault("_persist", {})["audit"] = outcome
+        #
+        # Caller-provided metadata= and canonical manager-set fields above
+        # (usage, model, provider, finish_reason, config_overrides_applied,
+        # system_prompt_override, cost) win on key conflict via setdefault.
+        # Middleware audits; it does not replace.
+        if response.metadata:
+            persist_ns = response.metadata.get("_persist")
+            if isinstance(persist_ns, dict):
+                for k, v in persist_ns.items():
+                    assistant_metadata.setdefault(k, v)
+            elif persist_ns is not None:
+                logger.warning(
+                    "response.metadata['_persist'] expected dict, got %s; "
+                    "skipping persistence merge",
+                    type(persist_ns).__name__,
+                )
+
         new_tree_node = Tree(
             ConversationNode(
                 message=assistant_message,

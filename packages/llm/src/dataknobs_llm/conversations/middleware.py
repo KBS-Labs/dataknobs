@@ -48,6 +48,9 @@ Available Middleware:
     - **ValidationMiddleware**: Validate responses with additional LLM call
     - **MetadataMiddleware**: Inject custom metadata into messages/responses
     - **RateLimitMiddleware**: Enforce rate limits with sliding window
+    - **PromoteToPersistMiddleware**: Promote allowlisted flat ``response.metadata``
+      keys into the ``_persist`` namespace so they flow onto the persisted
+      assistant conversation node (no source changes to the original writers)
 
 Example:
     ```python
@@ -135,6 +138,39 @@ class ConversationMiddleware(ABC):
         via the permanent stack. The scoped API handles attachment,
         exception-safe detachment, and preserves onion ordering relative
         to the permanent middleware.
+
+    Persisting Metadata:
+        Middleware writes to ``response.metadata`` are ephemeral by
+        default — they live on the
+        :class:`~dataknobs_llm.llm.base.LLMResponse` for this call and do
+        not flow to the persisted assistant conversation node. To persist
+        audit data (a citation renderer's culling outcome, a validation
+        middleware's verdict, a tool-selection middleware's rationale),
+        write into the ``_persist`` sub-dictionary:
+
+            >>> async def process_response(self, response, state):
+            ...     if response.metadata is None:
+            ...         response.metadata = {}
+            ...     persist = response.metadata.setdefault("_persist", {})
+            ...     persist["citation_audit"] = self._outcome_to_dict()
+            ...     return response
+
+        Keys inside ``_persist`` are merged into the assistant node's
+        ``metadata`` by
+        :meth:`ConversationManager._finalize_completion`. The
+        ``_persist`` marker itself is not propagated to the node — only
+        the keys inside it. Canonical framework fields (``usage``,
+        ``model``, ``provider``, ``finish_reason``, cost, config
+        overrides) and the caller's ``metadata=`` kwarg win over
+        middleware-provided values of the same key — middleware audits,
+        it does not replace.
+
+        For third-party writers (providers, in-tree middleware) that
+        write flat ``response.metadata`` keys you want persisted without
+        modifying their source, use :class:`PromoteToPersistMiddleware`
+        — register it at position ``[0]`` of the ``middleware`` list
+        with a key allowlist, and it copies matching flat keys into
+        ``_persist`` on each response.
 
     Example:
         ```python
@@ -742,3 +778,110 @@ class RateLimitMiddleware(ConversationMiddleware):
             >>> await middleware.reset()
         """
         await self._limiter.reset(key)
+
+
+class PromoteToPersistMiddleware(ConversationMiddleware):
+    """Promote allowlisted flat ``response.metadata`` keys into ``_persist``.
+
+    By default, middleware and provider writes to ``response.metadata`` are
+    ephemeral — they live on the :class:`~dataknobs_llm.llm.base.LLMResponse`
+    for this call but do not flow to the persisted assistant conversation
+    node (see :class:`ConversationMiddleware` "Persisting Metadata" for the
+    ``_persist`` namespace contract).
+
+    This middleware bridges the gap for writers that cannot (or should not)
+    be modified at the source: third-party providers, in-tree middleware
+    whose writes consumers want preserved per-deployment
+    (``llm_duration_seconds`` from a custom timing middleware,
+    ``rate_limit_count`` from :class:`RateLimitMiddleware`, Ollama's
+    ``eval_duration``/``total_duration``, etc.).
+
+    Example:
+        ```python
+        manager = await ConversationManager.create(
+            llm=ollama_provider,
+            prompt_builder=builder,
+            middleware=[
+                # Position-[0] — runs last on response, after other
+                # middleware have written their flat keys.
+                PromoteToPersistMiddleware(keys=[
+                    "rate_limit_count",     # from RateLimitMiddleware
+                    "eval_duration",        # from Ollama provider
+                    "total_duration",       # from Ollama provider
+                ]),
+                RateLimitMiddleware(max_requests=10, window_seconds=60),
+            ],
+        )
+        ```
+
+    After the LLM call, each listed key present in ``response.metadata`` is
+    copied into ``response.metadata["_persist"]``; the framework then merges
+    ``_persist`` into the assistant node's metadata. Missing keys are
+    silently skipped (the writer may not have run, or the value may be
+    conditional).
+
+    Ordering Requirement:
+        Place this middleware at position ``[0]`` of the ``middleware`` list
+        so it runs **last** on ``process_response`` — after every other
+        middleware has written its flat keys. Onion-execution runs
+        ``process_response`` in reverse order: ``middleware[-1]`` first,
+        ``middleware[0]`` last. Placing the promoter at the end of the list
+        would run it **first** on response, before other middleware has
+        written — and it would capture nothing.
+
+        Provider writes (e.g., Ollama's ``eval_duration``) are populated on
+        ``response.metadata`` before any middleware runs, so position does
+        not matter for them.
+
+    Collision with an existing ``_persist`` write:
+        If another middleware has already written a same-named key into
+        ``_persist``, the promoter uses ``setdefault`` and does not
+        overwrite — native ``_persist`` writes take precedence over passive
+        promotion.
+
+        Note: this is distinct from collision between two native
+        ``_persist`` writers. Those use ``persist[key] = ...`` or
+        ``persist.update(...)`` and thus follow onion ordering — the outer
+        middleware (earlier in the ``middleware`` list) runs last on
+        response and its write wins.
+
+    Args:
+        keys: List of flat ``response.metadata`` key names to promote into
+            the ``_persist`` namespace. Order within the list is not
+            significant.
+    """
+
+    def __init__(self, keys: list[str]) -> None:
+        """Initialize with the list of flat metadata keys to promote.
+
+        Args:
+            keys: Flat ``response.metadata`` keys to copy into ``_persist``
+                on each response.
+        """
+        self._keys = list(keys)
+
+    async def process_request(
+        self,
+        messages: List[LLMMessage],
+        state: ConversationState,
+    ) -> List[LLMMessage]:
+        """No-op. Promotion is a response-time concern."""
+        return messages
+
+    async def process_response(
+        self,
+        response: LLMResponse,
+        state: ConversationState,
+    ) -> LLMResponse:
+        """Copy allowlisted flat keys into ``response.metadata['_persist']``."""
+        if not self._keys:
+            return response
+        if response.metadata is None:
+            response.metadata = {}
+        persist = response.metadata.setdefault("_persist", {})
+        for key in self._keys:
+            if key == "_persist":
+                continue  # Defensive: skip the namespace marker itself.
+            if key in response.metadata:
+                persist.setdefault(key, response.metadata[key])
+        return response

@@ -836,6 +836,36 @@ manager = await ConversationManager.create(
 )
 ```
 
+#### PromoteToPersistMiddleware
+
+Promote allowlisted flat `response.metadata` keys into the `_persist`
+sub-dictionary so they flow onto the persisted assistant conversation node.
+See "Persisting Middleware Audit Data" below for the contract; this entry
+is a quick API reference.
+
+```python
+from dataknobs_llm.conversations import (
+    PromoteToPersistMiddleware,
+    RateLimitMiddleware,
+)
+
+# Position-[0] so it runs LAST on response (after RateLimitMiddleware writes
+# its flat keys). See the ordering note under "Persisting Middleware Audit
+# Data" below.
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[
+        PromoteToPersistMiddleware(keys=[
+            "rate_limit_count",    # from RateLimitMiddleware
+            "eval_duration",       # from an Ollama-style provider
+        ]),
+        RateLimitMiddleware(max_requests=10, window_seconds=60),
+    ],
+)
+```
+
 ### Middleware Execution Order
 
 Middleware executes in "onion model":
@@ -948,6 +978,111 @@ mutation the scoped middleware performs there will not land on the
 persisted assistant node. The middleware is still detached correctly
 via `finally`, so there is no leak — but if you rely on scoped
 `process_response` behavior, use `complete()` or drain the stream.
+
+### Persisting Middleware Audit Data
+
+Middleware writes to `response.metadata` are **ephemeral by default** —
+they live on the `LLMResponse` for this call but do not flow to the
+persisted assistant conversation node. This keeps the default payload
+small and avoids silent contract creep from libraries that write perf
+counters or internal state.
+
+To **opt in** to persistence, write into the `_persist` sub-dictionary.
+Keys inside `_persist` are merged into the assistant node's metadata by
+`ConversationManager._finalize_completion`. The `_persist` marker itself
+is not propagated — only the keys inside it.
+
+```python
+from dataknobs_llm.conversations import ConversationMiddleware
+
+
+class CitationAuditMiddleware(ConversationMiddleware):
+    """Persist a per-turn citation culling outcome onto the assistant node."""
+
+    def __init__(self, outcome: dict):
+        self._outcome = outcome
+
+    async def process_request(self, messages, state):
+        return messages
+
+    async def process_response(self, response, state):
+        if response.metadata is None:
+            response.metadata = {}
+        # The `_persist` key is the single opt-in gate for persistence.
+        persist = response.metadata.setdefault("_persist", {})
+        persist["citation_audit"] = self._outcome
+        return response
+```
+
+After the LLM call, `node.data.metadata["citation_audit"]` will hold the
+outcome dict. The `_persist` key itself will not be on the node.
+
+**Collision rules** — canonical framework fields (`usage`, `model`,
+`provider`, `finish_reason`, cost, config overrides,
+`system_prompt_override`) and the caller's `metadata=` kwarg win over
+`_persist` values of the same key. Middleware audits; it does not
+replace. Non-dict `_persist` values are skipped with a WARNING log.
+
+**Promoting existing writers.** If you want to persist keys that are
+written as **flat** `response.metadata` entries by a provider or an
+existing middleware (e.g. `RateLimitMiddleware`'s `rate_limit_count`,
+Ollama's `eval_duration`/`total_duration`), register
+`PromoteToPersistMiddleware` at position `[0]` of the `middleware` list
+with the key allowlist:
+
+```python
+from dataknobs_llm.conversations import (
+    PromoteToPersistMiddleware,
+    RateLimitMiddleware,
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[
+        # Position-[0] — runs LAST on response, after other middleware have
+        # written their flat keys. Onion-execution runs `process_response`
+        # in reverse order: middleware[-1] first, middleware[0] last. If
+        # the promoter is at the end of the list, it runs first on response
+        # and captures nothing written by later middleware.
+        PromoteToPersistMiddleware(keys=[
+            "rate_limit_count",
+            "eval_duration",
+            "total_duration",
+        ]),
+        RateLimitMiddleware(max_requests=10, window_seconds=60),
+    ],
+)
+```
+
+Provider writes (e.g. an Ollama-style provider populating
+`response.metadata["eval_duration"]`) are already in place **before** any
+middleware runs, so the promoter's position in the list is irrelevant
+for provider-sourced keys. It only matters for keys written by other
+middleware.
+
+**Per-call promotion.** For one-shot promotion (e.g., a single call where
+you want to capture a flat key without adding a permanent middleware),
+register the promoter via `scoped_middleware()` instead. The context
+manager attaches the promoter on entry and removes it on exit, preserving
+the same onion-ordering semantics relative to the permanent stack:
+
+```python
+async with manager.scoped_middleware(
+    PromoteToPersistMiddleware(keys=["eval_duration"])
+):
+    response = await manager.complete()
+```
+
+**Collision with an existing `_persist` write.** If another middleware
+has already written a same-named key into `_persist`, the promoter uses
+`setdefault` and does not overwrite — native `_persist` writes take
+precedence over passive promotion. This is distinct from collision
+between two native `_persist` writers: those use
+`persist[key] = ...` / `persist.update(...)` and follow onion ordering —
+the outer middleware (earlier in the `middleware` list) runs last on
+response and its write wins.
 
 ---
 
