@@ -125,11 +125,12 @@ See Also:
     AsyncPromptBuilder: Prompt rendering with RAG integration
 """
 
+import copy
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List
-import logging
 
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm.base import LLMMessage
@@ -345,7 +346,17 @@ class ConversationState:
         conversation_id: Unique conversation identifier
         message_tree: Root of conversation tree (Tree[ConversationNode])
         current_node_id: ID of current position in tree (dot-delimited)
-        metadata: Additional conversation metadata
+        metadata: Additional conversation metadata. Typed ``Dict[str, Any]``
+            and may contain JSON-serializable nested values (lists, dicts,
+            numbers, booleans, strings, ``None``) — the in-tree wizard FSM
+            and middleware layers rely on nested values. The persistence
+            layer deep-copies this dict into ``Record.metadata`` on save,
+            so post-save mutations of nested values do not leak into the
+            persisted row. SQL backends with a dedicated metadata column
+            index top-level keys; ``filter_metadata={"key": value}``
+            performs equality on the top-level value at that key, so
+            nested-value filtering is outside the ``filter_metadata``
+            contract.
         created_at: Conversation creation timestamp
         updated_at: Last update timestamp
         schema_version: Version of the storage schema used
@@ -970,6 +981,23 @@ class DataknobsConversationStorage(ConversationStorage):
     def _state_to_record(self, state: ConversationState) -> Any:
         """Convert ConversationState to Record.
 
+        ``state.metadata`` is mirrored into ``Record.metadata`` (in
+        addition to remaining embedded under the ``"metadata"`` key
+        inside the serialized payload at ``Record.data``). This matches
+        the convention used by other dataknobs producers (FSM
+        ``save_history``, bots ``BankRecord``) and ensures that
+        backends with a dedicated metadata column (Postgres,
+        Elasticsearch, etc.) can index and filter on metadata keys via
+        ``filter_metadata={...}``. Without this mirror, SQL filters of
+        the form ``metadata.<key>`` would route to a NULL column.
+
+        ``state.metadata`` is **deep-copied** into ``Record.metadata``.
+        Producers may store JSON-serializable nested values (the in-tree
+        wizard FSM persists nested state under
+        ``state.metadata["wizard"]``; rate-limit and timing middleware
+        write non-string scalars), and post-save mutations of those
+        nested values must not leak into already-persisted records.
+
         Args:
             state: Conversation state to convert
 
@@ -988,10 +1016,15 @@ class DataknobsConversationStorage(ConversationStorage):
         # Convert state to dict
         data = state.to_dict()
 
-        # Create Record with conversation_id as storage_id
+        # Create Record with conversation_id as storage_id. Deep-copy of
+        # state.metadata avoids aliasing if the caller mutates
+        # state.metadata (including nested lists/dicts) after this
+        # conversion. Wizard FSM state under state.metadata["wizard"] is
+        # nested, so a shallow dict() copy is insufficient.
         return Record(
             data=data,
-            storage_id=state.conversation_id
+            storage_id=state.conversation_id,
+            metadata=copy.deepcopy(state.metadata),
         )
 
     def _record_to_state(self, record: Any) -> ConversationState:

@@ -2,10 +2,11 @@
 
 import os
 import time
-from typing import Any
+from typing import Any, Generator
 
 import pytest
 import requests
+from dataknobs_common.testing import safe_sql_ident
 
 
 def is_ollama_available(
@@ -161,3 +162,132 @@ def ollama_extractor_config(
         "model": ollama_model,
         "temperature": 0.0,  # Deterministic for testing
     }
+
+
+# ---------------------------------------------------------------------------
+# Postgres fixtures (duplicated from packages/data/tests/integration/conftest.py)
+#
+# The data-package fixtures aren't part of its public API, so we duplicate the
+# minimal subset needed to exercise SQL-backend routing in the LLM package's
+# storage tests. If a future item consolidates this, the source of truth lives
+# in packages/data/tests/integration/conftest.py.
+# ---------------------------------------------------------------------------
+
+
+def wait_for_postgres(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    max_retries: int = 30,
+) -> bool:
+    """Wait for PostgreSQL to become reachable on the maintenance database."""
+    import psycopg2
+
+    for i in range(max_retries):
+        try:
+            conn = psycopg2.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database="postgres",
+            )
+            conn.close()
+            return True
+        except psycopg2.OperationalError:
+            if i == max_retries - 1:
+                raise
+            time.sleep(1)
+    return False
+
+
+@pytest.fixture(scope="session")
+def postgres_connection_params() -> dict[str, Any]:
+    """PostgreSQL connection parameters for integration tests."""
+    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
+        default_host = "postgres"
+    else:
+        default_host = "localhost"
+
+    return {
+        "host": os.environ.get("POSTGRES_HOST", default_host),
+        "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
+        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "database": os.environ.get("POSTGRES_DB", "dataknobs_test"),
+    }
+
+
+@pytest.fixture(scope="session")
+def ensure_postgres_ready(postgres_connection_params: dict[str, Any]) -> None:
+    """Ensure PostgreSQL is reachable and the test database exists."""
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    wait_for_postgres(
+        host=postgres_connection_params["host"],
+        port=postgres_connection_params["port"],
+        user=postgres_connection_params["user"],
+        password=postgres_connection_params["password"],
+    )
+
+    conn = psycopg2.connect(
+        host=postgres_connection_params["host"],
+        port=postgres_connection_params["port"],
+        user=postgres_connection_params["user"],
+        password=postgres_connection_params["password"],
+        database="postgres",
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s",
+            (postgres_connection_params["database"],),
+        )
+        if not cursor.fetchone():
+            cursor.execute(
+                f"CREATE DATABASE {safe_sql_ident(postgres_connection_params['database'])}"
+            )
+    except psycopg2.errors.DuplicateDatabase:
+        pass
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@pytest.fixture
+def postgres_test_db(
+    ensure_postgres_ready: None,
+    postgres_connection_params: dict[str, Any],
+) -> Generator[dict[str, Any], None, None]:
+    """Provide a clean PostgreSQL table per test, dropped on teardown."""
+    import uuid
+
+    import psycopg2
+
+    test_id = uuid.uuid4().hex[:8]
+    config = postgres_connection_params.copy()
+    config["table"] = f"test_conversations_{test_id}"
+    config["schema"] = "public"
+
+    yield config
+
+    conn = psycopg2.connect(
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+        password=config["password"],
+        database=config["database"],
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DROP TABLE IF EXISTS {safe_sql_ident(config['schema'])}."
+            f"{safe_sql_ident(config['table'])} CASCADE"
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()

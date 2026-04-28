@@ -22,6 +22,7 @@ from dataknobs_common.testing import (
     requires_ollama_model,
     requires_package,
     requires_redis,
+    safe_sql_ident,
 )
 
 
@@ -258,3 +259,44 @@ class TestFileHelpers:
 
         for file_path in files:
             assert Path(file_path).parent == tmp_path
+
+
+class TestSafeSqlIdent:
+    """Tests for the safe_sql_ident helper."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "public",
+            "test_records_abc12345",
+            "_x",
+            "X1",
+            "schema_name",
+            "T",
+        ],
+    )
+    def test_valid_identifier_returned_unchanged(self, name: str) -> None:
+        assert safe_sql_ident(name) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "",
+            "1abc",
+            "a-b",
+            "a.b",
+            "a; DROP TABLE x",
+            "a b",
+            'a"b',
+            "a'b",
+            "a;b",
+        ],
+    )
+    def test_invalid_identifier_raises(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Invalid SQL identifier"):
+            safe_sql_ident(name)
+
+    @pytest.mark.parametrize("value", [None, 123, b"public", ["public"]])
+    def test_non_string_input_raises(self, value: object) -> None:
+        with pytest.raises(ValueError, match="Invalid SQL identifier"):
+            safe_sql_ident(value)  # type: ignore[arg-type]

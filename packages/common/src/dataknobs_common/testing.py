@@ -10,6 +10,7 @@ Example:
         is_ollama_available,
         requires_ollama,
         get_test_bot_config,
+        safe_sql_ident,
     )
 
     # Skip test if Ollama not available
@@ -24,16 +25,41 @@ Example:
 
     # Get test configuration
     config = get_test_bot_config(use_echo_llm=True)
+
+    # Validate SQL identifiers built from env vars / hardcoded defaults /
+    # uuid suffixes before f-string interpolation in test fixtures
+    cursor.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(table)}")
     ```
 """
 
 import importlib.util
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# SQL Identifier Validation
+
+
+_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def safe_sql_ident(name: str) -> str:
+    """Validate that ``name`` is a safe unquoted SQL identifier.
+
+    Returns the name unchanged when valid; raises ``ValueError`` otherwise.
+    Intended for test-fixture identifier interpolation where the value comes
+    from environment variables, hardcoded defaults, or uuid-based suffixes —
+    not for arbitrary user input. For production code use the database
+    driver's quoting facility (e.g. ``psycopg2.extensions.quote_ident``).
+    """
+    if not isinstance(name, str) or not _SQL_IDENT_RE.fullmatch(name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
 
 
 # Service Availability Checks

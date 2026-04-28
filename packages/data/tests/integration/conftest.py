@@ -9,6 +9,7 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import requests
 
+from dataknobs_common.testing import safe_sql_ident
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 from dataknobs_utils.requests_utils import RequestHelper
 
@@ -136,9 +137,14 @@ def ensure_postgres_ready(postgres_connection_params):
     cursor = conn.cursor()
     try:
         # Check if database exists first
-        cursor.execute(f"SELECT 1 FROM pg_database WHERE datname = '{postgres_connection_params['database']}'")
+        cursor.execute(
+            "SELECT 1 FROM pg_database WHERE datname = %s",
+            (postgres_connection_params["database"],),
+        )
         if not cursor.fetchone():
-            cursor.execute(f"CREATE DATABASE {postgres_connection_params['database']}")
+            cursor.execute(
+                f"CREATE DATABASE {safe_sql_ident(postgres_connection_params['database'])}"
+            )
     except psycopg2.errors.DuplicateDatabase:
         pass
     finally:
@@ -178,7 +184,10 @@ def postgres_test_db(ensure_postgres_ready, postgres_connection_params) -> Gener
     )
     try:
         cursor = conn.cursor()
-        cursor.execute(f"DROP TABLE IF EXISTS {config['schema']}.{config['table']} CASCADE")
+        cursor.execute(
+            f"DROP TABLE IF EXISTS {safe_sql_ident(config['schema'])}."
+            f"{safe_sql_ident(config['table'])} CASCADE"
+        )
         conn.commit()
     finally:
         cursor.close()

@@ -714,6 +714,22 @@ if state:
     print(f"Message count: {len(state.get_current_messages())}")
 ```
 
+#### Metadata propagation
+
+`state.metadata` is mirrored into the underlying `Record.metadata` on save,
+so backends with a dedicated metadata column (Postgres, Elasticsearch, etc.)
+can index and filter on it. `filter_metadata={"key": value}` translates to a
+`metadata.<key>` query that SQL backends route to the metadata column
+directly. The serialized state in the data column also still includes the
+metadata block, so loading a conversation and round-tripping it is
+unaffected.
+
+`state.metadata` is typed `Dict[str, Any]` and may contain JSON-serializable
+nested values; the persistence layer deep-copies `state.metadata` on save,
+so post-save mutations of nested values do not affect already-persisted
+rows. SQL backends index top-level keys, so nested-value filtering is
+outside the `filter_metadata` contract.
+
 ---
 
 ## Middleware

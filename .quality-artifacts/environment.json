@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-28T14:53:48Z",
+  "timestamp": "2026-04-28T20:30:35Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.7 (Homebrew 2026-04-15 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "3ad34ffebabd32fde444f82f93aeaad0f78fd166",
+  "git_branch": "sbk/fix-dropped-metadata",
+  "git_commit": "59b37d22d87a7639ea04cd5a692933fbd3098205",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -598,7 +598,7 @@ class TestDataknobsConversationStorage:
 
     async def test_save_and_load_conversation(self):
         """Test saving and loading a conversation."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         # Create storage with memory backend
@@ -629,7 +629,7 @@ class TestDataknobsConversationStorage:
 
     async def test_save_and_load_with_history(self):
         """Test saving and loading conversation with message history."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -673,7 +673,7 @@ class TestDataknobsConversationStorage:
 
     async def test_save_and_load_with_branching(self):
         """Test conversation with branches."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -730,7 +730,7 @@ class TestDataknobsConversationStorage:
 
     async def test_update_conversation(self):
         """Test updating an existing conversation."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -773,7 +773,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversation(self):
         """Test deleting a conversation."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -805,7 +805,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_nonexistent_conversation(self):
         """Test deleting a conversation that doesn't exist."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -816,7 +816,7 @@ class TestDataknobsConversationStorage:
 
     async def test_list_conversations(self):
         """Test listing all conversations."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -843,7 +843,7 @@ class TestDataknobsConversationStorage:
 
     async def test_list_conversations_with_filters(self):
         """Test listing conversations with metadata filters."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
         import uuid
 
@@ -873,7 +873,7 @@ class TestDataknobsConversationStorage:
 
     async def test_list_conversations_with_limit(self):
         """Test listing conversations with limit."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -898,7 +898,7 @@ class TestDataknobsConversationStorage:
 
     async def test_list_conversations_with_sort_by(self):
         """Test listing conversations with sort_by and sort_order."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -926,7 +926,7 @@ class TestDataknobsConversationStorage:
 
     async def test_list_conversations_sort_by_none_backward_compatible(self):
         """Test that sort_by=None preserves backward-compatible behavior."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -951,7 +951,7 @@ class TestDataknobsConversationStorage:
 
     async def test_load_nonexistent_conversation(self):
         """Test loading a conversation that doesn't exist."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -962,7 +962,7 @@ class TestDataknobsConversationStorage:
 
     async def test_search_by_content(self):
         """Test searching conversations by message content."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1019,7 +1019,7 @@ class TestDataknobsConversationStorage:
 
     async def test_search_by_time_range(self):
         """Test searching conversations by created_after and created_before."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1063,7 +1063,7 @@ class TestDataknobsConversationStorage:
 
     async def test_search_by_metadata(self):
         """Test searching conversations by metadata filters."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1093,7 +1093,7 @@ class TestDataknobsConversationStorage:
 
     async def test_search_combined_filters(self):
         """Test searching with content + metadata filters combined."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1154,7 +1154,7 @@ class TestDataknobsConversationStorage:
 
     async def test_search_empty_results(self):
         """Test search returning no results."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1184,7 +1184,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversations_by_metadata(self):
         """Test deleting conversations matching metadata filter."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1216,7 +1216,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversations_by_content(self):
         """Test deleting conversations containing specific text."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1261,7 +1261,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversations_combined_filters(self):
         """Test deleting with content + metadata filters applied together."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1327,7 +1327,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversations_no_matches(self):
         """Test delete with no matching conversations returns empty list."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1356,7 +1356,7 @@ class TestDataknobsConversationStorage:
 
     async def test_delete_conversations_requires_filter(self):
         """Test that ValueError is raised when no filters provided."""
-        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
         from dataknobs_llm.conversations import DataknobsConversationStorage
 
         backend = AsyncMemoryDatabase()
@@ -1364,3 +1364,76 @@ class TestDataknobsConversationStorage:
 
         with pytest.raises(ValueError, match="At least one filter"):
             await storage.delete_conversations()
+
+    async def test_state_to_record_populates_record_metadata(self):
+        """`_state_to_record` must mirror `state.metadata` into
+        `Record.metadata` so backends with a dedicated metadata column
+        (postgres, elasticsearch, etc.) can index and filter on it.
+
+        Reproduces a bug where ``list_conversations(filter_metadata=...)``
+        returned zero rows on Postgres because ``record.metadata`` was
+        empty and the SQL filter routed to a NULL column, even though
+        ``state.metadata`` had been populated by the caller.
+        """
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        root = ConversationNode(
+            message=LLMMessage(role="system", content="x"),
+            node_id="",
+        )
+        state = ConversationState(
+            conversation_id="conv-meta-mirror",
+            message_tree=Tree(root),
+            metadata={
+                "domain_id": "prompt-engineering",
+                "user_id": "alice",
+                "session_id": "s-1",
+                # Nested wizard-shaped value, mirroring what
+                # dataknobs_bots.reasoning.wizard writes into
+                # state.metadata["wizard"]. Exercises the deep-copy
+                # contract — a shallow ``dict(state.metadata)`` would
+                # alias these inner containers.
+                "wizard": {
+                    "history": ["s1", "s2"],
+                    "data": {"name": "alice"},
+                },
+            },
+        )
+
+        record = storage._state_to_record(state)
+
+        # Contract: record.metadata must reflect state.metadata so SQL
+        # backends with a dedicated metadata column can index it.
+        assert record.metadata == state.metadata, (
+            f"record.metadata={record.metadata!r} did not mirror "
+            f"state.metadata={state.metadata!r}"
+        )
+
+        # Round-trip property is preserved (record.data still carries
+        # the full serialized state including the metadata key).
+        assert record.fields["metadata"].value == {
+            "domain_id": "prompt-engineering",
+            "user_id": "alice",
+            "session_id": "s-1",
+            "wizard": {
+                "history": ["s1", "s2"],
+                "data": {"name": "alice"},
+            },
+        }
+
+        # Deep-copy contract on the metadata column: post-save mutations
+        # of state.metadata — including nested lists and nested dicts —
+        # must not leak into record.metadata. Wizard FSM state mutates
+        # in place across turns, so a shallow copy here would silently
+        # rewrite already-persisted snapshots.
+        state.metadata["domain_id"] = "different"
+        state.metadata["wizard"]["history"].append("s3")
+        state.metadata["wizard"]["data"]["name"] = "bob"
+
+        assert record.metadata["domain_id"] == "prompt-engineering"
+        assert record.metadata["wizard"]["history"] == ["s1", "s2"]
+        assert record.metadata["wizard"]["data"]["name"] == "alice"
