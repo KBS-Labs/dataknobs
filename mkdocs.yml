@@ -69,6 +69,7 @@ nav:
       - packages/common/events.md
       - packages/common/postgres-config.md
       - packages/common/ratelimit.md
+      - packages/common/testing.md
       - packages/common/api.md
     - Config:
       - packages/config/index.md
