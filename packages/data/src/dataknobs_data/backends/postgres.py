@@ -32,7 +32,7 @@ from .postgres_mixins import (
     PostgresTableManager,
     PostgresVectorSupport,
 )
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager, validate_field_name
 from ..vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -2213,6 +2213,9 @@ class AsyncPostgresDatabase(
         """
         if not text_fields:
             return "COALESCE(data->>'content', '')"
+
+        for field in text_fields:
+            validate_field_name(field)
 
         parts = [f"COALESCE(data->>'{field}', '')" for field in text_fields]
         return " || ' ' || ".join(parts)

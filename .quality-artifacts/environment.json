@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-04-29T11:37:58Z",
+  "timestamp": "2026-04-29T12:17:35Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.7 (Homebrew 2026-04-15 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/safe-sql-identifier-followups-B",
-  "git_commit": "a86ab92796f9df00c5df9c5d07b77f5c76fc2883",
+  "git_branch": "sbk/sql-injection-non-identifier-positions",
+  "git_commit": "2fc0821b6f3e73e649d561b4602eec48552766ab",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

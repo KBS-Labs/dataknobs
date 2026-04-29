@@ -338,6 +338,36 @@ class PostgresDB:
                 conn.commit()
         return rowcount
 
+    @staticmethod
+    def _build_insert_columns(columns: list[str]) -> str:
+        """Build a quoted comma-separated column list for INSERT statements."""
+        return ", ".join(quote_ident(col) for col in columns)
+
+    @staticmethod
+    def _psql_schema_line(df: pd.DataFrame, col: str) -> str:
+        """Build a single quoted column definition line for CREATE TABLE."""
+        q_col = quote_ident(col)
+        dtype = df[col].dtype
+        # isinstance check distinguishes numpy dtypes from pandas ExtensionDtypes
+        # (e.g. StringDtype) that have a .type attribute but are not np.issubdtype-safe
+        if isinstance(dtype, np.dtype):
+            if np.issubdtype(dtype, np.integer):
+                return f"{q_col} integer"
+            if np.issubdtype(dtype, np.floating):
+                return f"{q_col} real"
+            raw = df[col].str.len().max()
+            maxlen = int(raw) if pd.notna(raw) else 1
+            return f"{q_col} varchar({maxlen})"
+        # ExtensionDtype: nullable numeric types (Int8/Int64/Float32/Float64 etc.)
+        # and string/categorical — detect before falling through to varchar
+        if pd.api.types.is_integer_dtype(dtype):
+            return f"{q_col} integer"
+        if pd.api.types.is_float_dtype(dtype):
+            return f"{q_col} real"
+        raw = df[col].str.len().max()
+        maxlen = int(raw) if pd.notna(raw) else 1
+        return f"{q_col} varchar({maxlen})"
+
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload DataFrame data to a database table.
 
@@ -347,7 +377,7 @@ class PostgresDB:
             table_name: Name of the table to insert data into.
             df: DataFrame with columns matching table fields and data to upload.
         """
-        fields = ", ".join(df.columns)
+        fields = self._build_insert_columns(list(df.columns))
         template = ", ".join(["%s"] * len(df.columns))
         if table_name not in self.table_names:
             self._create_table(table_name, df)
@@ -372,32 +402,11 @@ class PostgresDB:
             table_name: Name of the table to create.
             df: DataFrame whose columns and types define the table schema.
         """
-
-        def psql_schema_line(df: pd.DataFrame, col: str) -> str:
-            line = None
-            dtype = df[col].dtype
-            # Check if it's a numpy dtype (not an ExtensionDtype)
-            if hasattr(dtype, "type"):
-                if np.issubdtype(dtype, np.integer):
-                    line = f"{col} integer"
-                elif np.issubdtype(dtype, np.float64):
-                    line = f"{col} real"
-                else:
-                    maxlen = max(df[col].str.len())
-                    line = f"{col} varchar({maxlen})"
-            else:
-                # Handle ExtensionDtype or other types as varchar
-                maxlen = max(df[col].str.len())
-                line = f"{col} varchar({maxlen})"
-            return line
-
-        def build_create_table_sql(df: pd.DataFrame, table_name: str) -> str:
-            schema_lines = ",".join([psql_schema_line(df, col) for col in df.columns])
-            return f"CREATE TABLE IF NOT EXISTS {quote_ident(table_name)} ({schema_lines})"
-
+        schema_lines = ",".join(self._psql_schema_line(df, col) for col in df.columns)
+        sql = f"CREATE TABLE IF NOT EXISTS {quote_ident(table_name)} ({schema_lines})"
         self._tables_df = None
         self._table_names = None
-        self.execute(build_create_table_sql(df, table_name))
+        self.execute(sql)
 
 
 class PostgresRecordFetcher(RecordFetcher):
