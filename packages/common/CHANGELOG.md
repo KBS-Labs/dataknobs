@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.3.11 - 2026-04-29
+
 ### Test Infrastructure
 - `dataknobs_common.testing` is now a package (was a single file). All
   existing imports continue to work unchanged via re-exports from

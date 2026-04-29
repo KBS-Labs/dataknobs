@@ -8,11 +8,11 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common>=1.3.10",
+    "dataknobs-common>=1.3.11",
     "dataknobs-config>=0.3.10",
-    "dataknobs-llm>=0.5.8",
-    "dataknobs-data>=0.4.15",
-    "dataknobs-utils>=1.2.8",
+    "dataknobs-llm>=0.5.9",
+    "dataknobs-data>=0.4.16",
+    "dataknobs-utils>=1.2.9",
     "dataknobs-xization>=1.3.3",
     "dataknobs-fsm>=0.1.16",
     "pyyaml>=6.0",

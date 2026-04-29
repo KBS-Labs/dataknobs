@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.5.9 - 2026-04-29
+
 ### Test Infrastructure
 - Postgres integration fixtures and the `test_storage_postgres.py` asyncpg
   call site now validate interpolated SQL identifiers via

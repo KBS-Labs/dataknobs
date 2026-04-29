@@ -14,7 +14,7 @@
       "name": "common",
       "pypi_name": "dataknobs-common",
       "description": "Foundation library with exceptions, registries, serialization, and event bus",
-      "version": "1.3.10",
+      "version": "1.3.11",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Unified data abstraction layer with multiple backends",
-      "version": "0.4.15",
+      "version": "0.4.16",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "Unified LLM abstraction with prompt management and conversations",
-      "version": "0.5.8",
+      "version": "0.5.9",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utilities for file I/O, JSON processing, HTTP requests, and integrations",
-      "version": "1.2.8",
+      "version": "1.2.9",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -86,7 +86,7 @@
       "name": "legacy",
       "pypi_name": "dataknobs",
       "description": "Legacy compatibility package",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "legacy",
       "requires_docs_build": false,
       "deprecated": true
