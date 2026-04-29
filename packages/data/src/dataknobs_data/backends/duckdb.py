@@ -511,7 +511,7 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
                 # Check which records were actually updated
                 update_ids = [record_id for record_id, _ in updates]
                 placeholders = ", ".join(["?" for _ in update_ids])
-                check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+                check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
                 rows = self.conn.execute(check_query, update_ids).fetchall()
                 existing_ids = {row[0] for row in rows}
@@ -552,7 +552,7 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         with self._lock:
             # Check which IDs exist before deletion
             placeholders = ", ".join(["?" for _ in ids])
-            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
             rows = self.conn.execute(check_query, ids).fetchall()
             existing_ids = {row[0] for row in rows}
@@ -593,7 +593,7 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
     def _count_all_sync(self) -> int:
         """Synchronous count all implementation."""
         with self._lock:
-            result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_name}").fetchone()
+            result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}").fetchone()
         return result[0] if result else 0
 
     async def stream_read(
@@ -1020,7 +1020,7 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
             # Check which records were actually updated
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
             rows = self.conn.execute(check_query, update_ids).fetchall()
             existing_ids = {row[0] for row in rows}
@@ -1050,7 +1050,7 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
         rows = self.conn.execute(check_query, ids).fetchall()
         existing_ids = {row[0] for row in rows}
@@ -1079,7 +1079,7 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
         """Count all records in the database."""
         self._check_connection()
 
-        result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_name}").fetchone()
+        result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}").fetchone()
         return result[0] if result else 0
 
     def stream_read(

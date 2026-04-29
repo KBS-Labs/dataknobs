@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
+from dataknobs_utils.sql_utils import quote_ident
+
 from ..query import Filter, Operator, Query, SortOrder
 from ..records import Record
 
@@ -151,8 +153,8 @@ class SQLQueryBuilder:
     def _get_qualified_table_name(self) -> str:
         """Get the fully qualified table name."""
         if self.schema_name:
-            return f"{self.schema_name}.{self.table_name}"
-        return self.table_name
+            return f"{quote_ident(self.schema_name)}.{quote_ident(self.table_name)}"
+        return quote_ident(self.table_name)
 
     def _get_param_placeholder(self, param_num: int, param_name: str | None = None) -> str:
         """Get the appropriate parameter placeholder based on param_style.
@@ -914,8 +916,8 @@ class SQLTableManager:
     def _get_qualified_table_name(self) -> str:
         """Get the fully qualified table name."""
         if self.schema_name:
-            return f"{self.schema_name}.{self.table_name}"
-        return self.table_name
+            return f"{quote_ident(self.schema_name)}.{quote_ident(self.table_name)}"
+        return quote_ident(self.table_name)
 
     def get_create_table_sql(self) -> str:
         """Get the CREATE TABLE SQL statement.
@@ -933,10 +935,10 @@ class SQLTableManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_data")}
             ON {self.qualified_table} USING GIN (data);
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_metadata
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_metadata")}
             ON {self.qualified_table} USING GIN (metadata);
             """
         elif self.dialect == "sqlite":
@@ -950,10 +952,10 @@ class SQLTableManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_created")}
             ON {self.qualified_table} (created_at);
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_updated
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_updated")}
             ON {self.qualified_table} (updated_at);
             """
         elif self.dialect == "duckdb":
@@ -967,10 +969,10 @@ class SQLTableManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_created")}
             ON {self.qualified_table} (created_at);
 
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_updated
+            CREATE INDEX IF NOT EXISTS {quote_ident(f"idx_{self.table_name}_updated")}
             ON {self.qualified_table} (updated_at);
             """
         else:

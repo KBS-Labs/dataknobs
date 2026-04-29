@@ -29,13 +29,13 @@ class TestSQLBase:
         assert builder.table_name == "test_table"
         assert builder.schema_name is None
         assert builder.dialect == "standard"
-        assert builder.qualified_table == "test_table"
-        
+        assert builder.qualified_table == '"test_table"'
+
         # With schema
         builder = SQLQueryBuilder("test_table", schema_name="public", dialect="postgres")
         assert builder.schema_name == "public"
         assert builder.dialect == "postgres"
-        assert builder.qualified_table == "public.test_table"
+        assert builder.qualified_table == '"public"."test_table"'
     
     def test_query_builder_postgres_dialect(self):
         """Test PostgreSQL specific query building."""
@@ -138,12 +138,12 @@ class TestSQLBase:
         # Standard SQL
         manager = SQLTableManager("test_table", dialect="standard")
         sql = manager.get_create_table_sql()
-        assert "CREATE TABLE IF NOT EXISTS test_table" in sql
-        
+        assert 'CREATE TABLE IF NOT EXISTS "test_table"' in sql
+
         # PostgreSQL with schema
         manager = SQLTableManager("test_table", schema_name="public", dialect="postgres", param_style="numeric")
         sql = manager.get_create_table_sql()
-        assert "public.test_table" in sql
+        assert '"public"."test_table"' in sql
         assert "JSONB" in sql
         assert "GIN" in sql
         
@@ -155,7 +155,7 @@ class TestSQLBase:
         
         # Drop table
         sql = manager.get_drop_table_sql()
-        assert "DROP TABLE IF EXISTS test_table" in sql
+        assert 'DROP TABLE IF EXISTS "test_table"' in sql
     
     def test_complex_query_not_operator(self):
         """Test NOT operator in complex queries."""

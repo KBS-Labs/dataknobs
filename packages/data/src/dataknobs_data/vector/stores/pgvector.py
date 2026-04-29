@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_utils.sql_utils import quote_ident
 
 from ..types import DistanceMetric
 from .base import VectorStore
@@ -166,6 +167,9 @@ class PgVectorStore(VectorStore):
 
         self.table_name = self.config.get("table_name", "knowledge_embeddings")
         self.schema = self.config.get("schema", "edubot")
+        self._q_schema = quote_ident(self.schema)
+        self._q_table = quote_ident(self.table_name)
+        self._q_qualified = f"{self._q_schema}.{self._q_table}"
         self.pool_min_size = self.config.get("pool_min_size", 2)
         self.pool_max_size = self.config.get("pool_max_size", 10)
 
@@ -481,7 +485,7 @@ class PgVectorStore(VectorStore):
 
         col_embedding = self._col("embedding")
         operator_class = self._get_operator_class()
-        index_name = f"idx_{self.table_name}_{col_embedding}_{idx_type}"
+        index_name = quote_ident(f"idx_{self.table_name}_{col_embedding}_{idx_type}")
 
         async with self._pool.acquire() as conn:
             if idx_type == "hnsw":
@@ -489,7 +493,7 @@ class PgVectorStore(VectorStore):
                 ef_construction = idx_params.get("ef_construction", 64)
                 await conn.execute(f"""
                     CREATE INDEX {"IF NOT EXISTS" if if_not_exists else ""} {index_name}
-                    ON {self.schema}.{self.table_name}
+                    ON {self._q_qualified}
                     USING hnsw ({col_embedding} {operator_class})
                     WITH (m = {m}, ef_construction = {ef_construction})
                 """)
@@ -497,7 +501,7 @@ class PgVectorStore(VectorStore):
                 lists = idx_params.get("lists", 100)
                 await conn.execute(f"""
                     CREATE INDEX {"IF NOT EXISTS" if if_not_exists else ""} {index_name}
-                    ON {self.schema}.{self.table_name}
+                    ON {self._q_qualified}
                     USING ivfflat ({col_embedding} {operator_class})
                     WITH (lists = {lists})
                 """)
@@ -597,7 +601,7 @@ class PgVectorStore(VectorStore):
 
     async def _create_table(self, conn: asyncpg.Connection) -> None:
         """Create the embeddings table using configured column names."""
-        await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+        await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self._q_schema}")
 
         # Build ID column definition based on id_type
         if self.id_type == "uuid":
@@ -607,7 +611,7 @@ class PgVectorStore(VectorStore):
 
         # Build CREATE TABLE with configured column names
         await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {self.schema}.{self.table_name} (
+            CREATE TABLE IF NOT EXISTS {self._q_qualified} (
                 {id_def},
                 {self._col('domain_id')} VARCHAR(100),
                 {self._col('document_id')} VARCHAR(255),
@@ -624,12 +628,12 @@ class PgVectorStore(VectorStore):
         if self.auto_create_index and self.index_type == "hnsw":
             col_embedding = self._col("embedding")
             operator_class = self._get_operator_class()
-            index_name = f"idx_{self.table_name}_{col_embedding}_hnsw"
+            index_name = quote_ident(f"idx_{self.table_name}_{col_embedding}_hnsw")
             m = self.index_params.get("m", 16)
             ef_construction = self.index_params.get("ef_construction", 64)
             await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS {index_name}
-                ON {self.schema}.{self.table_name}
+                ON {self._q_qualified}
                 USING hnsw ({col_embedding} {operator_class})
                 WITH (m = {m}, ef_construction = {ef_construction})
             """)
@@ -674,11 +678,11 @@ class PgVectorStore(VectorStore):
         """
         col_updated_at = self._col('updated_at')
         await conn.execute(
-            f"ALTER TABLE {self.schema}.{self.table_name} "
+            f"ALTER TABLE {self._q_qualified} "
             f"ADD COLUMN IF NOT EXISTS {col_updated_at} TIMESTAMP"
         )
         await conn.execute(
-            f"ALTER TABLE {self.schema}.{self.table_name} "
+            f"ALTER TABLE {self._q_qualified} "
             f"ALTER COLUMN {col_updated_at} SET DEFAULT NOW()"
         )
 
@@ -753,7 +757,7 @@ class PgVectorStore(VectorStore):
                     conn,
                     "execute",
                     f"""
-                    INSERT INTO {self.schema}.{self.table_name}
+                    INSERT INTO {self._q_qualified}
                         ({self._col('id')}, {self._col('domain_id')},
                          {self._col('document_id')}, {self._col('chunk_index')},
                          {self._col('content')}, {self._col('embedding')},
@@ -829,7 +833,7 @@ class PgVectorStore(VectorStore):
                     f"""
                     SELECT {col_embedding}::text as embedding,
                            {col_metadata} as metadata{ts_select}
-                    FROM {self.schema}.{self.table_name}
+                    FROM {self._q_qualified}
                     WHERE {col_id} = $1{id_cast}
                     """,
                     vec_id,
@@ -887,7 +891,7 @@ class PgVectorStore(VectorStore):
                 conn,
                 "execute",
                 f"""
-                DELETE FROM {self.schema}.{self.table_name}
+                DELETE FROM {self._q_qualified}
                 WHERE {col_id} = ANY($1{id_array_cast})
                 """,
                 ids,
@@ -1028,7 +1032,7 @@ class PgVectorStore(VectorStore):
                     {score_expr} as score,
                     {col_metadata} as metadata,
                     {col_content} as content{ts_select}
-                FROM {self.schema}.{self.table_name}
+                FROM {self._q_qualified}
                 {where_sql}
                 ORDER BY {col_embedding} {distance_op} $1::vector
                 LIMIT {k}
@@ -1085,7 +1089,7 @@ class PgVectorStore(VectorStore):
                     conn,
                     "execute",
                     f"""
-                    UPDATE {self.schema}.{self.table_name}
+                    UPDATE {self._q_qualified}
                     SET {col_metadata} = $2::jsonb,
                         {col_updated_at} = NOW()
                     WHERE {col_id} = $1{id_cast}
@@ -1131,7 +1135,7 @@ class PgVectorStore(VectorStore):
 
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(
-                f"SELECT COUNT(*) FROM {self.schema}.{self.table_name} {where_sql}",
+                f"SELECT COUNT(*) FROM {self._q_qualified} {where_sql}",
                 *params,
             )
 
@@ -1152,7 +1156,7 @@ class PgVectorStore(VectorStore):
             rows = await conn.fetch(
                 f"""
                 SELECT DISTINCT key
-                FROM {self.schema}.{self.table_name},
+                FROM {self._q_qualified},
                      jsonb_object_keys({col_metadata}) AS key
                 """,
             )
@@ -1169,11 +1173,11 @@ class PgVectorStore(VectorStore):
         async with self._pool.acquire() as conn:
             if self.domain_id:
                 await conn.execute(
-                    f"DELETE FROM {self.schema}.{self.table_name} "
+                    f"DELETE FROM {self._q_qualified} "
                     f"WHERE {col_domain_id} = $1",
                     self.domain_id,
                 )
             else:
-                await conn.execute(f"TRUNCATE {self.schema}.{self.table_name}")
+                await conn.execute(f"TRUNCATE {self._q_qualified}")
 
         logger.info("Cleared pgvector store")

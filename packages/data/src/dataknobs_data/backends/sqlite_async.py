@@ -339,7 +339,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             # SQLite doesn't have RETURNING, so we need to verify each ID
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
             async with self.db.execute(check_query, update_ids) as check_cursor:
                 rows = await check_cursor.fetchall()
@@ -367,7 +367,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
         async with self.db.execute(check_query, ids) as cursor:
             rows = await cursor.fetchall()
@@ -401,7 +401,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         """Count all records in the database."""
         self._check_connection()
 
-        async with self.db.execute(f"SELECT COUNT(*) FROM {self.table_name}") as cursor:
+        async with self.db.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}") as cursor:
             result = await cursor.fetchone()
             return result[0] if result else 0
 

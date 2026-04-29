@@ -208,7 +208,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         metadata_json = json.dumps(record.metadata) if record.metadata else None
 
         # Build insert query for SQLite's standard table structure
-        query = f"INSERT INTO {self.table_name} (id, data, metadata) VALUES (?, ?, ?)"
+        query = f"INSERT INTO {self.table_manager.qualified_table} (id, data, metadata) VALUES (?, ?, ?)"
         params = [storage_id, data_json, metadata_json]
 
         cursor = self.conn.cursor()
@@ -264,7 +264,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         metadata_json = json.dumps(record.metadata) if record.metadata else None
 
         # Build update query
-        query = f"UPDATE {self.table_name} SET data = ?, metadata = ? WHERE id = ?"
+        query = f"UPDATE {self.table_manager.qualified_table} SET data = ?, metadata = ? WHERE id = ?"
         params = [data_json, metadata_json, id]
 
         cursor = self.conn.cursor()
@@ -316,11 +316,11 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         cursor = self.conn.cursor()
         try:
             # Get count before clearing
-            cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.table_name}")
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}")
             count = cursor.fetchone()[0]
-            
+
             # Clear the table
-            cursor.execute(f"DELETE FROM {self.table_manager.table_name}")
+            cursor.execute(f"DELETE FROM {self.table_manager.qualified_table}")
             self.conn.commit()
             
             return count
@@ -427,7 +427,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             # SQLite doesn't have RETURNING, so we need to verify each ID
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
             cursor.execute(check_query, update_ids)
             existing_ids = {row[0] for row in cursor.fetchall()}
 
@@ -455,7 +455,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
 
         cursor = self.conn.cursor()
         try:
@@ -491,7 +491,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         self._check_connection()
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}")
             result = cursor.fetchone()
             return result[0] if result else 0
         finally:

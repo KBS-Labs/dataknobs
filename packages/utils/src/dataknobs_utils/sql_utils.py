@@ -25,6 +25,30 @@ except ImportError:
 from dataknobs_utils.sys_utils import load_project_vars
 
 
+def quote_ident(name: str, dialect: str = "postgres") -> str:
+    """Return *name* as a double-quoted SQL identifier.
+
+    All three supported dialects (``postgres``, ``sqlite``, ``duckdb``)
+    follow the same SQL-standard rule: surround the name with ``"``,
+    escaping any internal ``"`` as ``""``.
+
+    Raises ``ValueError`` for empty or non-string input. Does **not**
+    split qualified names — ``"schema.table"`` is treated as a single
+    identifier that produces ``'"schema.table"'``. Splitting a qualified
+    name into parts and quoting each is the caller's responsibility.
+
+    Not for test code — use ``dataknobs_common.testing.safe_sql_ident``
+    for test-fixture identifier validation instead.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    _supported = {"postgres", "sqlite", "duckdb"}
+    if dialect not in _supported:
+        raise ValueError(f"Unsupported dialect: {dialect!r}. Supported: {_supported}")
+    # Standard SQL double-quoting rule (correct for postgres, sqlite, duckdb)
+    return '"' + name.replace('"', '""') + '"'
+
+
 class RecordFetcher(ABC):
     """Abstract base class for fetching records from a data source.
 
@@ -236,11 +260,10 @@ class PostgresDB:
         return self._tables_df
 
     def get_columns(self, table_name: str) -> pd.DataFrame:
-        return self.query(f"""
-            SELECT *
-            FROM information_schema.columns
-            WHERE table_name = '{table_name}'
-        """)
+        return self.query(
+            "SELECT * FROM information_schema.columns WHERE table_name = %(table_name)s",
+            params={"table_name": table_name},
+        )
 
     def table_head(self, table_name: str, n: int = 10) -> pd.DataFrame:
         """Get the first N rows from a table.
@@ -252,7 +275,7 @@ class PostgresDB:
         Returns:
             pd.DataFrame: First N rows from the table.
         """
-        return self.query(f"""SELECT * FROM {table_name} LIMIT {n}""")
+        return self.query(f"""SELECT * FROM {quote_ident(table_name)} LIMIT {n}""")
 
     def get_conn(self) -> Any:
         """Get a connection to the PostgreSQL database.
@@ -330,7 +353,7 @@ class PostgresDB:
             self._create_table(table_name, df)
         with self.get_conn() as conn:
             with conn.cursor() as curs:
-                sql = f"INSERT INTO {table_name} ({fields}) VALUES " + ",".join(
+                sql = f"INSERT INTO {quote_ident(table_name)} ({fields}) VALUES " + ",".join(
                     curs.mogrify(
                         f"({template})",
                         [str(row[col]) for col in df.columns],
@@ -370,7 +393,7 @@ class PostgresDB:
 
         def build_create_table_sql(df: pd.DataFrame, table_name: str) -> str:
             schema_lines = ",".join([psql_schema_line(df, col) for col in df.columns])
-            return f"CREATE TABLE IF NOT EXISTS {table_name} ({schema_lines})"
+            return f"CREATE TABLE IF NOT EXISTS {quote_ident(table_name)} ({schema_lines})"
 
         self._tables_df = None
         self._table_names = None
