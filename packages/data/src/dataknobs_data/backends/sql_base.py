@@ -16,6 +16,20 @@ from ..records import Record
 # Field name segments must be valid identifiers to prevent SQL injection.
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+
+def validate_field_name(field: str) -> None:
+    """Raise ValueError if *field* is not a safe SQL identifier segment.
+
+    Valid names match ``[A-Za-z_][A-Za-z0-9_]*``.  This check guards
+    string-literal positions in SQL (e.g. JSONB key slots) where
+    ``quote_ident()`` does not apply.
+    """
+    if not _FIELD_NAME_RE.match(field):
+        raise ValueError(
+            f"Invalid field name: {field!r}. "
+            f"Field names must match [A-Za-z_][A-Za-z0-9_]*."
+        )
+
 if TYPE_CHECKING:
     from ..query_logic import ComplexQuery
 
@@ -56,16 +70,18 @@ class SQLRecordSerializer:
         Returns:
             SQL expression to extract vector value
         """
+        validate_field_name(field_name)
+
         if dialect == "postgres":
             # PostgreSQL: Handle both formats - raw array or VectorField dict
-            return f"""CASE 
-                WHEN jsonb_typeof(data->'{field_name}') = 'object' 
+            return f"""CASE
+                WHEN jsonb_typeof(data->'{field_name}') = 'object'
                 THEN (data->'{field_name}'->>'value')::vector
                 ELSE (data->>'{field_name}')::vector
             END"""
         elif dialect == "sqlite":
             # SQLite doesn't have native vector type, return JSON string
-            return f"""CASE 
+            return f"""CASE
                 WHEN json_type(json_extract(data, '$.{field_name}')) = 'object'
                 THEN json_extract(data, '$.{field_name}.value')
                 ELSE json_extract(data, '$.{field_name}')

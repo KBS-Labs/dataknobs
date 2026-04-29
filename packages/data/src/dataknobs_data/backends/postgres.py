@@ -32,7 +32,7 @@ from .postgres_mixins import (
     PostgresTableManager,
     PostgresVectorSupport,
 )
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager, validate_field_name
 from ..vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -574,6 +574,9 @@ class SyncPostgresDatabase(
         config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from PostgreSQL."""
+        if query and query.filters:
+            for f in query.filters:
+                validate_field_name(f.field)
         self._check_connection()
         config = config or StreamConfig()
 
@@ -1847,6 +1850,9 @@ class AsyncPostgresDatabase(
         config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from PostgreSQL using cursor."""
+        if query and query.filters:
+            for f in query.filters:
+                validate_field_name(f.field)
         self._check_connection()
         config = config or StreamConfig()
 
@@ -2213,6 +2219,9 @@ class AsyncPostgresDatabase(
         """
         if not text_fields:
             return "COALESCE(data->>'content', '')"
+
+        for field in text_fields:
+            validate_field_name(field)
 
         parts = [f"COALESCE(data->>'{field}', '')" for field in text_fields]
         return " || ' ' || ".join(parts)
