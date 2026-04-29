@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from dataknobs_common.testing import safe_sql_ident
+
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_POSTGRES", "").lower() == "true",
@@ -108,7 +110,7 @@ async def pgvector_store(pgvector_config):
     try:
         async with store._pool.acquire() as conn:
             await conn.execute(
-                f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
             )
     except Exception:
         pass
@@ -395,7 +397,7 @@ class TestPgVectorStoreSearch:
             assert results[1][0] == "similar"
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_search_with_filter(self, pgvector_store):
@@ -480,7 +482,7 @@ class TestPgVectorStoreDistanceMetrics:
             assert results[0][0] == "origin"
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_inner_product_metric(self, ensure_pgvector_extension):
@@ -509,7 +511,7 @@ class TestPgVectorStoreDistanceMetrics:
             assert results[0][1] >= results[1][1]
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
 
@@ -571,7 +573,7 @@ class TestPgVectorStoreDomainIsolation:
         finally:
             # Cleanup - drop the shared table
             async with store1._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS public.{table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table_name)}")
             await store1.close()
             await store2.close()
 
@@ -613,7 +615,7 @@ class TestPgVectorStoreTextIds:
             assert await store.count() == 2
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
 
@@ -662,7 +664,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -691,7 +693,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -722,7 +724,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -758,7 +760,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -784,7 +786,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -815,7 +817,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -843,7 +845,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -882,7 +884,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                 )
             await store.close()
 
@@ -937,7 +939,7 @@ class TestPgVectorStoreIdTypeDefaults:
         finally:
             async with text_store._pool.acquire() as conn:
                 await conn.execute(
-                    f"DROP TABLE IF EXISTS public.{table_name}"
+                    f"DROP TABLE IF EXISTS public.{safe_sql_ident(table_name)}"
                 )
             await text_store.close()
 
@@ -980,7 +982,7 @@ class TestPgVectorStoreCustomColumns:
             assert len(results) == 2
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
 
@@ -1058,7 +1060,7 @@ class TestPgVectorStoreEdgeCases:
         async with pgvector_store._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT content, document_id FROM "
-                f"{pgvector_store.schema}.{pgvector_store.table_name} "
+                f"{safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1{id_cast}",
                 id_value,
             )
@@ -1165,7 +1167,7 @@ class TestPgVectorStoreIndexOperations:
             assert created is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_create_index_ivfflat_explicit(self, ensure_pgvector_extension):
@@ -1191,7 +1193,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_create_index_invalid_type(self, pgvector_store):
@@ -1223,7 +1225,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_ivfflat_not_auto_created_below_threshold(self, ensure_pgvector_extension):
@@ -1254,7 +1256,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_ivfflat_auto_created_above_threshold(self, ensure_pgvector_extension):
@@ -1289,7 +1291,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_no_auto_create_when_disabled(self, ensure_pgvector_extension):
@@ -1320,7 +1322,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
             await store.close()
 
     async def test_index_with_different_metrics(self, ensure_pgvector_extension):
@@ -1344,7 +1346,7 @@ class TestPgVectorStoreIndexOperations:
                 assert await store._check_index_exists() is True
             finally:
                 async with store._pool.acquire() as conn:
-                    await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                    await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
                 await store.close()
 
 
@@ -1412,7 +1414,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         async with pgvector_store._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT created_at, updated_at "
-                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"FROM {safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1",
                 "test-id-1",
             )
@@ -1434,7 +1436,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         async with pgvector_store._pool.acquire() as conn:
             first = await conn.fetchrow(
                 f"SELECT created_at, updated_at "
-                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"FROM {safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1",
                 "test-id-upsert",
             )
@@ -1449,7 +1451,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         async with pgvector_store._pool.acquire() as conn:
             second = await conn.fetchrow(
                 f"SELECT created_at, updated_at "
-                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"FROM {safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1",
                 "test-id-upsert",
             )
@@ -1472,7 +1474,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         async with pgvector_store._pool.acquire() as conn:
             first = await conn.fetchrow(
                 f"SELECT created_at, updated_at "
-                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"FROM {safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1",
                 "test-id-update-meta",
             )
@@ -1487,7 +1489,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         async with pgvector_store._pool.acquire() as conn:
             second = await conn.fetchrow(
                 f"SELECT created_at, updated_at "
-                f"FROM {pgvector_store.schema}.{pgvector_store.table_name} "
+                f"FROM {safe_sql_ident(pgvector_store.schema)}.{safe_sql_ident(pgvector_store.table_name)} "
                 f"WHERE id = $1",
                 "test-id-update-meta",
             )
@@ -1529,11 +1531,11 @@ class TestPgVectorStoreUpdatedAtColumn:
 
         conn = await asyncpg.connect(conn_str)
         try:
-            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {safe_sql_ident(schema)}")
             # Drop table if left from prior flaky test run.
-            await conn.execute(f"DROP TABLE IF EXISTS {schema}.{old_schema_table}")
+            await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}")
             await conn.execute(f"""
-                CREATE TABLE {schema}.{old_schema_table} (
+                CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} (
                     id TEXT PRIMARY KEY,
                     domain_id VARCHAR(100),
                     document_id VARCHAR(255),
@@ -1546,7 +1548,7 @@ class TestPgVectorStoreUpdatedAtColumn:
             """)
             # Insert a legacy row pre-migration.
             await conn.execute(
-                f"INSERT INTO {schema}.{old_schema_table} (id, content) "
+                f"INSERT INTO {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} (id, content) "
                 "VALUES ($1, $2)",
                 "legacy-row",
                 "legacy-content",
@@ -1564,7 +1566,7 @@ class TestPgVectorStoreUpdatedAtColumn:
             async with store._pool.acquire() as conn:
                 row = await conn.fetchrow(
                     f"SELECT created_at, updated_at "
-                    f"FROM {schema}.{old_schema_table} "
+                    f"FROM {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                     f"WHERE id = $1",
                     "legacy-row",
                 )
@@ -1582,7 +1584,7 @@ class TestPgVectorStoreUpdatedAtColumn:
                 await store.add_vectors(vectors, ids=["fresh-row"])
                 fresh = await conn.fetchrow(
                     f"SELECT updated_at "
-                    f"FROM {schema}.{old_schema_table} "
+                    f"FROM {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                     f"WHERE id = $1",
                     "fresh-row",
                 )
@@ -1592,7 +1594,7 @@ class TestPgVectorStoreUpdatedAtColumn:
             try:
                 async with store._pool.acquire() as conn:
                     await conn.execute(
-                        f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+                        f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}"
                     )
             except Exception:
                 pass
@@ -1614,10 +1616,10 @@ class TestPgVectorStoreUpdatedAtColumn:
 
         conn = await asyncpg.connect(conn_str)
         try:
-            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-            await conn.execute(f"DROP TABLE IF EXISTS {schema}.{table}")
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {safe_sql_ident(schema)}")
+            await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(table)}")
             await conn.execute(f"""
-                CREATE TABLE {schema}.{table} (
+                CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(table)} (
                     id TEXT PRIMARY KEY,
                     domain_id VARCHAR(100),
                     document_id VARCHAR(255),
@@ -1657,7 +1659,7 @@ class TestPgVectorStoreUpdatedAtColumn:
                 conn = await asyncpg.connect(conn_str)
                 try:
                     await conn.execute(
-                        f"DROP TABLE IF EXISTS {schema}.{table}"
+                        f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(table)}"
                     )
                 finally:
                     await conn.close()
@@ -1819,12 +1821,12 @@ class TestPgVectorStoreIncludeTimestamps:
 
         conn = await asyncpg.connect(conn_str)
         try:
-            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {safe_sql_ident(schema)}")
             await conn.execute(
-                f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+                f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}"
             )
             await conn.execute(f"""
-                CREATE TABLE {schema}.{old_schema_table} (
+                CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} (
                     id TEXT PRIMARY KEY,
                     domain_id VARCHAR(100),
                     document_id VARCHAR(255),
@@ -1839,7 +1841,7 @@ class TestPgVectorStoreIncludeTimestamps:
                 str(x) for x in np.random.rand(128).astype(np.float32).tolist()
             ) + "]"
             await conn.execute(
-                f"INSERT INTO {schema}.{old_schema_table} "
+                f"INSERT INTO {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                 f"(id, content, embedding, metadata) "
                 f"VALUES ($1, $2, $3::vector, $4::jsonb)",
                 "legacy-ts-row",
@@ -1872,7 +1874,7 @@ class TestPgVectorStoreIncludeTimestamps:
             try:
                 async with store._pool.acquire() as conn:
                     await conn.execute(
-                        f"DROP TABLE IF EXISTS {schema}.{old_schema_table}"
+                        f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}"
                     )
             except Exception:
                 pass

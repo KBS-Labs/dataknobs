@@ -23,6 +23,7 @@ import uuid
 import pytest
 from dataknobs_common.events import Event, EventType
 from dataknobs_common.events.postgres import PostgresEventBus
+from dataknobs_common.testing import safe_sql_ident
 
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
 from dataknobs_data.pooling.postgres import PostgresPoolConfig
@@ -198,9 +199,9 @@ async def test_one_config_feeds_all_postgres_constructs(
         )
         try:
             cur = conn.cursor()
-            cur.execute(f"DROP TABLE IF EXISTS public.{sync_table} CASCADE")
-            cur.execute(f"DROP TABLE IF EXISTS public.{async_table} CASCADE")
-            cur.execute(f"DROP TABLE IF EXISTS public.{vector_table} CASCADE")
+            cur.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(sync_table)} CASCADE")
+            cur.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(async_table)} CASCADE")
+            cur.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(vector_table)} CASCADE")
             conn.commit()
         finally:
             cur.close()
@@ -338,8 +339,8 @@ async def test_env_fallbacks_feed_all_postgres_constructs(
         )
         try:
             cur = conn.cursor()
-            cur.execute(f"DROP TABLE IF EXISTS public.{sync_table} CASCADE")
-            cur.execute(f"DROP TABLE IF EXISTS public.{vector_table} CASCADE")
+            cur.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(sync_table)} CASCADE")
+            cur.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(vector_table)} CASCADE")
             conn.commit()
         finally:
             cur.close()

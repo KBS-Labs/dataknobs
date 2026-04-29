@@ -7,6 +7,7 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+from dataknobs_common.testing import safe_sql_ident
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
 
@@ -47,7 +48,7 @@ def ensure_test_database():
         
         if not exists:
             # Create the database
-            cur.execute(f"CREATE DATABASE {db_name}")
+            cur.execute(f"CREATE DATABASE {safe_sql_ident(db_name)}")
         
         cur.close()
         conn.close()

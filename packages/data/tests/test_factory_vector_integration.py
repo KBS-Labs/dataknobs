@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 from collections import OrderedDict
 
+from dataknobs_common.testing import safe_sql_ident
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.records import Record
 from dataknobs_data.fields import VectorField
@@ -227,7 +228,7 @@ class TestFactoryVectorIntegration:
                     password=os.environ.get("POSTGRES_PASSWORD", "postgres")
                 )
                 cursor = conn.cursor()
-                cursor.execute(f"DROP TABLE IF EXISTS public.{table_name}")
+                cursor.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table_name)}")
                 conn.commit()
                 cursor.close()
                 conn.close()
