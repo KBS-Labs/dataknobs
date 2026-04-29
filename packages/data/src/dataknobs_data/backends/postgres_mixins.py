@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_utils.sql_utils import quote_ident
 
 from ..records import Record
 from .sql_base import SQLTableManager
@@ -116,6 +117,9 @@ class PostgresBaseConfig(VectorConfigMixin):
         """
         self.table_name = table_name
         self.schema_name = schema_name
+        self._q_table = quote_ident(table_name)
+        self._q_schema = quote_ident(schema_name)
+        self._q_qualified = f"{self._q_schema}.{self._q_table}"
         self._connected = False
         self._ensure_database_enabled = ensure_database
         self.auto_create_table = auto_create_table
@@ -130,29 +134,55 @@ class PostgresTableManager:
     @staticmethod
     def get_create_table_sql(schema_name: str, table_name: str) -> str:
         """Get SQL for creating the records table with indexes.
-        
+
         Args:
             schema_name: Database schema name
             table_name: Database table name
-            
+
         Returns:
             SQL string for table creation
         """
+        q_schema = quote_ident(schema_name)
+        q_table = quote_ident(table_name)
+        q_idx_data = quote_ident(f"idx_{table_name}_data")
+        q_idx_meta = quote_ident(f"idx_{table_name}_metadata")
         return f"""
-        CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
+        CREATE TABLE IF NOT EXISTS {q_schema}.{q_table} (
             id TEXT PRIMARY KEY,
             data JSONB NOT NULL,
             metadata JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_data 
-        ON {schema_name}.{table_name} USING GIN (data);
-        
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_metadata
-        ON {schema_name}.{table_name} USING GIN (metadata);
+
+        CREATE INDEX IF NOT EXISTS {q_idx_data}
+        ON {q_schema}.{q_table} USING GIN (data);
+
+        CREATE INDEX IF NOT EXISTS {q_idx_meta}
+        ON {q_schema}.{q_table} USING GIN (metadata);
         """
+
+    @staticmethod
+    def get_table_exists_sql(schema_name: str, table_name: str) -> tuple[str, tuple[str, str]]:
+        """Return ``(sql, params)`` to check if a table exists via parameterized query.
+
+        Uses ``$1``/``$2`` positional binding for asyncpg.
+
+        Args:
+            schema_name: Database schema name
+            table_name: Database table name
+
+        Returns:
+            Tuple of (sql_string, params_tuple) for asyncpg ``fetchval(sql, *params)``
+        """
+        sql = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_schema = $1
+            AND table_name = $2
+        )
+        """
+        return sql, (schema_name, table_name)
 
 class PostgresVectorSupport:
     """Shared vector support detection and management."""

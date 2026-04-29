@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 import asyncpg
 from dataknobs_config import ConfigurableBase
 
-from dataknobs_utils.sql_utils import PostgresDB
+from dataknobs_utils.sql_utils import PostgresDB, quote_ident
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..pooling import ConnectionPoolManager
@@ -290,7 +290,7 @@ class SyncPostgresDatabase(
         row = self._record_to_row(record, id)
 
         sql = f"""
-        INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+        INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES (%(id)s, %(data)s, %(metadata)s)
         """
         self.db.execute(sql, row)
@@ -301,7 +301,7 @@ class SyncPostgresDatabase(
         self._check_connection()
         sql = f"""
         SELECT id, data, metadata
-        FROM {self.schema_name}.{self.table_name}
+        FROM {self._q_qualified}
         WHERE id = %(id)s
         """
         df = self.db.query(sql, {"id": id})
@@ -326,7 +326,7 @@ class SyncPostgresDatabase(
         row = self._record_to_row(record, id)
 
         sql = f"""
-        UPDATE {self.schema_name}.{self.table_name}
+        UPDATE {self._q_qualified}
         SET data = %(data)s, metadata = %(metadata)s, updated_at = CURRENT_TIMESTAMP
         WHERE id = %(id)s
         """
@@ -344,7 +344,7 @@ class SyncPostgresDatabase(
         """Delete a record by ID."""
         self._check_connection()
         sql = f"""
-        DELETE FROM {self.schema_name}.{self.table_name}
+        DELETE FROM {self._q_qualified}
         WHERE id = %(id)s
         """
         result = self.db.execute(sql, {"id": id})
@@ -354,7 +354,7 @@ class SyncPostgresDatabase(
         """Check if a record exists."""
         self._check_connection()
         sql = f"""
-        SELECT 1 FROM {self.schema_name}.{self.table_name}
+        SELECT 1 FROM {self._q_qualified}
         WHERE id = %(id)s
         LIMIT 1
         """
@@ -389,7 +389,7 @@ class SyncPostgresDatabase(
             # Insert with specific ID
             row = self._record_to_row(record, id)
             sql = f"""
-            INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+            INSERT INTO {self._q_qualified} (id, data, metadata)
             VALUES (%(id)s, %(data)s, %(metadata)s)
             """
             self.db.execute(sql, row)
@@ -435,7 +435,7 @@ class SyncPostgresDatabase(
     def _count_all(self) -> int:
         """Count all records in the database."""
         self._check_connection()
-        sql = f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"
+        sql = f"SELECT COUNT(*) as count FROM {self._q_qualified}"
         df = self.db.query(sql)
         return int(df.iloc[0]["count"]) if not df.empty else 0
 
@@ -446,7 +446,7 @@ class SyncPostgresDatabase(
         count = self._count_all()
 
         # Delete all records
-        sql = f"TRUNCATE TABLE {self.schema_name}.{self.table_name}"
+        sql = f"TRUNCATE TABLE {self._q_qualified}"
         self.db.execute(sql)
 
         return count
@@ -578,7 +578,7 @@ class SyncPostgresDatabase(
         config = config or StreamConfig()
 
         # Build SQL query
-        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
+        sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
         params = {}
 
         if query and query.filters:
@@ -686,7 +686,7 @@ class SyncPostgresDatabase(
             params[f"metadata_{i}"] = row["metadata"]
 
         sql = f"""
-        INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+        INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES {', '.join(values)}
         """
         self.db.execute(sql, params)
@@ -746,7 +746,7 @@ class SyncPostgresDatabase(
             data,
             metadata,
             {vector_expr} {operator} %(p0)s::vector AS distance
-        FROM {self.schema_name}.{self.table_name}
+        FROM {self._q_qualified}
         WHERE data ? %(p1)s  -- Check field exists
         """
 
@@ -1053,7 +1053,7 @@ class AsyncPostgresDatabase(
             if not existing:
                 # Add vector column
                 alter_sql = f"""
-                ALTER TABLE {self.schema_name}.{self.table_name}
+                ALTER TABLE {self._q_qualified}
                 ADD COLUMN IF NOT EXISTS {column_name} vector({dimensions})
                 """
                 try:
@@ -1065,7 +1065,7 @@ class AsyncPostgresDatabase(
                     from .postgres_vector import build_vector_index_sql, get_optimal_index_type
 
                     # Get row count for optimal index selection
-                    count_sql = f"SELECT COUNT(*) FROM {self.schema_name}.{self.table_name}"
+                    count_sql = f"SELECT COUNT(*) FROM {self._q_qualified}"
                     count = await conn.fetchval(count_sql)
 
                     index_type, index_params = get_optimal_index_type(count)
@@ -1148,7 +1148,7 @@ class AsyncPostgresDatabase(
                 param_num += 1
 
         sql = f"""
-        INSERT INTO {self.schema_name}.{self.table_name} ({', '.join(columns)})
+        INSERT INTO {self._q_qualified} ({', '.join(columns)})
         VALUES ({', '.join(placeholders)})
         """
 
@@ -1162,7 +1162,7 @@ class AsyncPostgresDatabase(
         self._check_connection()
         sql = f"""
         SELECT id, data, metadata
-        FROM {self.schema_name}.{self.table_name}
+        FROM {self._q_qualified}
         WHERE id = $1
         """
 
@@ -1188,7 +1188,7 @@ class AsyncPostgresDatabase(
         row = self._record_to_row(record, id)
 
         sql = f"""
-        UPDATE {self.schema_name}.{self.table_name}
+        UPDATE {self._q_qualified}
         SET data = $2, metadata = $3, updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
         """
@@ -1208,7 +1208,7 @@ class AsyncPostgresDatabase(
         """Delete a record by ID."""
         self._check_connection()
         sql = f"""
-        DELETE FROM {self.schema_name}.{self.table_name}
+        DELETE FROM {self._q_qualified}
         WHERE id = $1
         """
 
@@ -1222,7 +1222,7 @@ class AsyncPostgresDatabase(
         """Check if a record exists."""
         self._check_connection()
         sql = f"""
-        SELECT 1 FROM {self.schema_name}.{self.table_name}
+        SELECT 1 FROM {self._q_qualified}
         WHERE id = $1
         LIMIT 1
         """
@@ -1257,7 +1257,7 @@ class AsyncPostgresDatabase(
         row = self._record_to_row(record, id)
 
         sql = f"""
-        INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+        INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES ($1, $2, $3)
         ON CONFLICT (id) DO UPDATE
         SET data = EXCLUDED.data, metadata = EXCLUDED.metadata, updated_at = CURRENT_TIMESTAMP
@@ -1307,7 +1307,7 @@ class AsyncPostgresDatabase(
     async def _count_all(self) -> int:
         """Count all records in the database."""
         self._check_connection()
-        sql = f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"
+        sql = f"SELECT COUNT(*) as count FROM {self._q_qualified}"
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(sql)
@@ -1321,7 +1321,7 @@ class AsyncPostgresDatabase(
         count = await self._count_all()
 
         # Delete all records
-        sql = f"TRUNCATE TABLE {self.schema_name}.{self.table_name}"
+        sql = f"TRUNCATE TABLE {self._q_qualified}"
 
         async with self._pool.acquire() as conn:
             await conn.execute(sql)
@@ -1486,7 +1486,7 @@ class AsyncPostgresDatabase(
         sql = f"""
         SELECT id, data, metadata, {vector_column},
                {vector_column} {operator} $1::vector AS distance
-        FROM {self.schema_name}.{self.table_name}
+        FROM {self._q_qualified}
         WHERE {vector_column} IS NOT NULL
         """
 
@@ -1733,7 +1733,9 @@ class AsyncPostgresDatabase(
 
         try:
             async with self._pool.acquire() as conn:
-                await conn.execute(f"DROP INDEX IF EXISTS {self.schema_name}.{index_name}")
+                await conn.execute(
+                    f"DROP INDEX IF EXISTS {self._q_schema}.{quote_ident(index_name)}"
+                )
             return True
         except Exception as e:
             logger.warning(f"Failed to drop vector index: {e}")
@@ -1782,7 +1784,7 @@ class AsyncPostgresDatabase(
         config = config or StreamConfig()
 
         # Build SQL query
-        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
+        sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
         params = []
 
         if query and query.filters:
@@ -1900,7 +1902,7 @@ class AsyncPostgresDatabase(
         # Use COPY for efficient bulk insert
         async with self._pool.acquire() as conn:
             await conn.copy_records_to_table(
-                f"{self.schema_name}.{self.table_name}",
+                f"{self._q_qualified}",
                 records=rows,
                 columns=["id", "data", "metadata"]
             )
@@ -2015,7 +2017,7 @@ class AsyncPostgresDatabase(
                         plainto_tsquery('english', $1)
                     ) DESC
                 ) as text_rank
-            FROM {self.schema_name}.{self.table_name}
+            FROM {self._q_qualified}
             WHERE to_tsvector('english', {self._build_text_field_concat(search_text_fields)}) @@ plainto_tsquery('english', $1)
             LIMIT {fetch_k}
         ),
@@ -2029,7 +2031,7 @@ class AsyncPostgresDatabase(
                 ROW_NUMBER() OVER (
                     ORDER BY {vector_column} {operator} $2::vector
                 ) as vector_rank
-            FROM {self.schema_name}.{self.table_name}
+            FROM {self._q_qualified}
             WHERE {vector_column} IS NOT NULL
             LIMIT {fetch_k}
         ),
@@ -2180,7 +2182,7 @@ class AsyncPostgresDatabase(
                 to_tsvector('english', {text_concat}),
                 plainto_tsquery('english', $1)
             ) as score
-        FROM {self.schema_name}.{self.table_name}
+        FROM {self._q_qualified}
         WHERE to_tsvector('english', {text_concat}) @@ plainto_tsquery('english', $1)
         ORDER BY score DESC
         LIMIT {k}

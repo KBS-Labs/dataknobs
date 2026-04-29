@@ -131,6 +131,7 @@ nav:
       - packages/utils/file-utils.md
       - packages/utils/elasticsearch.md
       - packages/utils/llm-utils.md
+      - packages/utils/sql-utils.md
       - packages/utils/api.md
     - FSM:
       - packages/fsm/index.md

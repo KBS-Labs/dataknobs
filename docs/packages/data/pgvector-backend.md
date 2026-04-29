@@ -550,6 +550,15 @@ pip install asyncpg
 - HNSW: Lower `ef_construction` (trades build time for recall)
 - IVFFlat: Fewer `lists` (trades recall for speed)
 
+## Identifier Quoting
+
+Schema and table names supplied via configuration are internally quoted using
+`quote_ident()` from `dataknobs_utils.sql_utils`. Any valid SQL identifier is
+accepted — including mixed-case names, reserved words, and names with spaces
+— without the consumer needing to pre-quote them. Existing consumers using
+simple `[a-z_][a-z0-9_]*` names see no behavior change (quoting is idempotent
+under correct SQL parsing).
+
 ## See Also
 
 - [Backends Overview](backends.md)
