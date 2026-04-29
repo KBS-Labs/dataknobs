@@ -120,9 +120,38 @@ db = SyncSQLiteDatabase({
     "synchronous": "NORMAL",
     
     # For async only - connection pool size (default: 5)
-    "pool_size": 10
+    "pool_size": 10,
+
+    # Create the records table on connect if missing (default: True).
+    # Set to False when an external migration tool owns DDL.
+    "auto_create_table": True
 })
 ```
+
+## Schema Ownership
+
+By default, the backend creates the records table on every `connect()` via
+`CREATE TABLE IF NOT EXISTS …`. Set `auto_create_table: False` to opt out when
+an external migration tool owns DDL:
+
+```python
+db = SyncSQLiteDatabase({
+    "path": "/path/to/database.db",
+    "auto_create_table": False,
+})
+db.connect()
+# → If the table does not exist, raises:
+#   RuntimeError: Table records does not exist and auto_create_table is
+#   disabled. Run your migrations before starting the application.
+```
+
+When `auto_create_table` is `False`:
+
+- `connect()` runs a single `SELECT EXISTS …` query to verify the table is present.
+- If the table is missing, `connect()` raises `RuntimeError` with a clear message.
+- If the table is present, `connect()` is a no-op for DDL.
+
+The default is `True`, preserving backward compatibility with all existing consumers.
 
 ## Advanced Features
 

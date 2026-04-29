@@ -32,7 +32,7 @@ from .postgres_mixins import (
     PostgresTableManager,
     PostgresVectorSupport,
 )
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer
+from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
 from ..vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -73,12 +73,19 @@ class SyncPostgresDatabase(
                 - schema: Schema name (default: "public")
                 - enable_vector: Enable vector support (default: False)
                 - ensure_database: Auto-create database if missing (default: True)
+                - auto_create_table: Create the records table on connect if
+                    missing (default: True). Set to False when an external
+                    migration tool (Alembic, Flyway, etc.) owns DDL —
+                    connect() will then verify the table exists and raise
+                    RuntimeError if it doesn't.
         """
         super().__init__(config)
 
         # Parse configuration using mixin
-        table_name, schema_name, conn_config, ensure_database = self._parse_postgres_config(config or {})
-        self._init_postgres_attributes(table_name, schema_name, ensure_database)
+        table_name, schema_name, conn_config, ensure_database, auto_create_table = (
+            self._parse_postgres_config(config or {})
+        )
+        self._init_postgres_attributes(table_name, schema_name, ensure_database, auto_create_table)
 
         # Store connection config for later use
         self._conn_config = conn_config
@@ -230,13 +237,30 @@ class SyncPostgresDatabase(
             self._vector_enabled = False
 
     def _ensure_table(self) -> None:
-        """Ensure the records table exists."""
+        """Ensure the records table exists.
+
+        When ``auto_create_table=True`` (default), runs ``CREATE TABLE IF NOT
+        EXISTS …``. When ``auto_create_table=False``, verifies the table is
+        present and raises ``RuntimeError`` if it isn't — for consumers
+        managing DDL via Alembic / Flyway / Sqitch.
+        """
         if not self.db:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)  # type: ignore[unreachable]
-        self.db.execute(create_table_sql)
+        if not self.auto_create_table:
+            exists_sql, params = self.get_table_exists_sql(self.schema_name, self.table_name)
+            df = self.db.query(exists_sql, params)
+            exists = bool(df.iloc[0, 0]) if not df.empty else False
+            if not exists:
+                raise RuntimeError(
+                    f"Table {self.schema_name}.{self.table_name} does not exist "
+                    "and auto_create_table is disabled. Run your migrations "
+                    "before starting the application."
+                )
+            return
 
+        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
+        self.db.execute(create_table_sql)
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to a database row."""
@@ -833,6 +857,11 @@ class AsyncPostgresDatabase(
                 - schema: Schema name (default: "public")
                 - enable_vector: Enable vector support (default: False)
                 - ensure_database: Auto-create database if missing (default: True)
+                - auto_create_table: Create the records table on connect if
+                    missing (default: True). Set to False when an external
+                    migration tool (Alembic, Flyway, etc.) owns DDL —
+                    connect() will then verify the table exists and raise
+                    RuntimeError if it doesn't.
                 - connection_string: PostgreSQL connection string (alternative to individual params)
                 - min_pool_size: Minimum pool connections (default: 2)
                 - max_pool_size: Maximum pool connections (default: 5)
@@ -842,8 +871,18 @@ class AsyncPostgresDatabase(
         super().__init__(config)
 
         # Parse configuration using mixin
-        table_name, schema_name, conn_config, ensure_database = self._parse_postgres_config(config or {})
-        self._init_postgres_attributes(table_name, schema_name, ensure_database)
+        table_name, schema_name, conn_config, ensure_database, auto_create_table = (
+            self._parse_postgres_config(config or {})
+        )
+        self._init_postgres_attributes(table_name, schema_name, ensure_database, auto_create_table)
+
+        # Table manager for parameterized existence checks (asyncpg numeric style)
+        self.table_manager = SQLTableManager(
+            table_name,
+            schema_name=schema_name,
+            dialect="postgres",
+            param_style="numeric",
+        )
 
         # Extract pool configuration
         self._pool_config = PostgresPoolConfig.from_dict(conn_config)
@@ -926,27 +965,42 @@ class AsyncPostgresDatabase(
 
     async def close(self) -> None:
         """Close the database connection and properly close the pool."""
-        if self._connected:
-            # Properly close the pool if we have one
-            if self._pool:
-                try:
-                    await self._pool.close()
-                except Exception as e:
-                    logger.warning(f"Error closing connection pool: {e}")
+        if self._pool is not None:
+            try:
+                await self._pool.close()
+            except Exception as e:
+                logger.warning("Error closing connection pool: %s", e)
             self._pool = None
-            self._connected = False
+        self._connected = False
 
     def _initialize(self) -> None:
         """Initialize is handled in connect."""
         pass
 
     async def _ensure_table(self) -> None:
-        """Ensure the records table exists."""
+        """Ensure the records table exists.
+
+        When ``auto_create_table=True`` (default), runs ``CREATE TABLE IF NOT
+        EXISTS …``. When ``auto_create_table=False``, verifies the table is
+        present and raises ``RuntimeError`` if it isn't — for consumers
+        managing DDL via Alembic / Flyway / Sqitch.
+        """
         if not self._pool:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
+        if not self.auto_create_table:
+            exists_sql, params = self.table_manager.get_table_exists_sql()
+            async with self._pool.acquire() as conn:
+                exists = await conn.fetchval(exists_sql, *params)
+            if not exists:
+                raise RuntimeError(
+                    f"Table {self.schema_name}.{self.table_name} does not exist "
+                    "and auto_create_table is disabled. Run your migrations "
+                    "before starting the application."
+                )
+            return
 
+        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
         async with self._pool.acquire() as conn:
             await conn.execute(create_table_sql)
 
