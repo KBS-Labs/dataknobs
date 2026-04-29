@@ -8,6 +8,7 @@ validation with validate_field_name(), consistent with _build_json_field_expr.
 """
 import pytest
 
+from dataknobs_data import Filter, Operator, Query
 from dataknobs_data.backends.sql_base import SQLRecordSerializer
 
 
@@ -96,3 +97,42 @@ class TestBuildTextFieldConcatValidation:
         db = self._make_db()
         sql = db._build_text_field_concat([])
         assert "content" in sql
+
+
+class TestStreamReadFilterValidation:
+    """stream_read must reject filter.field values unsafe in JSONB key positions.
+
+    Both SyncPostgresDatabase.stream_read and AsyncPostgresDatabase.stream_read embed
+    filter.field into data->>'{filter.field}' — the same injection class as
+    _build_text_field_concat.  Validation fires before _check_connection() so it is
+    reachable on first iteration without a live database connection.
+    """
+
+    def _bad_query(self, field: str = "x'; DROP TABLE records;--") -> Query:
+        return Query(filters=[Filter(field=field, operator=Operator.EQ, value="x")])
+
+    def test_sync_injection_raises(self):
+        from dataknobs_data.backends.postgres import SyncPostgresDatabase
+        db = SyncPostgresDatabase({})
+        with pytest.raises(ValueError, match="Invalid field name"):
+            next(iter(db.stream_read(self._bad_query())))
+
+    def test_sync_hyphen_raises(self):
+        from dataknobs_data.backends.postgres import SyncPostgresDatabase
+        db = SyncPostgresDatabase({})
+        with pytest.raises(ValueError, match="Invalid field name"):
+            next(iter(db.stream_read(self._bad_query("my-field"))))
+
+    async def test_async_injection_raises(self):
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+        db = AsyncPostgresDatabase({})
+        with pytest.raises(ValueError, match="Invalid field name"):
+            async for _ in db.stream_read(self._bad_query()):
+                pass  # pragma: no cover
+
+    async def test_async_hyphen_raises(self):
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+        db = AsyncPostgresDatabase({})
+        with pytest.raises(ValueError, match="Invalid field name"):
+            async for _ in db.stream_read(self._bad_query("my-field")):
+                pass  # pragma: no cover

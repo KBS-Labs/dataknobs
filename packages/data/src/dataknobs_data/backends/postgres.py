@@ -574,6 +574,9 @@ class SyncPostgresDatabase(
         config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from PostgreSQL."""
+        if query and query.filters:
+            for f in query.filters:
+                validate_field_name(f.field)
         self._check_connection()
         config = config or StreamConfig()
 
@@ -1847,6 +1850,9 @@ class AsyncPostgresDatabase(
         config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from PostgreSQL using cursor."""
+        if query and query.filters:
+            for f in query.filters:
+                validate_field_name(f.field)
         self._check_connection()
         config = config or StreamConfig()
 
