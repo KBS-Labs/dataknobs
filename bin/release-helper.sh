@@ -32,8 +32,9 @@ $(echo -e "${BOLD}Commands:${NC}")
   $(echo -e "${CYAN}check${NC}")         Check what changed since last release
   $(echo -e "${CYAN}changes${NC}")       List all commits for a package or all packages
   $(echo -e "${CYAN}diffs${NC}")         Browse commit diffs interactively
-  $(echo -e "${CYAN}bump${NC}")          Bump package versions interactively
-  $(echo -e "${CYAN}sync-versions${NC}") Sync __init__.py versions from pyproject.toml
+  $(echo -e "${CYAN}bump${NC}")             Bump package versions interactively
+  $(echo -e "${CYAN}update-changelogs${NC}") Update CHANGELOG.md Unreleased headings to current versions
+  $(echo -e "${CYAN}sync-versions${NC}")  Sync __init__.py versions from pyproject.toml
   $(echo -e "${CYAN}verify-deps${NC}")   Check cross-package dependency constraints are current
   $(echo -e "${CYAN}sync-deps${NC}")     Update all cross-package dependency constraints to current versions
   $(echo -e "${CYAN}notes${NC}")         Generate release notes from commits
@@ -679,6 +680,103 @@ update_cross_package_deps() {
     fi
 }
 
+# Update CHANGELOG.md Unreleased section to a versioned heading.
+# Detects "## Unreleased" vs "## [Unreleased]" and matches the existing style.
+# Inserts a fresh empty Unreleased section above the now-versioned heading.
+# Returns 0 if updated, non-zero if no CHANGELOG or no Unreleased section found.
+update_changelog() {
+    local package=$1
+    local new_version=$2
+    local changelog="$ROOT_DIR/packages/$package/CHANGELOG.md"
+    local release_date
+    release_date=$(date +%Y-%m-%d)
+
+    if [ ! -f "$changelog" ]; then
+        return 1
+    fi
+
+    local unreleased_heading
+    unreleased_heading=$(grep -m1 "^## \[Unreleased\]\|^## Unreleased" "$changelog" 2>/dev/null || true)
+    if [ -z "$unreleased_heading" ]; then
+        return 1
+    fi
+
+    local new_versioned_heading new_unreleased_heading
+    if [[ "$unreleased_heading" == *"["* ]]; then
+        new_versioned_heading="## [${new_version}] - ${release_date}"
+        new_unreleased_heading="## [Unreleased]"
+    else
+        new_versioned_heading="## v${new_version} - ${release_date}"
+        new_unreleased_heading="## Unreleased"
+    fi
+
+    local exit_code=0
+    CHANGELOG="$changelog" \
+    OLD_HEADING="$unreleased_heading" \
+    NEW_UNRELEASED="$new_unreleased_heading" \
+    NEW_VERSIONED="$new_versioned_heading" \
+    python3 << 'PYEOF'
+import os, sys
+changelog = os.environ["CHANGELOG"]
+old_heading = os.environ["OLD_HEADING"]
+new_unreleased = os.environ["NEW_UNRELEASED"]
+new_versioned = os.environ["NEW_VERSIONED"]
+
+with open(changelog) as f:
+    content = f.read()
+
+if old_heading not in content:
+    sys.exit(2)
+
+content = content.replace(old_heading, new_unreleased + "\n\n" + new_versioned, 1)
+
+with open(changelog, "w") as f:
+    f.write(content)
+PYEOF
+    exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
+        echo -e "${BLUE}  ↳ Updated CHANGELOG.md: ${unreleased_heading} → ${new_versioned_heading}${NC}"
+    elif [ $exit_code -eq 2 ]; then
+        echo -e "${YELLOW}  ↳ Warning: Unreleased heading not found in ${package}/CHANGELOG.md${NC}" >&2
+    else
+        echo -e "${YELLOW}  ↳ Warning: Could not update ${package}/CHANGELOG.md${NC}" >&2
+    fi
+    return $exit_code
+}
+
+# Apply CHANGELOG Unreleased→versioned updates for all packages using current versions.
+# Used to apply the update after a bump that predates this feature.
+update_changelogs_all() {
+    echo -e "${CYAN}Updating CHANGELOG.md Unreleased sections to current versions...${NC}"
+    echo ""
+
+    local packages
+    packages=($(get_packages_in_order))
+    local updated=0
+    local skipped=0
+
+    for package in "${packages[@]}"; do
+        local version
+        version=$(get_version "packages/$package")
+        if update_changelog "$package" "$version"; then
+            ((updated++)) || true
+        else
+            ((skipped++)) || true
+        fi
+    done
+
+    echo ""
+    if [ "$updated" -gt 0 ]; then
+        echo -e "${GREEN}✓ Updated ${updated} CHANGELOG(s)${NC}"
+    else
+        echo -e "${YELLOW}No CHANGELOG files had an Unreleased section to update${NC}"
+    fi
+    if [ "$skipped" -gt 0 ]; then
+        echo -e "${CYAN}  (${skipped} packages had no CHANGELOG or no Unreleased section)${NC}"
+    fi
+}
+
 # Function to bump version
 bump_version() {
     local package=$1
@@ -832,6 +930,9 @@ EOF
 
         # Update cross-package dependency constraints in sibling packages
         update_cross_package_deps "$package" "$new_version"
+
+        # Update CHANGELOG.md Unreleased section to versioned heading
+        update_changelog "$package" "$new_version"
     fi
 }
 
@@ -1466,6 +1567,9 @@ case "${1:-help}" in
         ;;
     bump)
         bump_versions
+        ;;
+    update-changelogs)
+        update_changelogs_all
         ;;
     sync-versions)
         sync_versions
