@@ -18,12 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SQLTableManager.get_table_exists_sql()` — dialect-aware parameterized
   table-existence query supporting qmark (`?`), numeric (`$1`/`$2`), and
   pyformat (`%(name)s`) placeholder styles. Used internally by all SQL
-  backends; Postgres backends now delegate to this shared helper rather than
-  each maintaining their own inline SQL.
+  backends; both Postgres backends now delegate to this shared helper
+  (`SyncPostgresDatabase` with `param_style="pyformat"`,
+  `AsyncPostgresDatabase` with `param_style="numeric"`) replacing the
+  separate `PostgresTableManager.get_table_exists_sql()` static method.
 - `SQLTableManager.coerce_bool()` — public shared helper for coercing
   YAML/env string values (`"false"`, `"0"`, `"no"`) to Python `bool`.
   `None` returns the `default` parameter (``True`` by default). Replaces
   per-backend inline coercion logic for consistent edge-case handling.
+  **Behaviour change for `ensure_database`:** the previous inline coercion
+  used an allowlist (`"true"`, `"1"`, `"yes"` → `True`; all other strings
+  → `False`). `coerce_bool` uses a blocklist (`"false"`, `"0"`, `"no"`, `""`
+  → `False`; all other strings → `True`). Unrecognised strings such as
+  `"on"` or `"enabled"` now correctly enable the feature rather than
+  silently disabling it.
 - `SQLTableManager.__init__` now accepts a `param_style` keyword argument
   (`"qmark"` default, `"numeric"` for asyncpg, `"pyformat"` for psycopg2)
   controlling which placeholder style `get_table_exists_sql()` emits.

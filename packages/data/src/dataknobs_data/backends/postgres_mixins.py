@@ -154,30 +154,6 @@ class PostgresTableManager:
         ON {schema_name}.{table_name} USING GIN (metadata);
         """
 
-    @staticmethod
-    def get_table_exists_sql(schema_name: str, table_name: str) -> tuple[str, dict[str, str]]:
-        """Get parameterized SQL to check if table exists.
-
-        Returns a ``(sql, params)`` pair using psycopg2 named-parameter style
-        (``%(name)s``) so schema and table are never interpolated into the SQL
-        text.  Pass both values to ``cursor.execute()`` or ``PostgresDB.query()``.
-
-        Args:
-            schema_name: Database schema name
-            table_name: Database table name
-
-        Returns:
-            Tuple of (sql_string, params_dict)
-        """
-        sql = (
-            "SELECT EXISTS ("
-            "SELECT FROM information_schema.tables "
-            "WHERE table_schema = %(schema)s AND table_name = %(table)s"
-            ")"
-        )
-        return sql, {"schema": schema_name, "table": table_name}
-
-
 class PostgresVectorSupport:
     """Shared vector support detection and management."""
 

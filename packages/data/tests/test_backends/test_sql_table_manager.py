@@ -7,15 +7,24 @@ from dataknobs_data.backends.sql_base import SQLTableManager
 
 class TestGetTableExistsSql:
     def test_postgres_dialect(self):
-        mgr = SQLTableManager("records", schema_name="public", dialect="postgres")
+        mgr = SQLTableManager("records", schema_name="public", dialect="postgres", param_style="numeric")
         sql, params = mgr.get_table_exists_sql()
         assert "information_schema.tables" in sql
         assert params == ("public", "records")
 
     def test_postgres_default_schema(self):
-        mgr = SQLTableManager("records", dialect="postgres")
+        mgr = SQLTableManager("records", dialect="postgres", param_style="numeric")
         _sql, params = mgr.get_table_exists_sql()
         assert params == ("public", "records")
+
+    def test_postgres_qmark_raises(self):
+        """qmark placeholders are invalid for postgres — caught at construction time."""
+        with pytest.raises(ValueError, match="param_style='qmark' is not valid for dialect='postgres'"):
+            SQLTableManager("records", dialect="postgres")
+
+    def test_postgres_qmark_raises_explicit(self):
+        with pytest.raises(ValueError, match="param_style='qmark'"):
+            SQLTableManager("records", dialect="postgres", param_style="qmark")
 
     def test_sqlite_dialect(self):
         mgr = SQLTableManager("records", dialect="sqlite")

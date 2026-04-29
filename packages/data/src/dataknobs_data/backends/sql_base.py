@@ -897,7 +897,14 @@ class SQLTableManager:
             param_style: Parameter placeholder style — ``'qmark'`` (``?``,
                 default, works for DuckDB/SQLite), ``'numeric'`` (``$1``/``$2``
                 for asyncpg), or ``'pyformat'`` (``%(name)s`` for psycopg2).
+                ``'qmark'`` is invalid for ``dialect='postgres'``; use
+                ``'numeric'`` (asyncpg) or ``'pyformat'`` (psycopg2).
         """
+        if dialect == "postgres" and param_style == "qmark":
+            raise ValueError(
+                "param_style='qmark' is not valid for dialect='postgres'. "
+                "Use param_style='numeric' for asyncpg or 'pyformat' for psycopg2."
+            )
         self.table_name = table_name
         self.schema_name = schema_name
         self.dialect = dialect

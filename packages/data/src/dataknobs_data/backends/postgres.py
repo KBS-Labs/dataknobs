@@ -87,6 +87,14 @@ class SyncPostgresDatabase(
         )
         self._init_postgres_attributes(table_name, schema_name, ensure_database, auto_create_table)
 
+        # Table manager for parameterized existence checks (psycopg2 pyformat style)
+        self.table_manager = SQLTableManager(
+            table_name,
+            schema_name=schema_name,
+            dialect="postgres",
+            param_style="pyformat",
+        )
+
         # Store connection config for later use
         self._conn_config = conn_config
         self.db = None  # Will be initialized in connect()
@@ -248,7 +256,7 @@ class SyncPostgresDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if not self.auto_create_table:
-            exists_sql, params = self.get_table_exists_sql(self.schema_name, self.table_name)
+            exists_sql, params = self.table_manager.get_table_exists_sql()
             df = self.db.query(exists_sql, params)
             exists = bool(df.iloc[0, 0]) if not df.empty else False
             if not exists:

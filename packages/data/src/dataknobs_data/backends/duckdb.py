@@ -180,6 +180,11 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         run and no error will be raised.
         """
         if self.read_only:
+            if not self.auto_create_table:
+                logger.warning(
+                    "auto_create_table=False has no effect when read_only=True — "
+                    "the table existence check is skipped in read-only mode."
+                )
             return
 
         with self._lock:
@@ -794,6 +799,11 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if self.read_only:
+            if not self.auto_create_table:
+                logger.warning(
+                    "auto_create_table=False has no effect when read_only=True — "
+                    "the table existence check is skipped in read-only mode."
+                )
             return
 
         if not self.auto_create_table:
