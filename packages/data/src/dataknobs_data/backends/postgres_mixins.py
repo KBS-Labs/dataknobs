@@ -11,6 +11,7 @@ from typing import Any
 from dataknobs_common import normalize_postgres_connection_config
 
 from ..records import Record
+from .sql_base import SQLTableManager
 from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
@@ -40,14 +41,15 @@ class PostgresBaseConfig(VectorConfigMixin):
 
     def _parse_postgres_config(
         self, config: dict[str, Any],
-    ) -> tuple[str, str, dict, bool]:
-        """Extract table, schema, connection configuration, and ensure_database flag.
+    ) -> tuple[str, str, dict, bool, bool]:
+        """Extract table, schema, connection configuration, and boolean flags.
 
         Args:
             config: Configuration dictionary
 
         Returns:
-            Tuple of (table_name, schema_name, connection_config, ensure_database)
+            Tuple of (table_name, schema_name, connection_config,
+            ensure_database, auto_create_table)
         """
         config = config.copy() if config else {}
 
@@ -62,14 +64,16 @@ class PostgresBaseConfig(VectorConfigMixin):
         config.pop("vector_enabled", None)
         config.pop("vector_metric", None)
 
-        # Extract and validate ensure_database as a proper boolean.
-        # String "false" from YAML/env must be coerced — raw truthy check
-        # would treat it as True (security.md §8 anti-pattern).
-        raw_ensure = config.pop("ensure_database", True)
-        if isinstance(raw_ensure, str):
-            ensure_database = raw_ensure.lower() in ("true", "1", "yes")
-        else:
-            ensure_database = bool(raw_ensure)
+        # Extract and validate boolean flags via the shared coerce_bool helper so
+        # that string values from YAML/env ("false", "0", "no") are handled
+        # consistently across all backends (security.md §8 anti-pattern: raw
+        # truthy check treats the string "false" as True).
+        ensure_database = SQLTableManager.coerce_bool(
+            config.pop("ensure_database", None), default=True
+        )
+        auto_create_table = SQLTableManager.coerce_bool(
+            config.pop("auto_create_table", None), default=True
+        )
 
         # Normalize connection config via the shared helper so that every
         # downstream postgres site reads host/port/database/... from the
@@ -91,10 +95,14 @@ class PostgresBaseConfig(VectorConfigMixin):
         if normalized is not None:
             config.update(normalized)
 
-        return table_name, schema_name, config, ensure_database
+        return table_name, schema_name, config, ensure_database, auto_create_table
 
     def _init_postgres_attributes(
-        self, table_name: str, schema_name: str, ensure_database: bool = True,
+        self,
+        table_name: str,
+        schema_name: str,
+        ensure_database: bool = True,
+        auto_create_table: bool = True,
     ) -> None:
         """Initialize common PostgreSQL attributes.
 
@@ -102,11 +110,15 @@ class PostgresBaseConfig(VectorConfigMixin):
             table_name: Name of the database table
             schema_name: Name of the database schema
             ensure_database: Auto-create database if missing (default: True)
+            auto_create_table: Create the records table on connect if missing
+                (default: True). Set to False when an external migration tool
+                (Alembic, Flyway, etc.) owns DDL.
         """
         self.table_name = table_name
         self.schema_name = schema_name
         self._connected = False
         self._ensure_database_enabled = ensure_database
+        self.auto_create_table = auto_create_table
 
         # Initialize vector state using the mixin
         self._init_vector_state()
@@ -141,26 +153,6 @@ class PostgresTableManager:
         CREATE INDEX IF NOT EXISTS idx_{table_name}_metadata
         ON {schema_name}.{table_name} USING GIN (metadata);
         """
-
-    @staticmethod
-    def get_table_exists_sql(schema_name: str, table_name: str) -> str:
-        """Get SQL to check if table exists.
-        
-        Args:
-            schema_name: Database schema name
-            table_name: Database table name
-            
-        Returns:
-            SQL string to check table existence
-        """
-        return f"""
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_schema = '{schema_name}' 
-            AND table_name = '{table_name}'
-        )
-        """
-
 
 class PostgresVectorSupport:
     """Shared vector support detection and management."""

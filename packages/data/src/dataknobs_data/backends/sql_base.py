@@ -881,17 +881,34 @@ class SQLQueryBuilder:
 class SQLTableManager:
     """Manages SQL table creation and schema."""
 
-    def __init__(self, table_name: str, schema_name: str | None = None, dialect: str = "standard"):
+    def __init__(
+        self,
+        table_name: str,
+        schema_name: str | None = None,
+        dialect: str = "standard",
+        param_style: str = "qmark",
+    ):
         """Initialize the table manager.
-        
+
         Args:
             table_name: Name of the database table
             schema_name: Optional schema name
-            dialect: SQL dialect ('postgres', 'sqlite', 'standard')
+            dialect: SQL dialect ('postgres', 'duckdb', 'sqlite', 'standard')
+            param_style: Parameter placeholder style — ``'qmark'`` (``?``,
+                default, works for DuckDB/SQLite), ``'numeric'`` (``$1``/``$2``
+                for asyncpg), or ``'pyformat'`` (``%(name)s`` for psycopg2).
+                ``'qmark'`` is invalid for ``dialect='postgres'``; use
+                ``'numeric'`` (asyncpg) or ``'pyformat'`` (psycopg2).
         """
+        if dialect == "postgres" and param_style == "qmark":
+            raise ValueError(
+                "param_style='qmark' is not valid for dialect='postgres'. "
+                "Use param_style='numeric' for asyncpg or 'pyformat' for psycopg2."
+            )
         self.table_name = table_name
         self.schema_name = schema_name
         self.dialect = dialect
+        self.param_style = param_style
         self.qualified_table = self._get_qualified_table_name()
 
     def _get_qualified_table_name(self) -> str:
@@ -968,9 +985,87 @@ class SQLTableManager:
             );
             """
 
+    def _placeholder(self, n: int, name: str) -> str:
+        """Return the correct parameter placeholder for this instance's param_style.
+
+        Args:
+            n: 1-based positional index (used by 'numeric' style)
+            name: Named parameter key (used by 'pyformat' style)
+        """
+        if self.param_style == "numeric":
+            return f"${n}"
+        if self.param_style == "pyformat":
+            return f"%({name})s"
+        return "?"
+
+    def get_table_exists_sql(self) -> tuple[str, tuple[Any, ...] | dict[str, Any]]:
+        """Get a parameterized table-existence-check query.
+
+        Returns a ``(sql, params)`` pair. Execute as
+        ``cursor.execute(sql, params)`` and read the first column of the
+        first row as a bool.
+
+        The placeholder style and param type depend on ``param_style``:
+        - ``'qmark'`` (default): ``?`` placeholders, positional tuple
+        - ``'numeric'``: ``$1``/``$2`` placeholders (asyncpg), positional tuple
+        - ``'pyformat'``: ``%(name)s`` placeholders (psycopg2), named dict
+        """
+        if self.dialect == "postgres":
+            p1 = self._placeholder(1, "schema")
+            p2 = self._placeholder(2, "table")
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                f"WHERE table_schema = {p1} AND table_name = {p2}"
+                ")"
+            )
+            schema = self.schema_name or "public"
+            if self.param_style == "pyformat":
+                return sql, {"schema": schema, "table": self.table_name}
+            return sql, (schema, self.table_name)
+        elif self.dialect == "duckdb":
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_name = ?"
+                ")"
+            )
+            schema = self.schema_name or "main"
+            return sql, (schema, self.table_name)
+        elif self.dialect == "sqlite":
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = ?"
+                ")"
+            )
+            return sql, (self.table_name,)
+        else:
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = ?"
+                ")"
+            )
+            return sql, (self.table_name,)
+
+    @staticmethod
+    def coerce_bool(value: Any, default: bool = True) -> bool:
+        """Coerce a config value to bool, handling YAML/env string values.
+
+        ``None`` → ``default``. Strings ``"false"`` / ``"0"`` / ``"no"``
+        (case-insensitive) → ``False``; any other string → ``True``.
+        Non-strings go through ``bool(value)``.
+        """
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.lower() not in ("false", "0", "no", "")
+        return bool(value)
+
     def get_drop_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement.
-        
+
         Returns:
             SQL statement for dropping the table
         """

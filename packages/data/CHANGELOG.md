@@ -5,6 +5,37 @@ All notable changes to the dataknobs-data package will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- `auto_create_table` config option on all SQL-style relational database
+  backends — `Sync/AsyncPostgresDatabase`, `Sync/AsyncSQLiteDatabase`,
+  `Sync/AsyncDuckDBDatabase`. Default is `True` (no behaviour change for
+  existing consumers). When `False`, `connect()` verifies the records table
+  exists and raises `RuntimeError` if it doesn't, enabling
+  Alembic/Flyway/Sqitch-managed schemas with DML-only application roles.
+  Mirrors the existing `PgVectorStore.auto_create_table` contract.
+- `SQLTableManager.get_table_exists_sql()` — dialect-aware parameterized
+  table-existence query supporting qmark (`?`), numeric (`$1`/`$2`), and
+  pyformat (`%(name)s`) placeholder styles. Used internally by all SQL
+  backends; both Postgres backends now delegate to this shared helper
+  (`SyncPostgresDatabase` with `param_style="pyformat"`,
+  `AsyncPostgresDatabase` with `param_style="numeric"`) replacing the
+  separate `PostgresTableManager.get_table_exists_sql()` static method.
+- `SQLTableManager.coerce_bool()` — public shared helper for coercing
+  YAML/env string values (`"false"`, `"0"`, `"no"`) to Python `bool`.
+  `None` returns the `default` parameter (``True`` by default). Replaces
+  per-backend inline coercion logic for consistent edge-case handling.
+  **Behaviour change for `ensure_database`:** the previous inline coercion
+  used an allowlist (`"true"`, `"1"`, `"yes"` → `True`; all other strings
+  → `False`). `coerce_bool` uses a blocklist (`"false"`, `"0"`, `"no"`, `""`
+  → `False`; all other strings → `True`). Unrecognised strings such as
+  `"on"` or `"enabled"` now correctly enable the feature rather than
+  silently disabling it.
+- `SQLTableManager.__init__` now accepts a `param_style` keyword argument
+  (`"qmark"` default, `"numeric"` for asyncpg, `"pyformat"` for psycopg2)
+  controlling which placeholder style `get_table_exists_sql()` emits.
+
 ## v0.4.15
 
 ### Breaking

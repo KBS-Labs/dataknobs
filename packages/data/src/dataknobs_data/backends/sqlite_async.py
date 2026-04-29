@@ -54,6 +54,10 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 - journal_mode: Journal mode (WAL, DELETE, etc.) (default: WAL for file-based)
                 - synchronous: Synchronous mode (NORMAL, FULL, OFF) (default: NORMAL)
                 - pool_size: Number of connections in pool (default: 5)
+                - auto_create_table: Create the records table on connect if
+                    missing (default: True). Set to False when an external
+                    migration tool owns DDL — connect() will then verify the
+                    table exists and raise RuntimeError if it doesn't.
         """
         super().__init__(config)
         config = config or {}
@@ -63,6 +67,9 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         self.journal_mode = config.get("journal_mode", "WAL" if self.db_path != ":memory:" else None)
         self.synchronous = config.get("synchronous", "NORMAL")
         self.pool_size = config.get("pool_size", 5)
+        self.auto_create_table = SQLTableManager.coerce_bool(
+            config.get("auto_create_table", True)
+        )
 
         # Start with standard query builder, will customize after mixins are initialized
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
@@ -140,9 +147,27 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         await self.db.commit()
 
     async def _ensure_table(self) -> None:
-        """Ensure the table exists."""
+        """Ensure the table exists.
+
+        When ``auto_create_table=True`` (default), runs ``CREATE TABLE IF NOT
+        EXISTS …``. When ``auto_create_table=False``, verifies the table is
+        present and raises ``RuntimeError`` if it isn't.
+        """
         if not self.db:
             raise RuntimeError("Database not connected. Call connect() first.")
+
+        if not self.auto_create_table:
+            exists_sql, params = self.table_manager.get_table_exists_sql()
+            async with self.db.execute(exists_sql, params) as cursor:
+                row = await cursor.fetchone()
+                exists = bool(row[0]) if row else False
+            if not exists:
+                raise RuntimeError(
+                    f"Table {self.table_name} does not exist and "
+                    "auto_create_table is disabled. Run your migrations "
+                    "before starting the application."
+                )
+            return
 
         await self.db.executescript(self.table_manager.get_create_table_sql())
         await self.db.commit()

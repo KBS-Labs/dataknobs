@@ -141,7 +141,7 @@ class TestSQLBase:
         assert "CREATE TABLE IF NOT EXISTS test_table" in sql
         
         # PostgreSQL with schema
-        manager = SQLTableManager("test_table", schema_name="public", dialect="postgres")
+        manager = SQLTableManager("test_table", schema_name="public", dialect="postgres", param_style="numeric")
         sql = manager.get_create_table_sql()
         assert "public.test_table" in sql
         assert "JSONB" in sql

@@ -53,6 +53,43 @@ CREATE INDEX idx_fields ON records USING GIN (fields);
 CREATE INDEX idx_metadata ON records USING GIN (metadata);
 ```
 
+## Schema Ownership
+
+By default, the backend creates the records table on every `connect()` via
+`CREATE TABLE IF NOT EXISTS …`. This is convenient for local development and
+ad-hoc use but inappropriate for deployments where schema is managed by an
+external migration tool (Alembic, Flyway, Sqitch, etc.) and the application
+database role is DML-only.
+
+Set `auto_create_table: False` to opt out:
+
+```python
+db = AsyncPostgresDatabase({
+    "connection_string": "postgresql://app:secret@db/myapp",
+    "auto_create_table": False,
+})
+await db.connect()
+# → If the table does not exist, raises:
+#   RuntimeError: Table public.records does not exist and
+#   auto_create_table is disabled. Run your migrations before starting
+#   the application.
+```
+
+When `auto_create_table` is `False`:
+
+- `connect()` runs a single `SELECT EXISTS …` query to verify the table is present.
+- If the table is missing, `connect()` raises `RuntimeError` with a clear message —
+  the application fails fast instead of running against an empty schema.
+- If the table is present, `connect()` is a no-op for DDL — no `CREATE TABLE`,
+  no index DDL, no privileged operations.
+
+The default is `True`, preserving backward compatibility with all existing consumers.
+
+This is the same contract as `PgVectorStore.auto_create_table` — see
+[pgvector backend](pgvector-backend.md) for the parallel pattern in the
+vector-store layer. Together the two flags let Alembic (or any external tool)
+own both the records table and the embeddings table.
+
 ## Usage Examples
 
 ### Connection Pooling
