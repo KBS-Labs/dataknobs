@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 import pytest_asyncio
 
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import requires_postgres, safe_sql_ident
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 try:
@@ -137,7 +137,7 @@ async def any_vector_store(
                 async with store._pool.acquire() as conn:
                     await conn.execute(
                         f"DROP TABLE IF EXISTS "
-                        f"{store.schema}.{store.table_name}"
+                        f"{safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
                     )
             except Exception:
                 pass

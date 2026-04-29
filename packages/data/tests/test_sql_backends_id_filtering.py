@@ -4,6 +4,7 @@ import os
 import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from dataknobs_common.testing import safe_sql_ident
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
@@ -38,9 +39,9 @@ class TestSqlBackendsIdFiltering:
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = conn.cursor()
         try:
-            cursor.execute(f"SELECT 1 FROM pg_database WHERE datname = '{database}'")
+            cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
             if not cursor.fetchone():
-                cursor.execute(f"CREATE DATABASE {database}")
+                cursor.execute(f"CREATE DATABASE {safe_sql_ident(database)}")
         except psycopg2.errors.DuplicateDatabase:
             pass
         finally:

@@ -8,6 +8,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Pytest Markers](#pytest-markers)
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
+- [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
 
 ---
@@ -235,6 +236,118 @@ def test_json_processing(tmp_path):
 
 ---
 
+## Shared Integration Fixtures: Postgres and Elasticsearch
+
+`dataknobs-common` ships pytest11 plugins that expose Postgres and
+Elasticsearch infrastructure fixtures to every package depending on it.
+Plugin discovery is automatic — no `conftest.py` imports needed. Consumers
+wrap a factory fixture with their own per-prefix fixture so each package
+controls its table/index naming.
+
+### Available Fixtures
+
+| Fixture | Scope | Provided by |
+|---|---|---|
+| `postgres_connection_params` | session | `dataknobs_common.testing.postgres_fixtures` |
+| `ensure_postgres_ready` | session | `dataknobs_common.testing.postgres_fixtures` |
+| `make_postgres_test_db` | function | `dataknobs_common.testing.postgres_fixtures` |
+| `elasticsearch_connection_params` | session | `dataknobs_common.testing.elasticsearch_fixtures` |
+| `ensure_elasticsearch_ready` | session | `dataknobs_common.testing.elasticsearch_fixtures` |
+| `make_elasticsearch_test_index` | function | `dataknobs_common.testing.elasticsearch_fixtures` |
+
+The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
+are also importable from `dataknobs_common.testing`.
+
+### Environment Variables
+
+Postgres fixtures read (defaults shown):
+
+- `POSTGRES_HOST` — `postgres` in Docker, `localhost` otherwise
+- `POSTGRES_PORT` — `5432`
+- `POSTGRES_USER` — `postgres`
+- `POSTGRES_PASSWORD` — `postgres`
+- `POSTGRES_DB` — `dataknobs_test`
+- `DOCKER_CONTAINER` — any truthy value forces the `postgres` host default
+
+Elasticsearch fixtures read:
+
+- `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
+- `ELASTICSEARCH_PORT` — `9200`
+- `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+
+Docker detection also checks for `/.dockerenv`.
+
+### Factory Fixture Pattern
+
+`make_postgres_test_db` and `make_elasticsearch_test_index` are factory
+fixtures: they return a callable that, when invoked with a table/index
+prefix, yields a clean per-test config and tears down the resource on
+completion. Consumers wrap them with a thin per-prefix fixture:
+
+```python
+# packages/<your-pkg>/tests/integration/conftest.py
+import pytest
+
+
+@pytest.fixture
+def postgres_test_db(make_postgres_test_db):
+    yield from make_postgres_test_db("test_conversations_")
+
+
+@pytest.fixture
+def elasticsearch_test_index(make_elasticsearch_test_index):
+    yield from make_elasticsearch_test_index("test_records_")
+```
+
+The `yield from` bridge threads exception cleanup through both generator
+layers, so teardown runs even when the test body raises.
+
+The yielded Postgres config has the same shape as
+`postgres_connection_params` plus `table` and `schema` keys. The yielded
+Elasticsearch config has the same shape as `elasticsearch_connection_params`
+plus `index` and `refresh=True` keys.
+
+### Usage in Tests
+
+```python
+from dataknobs_common.testing import requires_postgres
+
+
+@requires_postgres
+def test_create_record(postgres_test_db):
+    # postgres_test_db is the dict yielded by the consumer wrapper
+    # Each test gets its own table; the table is dropped on teardown.
+    ...
+```
+
+### Why a Factory Fixture?
+
+The table/index prefix differs between packages (`test_records_` for
+`dataknobs-data`, `test_conversations_` for `dataknobs-llm`, etc.). Two
+alternatives were considered and rejected:
+
+- **Parameterize a single shared fixture.** Forces every consumer to
+  re-declare `@pytest.fixture(params=[...])` indirect parameterization in
+  its own `conftest.py`, defeating the point of the shared plugin.
+- **Hardcode a prefix in `dataknobs-common`.** Every package would need a
+  rename and the per-package `test_*` namespace convention would be lost.
+
+The factory pattern keeps the prefix consumer-controlled with a one-line
+wrapper.
+
+### Cleanup Behavior
+
+Postgres cleanup unconditionally re-opens a connection and runs
+`DROP TABLE IF EXISTS … CASCADE` under `safe_sql_ident()`. Cleanup
+exceptions propagate so test failures aren't masked by silent teardown
+errors.
+
+Elasticsearch cleanup is best-effort: `ConnectionError` and `ValueError`
+are logged at `WARNING` and swallowed (the test result is preserved); any
+other exception propagates to surface unexpected failures.
+
+---
+
 ## Usage Examples
 
 ### Complete Test Setup
@@ -358,4 +471,4 @@ class TestRAGIntegration:
 ## See Also
 
 - [pytest documentation](https://docs.pytest.org/)
-- [dataknobs_bots USER_GUIDE.md](../../bots/docs/USER_GUIDE.md)
+- [pytest11 plugin entry-points](https://docs.pytest.org/en/stable/how-to/writing_plugins.html#making-your-plugin-installable-by-others)

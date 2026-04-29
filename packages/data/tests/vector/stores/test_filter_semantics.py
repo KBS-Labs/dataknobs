@@ -36,6 +36,7 @@ from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
     requires_postgres,
+    safe_sql_ident,
 )
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
@@ -130,7 +131,7 @@ async def _teardown_backend(backend: str, store: Any) -> None:
         try:
             conn = await asyncpg.connect(_get_test_connection_string())
             await conn.execute(
-                f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}"
+                f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
             )
         except (OSError, asyncpg.PostgresError) as exc:
             logger.warning(
