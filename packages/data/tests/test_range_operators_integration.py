@@ -4,6 +4,7 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from datetime import datetime, timedelta
+from dataknobs_common.testing import safe_sql_ident
 from dataknobs_data import Record, Query, Filter, Operator
 
 
@@ -41,7 +42,7 @@ def ensure_postgres_test_db():
         
         if not exists:
             # Create the database
-            cur.execute(f"CREATE DATABASE {db_name}")
+            cur.execute(f"CREATE DATABASE {safe_sql_ident(db_name)}")
         
         cur.close()
         conn.close()
@@ -81,7 +82,7 @@ class TestPostgresRangeOperators:
         
         # Clean up any existing data
         try:
-            db.db.execute(f"TRUNCATE TABLE {db.schema_name}.{db.table_name}")
+            db.db.execute(f"TRUNCATE TABLE {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}")
         except:
             pass  # Table might not exist yet
         
@@ -89,7 +90,7 @@ class TestPostgresRangeOperators:
         
         # Cleanup
         try:
-            db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
+            db.db.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}")
         except:
             pass
         finally:
@@ -225,7 +226,7 @@ class TestPostgresRangeOperators:
             # Cleanup
             try:
                 if db._pool:
-                    await db._pool.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
+                    await db._pool.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}")
             except:
                 pass
             finally:
@@ -569,7 +570,7 @@ class TestCrossBackendConsistency:
             
         finally:
             try:
-                db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
+                db.db.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}")
             except:
                 pass
             finally:
