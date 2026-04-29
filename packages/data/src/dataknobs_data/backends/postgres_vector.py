@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_utils.sql_utils import quote_ident
+
 if TYPE_CHECKING:
     import asyncpg
     import numpy as np
@@ -140,8 +142,8 @@ def get_optimal_index_type(num_vectors: int) -> tuple[str, dict[str, Any]]:
 
 
 def build_vector_index_sql(
-    table_name: str,
-    schema_name: str,
+    q_table_name: str,
+    q_schema_name: str,
     column_name: str,
     dimensions: int,
     metric: str = "cosine",
@@ -150,17 +152,17 @@ def build_vector_index_sql(
     field_name: str | None = None
 ) -> str:
     """Build SQL for creating a vector index.
-    
+
     Args:
-        table_name: Name of table
-        schema_name: Schema name
+        q_table_name: Pre-quoted table name (e.g. ``'"MyTable"'``)
+        q_schema_name: Pre-quoted schema name (e.g. ``'"public"'``)
         column_name: SQL expression for vector column
         dimensions: Vector dimensions
         metric: Distance metric
         index_type: Type of index (ivfflat, hnsw)
         index_params: Index-specific parameters
         field_name: Original field name for index naming
-        
+
     Returns:
         SQL CREATE INDEX statement
     """
@@ -170,7 +172,20 @@ def build_vector_index_sql(
     if not field_name:
         field_name = extract_field_name(column_name)
 
-    index_name = get_vector_index_name(table_name, field_name, metric)
+    # Derive the raw table name for index naming.  q_table_name is assumed to be
+    # a quote_ident-produced value (starts and ends with '"'); anything else is
+    # passed through unchanged so callers with plain names still work.
+    raw_table_name = (
+        q_table_name[1:-1].replace('""', '"')
+        if q_table_name.startswith('"') and q_table_name.endswith('"')
+        else q_table_name
+    )
+    index_name = get_vector_index_name(raw_table_name, field_name, metric)
+    # Quote the index name so it is consistent with drop_vector_index, which
+    # already calls quote_ident(index_name).  Without quoting, PostgreSQL folds
+    # the name to lowercase in the catalog; the quoted DROP then silently finds
+    # nothing, leaving an orphaned index that cannot be dropped programmatically.
+    q_index_name = quote_ident(index_name)
 
     # Determine operator class based on metric
     op_class = {
@@ -187,8 +202,8 @@ def build_vector_index_sql(
         # IVFFlat requires proper parentheses for functional indexes with operator class
         # The column_name should already include the dimension cast
         return f"""
-        CREATE INDEX IF NOT EXISTS {index_name}
-        ON {schema_name}.{table_name}
+        CREATE INDEX IF NOT EXISTS {q_index_name}
+        ON {q_schema_name}.{q_table_name}
         USING ivfflat (({column_name}) {op_class})
         WITH (lists = {lists})
         """
@@ -198,16 +213,16 @@ def build_vector_index_sql(
         # HNSW index (requires pgvector 0.5.0+)
         # The column_name should already include the dimension cast
         return f"""
-        CREATE INDEX IF NOT EXISTS {index_name}
-        ON {schema_name}.{table_name}  
+        CREATE INDEX IF NOT EXISTS {q_index_name}
+        ON {q_schema_name}.{q_table_name}
         USING hnsw (({column_name}) {op_class})
         WITH (m = {m}, ef_construction = {ef_construction})
         """
     else:
         # Default to basic index
         return f"""
-        CREATE INDEX IF NOT EXISTS {index_name}
-        ON {schema_name}.{table_name}
+        CREATE INDEX IF NOT EXISTS {q_index_name}
+        ON {q_schema_name}.{q_table_name}
         USING btree ({column_name})
         """
 
@@ -302,20 +317,20 @@ def build_vector_column_expression(field_name: str, dimensions: int | None = Non
         return f"(data->'{field_name}'->>'value')::vector{dim_cast}"
 
 
-def get_vector_count_sql(schema_name: str, table_name: str, field_name: str) -> str:
+def get_vector_count_sql(q_schema_name: str, q_table_name: str, field_name: str) -> str:
     """Get SQL to count vectors in a field.
-    
+
     Args:
-        schema_name: Database schema
-        table_name: Table name
+        q_schema_name: Pre-quoted schema name (e.g. ``'"public"'``)
+        q_table_name: Pre-quoted table name (e.g. ``'"MyTable"'``)
         field_name: Vector field name
-        
+
     Returns:
         SQL query string
     """
     return f"""
-    SELECT COUNT(*) as count 
-    FROM {schema_name}.{table_name}
+    SELECT COUNT(*) as count
+    FROM {q_schema_name}.{q_table_name}
     WHERE data ? '{field_name}'
     """
 

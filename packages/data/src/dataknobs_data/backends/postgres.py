@@ -1040,6 +1040,7 @@ class AsyncPostgresDatabase(
             return
 
         column_name = f"vector_{field_name}"
+        q_column_name = quote_ident(column_name)
 
         # Check if column already exists
         check_sql = """
@@ -1054,7 +1055,7 @@ class AsyncPostgresDatabase(
                 # Add vector column
                 alter_sql = f"""
                 ALTER TABLE {self._q_qualified}
-                ADD COLUMN IF NOT EXISTS {column_name} vector({dimensions})
+                ADD COLUMN IF NOT EXISTS {q_column_name} vector({dimensions})
                 """
                 try:
                     await conn.execute(alter_sql)
@@ -1070,9 +1071,9 @@ class AsyncPostgresDatabase(
 
                     index_type, index_params = get_optimal_index_type(count)
                     index_sql = build_vector_index_sql(
-                        self.table_name,
-                        self.schema_name,
-                        column_name,
+                        self._q_table,
+                        self._q_schema,
+                        q_column_name,
                         dimensions,
                         metric="cosine",
                         index_type=index_type,
@@ -1119,33 +1120,64 @@ class AsyncPostgresDatabase(
         # Use the common serializer to reconstruct the record
         return SQLRecordSerializer.json_to_record(data_json, metadata_json)
 
+    @staticmethod
+    def _build_vector_params(
+        vector_inserts: list[tuple[str, str]],
+        start_param: int,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Return (columns, placeholders, values) lists for vector fields.
+
+        vector_inserts: [(quoted_col_name, formatted_vec_str), ...]
+        start_param: $N index for the first vector parameter.
+        Placeholders include the ``::vector`` cast required by asyncpg.
+        """
+        columns: list[str] = []
+        placeholders: list[str] = []
+        values: list[str] = []
+        for i, (q_col, vec_str) in enumerate(vector_inserts):
+            columns.append(q_col)
+            placeholders.append(f"${start_param + i}::vector")
+            values.append(vec_str)
+        return columns, placeholders, values
+
+    async def _collect_vector_inserts(
+        self, record: Record
+    ) -> list[tuple[str, str]]:
+        """Return [(quoted_col_name, formatted_vec_str)] for every VectorField.
+
+        Also calls _ensure_vector_column so the pgvector column is guaranteed
+        to exist before any INSERT/UPDATE that uses the returned data.
+        """
+        from ..fields import VectorField
+        from .postgres_vector import format_vector_for_postgres
+
+        result: list[tuple[str, str]] = []
+        for field_name, field_obj in record.fields.items():
+            if isinstance(field_obj, VectorField) and self._vector_enabled:
+                await self._ensure_vector_column(field_name, field_obj.dimensions)
+                q_col = quote_ident(f"vector_{field_name}")
+                result.append((q_col, format_vector_for_postgres(field_obj.value)))
+        return result
+
     async def create(self, record: Record) -> str:
         """Create a new record with vector support."""
         self._check_connection()
 
-        # Check for vector fields and ensure columns exist
-        from ..fields import VectorField
-        for field_name, field_obj in record.fields.items():
-            if isinstance(field_obj, VectorField) and self._vector_enabled:
-                await self._ensure_vector_column(field_name, field_obj.dimensions)
+        vector_inserts = await self._collect_vector_inserts(record)
 
-        # Use record's ID if it has one, otherwise generate a new one
         id = record.id if record.id else str(uuid.uuid4())
         row = self._record_to_row(record, id)
 
-        # Build dynamic SQL based on vector columns present
         columns = ["id", "data", "metadata"]
-        values = [row["id"], row["data"], row["metadata"]]
+        values: list[Any] = [row["id"], row["data"], row["metadata"]]
         placeholders = ["$1", "$2", "$3"]
 
-        # Add vector columns
-        param_num = 4
-        for key, value in row.items():
-            if key.startswith("vector_"):
-                columns.append(key)
-                values.append(value)
-                placeholders.append(f"${param_num}")
-                param_num += 1
+        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
+            vector_inserts, start_param=4
+        )
+        columns.extend(vec_cols)
+        placeholders.extend(vec_placeholders)
+        values.extend(vec_values)
 
         sql = f"""
         INSERT INTO {self._q_qualified} ({', '.join(columns)})
@@ -1185,22 +1217,34 @@ class AsyncPostgresDatabase(
             True if the record was updated, False if no record with the given ID exists
         """
         self._check_connection()
+
+        vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
+
+        set_clauses = ["data = $2", "metadata = $3", "updated_at = CURRENT_TIMESTAMP"]
+        values: list[Any] = [id, row["data"], row["metadata"]]
+
+        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
+            vector_inserts, start_param=4
+        )
+        for q_col, placeholder in zip(vec_cols, vec_placeholders):
+            set_clauses.append(f"{q_col} = {placeholder}")
+        values.extend(vec_values)
 
         sql = f"""
         UPDATE {self._q_qualified}
-        SET data = $2, metadata = $3, updated_at = CURRENT_TIMESTAMP
+        SET {', '.join(set_clauses)}
         WHERE id = $1
         """
 
         async with self._pool.acquire() as conn:
-            result = await conn.execute(sql, row["id"], row["data"], row["metadata"])
+            result = await conn.execute(sql, *values)
 
         # Returns UPDATE n where n is rows affected
         rows_affected = int(result.split()[-1])
 
         if rows_affected == 0:
-            logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+            logger.warning("Update affected 0 rows for id=%s. Record may not exist.", id)
 
         return rows_affected > 0
 
@@ -1234,13 +1278,13 @@ class AsyncPostgresDatabase(
 
     async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
         """
         self._check_connection()
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             id = id_or_record
@@ -1253,18 +1297,37 @@ class AsyncPostgresDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
+        vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
 
+        columns = ["id", "data", "metadata"]
+        values: list[Any] = [row["id"], row["data"], row["metadata"]]
+        placeholders = ["$1", "$2", "$3"]
+        update_clauses = [
+            "data = EXCLUDED.data",
+            "metadata = EXCLUDED.metadata",
+            "updated_at = CURRENT_TIMESTAMP",
+        ]
+
+        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
+            vector_inserts, start_param=4
+        )
+        columns.extend(vec_cols)
+        placeholders.extend(vec_placeholders)
+        values.extend(vec_values)
+        for q_col in vec_cols:
+            update_clauses.append(f"{q_col} = EXCLUDED.{q_col}")
+
         sql = f"""
-        INSERT INTO {self._q_qualified} (id, data, metadata)
-        VALUES ($1, $2, $3)
+        INSERT INTO {self._q_qualified} ({', '.join(columns)})
+        VALUES ({', '.join(placeholders)})
         ON CONFLICT (id) DO UPDATE
-        SET data = EXCLUDED.data, metadata = EXCLUDED.metadata, updated_at = CURRENT_TIMESTAMP
+        SET {', '.join(update_clauses)}
         """
 
         async with self._pool.acquire() as conn:
-            await conn.execute(sql, row["id"], row["data"], row["metadata"])
+            await conn.execute(sql, *values)
 
         return id
 
@@ -1481,13 +1544,14 @@ class AsyncPostgresDatabase(
         operator = get_vector_operator(metric_str)
 
         vector_column = f"vector_{field_name}"
+        q_vector_column = quote_ident(vector_column)
 
         # Build query
         sql = f"""
-        SELECT id, data, metadata, {vector_column},
-               {vector_column} {operator} $1::vector AS distance
+        SELECT id, data, metadata, {q_vector_column},
+               {q_vector_column} {operator} $1::vector AS distance
         FROM {self._q_qualified}
-        WHERE {vector_column} IS NOT NULL
+        WHERE {q_vector_column} IS NOT NULL
         """
 
         params = [vector_str]
@@ -1677,7 +1741,7 @@ class AsyncPostgresDatabase(
         # Determine optimal parameters if not provided
         if not lists and index_type == "ivfflat":
             # Count vectors to determine optimal lists
-            count_sql = get_vector_count_sql(self.schema_name, self.table_name, vector_field)
+            count_sql = get_vector_count_sql(self._q_schema, self._q_table, vector_field)
             async with self._pool.acquire() as conn:
                 count = await conn.fetchval(count_sql) or 0
                 _, params = get_optimal_index_type(count)
@@ -1694,8 +1758,8 @@ class AsyncPostgresDatabase(
 
         # Build index SQL - pass field_name for proper index naming
         index_sql = build_vector_index_sql(
-            table_name=self.table_name,
-            schema_name=self.schema_name,
+            q_table_name=self._q_table,
+            q_schema_name=self._q_schema,
             column_name=column_expr,
             dimensions=dimensions,
             metric=metric_str,
@@ -1763,10 +1827,13 @@ class AsyncPostgresDatabase(
         try:
             async with self._pool.acquire() as conn:
                 # Count vectors
-                count_sql = get_vector_count_sql(self.schema_name, self.table_name, vector_field)
+                count_sql = get_vector_count_sql(self._q_schema, self._q_table, vector_field)
                 stats["vector_count"] = await conn.fetchval(count_sql) or 0
 
-                # Check for index
+                # Check for index — raw (unquoted) names are correct here:
+                # get_index_check_sql queries pg_indexes using $1/$2 parameterized
+                # bindings against catalog text columns (schemaname, tablename), not
+                # via identifier interpolation, so quoting would produce wrong matches.
                 index_sql, params = get_index_check_sql(self.schema_name, self.table_name, vector_field)
                 stats["indexed"] = await conn.fetchval(index_sql, *params) or False
         except Exception as e:
@@ -1902,7 +1969,8 @@ class AsyncPostgresDatabase(
         # Use COPY for efficient bulk insert
         async with self._pool.acquire() as conn:
             await conn.copy_records_to_table(
-                f"{self._q_qualified}",
+                self.table_name,
+                schema_name=self.schema_name or None,
                 records=rows,
                 columns=["id", "data", "metadata"]
             )
@@ -1998,6 +2066,7 @@ class AsyncPostgresDatabase(
         operator = get_vector_operator(metric_str)
 
         vector_column = f"vector_{vector_field}"
+        q_vector_column = quote_ident(vector_column)
 
         # Build combined query using CTE for efficient hybrid search
         # This performs both searches in a single query
@@ -2026,13 +2095,13 @@ class AsyncPostgresDatabase(
                 id,
                 data,
                 metadata,
-                {vector_column},
-                1.0 - ({vector_column} {operator} $2::vector) as vector_score,
+                {q_vector_column},
+                1.0 - ({q_vector_column} {operator} $2::vector) as vector_score,
                 ROW_NUMBER() OVER (
-                    ORDER BY {vector_column} {operator} $2::vector
+                    ORDER BY {q_vector_column} {operator} $2::vector
                 ) as vector_rank
             FROM {self._q_qualified}
-            WHERE {vector_column} IS NOT NULL
+            WHERE {q_vector_column} IS NOT NULL
             LIMIT {fetch_k}
         ),
         combined AS (

@@ -22,7 +22,7 @@ All three supported dialects (`postgres`, `sqlite`, `duckdb`) use the same SQL-s
 - Non-empty string required — raises `ValueError` for empty string or non-string input
 - Does **not** split qualified names — `"schema.table"` → `'"schema.table"'` (one identifier, not two)
 - Caller is responsible for splitting a qualified name and quoting each part separately
-- For Postgres, delegates to `psycopg2.extensions.quote_ident` when available; falls back to the pure-Python rule
+- All three dialects use the same pure-Python SQL-standard rule: wrap with `"`, escape internal `"` as `""`
 
 ### Not for test code
 

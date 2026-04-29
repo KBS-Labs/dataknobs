@@ -52,7 +52,13 @@ def test_quote_ident_duckdb_dialect():
     assert quote_ident("records", dialect="duckdb") == '"records"'
 
 
-def test_quote_ident_idempotent_semantics():
-    """Double-quoting a plain identifier is semantically equivalent in SQL."""
-    name = quote_ident("records")
-    assert name == '"records"'
+def test_quote_ident_is_not_idempotent():
+    """quote_ident is NOT idempotent — calling it twice wraps in another layer of quotes.
+
+    Callers must not pre-quote and then pass the result to quote_ident again,
+    or the identifier will contain literal double-quote characters and be wrong.
+    """
+    once = quote_ident("records")       # '"records"'
+    twice = quote_ident(once)           # '"""records"""'
+    assert twice != once
+    assert twice == '"""records"""'

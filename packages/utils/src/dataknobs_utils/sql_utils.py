@@ -32,11 +32,6 @@ def quote_ident(name: str, dialect: str = "postgres") -> str:
     follow the same SQL-standard rule: surround the name with ``"``,
     escaping any internal ``"`` as ``""``.
 
-    For Postgres, delegates to ``psycopg2.extensions.quote_ident`` when
-    available (same algorithm, avoids re-implementing the edge cases
-    psycopg2 has already handled). Falls back to the pure-Python rule
-    when psycopg2 is not importable or when the dialect is not postgres.
-
     Raises ``ValueError`` for empty or non-string input. Does **not**
     split qualified names — ``"schema.table"`` is treated as a single
     identifier that produces ``'"schema.table"'``. Splitting a qualified
@@ -47,14 +42,9 @@ def quote_ident(name: str, dialect: str = "postgres") -> str:
     """
     if not isinstance(name, str) or not name:
         raise ValueError(f"Invalid SQL identifier: {name!r}")
-
-    if dialect == "postgres":
-        try:
-            from psycopg2.extensions import quote_ident as _pg_quote
-            return _pg_quote(name, None)
-        except Exception:
-            pass
-
+    _supported = {"postgres", "sqlite", "duckdb"}
+    if dialect not in _supported:
+        raise ValueError(f"Unsupported dialect: {dialect!r}. Supported: {_supported}")
     # Standard SQL double-quoting rule (correct for postgres, sqlite, duckdb)
     return '"' + name.replace('"', '""') + '"'
 
@@ -270,11 +260,10 @@ class PostgresDB:
         return self._tables_df
 
     def get_columns(self, table_name: str) -> pd.DataFrame:
-        return self.query(f"""
-            SELECT *
-            FROM information_schema.columns
-            WHERE table_name = '{table_name}'
-        """)
+        return self.query(
+            "SELECT * FROM information_schema.columns WHERE table_name = %(table_name)s",
+            params={"table_name": table_name},
+        )
 
     def table_head(self, table_name: str, n: int = 10) -> pd.DataFrame:
         """Get the first N rows from a table.
