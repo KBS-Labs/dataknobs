@@ -5,6 +5,23 @@ All notable changes to the dataknobs-data package will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- `auto_create_table` config option on all SQL-style relational database
+  backends — `Sync/AsyncPostgresDatabase`, `Sync/AsyncSQLiteDatabase`,
+  `Sync/AsyncDuckDBDatabase`. Default is `True` (no behaviour change for
+  existing consumers). When set to `False`, `connect()` verifies the
+  records table exists and raises `RuntimeError` if it doesn't, enabling
+  Alembic / Flyway / Sqitch-managed schemas with DML-only application
+  roles. Mirrors the existing `PgVectorStore.auto_create_table` contract.
+- `SQLTableManager.get_table_exists_sql()` — dialect-aware parameterized
+  table-existence query (postgres / sqlite / duckdb). Used internally by
+  the backends above.
+- `SQLTableManager._coerce_bool()` — bool coercion helper for config values
+  that may arrive as strings from YAML or env-var deserialization
+  (``"false"`` / ``"0"`` / ``"no"`` → ``False``).
+
 ## v0.4.15
 
 ### Breaking

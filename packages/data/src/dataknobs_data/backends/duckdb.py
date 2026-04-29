@@ -71,6 +71,11 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
                 - timeout: Connection timeout in seconds (default: 5.0)
                 - max_workers: Number of threads in pool (default: 4)
                 - read_only: Open database in read-only mode (default: False)
+                - auto_create_table: Auto-create the records table if missing
+                    on connect (default: True). Set to False when an external
+                    migration tool (Alembic, Flyway, etc.) owns DDL — startup
+                    will then verify the table exists and raise a clear error
+                    if it doesn't. Ignored when ``read_only=True``.
         """
         super().__init__(config)
         config = config or {}
@@ -79,6 +84,9 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         self.timeout = config.get("timeout", 5.0)
         self.max_workers = config.get("max_workers", 4)
         self.read_only = config.get("read_only", False)
+        self.auto_create_table = SQLTableManager._coerce_bool(
+            config.get("auto_create_table", True)
+        )
 
         # Thread pool for async operations (DuckDB has no native async support)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
@@ -161,12 +169,30 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         )
 
     def _ensure_table_sync(self) -> None:
-        """Synchronous table creation."""
-        # Skip table creation in read-only mode
+        """Synchronous table creation or existence-check.
+
+        When ``auto_create_table=True`` (default), runs
+        ``CREATE TABLE IF NOT EXISTS …``. When ``auto_create_table=False``,
+        verifies the table is present and raises a clear ``RuntimeError``
+        if it isn't. ``read_only=True`` skips both paths (verification is
+        not meaningful in read-only mode).
+        """
         if self.read_only:
             return
 
         with self._lock:
+            if not self.auto_create_table:
+                exists_sql, params = self.table_manager.get_table_exists_sql()
+                row = self.conn.execute(exists_sql, list(params)).fetchone()
+                exists = bool(row[0]) if row else False
+                if not exists:
+                    raise RuntimeError(
+                        f"Table {self.table_name} does not exist and "
+                        "auto_create_table is disabled. Run your migrations "
+                        "before starting the application."
+                    )
+                return
+
             create_sql = self.table_manager.get_create_table_sql()
             self.conn.execute(create_sql)
 
@@ -688,6 +714,11 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
                 - table: Table name (default: "records")
                 - timeout: Connection timeout in seconds (default: 5.0)
                 - read_only: Open database in read-only mode (default: False)
+                - auto_create_table: Auto-create the records table if missing
+                    on connect (default: True). Set to False when an external
+                    migration tool (Alembic, Flyway, etc.) owns DDL — startup
+                    will then verify the table exists and raise a clear error
+                    if it doesn't. Ignored when ``read_only=True``.
         """
         super().__init__(config)
         config = config or {}
@@ -695,6 +726,9 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
         self.table_name = config.get("table", "records")
         self.timeout = config.get("timeout", 5.0)
         self.read_only = config.get("read_only", False)
+        self.auto_create_table = SQLTableManager._coerce_bool(
+            config.get("auto_create_table", True)
+        )
 
         # Reuse SQL infrastructure
         self.query_builder = SQLQueryBuilder(
@@ -747,12 +781,29 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
             logger.info(f"Disconnected from sync DuckDB database: {self.db_path}")
 
     def _ensure_table(self) -> None:
-        """Ensure the table exists."""
+        """Ensure the records table exists.
+
+        When ``auto_create_table=True`` (default), runs
+        ``CREATE TABLE IF NOT EXISTS …``. When ``auto_create_table=False``,
+        verifies the table is present and raises a clear ``RuntimeError``
+        if it isn't. ``read_only=True`` skips both paths.
+        """
         if not self.conn:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        # Skip table creation in read-only mode
         if self.read_only:
+            return
+
+        if not self.auto_create_table:
+            exists_sql, params = self.table_manager.get_table_exists_sql()
+            row = self.conn.execute(exists_sql, list(params)).fetchone()
+            exists = bool(row[0]) if row else False
+            if not exists:
+                raise RuntimeError(
+                    f"Table {self.table_name} does not exist and "
+                    "auto_create_table is disabled. Run your migrations "
+                    "before starting the application."
+                )
             return
 
         create_sql = self.table_manager.get_create_table_sql()

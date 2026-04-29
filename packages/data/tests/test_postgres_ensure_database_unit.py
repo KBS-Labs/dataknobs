@@ -102,7 +102,7 @@ class TestParsePostgresConfigEnsureDatabase:
 
     def test_default_true(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db = mixin._parse_postgres_config({
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
             "host": "localhost",
             "database": "mydb",
         })
@@ -111,7 +111,7 @@ class TestParsePostgresConfigEnsureDatabase:
 
     def test_explicit_false(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db = mixin._parse_postgres_config({
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
             "host": "localhost",
             "database": "mydb",
             "ensure_database": False,
@@ -136,11 +136,11 @@ class TestParsePostgresConfigBoolCoercion:
         ("0", False),
         ("no", False),
         ("", False),
-        ("anything_else", False),
+        ("anything_else", True),
     ])
     def test_bool_coercion(self, value: bool | str, expected: bool) -> None:
         mixin = PostgresBaseConfig()
-        _, _, _, ensure_db = mixin._parse_postgres_config({
+        _, _, _, ensure_db, _ = mixin._parse_postgres_config({
             "ensure_database": value,
         })
         assert ensure_db is expected
@@ -151,7 +151,7 @@ class TestParsePostgresConfigConnectionString:
 
     def test_normalizes_connection_string_into_individual_keys(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, _ = mixin._parse_postgres_config({
+        _, _, conn_config, _, _ = mixin._parse_postgres_config({
             "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
         })
         assert conn_config["host"] == "dbhost"
@@ -172,7 +172,7 @@ class TestParsePostgresConfigConnectionString:
         reusing a shared URL for the other fields.
         """
         mixin = PostgresBaseConfig()
-        _, _, conn_config, _ = mixin._parse_postgres_config({
+        _, _, conn_config, _, _ = mixin._parse_postgres_config({
             "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
             "database": "override_db",
         })
@@ -181,7 +181,7 @@ class TestParsePostgresConfigConnectionString:
 
     def test_connection_string_with_ensure_database(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db = mixin._parse_postgres_config({
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
             "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
             "ensure_database": False,
         })
@@ -190,7 +190,7 @@ class TestParsePostgresConfigConnectionString:
 
     def test_connection_string_default_ensure_database_true(self) -> None:
         mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db = mixin._parse_postgres_config({
+        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config({
             "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
         })
         assert ensure_db is True

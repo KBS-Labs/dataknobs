@@ -968,9 +968,76 @@ class SQLTableManager:
             );
             """
 
+    def get_table_exists_sql(self) -> tuple[str, tuple[Any, ...]]:
+        """Get a parameterized table-existence-check query.
+
+        Returns a ``(sql, params)`` pair. The SQL uses ``?`` placeholders
+        that callers adapt to their backend's param style when needed
+        (postgres-async uses ``$1, $2``; sqlite and duckdb pass ``?``
+        through verbatim).
+
+        Returns:
+            Tuple of ``(sql, params)`` — execute with
+            ``cursor.execute(sql, params)`` and read the first column of
+            the first row as a bool.
+        """
+        if self.dialect == "postgres":
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_name = ?"
+                ")"
+            )
+            return sql, (self.schema_name or "public", self.table_name)
+        elif self.dialect == "duckdb":
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_name = ?"
+                ")"
+            )
+            return sql, (self.schema_name or "main", self.table_name)
+        elif self.dialect == "sqlite":
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = ?"
+                ")"
+            )
+            return sql, (self.table_name,)
+        else:
+            sql = (
+                "SELECT EXISTS ("
+                "SELECT FROM information_schema.tables "
+                "WHERE table_name = ?"
+                ")"
+            )
+            return sql, (self.table_name,)
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = True) -> bool:
+        """Coerce a config value to bool, handling YAML/env string values.
+
+        String values ``"false"`` / ``"0"`` / ``"no"`` (case-insensitive)
+        map to ``False``; any other string maps to ``True``. Non-strings
+        go through ``bool(value)``.
+
+        Args:
+            value: Config value to coerce.
+            default: Returned when ``value`` is ``None``.
+
+        Returns:
+            Coerced boolean.
+        """
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.lower() not in ("false", "0", "no", "")
+        return bool(value)
+
     def get_drop_table_sql(self) -> str:
         """Get the DROP TABLE SQL statement.
-        
+
         Returns:
             SQL statement for dropping the table
         """

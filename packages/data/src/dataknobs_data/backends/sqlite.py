@@ -58,6 +58,11 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 - synchronous: Synchronous mode (NORMAL, FULL, OFF) (default: None)
                 - vector_enabled: Enable vector support (default: False)
                 - vector_metric: Distance metric for vector search (default: "cosine")
+                - auto_create_table: Auto-create the records table if missing
+                    on connect (default: True). Set to False when an external
+                    migration tool (Alembic, Flyway, etc.) owns DDL — startup
+                    will then verify the table exists and raise a clear error
+                    if it doesn't.
         """
         super().__init__(config)
         SQLiteVectorSupport.__init__(self)
@@ -71,6 +76,9 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         self.check_same_thread = self.config.get("check_same_thread", False)
         self.journal_mode = self.config.get("journal_mode")
         self.synchronous = self.config.get("synchronous")
+        self.auto_create_table = SQLTableManager._coerce_bool(
+            self.config.get("auto_create_table", True)
+        )
 
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
@@ -147,9 +155,33 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         cursor.close()
 
     def _ensure_table(self) -> None:
-        """Ensure the table exists."""
+        """Ensure the records table exists.
+
+        When ``auto_create_table=True`` (default), runs
+        ``CREATE TABLE IF NOT EXISTS …``. When ``auto_create_table=False``,
+        verifies the table is present and raises a clear ``RuntimeError``
+        if it isn't — for consumers managing DDL via Alembic / Flyway /
+        Sqitch.
+        """
         if not self.conn:
             raise RuntimeError("Database not connected. Call connect() first.")
+
+        if not self.auto_create_table:
+            exists_sql, params = self.table_manager.get_table_exists_sql()
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(exists_sql, params)
+                row = cursor.fetchone()
+                exists = bool(row[0]) if row else False
+            finally:
+                cursor.close()
+            if not exists:
+                raise RuntimeError(
+                    f"Table {self.table_name} does not exist and "
+                    "auto_create_table is disabled. Run your migrations "
+                    "before starting the application."
+                )
+            return
 
         cursor = self.conn.cursor()
         cursor.executescript(self.table_manager.get_create_table_sql())

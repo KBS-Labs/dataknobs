@@ -139,9 +139,43 @@ async_db = async_factory.create(
     path="/path/to/analytics.duckdb",
 
     # Number of worker threads for async operations (default: 4)
-    max_workers=8
+    max_workers=8,
+
+    # Auto-create the records table on connect (default: True).
+    # Set to False when an external migration tool owns DDL.
+    # Ignored when read_only=True.
+    auto_create_table=True,
 )
 ```
+
+## Schema Ownership
+
+By default, the backend creates the records table on every `connect()` via
+`CREATE TABLE IF NOT EXISTS …`. To opt out (e.g., when running migrations via
+Alembic or Flyway):
+
+```python
+db = SyncDuckDBDatabase({
+    "path": "/path/to/analytics.duckdb",
+    "auto_create_table": False,
+})
+db.connect()
+# → If the table does not exist, raises:
+#   RuntimeError: Table records does not exist and
+#   auto_create_table is disabled. Run your migrations before starting
+#   the application.
+```
+
+When `auto_create_table` is `False`:
+
+- `connect()` runs a `SELECT EXISTS …` query against `information_schema.tables` to verify the table is present.
+- If the table is missing, `connect()` raises `RuntimeError` with a clear message.
+- If the table is present, `connect()` is a no-op for DDL.
+
+When `read_only=True`, both DDL and the existence check are skipped (verification is not meaningful in read-only mode).
+
+The default is `True`, preserving backward compatibility with all existing consumers.
+Both `SyncDuckDBDatabase` and `AsyncDuckDBDatabase` support this option.
 
 ## Advanced Features
 
