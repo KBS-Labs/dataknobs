@@ -195,7 +195,7 @@ else:
 | `tag` | `str` | Task identifier |
 | `success` | `bool` | Whether the task completed without error |
 | `value` | `LLMResponse \| Any` | Return value (`None` on failure) |
-| `error` | `Exception \| None` | The exception if failed |
+| `error` | `BaseException \| None` | The exception if failed (e.g. `asyncio.CancelledError` for cancelled tasks) |
 | `duration_ms` | `float` | Wall-clock execution time in milliseconds |
 
 ## Error Handling
