@@ -292,6 +292,13 @@ class ConfigLoader:
         literal ``${...}`` strings as dict keys; expanding them is a
         behavior change beyond the migration's documented scope.
 
+        ``expand_user_paths=False`` matches the pre-Item 111 inline parser,
+        which returned ``os.environ[name]`` verbatim. The canonical helper
+        defaults to ``True``, but the other in-tree config-loading callers
+        (``Config._load_dict``, the legacy ``VariableSubstitution`` shim)
+        also pass ``False`` — letting downstream code decide whether to
+        expand ``~``-prefixed values.
+
         Args:
             config: Configuration to process.
 
@@ -299,7 +306,11 @@ class ConfigLoader:
             Configuration with resolved environment variables.
         """
         with _alias_prefixed_env_vars(self._env_prefix):
-            return substitute_env_vars(config, substitute_keys=False)
+            return substitute_env_vars(
+                config,
+                substitute_keys=False,
+                expand_user_paths=False,
+            )
 
     def _finalize_config(self, config: Dict[str, Any]) -> FSMConfig:
         """Apply final transformations and validate configuration.

@@ -396,6 +396,34 @@ class TestConfigLoader:
         config = loader.load_from_dict(config_dict)
         assert config.name == "$PORT"
 
+    def test_tilde_in_env_value_is_not_expanded(self, monkeypatch):
+        """Tilde-prefixed env-var values are returned literally.
+
+        The canonical helper defaults to ``expand_user_paths=True``; the
+        FSM call site overrides to ``False`` so values like ``~/data``
+        survive intact and downstream code decides whether to expand.
+        """
+        monkeypatch.setenv("FSM_DATA_DIR", "~/data")
+
+        loader = ConfigLoader()
+        config_dict = {"name": "${FSM_DATA_DIR}", **self._minimal_network()}
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "~/data"
+
+    def test_colon_only_default_form_resolves(self, monkeypatch):
+        """``${VAR:default}`` resolves via the FSM loader path.
+
+        Parity test for the canonical helper's documented default form
+        (no dash). The legacy inline parser had no branch for this and
+        would error; the canonical helper accepts it as a feature.
+        """
+        monkeypatch.delenv("UNSET_VAR", raising=False)
+
+        loader = ConfigLoader()
+        config_dict = {"name": "${UNSET_VAR:fallback}", **self._minimal_network()}
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "fallback"
+
     def test_alias_helper_with_empty_prefix_is_noop(self, monkeypatch):
         """Defensive guard: empty prefix in _alias_prefixed_env_vars aliases nothing.
 
