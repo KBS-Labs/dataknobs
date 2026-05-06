@@ -5,6 +5,39 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-06
+
+### dataknobs-config [0.3.11]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-structures [1.0.8]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-xization [1.3.4]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-fsm [0.1.17]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-llm [0.5.10]
+
+#### Added
+- added parallel llm executor cancellation
+
+### dataknobs-bots [0.6.18]
+
+#### Changed
+- bumped versions, updated release notes
+
+
 ## Release - 2026-04-29
 
 ### dataknobs-common [1.3.11]

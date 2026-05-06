@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-bots"
-version = "0.6.17"
+version = "0.6.18"
 description = "Configuration-driven AI agents for DataKnobs"
 readme = "README.md"
 authors = [
@@ -9,12 +9,12 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common>=1.3.11",
-    "dataknobs-config>=0.3.10",
-    "dataknobs-llm>=0.5.9",
+    "dataknobs-config>=0.3.11",
+    "dataknobs-llm>=0.5.10",
     "dataknobs-data>=0.4.16",
     "dataknobs-utils>=1.2.9",
-    "dataknobs-xization>=1.3.3",
-    "dataknobs-fsm>=0.1.16",
+    "dataknobs-xization>=1.3.4",
+    "dataknobs-fsm>=0.1.17",
     "pyyaml>=6.0",
     "numpy>=1.24.0",
     "jinja2>=3.1.0",

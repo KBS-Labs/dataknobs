@@ -23,7 +23,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "dataknobs-common>=1.3.11",
     "dataknobs-utils>=1.2.9",
-    "dataknobs-config>=0.3.10",
+    "dataknobs-config>=0.3.11",
     "numpy>=1.24.0",
 ]
 
