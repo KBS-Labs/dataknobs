@@ -231,6 +231,123 @@ class TestSubstituteEnvVars:
         assert "~" not in key
         assert key.endswith("/configs")
 
+    # --- Item 109 — bash-superset syntax + new option flags ---
+
+    def test_dash_default_syntax(self, monkeypatch):
+        """Bash-style ${VAR:-default} works as alias for ${VAR:default}."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        result = substitute_env_vars({"k": "${MISSING_VAR:-fallback}"})
+        assert result == {"k": "fallback"}
+
+    def test_question_mark_error_syntax(self, monkeypatch):
+        """Bash-style ${VAR:?msg} raises with the custom message when unset."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        with pytest.raises(
+            ValueError, match="Required environment variable not set: DB password is required"
+        ):
+            substitute_env_vars({"k": "${MISSING_VAR:?DB password is required}"})
+
+    def test_question_mark_uses_var_name_when_msg_empty(self, monkeypatch):
+        """${VAR:?} (empty message) raises using the variable name."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        with pytest.raises(
+            ValueError, match="Required environment variable not set: MISSING_VAR"
+        ):
+            substitute_env_vars({"k": "${MISSING_VAR:?}"})
+
+    def test_question_mark_returns_value_when_set(self, monkeypatch):
+        """${VAR:?msg} returns the env value when the variable is set."""
+        monkeypatch.setenv("PRESENT_VAR", "hello")
+        result = substitute_env_vars({"k": "${PRESENT_VAR:?must be set}"})
+        assert result == {"k": "hello"}
+
+    def test_type_coerce_int(self, monkeypatch):
+        """type_coerce=True returns int when the entire string is a numeric ${VAR}."""
+        monkeypatch.setenv("PORT", "5432")
+        result = substitute_env_vars({"port": "${PORT}"}, type_coerce=True)
+        assert result == {"port": 5432}
+
+    def test_type_coerce_bool(self, monkeypatch):
+        """type_coerce=True returns bool for true/yes/1 and false/no/0."""
+        monkeypatch.setenv("ENABLED", "true")
+        monkeypatch.setenv("DISABLED", "false")
+        result = substitute_env_vars(
+            {"on": "${ENABLED}", "off": "${DISABLED}"}, type_coerce=True
+        )
+        assert result == {"on": True, "off": False}
+
+    def test_type_coerce_float(self, monkeypatch):
+        """type_coerce=True returns float for numeric strings with a decimal."""
+        monkeypatch.setenv("THRESHOLD", "0.95")
+        result = substitute_env_vars({"t": "${THRESHOLD}"}, type_coerce=True)
+        assert result == {"t": 0.95}
+
+    def test_type_coerce_only_whole_value(self, monkeypatch):
+        """type_coerce=True does NOT coerce mixed-content strings."""
+        monkeypatch.setenv("PORT", "5432")
+        result = substitute_env_vars({"k": "port=${PORT}"}, type_coerce=True)
+        assert result == {"k": "port=5432"}  # string, not int
+
+    def test_type_coerce_default_value(self, monkeypatch):
+        """type_coerce=True coerces values from defaults too."""
+        monkeypatch.delenv("PORT", raising=False)
+        result = substitute_env_vars({"port": "${PORT:5432}"}, type_coerce=True)
+        assert result == {"port": 5432}
+
+    def test_type_coerce_preserves_string_for_non_numeric(self, monkeypatch):
+        """type_coerce=True returns the original string when no coercion applies."""
+        monkeypatch.setenv("NAME", "hello")
+        result = substitute_env_vars({"name": "${NAME}"}, type_coerce=True)
+        assert result == {"name": "hello"}
+
+    def test_expand_user_paths_off(self, monkeypatch):
+        """expand_user_paths=False leaves ~ literals intact."""
+        monkeypatch.setenv("P", "~/data")
+        result = substitute_env_vars(
+            {"path": "${P}"}, expand_user_paths=False
+        )
+        assert result == {"path": "~/data"}
+
+    def test_substitute_keys_off(self, monkeypatch):
+        """substitute_keys=False leaves ${VAR}-shaped keys as literals."""
+        monkeypatch.setenv("K", "resolved")
+        result = substitute_env_vars({"${K}": "v"}, substitute_keys=False)
+        assert result == {"${K}": "v"}
+
+    def test_keys_never_type_coerced(self, monkeypatch):
+        """Even with type_coerce=True, dict keys remain strings (no int keys)."""
+        monkeypatch.setenv("PORT", "5432")
+        result = substitute_env_vars({"${PORT}": "v"}, type_coerce=True)
+        assert "5432" in result  # string key
+        assert 5432 not in result  # never int key
+
+    def test_dash_default_set_value_parity(self, monkeypatch):
+        """${VAR:default} and ${VAR:-default} return the env value identically when set."""
+        monkeypatch.setenv("VAR", "real")
+        legacy = substitute_env_vars({"k": "${VAR:fallback}"})
+        bash = substitute_env_vars({"k": "${VAR:-fallback}"})
+        assert legacy == bash == {"k": "real"}
+
+    def test_dash_default_literal_dash(self, monkeypatch):
+        """${VAR:--} resolves to a literal '-' default when VAR is unset."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        result = substitute_env_vars({"k": "${MISSING_VAR:--}"})
+        assert result == {"k": "-"}
+
+    def test_dash_default_with_dash_prefix(self, monkeypatch):
+        """${VAR:--default} resolves to literal '-default' when VAR is unset."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        result = substitute_env_vars({"k": "${MISSING_VAR:--flag}"})
+        assert result == {"k": "-flag"}
+
+    def test_question_mark_msg_starting_with_colon(self, monkeypatch):
+        """${VAR:?:foo} uses ':foo' as the error message when VAR is unset."""
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        with pytest.raises(
+            ValueError, match=r"Required environment variable not set: :foo"
+        ):
+            substitute_env_vars({"k": "${MISSING_VAR:?:foo}"})
+
 
 class TestInheritableConfigLoader:
     """Test InheritableConfigLoader class."""

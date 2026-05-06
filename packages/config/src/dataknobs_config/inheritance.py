@@ -87,29 +87,63 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return result
 
 
-def substitute_env_vars(data: Any) -> Any:
+# Bash-superset pattern. Captures three groups:
+#   1: variable name (no ":" or "}")
+#   2: optional modifier — "" (legacy ${VAR:default}), "-" (bash ${VAR:-default}),
+#                        or "?" (bash ${VAR:?error_msg})
+#   3: optional default value or error message (everything until "}")
+# When the ":..." section is absent, groups 2 and 3 are both None.
+VAR_PATTERN: re.Pattern[str] = re.compile(r"\$\{([^}:]+)(?::([-?]?)([^}]*))?\}")
+
+
+def substitute_env_vars(
+    data: Any,
+    *,
+    type_coerce: bool = False,
+    expand_user_paths: bool = True,
+    substitute_keys: bool = True,
+) -> Any:
     """Recursively substitute environment variables in configuration.
 
-    Supports formats:
-    - ${VAR_NAME}: Required variable, raises error if not set
-    - ${VAR_NAME:default_value}: Optional with default
+    Supported syntaxes (bash superset):
+    - ``${VAR}`` — required; raises ``ValueError`` if unset
+    - ``${VAR:default}`` — DataKnobs legacy form; uses default if unset
+    - ``${VAR:-default}`` — bash-style alias for ``${VAR:default}``
+    - ``${VAR:?error_msg}`` — bash-style; when unset, raises
+      ``ValueError("Required environment variable not set: <error_msg>")``
+      (the variable name is used in place of ``<error_msg>`` when
+      ``error_msg`` is empty)
 
     Substitution applies to both dict keys and values, list items,
     and top-level strings. Non-string dict keys (integers, booleans, etc.)
     pass through unchanged.
 
-    Also expands ~ in string keys and values after substitution using
-    os.path.expanduser(), which leaves non-path strings (URLs,
-    connection strings) intact.
-
     Args:
-        data: Configuration data (dict, list, string, or primitive)
+        data: Configuration data (dict, list, string, or primitive).
+        type_coerce: When ``True``, a string that is *entirely* a single
+            ``${VAR}`` placeholder (e.g., ``"${PORT}"``) returns the env var
+            value coerced to ``int``/``float``/``bool`` when the literal
+            looks like one. Mixed-content strings (``"port=${PORT}"``) always
+            return strings. Default ``False``.
+        expand_user_paths: When ``True``, applies ``os.path.expanduser()`` to
+            substituted strings so ``"${PATH_VAR}"`` with value ``"~/foo"``
+            yields ``"/home/.../foo"``. ``os.path.expanduser`` is a no-op for
+            strings that do not start with ``~``, so URLs and connection
+            strings pass through unchanged. Default ``True`` (preserves
+            historical behavior). Set to ``False`` for strict no-touch
+            substitution.
+        substitute_keys: When ``True``, dict keys with ``${VAR}`` references
+            are substituted. Dict keys are never type-coerced even when
+            ``type_coerce=True``. Default ``True``.
 
     Returns:
-        Data with environment variables substituted
+        Data with environment variables substituted. When ``type_coerce`` is
+        ``True`` the return type for whole-value placeholders may be
+        ``int``/``float``/``bool``; otherwise always returns string.
 
     Raises:
-        ValueError: If required environment variable not set
+        ValueError: Required ``${VAR}`` unset, or ``${VAR:?msg}`` unset (the
+            message is included in the exception message).
 
     Example:
         >>> os.environ["MY_VAR"] = "hello"
@@ -117,50 +151,133 @@ def substitute_env_vars(data: Any) -> Any:
         {'key': 'hello', 'default': 'world'}
     """
     if isinstance(data, dict):
+        if substitute_keys:
+            return {
+                (
+                    _substitute_string(
+                        k, type_coerce=False, expand_user_paths=expand_user_paths
+                    )
+                    if isinstance(k, str)
+                    else k
+                ): substitute_env_vars(
+                    v,
+                    type_coerce=type_coerce,
+                    expand_user_paths=expand_user_paths,
+                    substitute_keys=substitute_keys,
+                )
+                for k, v in data.items()
+            }
         return {
-            _substitute_string(k) if isinstance(k, str) else k: substitute_env_vars(v)
+            k: substitute_env_vars(
+                v,
+                type_coerce=type_coerce,
+                expand_user_paths=expand_user_paths,
+                substitute_keys=substitute_keys,
+            )
             for k, v in data.items()
         }
     elif isinstance(data, list):
-        return [substitute_env_vars(item) for item in data]
+        return [
+            substitute_env_vars(
+                item,
+                type_coerce=type_coerce,
+                expand_user_paths=expand_user_paths,
+                substitute_keys=substitute_keys,
+            )
+            for item in data
+        ]
     elif isinstance(data, str):
-        return _substitute_string(data)
+        return _substitute_string(
+            data, type_coerce=type_coerce, expand_user_paths=expand_user_paths
+        )
     else:
         return data
 
 
-def _substitute_string(value: str) -> str:
+def _substitute_string(
+    value: str,
+    *,
+    type_coerce: bool,
+    expand_user_paths: bool,
+) -> str | int | float | bool:
     """Substitute environment variables in a string.
 
     Args:
-        value: String potentially containing ${VAR} references
+        value: String potentially containing ``${VAR}`` references.
+        type_coerce: When ``True`` and the entire string is a single
+            ``${VAR}`` placeholder, coerce the resolved value to
+            ``int``/``float``/``bool`` if it looks like one.
+        expand_user_paths: When ``True`` apply ``os.path.expanduser`` to the
+            final string result. Applied before ``type_coerce`` in the
+            whole-value fast path so the two flags compose consistently.
 
     Returns:
-        String with variables substituted
+        String with variables substituted, or coerced primitive when
+        ``type_coerce`` matches a whole-value placeholder.
 
     Raises:
-        ValueError: If required variable not set
+        ValueError: If a required variable is unset.
     """
-    # Pattern: ${VAR_NAME} or ${VAR_NAME:default}
-    pattern = r"\$\{([^}:]+)(?::([^}]*))?\}"
+    if type_coerce:
+        whole = VAR_PATTERN.fullmatch(value)
+        if whole is not None:
+            resolved = _resolve_match(whole)
+            if expand_user_paths and resolved:
+                resolved = os.path.expanduser(resolved)  # noqa: PTH111 — Path(x).expanduser() collapses "://" to ":/" in URLs
+            return _convert_type(resolved)
 
     def replacer(match: re.Match[str]) -> str:
-        var_name = match.group(1)
-        default_value = match.group(2)
+        return _resolve_match(match)
 
-        env_value = os.environ.get(var_name)
+    result = VAR_PATTERN.sub(replacer, value)
+    if expand_user_paths and result:
+        return os.path.expanduser(result)  # noqa: PTH111 — Path(x).expanduser() collapses "://" to ":/" in URLs
+    return result
 
-        if env_value is not None:
-            return env_value
-        elif default_value is not None:
-            return default_value
-        else:
-            raise ValueError(f"Required environment variable not set: {var_name}")
 
-    result = re.sub(pattern, replacer, value)
-    if not result:
-        return result
-    return os.path.expanduser(result)  # noqa: PTH111 — Path(x).expanduser() collapses "://" to ":/" in URLs
+def _resolve_match(match: re.Match[str]) -> str:
+    """Resolve a single ``${...}`` regex match to its environment value.
+
+    Raises:
+        ValueError: When the variable is required and unset, or when the
+            ``${VAR:?msg}`` form fires with a missing variable.
+    """
+    var_name = match.group(1)
+    modifier = match.group(2)  # None, "", "-", or "?"
+    default_or_error = match.group(3)  # None or the captured trailing text
+
+    env_value = os.environ.get(var_name)
+    if env_value is not None:
+        return env_value
+    if modifier == "?":
+        msg = default_or_error or var_name
+        raise ValueError(f"Required environment variable not set: {msg}")
+    if default_or_error is not None:
+        return default_or_error
+    raise ValueError(f"Required environment variable not set: {var_name}")
+
+
+def _convert_type(value: str) -> str | int | float | bool:
+    """Coerce a string to ``int``/``float``/``bool`` when it looks like one.
+
+    Used by ``substitute_env_vars(..., type_coerce=True)`` for whole-value
+    placeholders only. Preserves the original string when no coercion
+    applies.
+    """
+    lower = value.lower()
+    if lower in ("true", "yes", "1"):
+        return True
+    if lower in ("false", "no", "0"):
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
 
 
 class InheritableConfigLoader:

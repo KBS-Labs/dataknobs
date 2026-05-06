@@ -1,6 +1,7 @@
 """Test environment variable substitution."""
 
-import os
+import warnings
+
 import pytest
 
 from dataknobs_config.substitution import VariableSubstitution
@@ -8,11 +9,19 @@ from dataknobs_config.substitution import VariableSubstitution
 
 class TestVariableSubstitution:
     """Test environment variable substitution functionality."""
-    
+
     @pytest.fixture
     def substitution(self):
-        """Create a VariableSubstitution instance."""
-        return VariableSubstitution()
+        """Create a VariableSubstitution instance.
+
+        Suppresses the deprecation warning emitted on construction so the
+        behavioral-parity tests below do not flood pytest output. The
+        deprecation warning itself is asserted in
+        ``test_emits_deprecation_warning``.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return VariableSubstitution()
     
     def test_simple_substitution(self, substitution, monkeypatch):
         """Test simple variable substitution."""
@@ -145,3 +154,35 @@ class TestVariableSubstitution:
         assert substitution.has_variables({"key": "${VAR}"}) is True
         assert substitution.has_variables(["${VAR}", "text"]) is True
         assert substitution.has_variables(42) is False
+
+    def test_emits_deprecation_warning(self):
+        """Constructing VariableSubstitution emits a DeprecationWarning that
+        points at the canonical helper.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            VariableSubstitution()
+        deprecation_warnings = [
+            w for w in caught if issubclass(w.category, DeprecationWarning)
+        ]
+        assert deprecation_warnings, "expected a DeprecationWarning"
+        assert any(
+            "substitute_env_vars" in str(w.message) for w in deprecation_warnings
+        )
+
+    def test_question_mark_msg_passes_through_canonical(self, substitution, monkeypatch):
+        """${VAR:?multi word msg} preserves the canonical helper's wording.
+
+        The shim's error-message rewrite only applies when the suffix is a
+        bare identifier (the historical ${VAR} form). For bash-style
+        ${VAR:?error_msg} the suffix is a free-form message, so rewriting
+        it as a variable name would produce garbled output (e.g.
+        "Environment variable 'DB password is required' not found"). The
+        shim must pass these errors through unchanged.
+        """
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        with pytest.raises(
+            ValueError,
+            match=r"Required environment variable not set: DB password is required",
+        ):
+            substitution.substitute("${MISSING_VAR:?DB password is required}")

@@ -1,6 +1,16 @@
 """DataKnobs Config Package
 
 A modular, reusable configuration system for composable settings.
+
+Environment variable substitution is provided by
+:func:`substitute_env_vars` (canonical helper). It supports the bash
+superset ``${VAR}`` / ``${VAR:default}`` / ``${VAR:-default}`` /
+``${VAR:?error_msg}`` and three keyword-only options
+(``type_coerce``, ``expand_user_paths``, ``substitute_keys``). The
+:class:`VariableSubstitution` class is a deprecated thin shim over
+``substitute_env_vars(data, type_coerce=True)`` and emits
+``DeprecationWarning`` on construction; new code should use
+``substitute_env_vars`` directly.
 """
 
 from .binding_resolver import (

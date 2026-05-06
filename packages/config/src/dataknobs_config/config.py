@@ -17,9 +17,9 @@ from .exceptions import (
     FileNotFoundError as ConfigFileNotFoundError,
     ValidationError,
 )
+from .inheritance import substitute_env_vars
 from .references import ReferenceResolver
 from .settings import SettingsManager
-from .substitution import VariableSubstitution
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,6 @@ class Config:
         self._reference_resolver = ReferenceResolver(self)
         self._environment_overrides = EnvironmentOverrides()
         self._object_builder = ObjectBuilder(self)
-        self._variable_substitution = VariableSubstitution()
         self._registered_factories = Registry[Any](name="factories", enable_metrics=True)
 
         # Load sources
@@ -158,8 +157,17 @@ class Config:
                 # Apply path resolution
                 config = self._resolve_paths(config, type_name)
 
-                # Apply environment variable substitution
-                config = self._variable_substitution.substitute(config)
+                # Apply environment variable substitution. Flags reproduce
+                # the historical VariableSubstitution semantics that
+                # Config callers were relying on: whole-value ${VAR}
+                # placeholders coerce to int/float/bool, dict keys are
+                # not substituted, and tilde expansion is off.
+                config = substitute_env_vars(
+                    config,
+                    type_coerce=True,
+                    expand_user_paths=False,
+                    substitute_keys=False,
+                )
 
                 # Store configuration
                 self._data[type_name].append(config)

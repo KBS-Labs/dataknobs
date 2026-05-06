@@ -99,14 +99,28 @@ config.apply_env_overrides(filter_func=filter_func)
 
 ## Variable Substitution in Files
 
-Configuration files can reference environment variables directly:
+Configuration files can reference environment variables directly. The
+canonical helper is :func:`substitute_env_vars` from
+``dataknobs_config.inheritance`` (re-exported as
+``dataknobs_config.substitute_env_vars``); it powers
+``InheritableConfigLoader.load``, ``EnvironmentConfig.load`` /
+``from_dict``, ``EnvironmentAwareConfig.resolve_for_build``,
+``ConfigBindingResolver._get_resolved_config``, and ``Config._load_dict``.
+
+### Supported syntax
+
+| Syntax | Behavior |
+|---|---|
+| ``${VAR}`` | Required. Raises ``ValueError`` if ``VAR`` is unset. |
+| ``${VAR:default}`` | Uses ``default`` when ``VAR`` is unset (DataKnobs legacy form). |
+| ``${VAR:-default}`` | Bash-style alias for ``${VAR:default}``. |
+| ``${VAR:?error_msg}`` | Bash-style. When ``VAR`` is unset, raises ``ValueError("Required environment variable not set: <error_msg>")`` (the variable name is used in place of ``<error_msg>`` when ``error_msg`` is empty). |
 
 ### Basic Substitution
 
 ```yaml
 database:
   host: ${DB_HOST}
-  port: ${DB_PORT}
   password: ${DB_PASSWORD}
 ```
 
@@ -114,13 +128,16 @@ database:
 
 ```yaml
 database:
-  # Colon syntax
+  # Colon syntax (DataKnobs legacy)
   host: ${DB_HOST:localhost}
   port: ${DB_PORT:5432}
-  
-  # Bash-style syntax
+
+  # Bash-style with default
   username: ${DB_USER:-postgres}
   password: ${DB_PASS:-}
+
+  # Bash-style required-with-message — fails fast at load time
+  api_key: ${API_KEY:?API_KEY must be set for production}
 ```
 
 ### Nested Substitution
@@ -129,6 +146,39 @@ database:
 database:
   connection_string: ${DB_PROTOCOL:postgresql}://${DB_HOST}:${DB_PORT}/${DB_NAME}
 ```
+
+### Helper options
+
+``substitute_env_vars`` exposes three keyword-only options:
+
+| Option | Default | Effect |
+|---|---|---|
+| ``type_coerce`` | ``False`` | When a string is *entirely* a single ``${VAR}`` placeholder, coerce the resolved value to ``int`` / ``float`` / ``bool`` if the literal looks like one. Mixed-content strings (``"port=${PORT}"``) always return strings. ``Config._load_dict`` passes ``type_coerce=True`` to preserve historical behavior; other loaders default to ``False`` (string out). |
+| ``expand_user_paths`` | ``True`` | Apply ``os.path.expanduser`` to substituted strings so ``${PATH_VAR}`` whose value is ``~/foo`` yields ``/home/.../foo``. ``os.path.expanduser`` is a no-op on strings that do not start with ``~``, so URLs and connection strings (``postgresql://host:5432/db``) pass through unchanged. Set to ``False`` for strict no-touch substitution. |
+| ``substitute_keys`` | ``True`` | Substitute ``${VAR}`` references in dict keys as well as values. Keys are never type-coerced even when ``type_coerce=True``. |
+
+```python
+from dataknobs_config import substitute_env_vars
+
+# Strict no-touch substitution
+result = substitute_env_vars(data, expand_user_paths=False)
+
+# Coerce numeric env vars to int/float, leave keys as literal strings
+result = substitute_env_vars(data, type_coerce=True, substitute_keys=False)
+```
+
+### Migrating from ``VariableSubstitution``
+
+The class :class:`VariableSubstitution` is a deprecated thin shim over
+``substitute_env_vars``. New code should call ``substitute_env_vars``
+directly:
+
+| Old | New |
+|---|---|
+| ``VariableSubstitution().substitute(data)`` | ``substitute_env_vars(data, type_coerce=True, expand_user_paths=False, substitute_keys=False)`` |
+
+Constructing ``VariableSubstitution()`` emits a ``DeprecationWarning``;
+the class will be removed in a future release.
 
 ## Named vs Indexed Access
 
