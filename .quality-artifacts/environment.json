@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-04T17:15:35Z",
+  "timestamp": "2026-05-06T02:02:37Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.8 (Homebrew 2026-04-27 aarch64-apple-darwin)",
+  "uv_version": "uv 0.11.9 (Homebrew 2026-05-05 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "bbc473beaf652430d76f51eccd54f7d4ea2af6eb",
+  "git_branch": "sbk/parallel-llm-executor-cancellation",
+  "git_commit": "28353a7674d9a34a5f4b24bbd3ab193507b394b1",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
