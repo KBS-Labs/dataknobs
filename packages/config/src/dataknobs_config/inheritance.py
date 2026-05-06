@@ -142,8 +142,12 @@ def substitute_env_vars(
         ``int``/``float``/``bool``; otherwise always returns string.
 
     Raises:
-        ValueError: Required ``${VAR}`` unset, or ``${VAR:?msg}`` unset (the
-            message is included in the exception message).
+        RequiredEnvVarError: When a required ``${VAR}`` is unset, or when
+            ``${VAR:?msg}`` is unset (the message is included in the
+            exception message). The class is a subclass of ``ValueError``
+            so ``except ValueError`` continues to catch it; catch
+            :class:`RequiredEnvVarError` directly to inspect the
+            ``var_name`` / ``bash_form`` / ``explicit_message`` attributes.
 
     Example:
         >>> os.environ["MY_VAR"] = "hello"
@@ -235,12 +239,45 @@ def _substitute_string(
     return result
 
 
+class RequiredEnvVarError(ValueError):
+    """Raised by :func:`substitute_env_vars` when a required env var is unset.
+
+    Subclass of ``ValueError`` so callers using ``except ValueError`` or
+    ``pytest.raises(ValueError)`` keep working. Catch this class directly
+    when you need to distinguish missing-required-var failures from other
+    ``ValueError`` causes, or to inspect:
+
+    - :attr:`var_name`: the variable name that was unset.
+    - :attr:`bash_form`: ``True`` when raised by the bash-style
+      ``${VAR:?msg}`` form, ``False`` when raised by the bare ``${VAR}``
+      form.
+    - :attr:`explicit_message`: the user-supplied message from
+      ``${VAR:?msg}`` (``None`` for the bare form or empty ``${VAR:?}``).
+
+    Library code should not construct this exception directly; it is
+    raised by the canonical helper.
+    """
+
+    def __init__(
+        self,
+        var_name: str,
+        *,
+        bash_form: bool,
+        explicit_message: str | None,
+    ) -> None:
+        self.var_name = var_name
+        self.bash_form = bash_form
+        self.explicit_message = explicit_message
+        message = explicit_message if explicit_message else var_name
+        super().__init__(f"Required environment variable not set: {message}")
+
+
 def _resolve_match(match: re.Match[str]) -> str:
     """Resolve a single ``${...}`` regex match to its environment value.
 
     Raises:
-        ValueError: When the variable is required and unset, or when the
-            ``${VAR:?msg}`` form fires with a missing variable.
+        RequiredEnvVarError: When the variable is required and unset, or
+            when the ``${VAR:?msg}`` form fires with a missing variable.
     """
     var_name = match.group(1)
     modifier = match.group(2)  # None, "", "-", or "?"
@@ -250,11 +287,18 @@ def _resolve_match(match: re.Match[str]) -> str:
     if env_value is not None:
         return env_value
     if modifier == "?":
-        msg = default_or_error or var_name
-        raise ValueError(f"Required environment variable not set: {msg}")
+        # Empty error message ("${VAR:?}") is treated as "no message" so
+        # ``RequiredEnvVarError`` falls back to the variable name; only a
+        # non-empty trailing string is preserved as the explicit message.
+        explicit_message = default_or_error if default_or_error else None
+        raise RequiredEnvVarError(
+            var_name,
+            bash_form=True,
+            explicit_message=explicit_message,
+        )
     if default_or_error is not None:
         return default_or_error
-    raise ValueError(f"Required environment variable not set: {var_name}")
+    raise RequiredEnvVarError(var_name, bash_form=False, explicit_message=None)
 
 
 def _convert_type(value: str) -> str | int | float | bool:
@@ -263,11 +307,17 @@ def _convert_type(value: str) -> str | int | float | bool:
     Used by ``substitute_env_vars(..., type_coerce=True)`` for whole-value
     placeholders only. Preserves the original string when no coercion
     applies.
+
+    Only the unambiguous bool words ``true`` / ``false`` / ``yes`` / ``no``
+    (case-insensitive) coerce to ``bool``. Numeric strings such as ``"0"``
+    and ``"1"`` coerce to ``int`` — bash conflates them with bool, but
+    treating ``"0"`` as ``False`` surprises callers expecting an integer
+    port / count / size.
     """
     lower = value.lower()
-    if lower in ("true", "yes", "1"):
+    if lower in ("true", "yes"):
         return True
-    if lower in ("false", "no", "0"):
+    if lower in ("false", "no"):
         return False
     try:
         return int(value)
@@ -330,7 +380,7 @@ class InheritableConfigLoader:
         """
         # Check cache
         if use_cache and name in self._cache:
-            logger.debug(f"Using cached config: {name}")
+            logger.debug("Using cached config: %s", name)
             return self._cache[name]
 
         # Detect circular inheritance
@@ -346,7 +396,7 @@ class InheritableConfigLoader:
             # Handle inheritance
             if raw_config.get("extends"):
                 parent_name = raw_config["extends"]
-                logger.debug(f"Config '{name}' extends '{parent_name}'")
+                logger.debug("Config '%s' extends '%s'", name, parent_name)
 
                 # Load parent configuration (recursively handles inheritance)
                 parent_config = self.load(parent_name, use_cache=use_cache, substitute_vars=False)
@@ -363,7 +413,7 @@ class InheritableConfigLoader:
 
             # Cache the result
             self._cache[name] = raw_config
-            logger.info(f"Loaded configuration: {name}")
+            logger.info("Loaded configuration: %s", name)
 
             return raw_config
 
@@ -462,7 +512,7 @@ class InheritableConfigLoader:
         """
         if name:
             self._cache.pop(name, None)
-            logger.debug(f"Cleared cache for: {name}")
+            logger.debug("Cleared cache for: %s", name)
         else:
             self._cache.clear()
             logger.debug("Cleared all cached configurations")

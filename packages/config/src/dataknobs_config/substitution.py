@@ -8,29 +8,22 @@ release. See :mod:`dataknobs_config.inheritance` for the canonical helper
 and its options (``type_coerce``, ``expand_user_paths``, ``substitute_keys``).
 """
 
-import re
 import warnings
 from typing import Any
 
-from .inheritance import VAR_PATTERN as _VAR_PATTERN
-from .inheritance import substitute_env_vars
-
-# Sentinel prefix from the canonical helper's required-var error message.
-# We translate it back to the historical VariableSubstitution wording so
-# out-of-tree consumers that ``pytest.raises(match=...)`` on the old
-# string keep passing through the deprecation period — but only when the
-# suffix is a bare identifier (i.e., the bare ``${VAR}`` form). For the
-# bash-style ``${VAR:?msg}`` form the suffix is a free-form message that
-# would produce garbled wording if rewritten as a variable name, so we
-# pass those errors through unchanged.
-_REQUIRED_ERROR_PREFIX = "Required environment variable not set: "
-_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+from .inheritance import (
+    VAR_PATTERN as _VAR_PATTERN,
+)
+from .inheritance import (
+    RequiredEnvVarError,
+    substitute_env_vars,
+)
 
 
 class VariableSubstitution:
     """Deprecated env-var substitution helper.
 
-    Use :func:`substitute_env_vars(data, type_coerce=True) <substitute_env_vars>`
+    Use :func:`substitute_env_vars(data, type_coerce=True, expand_user_paths=False, substitute_keys=False) <substitute_env_vars>`
     from :mod:`dataknobs_config.inheritance` instead. This class is a thin
     shim that preserves the historical semantics of ``VariableSubstitution``:
 
@@ -48,8 +41,9 @@ class VariableSubstitution:
     def __init__(self) -> None:
         warnings.warn(
             "VariableSubstitution is deprecated; use "
-            "dataknobs_config.substitute_env_vars(data, type_coerce=True) "
-            "instead. This class will be removed in a future release.",
+            "dataknobs_config.substitute_env_vars(data, type_coerce=True, "
+            "expand_user_paths=False, substitute_keys=False) instead. "
+            "This class will be removed in a future release.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -71,9 +65,10 @@ class VariableSubstitution:
                 (``"Environment variable 'VAR' not found"``). For the
                 bash-style ``${VAR:?error_msg}`` form, the canonical
                 helper's wording is preserved verbatim
-                (``"Required environment variable not set: <error_msg>"``)
-                because rewriting a free-form error message as a variable
-                name would produce garbled output.
+                (``"Required environment variable not set: <error_msg>"``,
+                using the variable name as the message when ``error_msg``
+                is empty), so user-supplied messages are never reframed
+                as variable names.
         """
         try:
             return substitute_env_vars(
@@ -82,15 +77,12 @@ class VariableSubstitution:
                 expand_user_paths=False,
                 substitute_keys=False,
             )
-        except ValueError as exc:
-            msg = str(exc)
-            if msg.startswith(_REQUIRED_ERROR_PREFIX):
-                suffix = msg[len(_REQUIRED_ERROR_PREFIX):]
-                if _VAR_NAME_RE.fullmatch(suffix):
-                    raise ValueError(
-                        f"Environment variable '{suffix}' not found"
-                    ) from exc
-            raise
+        except RequiredEnvVarError as exc:
+            if exc.bash_form:
+                raise
+            raise ValueError(
+                f"Environment variable '{exc.var_name}' not found"
+            ) from exc
 
     def has_variables(self, value: Any) -> bool:
         """Check if a value contains environment variable references.

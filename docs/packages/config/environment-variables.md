@@ -111,10 +111,16 @@ canonical helper is :func:`substitute_env_vars` from
 
 | Syntax | Behavior |
 |---|---|
-| ``${VAR}`` | Required. Raises ``ValueError`` if ``VAR`` is unset. |
+| ``${VAR}`` | Required. Raises ``RequiredEnvVarError`` if ``VAR`` is unset. |
 | ``${VAR:default}`` | Uses ``default`` when ``VAR`` is unset (DataKnobs legacy form). |
 | ``${VAR:-default}`` | Bash-style alias for ``${VAR:default}``. |
-| ``${VAR:?error_msg}`` | Bash-style. When ``VAR`` is unset, raises ``ValueError("Required environment variable not set: <error_msg>")`` (the variable name is used in place of ``<error_msg>`` when ``error_msg`` is empty). |
+| ``${VAR:?error_msg}`` | Bash-style. When ``VAR`` is unset, raises ``RequiredEnvVarError("Required environment variable not set: <error_msg>")`` (the variable name is used in place of ``<error_msg>`` when ``error_msg`` is empty). |
+
+``RequiredEnvVarError`` is a subclass of ``ValueError``, so existing
+``except ValueError`` / ``pytest.raises(ValueError)`` continue to catch
+required-but-unset failures. Catch ``RequiredEnvVarError`` directly to
+inspect ``var_name``, ``bash_form`` (``True`` for the ``${VAR:?msg}``
+form, ``False`` for the bare ``${VAR}`` form), and ``explicit_message``.
 
 ### Basic Substitution
 

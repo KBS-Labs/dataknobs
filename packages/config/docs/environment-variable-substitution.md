@@ -21,13 +21,21 @@ The pattern is a bash superset:
 
 | Syntax | Behavior |
 |---|---|
-| `${VAR}` | Required. Raises `ValueError` if `VAR` is unset. |
+| `${VAR}` | Required. Raises `RequiredEnvVarError` if `VAR` is unset. |
 | `${VAR:default}` | Uses `default` when `VAR` is unset (DataKnobs legacy form). |
 | `${VAR:-default}` | Bash-style alias for `${VAR:default}`. |
-| `${VAR:?error_msg}` | Bash-style. When `VAR` is unset, raises `ValueError("Required environment variable not set: <error_msg>")` (the variable name is used in place of `<error_msg>` when `error_msg` is empty). |
+| `${VAR:?error_msg}` | Bash-style. When `VAR` is unset, raises `RequiredEnvVarError("Required environment variable not set: <error_msg>")` (the variable name is used in place of `<error_msg>` when `error_msg` is empty). |
 
 Substitution applies to nested dicts and lists. Non-string dict keys
 (integers, booleans) pass through unchanged.
+
+`RequiredEnvVarError` is a subclass of `ValueError`, so existing
+`except ValueError` / `pytest.raises(ValueError)` continue to catch
+required-but-unset failures. Catch `RequiredEnvVarError` directly when
+you need to inspect the failure: it carries `var_name` (the unset
+variable), `bash_form` (`True` for the `${VAR:?msg}` form, `False` for
+the bare `${VAR}` form), and `explicit_message` (the user-supplied
+message from `${VAR:?msg}`, or `None`).
 
 ## Options
 
