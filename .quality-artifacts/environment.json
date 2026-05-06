@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-06T21:40:41Z",
+  "timestamp": "2026-05-06T22:49:55Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.10 (Homebrew 2026-05-05 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/canonicalize-env-var-subs",
-  "git_commit": "99bd25b3b5ce232935c339964b992ee2f92245c9",
+  "git_branch": "sbk/shared-yaml-json-loader-helper",
+  "git_commit": "8c7f96ebdb599eea2bb166ebe5a4bd118c67750a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

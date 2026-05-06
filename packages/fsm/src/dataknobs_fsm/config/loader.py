@@ -7,12 +7,17 @@ This module provides functionality to load FSM configurations from various sourc
 - Environment variables
 """
 
-import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Set, Union
 
-import yaml
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    ConfigParseError,
+    ConfigUnsupportedFormatError,
+    ConfigYAMLNotInstalledError,
+    load_yaml_or_json,
+)
 from dataknobs_config import Config as DataknobsConfig
 
 from dataknobs_fsm.config.schema import (
@@ -194,25 +199,34 @@ class ConfigLoader:
 
     def _load_file(self, file_path: Path) -> Dict[str, Any]:
         """Load raw configuration from a file.
-        
+
         Args:
             file_path: Path to configuration file.
-            
+
         Returns:
             Raw configuration dictionary.
-            
+
         Raises:
-            ValueError: If file format is not supported.
+            ValueError: If the file format is unsupported, parsing
+                fails, or PyYAML is required but not installed.
         """
-        suffix = file_path.suffix.lower()
-        
-        with open(file_path) as f:
-            if suffix == ".json":
-                return json.load(f)
-            elif suffix in [".yaml", ".yml"]:
-                return yaml.safe_load(f)
-            else:
-                raise ValueError(f"Unsupported file format: {suffix}")
+        # FSM tolerates non-dict roots (legacy behavior); higher-level
+        # validation happens in `_finalize_config`. Helper-raised
+        # errors are re-wrapped as ``ValueError`` to preserve the
+        # historical surface (parse errors used to propagate as
+        # ``yaml.YAMLError`` / ``json.JSONDecodeError``; this
+        # consolidates them under ``ValueError`` so callers see a
+        # single, stable type).
+        try:
+            return load_yaml_or_json(file_path, require_dict=False)
+        except ConfigUnsupportedFormatError as e:
+            raise ValueError(str(e)) from e
+        except ConfigYAMLNotInstalledError as e:
+            raise ValueError(str(e)) from e
+        except ConfigParseError as e:
+            raise ValueError(str(e)) from e
+        except ConfigLoadError as e:
+            raise ValueError(str(e)) from e
 
     def _resolve_environment_vars(self, config: Any) -> Any:
         """Resolve environment variables in configuration.

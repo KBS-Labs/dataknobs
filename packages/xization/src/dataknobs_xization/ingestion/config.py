@@ -6,11 +6,16 @@ documents from a directory into a knowledge base.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    ConfigYAMLNotInstalledError,
+    load_yaml_or_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -227,25 +232,22 @@ class KnowledgeBaseConfig:
         Returns:
             Parsed configuration dictionary
         """
-        with open(path, encoding="utf-8") as f:
-            if path.suffix in [".yaml", ".yml"]:
-                try:
-                    import yaml
-                    data = yaml.safe_load(f)
-                except ImportError as err:
-                    raise IngestionConfigError(
-                        "PyYAML is required to load YAML config files. "
-                        "Install with: pip install pyyaml"
-                    ) from err
-            else:
-                data = json.load(f)
-
-        if not isinstance(data, dict):
+        try:
+            return load_yaml_or_json(path)
+        except ConfigYAMLNotInstalledError as err:
+            # Preserve the historical user-facing PyYAML-missing message.
             raise IngestionConfigError(
-                f"Config file must contain a dictionary: {path}"
-            )
-
-        return data
+                "PyYAML is required to load YAML config files. "
+                "Install with: pip install pyyaml"
+            ) from err
+        except ConfigLoadError as err:
+            raise IngestionConfigError(
+                f"Failed to load config from {path}: {err}"
+            ) from err
+        except OSError as err:
+            raise IngestionConfigError(
+                f"Failed to read config from {path}: {err}"
+            ) from err
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""

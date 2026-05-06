@@ -45,6 +45,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Use `substitute_env_vars` directly. The class will be removed in a
   future release.
 
+### Changed
+- `Config._load_file` raises `ValidationError` for malformed YAML or
+  JSON config files. `yaml.YAMLError` and `json.JSONDecodeError` no
+  longer escape; callers should catch `ValidationError` (or its base,
+  `ConfigError`).
+- Loader error messages for a non-dict root now read
+  `"Expected a dict at the root of <path>, got <type>"` (previously
+  `"must contain a dictionary"` / `"must be a dictionary"`).
+  Exception types are unchanged.
+
+### Internal
+- `InheritableConfigLoader._load_file`, `EnvironmentConfig._load_file`,
+  `EnvironmentAwareConfig._load_file`, `Config._load_file`, and
+  `Config._load_referenced_file` share the
+  `dataknobs_common.config_loading` helpers
+  (`load_yaml_or_json`, `find_config_file`). Each loader wraps the
+  helper's `ConfigLoadError` as its existing public error class
+  (`InheritanceError`, `EnvironmentConfigError`,
+  `EnvironmentAwareConfigError`, `ValidationError` /
+  `ConfigFileNotFoundError`).
+- `Config._load_referenced_file` coerces empty / falsy parsed
+  payloads to `{}`.
+
 ## v0.3.11 - 2026-05-06
 
 ## v0.1.0 - 2025-01-12

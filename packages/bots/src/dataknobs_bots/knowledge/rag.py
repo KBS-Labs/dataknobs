@@ -4,7 +4,7 @@ import logging
 import types
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from dataknobs_xization import (
     ContentTransformer,
@@ -534,8 +534,12 @@ class RAGKnowledgeBase(KnowledgeBase):
         a dict, raises :class:`IngestionConfigError` so the failure is
         loud — symmetric with the local-directory path.
         """
-        import json as json_lib
-
+        from dataknobs_common.config_loading import (
+            ConfigLoadError,
+            ConfigShapeError,
+            ConfigYAMLNotInstalledError,
+            parse_yaml_or_json,
+        )
         from dataknobs_xization.ingestion.config import IngestionConfigError
 
         for filename in (
@@ -549,31 +553,32 @@ class RAGKnowledgeBase(KnowledgeBase):
             data = await backend.get_file(domain_id, filename)
             if data is None:
                 continue
+            fmt: Literal["yaml", "json"] = (
+                "json" if filename.endswith(".json") else "yaml"
+            )
             try:
-                if filename.endswith(".json"):
-                    raw = json_lib.loads(data.decode("utf-8"))
-                else:
-                    try:
-                        import yaml
-                    except ImportError as e:
-                        raise IngestionConfigError(
-                            f"YAML config {filename} found in backend but "
-                            "PyYAML is not installed; install 'pyyaml' or "
-                            "use a .json config"
-                        ) from e
-                    raw = yaml.safe_load(data.decode("utf-8"))
-            except IngestionConfigError:
-                raise
-            except Exception as e:
+                raw = parse_yaml_or_json(
+                    data,
+                    format=fmt,
+                    source_name=f"{domain_id}/{filename}",
+                )
+            except ConfigYAMLNotInstalledError as e:
+                # Preserve the historical user-facing message verbatim.
+                raise IngestionConfigError(
+                    f"YAML config {filename} found in backend but "
+                    "PyYAML is not installed; install 'pyyaml' or "
+                    "use a .json config"
+                ) from e
+            except ConfigShapeError as e:
+                raise IngestionConfigError(
+                    f"knowledge_base config {filename} for domain "
+                    f"{domain_id} did not decode to a dict"
+                ) from e
+            except ConfigLoadError as e:
                 raise IngestionConfigError(
                     f"Failed to parse knowledge_base config {filename} "
                     f"for domain {domain_id}: {e}"
                 ) from e
-            if not isinstance(raw, dict):
-                raise IngestionConfigError(
-                    f"knowledge_base config {filename} for domain "
-                    f"{domain_id} did not decode to a dict"
-                )
             return KnowledgeBaseConfig.from_dict(raw, default_name=domain_id)
         return None
 

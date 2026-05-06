@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+- `KnowledgeBaseConfig._load_file` raises `IngestionConfigError` for
+  malformed or unreadable config files. `yaml.YAMLError`,
+  `json.JSONDecodeError`, and `OSError` no longer escape; callers
+  should catch `IngestionConfigError`.
+
+### Internal
+- `KnowledgeBaseConfig._load_file` uses
+  `dataknobs_common.config_loading.load_yaml_or_json`. Surface is
+  `IngestionConfigError`.
+
 ## v1.3.4 - 2026-05-06
 
 ## v1.3.3 - 2026-04-23

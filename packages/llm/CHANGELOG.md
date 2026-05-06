@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Internal
+- `FileSystemPromptLibrary._load_file` uses
+  `dataknobs_common.config_loading.load_yaml_or_json`. Surface is
+  `ValueError` for unsupported extensions, parse failures, and read
+  errors. Empty / falsy parsed payloads collapse to `{}`.
+
 ## v0.5.10 - 2026-05-06
 
 ### Execution Layer
