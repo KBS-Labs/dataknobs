@@ -99,6 +99,11 @@ resources:
     connection_string: ${DATABASE_URL}
 ```
 
+Defaults (`${VAR:-default}`), required-with-message (`${VAR:?error}`), and
+the `FSM_` prefix-fallback are also supported. See
+[Environment Variables](guides/configuration.md#environment-variables)
+in the configuration guide for the full syntax.
+
 ## Data Handling
 
 ### What's the difference between DataHandlingMode and ProcessingMode?

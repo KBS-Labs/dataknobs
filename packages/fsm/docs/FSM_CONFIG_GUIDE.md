@@ -1024,13 +1024,22 @@ networks:
 
 ## Environment Variables
 
-Environment variables can be used in configurations:
+Environment variables can be used in configurations. The FSM
+configuration loader delegates substitution to the canonical
+`dataknobs_config.substitute_env_vars` helper, with a thin FSM-side
+wrapper that preserves the documented `FSM_` prefix-fallback.
 
 ### Syntax
 
-- `${VAR_NAME}` - Required variable
-- `${VAR_NAME:-default}` - Variable with default value
-- `${VAR_NAME:?error message}` - Required with custom error message
+- `${VAR_NAME}` — Required variable; raises `ValueError` if unset
+- `${VAR_NAME:default}` — DataKnobs legacy default form
+- `${VAR_NAME:-default}` — Bash-style default (alias for `${VAR_NAME:default}`)
+- `${VAR_NAME:?error message}` — Required with custom error message
+
+Substitution is recursive (nested dicts and lists) and supports
+embedded patterns such as `"http://${HOST}:${PORT}/path"` — the
+references are replaced in-place and the surrounding string is
+preserved.
 
 ### Example
 
@@ -1050,7 +1059,12 @@ Environment variables can be used in configurations:
 }
 ```
 
-The loader will also check for variables with the `FSM_` prefix automatically.
+### `FSM_` prefix-fallback
+
+When a `${VAR}` reference is unset in the environment but
+`${FSM_VAR}` is set, the prefixed value is used. This is convenient
+for environments that namespace FSM-specific configuration but write
+YAMLs against the unprefixed names.
 
 ## History Storage
 

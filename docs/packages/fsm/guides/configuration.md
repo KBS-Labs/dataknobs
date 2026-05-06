@@ -233,6 +233,45 @@ etl_pipeline = {
 7. **Use conditions** to control flow
 8. **Document with metadata**
 
+## Environment Variables
+
+The FSM configuration loader resolves `${VAR}` references in string values
+by delegating to `dataknobs_config.substitute_env_vars`. Resolution is
+recursive (nested dicts and lists) and supports embedded patterns such as
+`"http://${HOST}:${PORT}/path"`.
+
+### Syntax
+
+| Form | Behavior |
+|------|----------|
+| `${VAR}` | Required; raises `ValueError` if unset |
+| `${VAR:default}` | DataKnobs default form |
+| `${VAR:-default}` | Bash-style default (alias for `${VAR:default}`) |
+| `${VAR:?error message}` | Required with custom error message |
+
+The unbraced `$VAR` form is **not** supported — write `${VAR}` instead.
+
+### `FSM_` prefix fallback
+
+When `${VAR}` is unset but `${FSM_VAR}` is set, the prefixed value is used
+automatically. This lets configurations reference unprefixed names while
+the environment uses the `FSM_` namespace.
+
+```yaml
+resources:
+  - name: database
+    config:
+      connection_string: "${DATABASE_URL}"          # required
+      password: "${DB_PASSWORD:-defaultpass}"        # default if unset
+      api_key: "${API_KEY:?API key is required}"     # custom error
+```
+
+Tilde-prefixed values (e.g. `FSM_DATA_DIR=~/data`) are returned literally;
+downstream code decides whether to expand `~`.
+
+For full details see the package-level
+[FSM Configuration Guide](https://github.com/KBS-Labs/dataknobs/blob/main/packages/fsm/docs/FSM_CONFIG_GUIDE.md#environment-variables).
+
 ## Troubleshooting
 
 ### Common Errors

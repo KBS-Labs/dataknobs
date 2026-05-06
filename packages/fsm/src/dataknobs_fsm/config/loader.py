@@ -7,7 +7,9 @@ This module provides functionality to load FSM configurations from various sourc
 - Environment variables
 """
 
+import contextlib
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Dict, List, Set, Union
 
@@ -19,6 +21,7 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
 )
 from dataknobs_config import Config as DataknobsConfig
+from dataknobs_config import substitute_env_vars
 
 from dataknobs_fsm.config.schema import (
     FSMConfig,
@@ -27,6 +30,48 @@ from dataknobs_fsm.config.schema import (
     apply_template,
     validate_config,
 )
+
+
+@contextlib.contextmanager
+def _alias_prefixed_env_vars(prefix: str) -> Iterator[None]:
+    """Temporarily expose prefixed env vars as their unprefixed names.
+
+    For each ``os.environ[{prefix}{NAME}]`` where ``os.environ[NAME]`` is
+    unset, set ``os.environ[NAME] = os.environ[{prefix}{NAME}]`` for the
+    duration of the context, then restore. Preserves the documented FSM
+    behavior where a YAML reference to ``${PORT}`` resolves to the value
+    of ``FSM_PORT`` when ``PORT`` is not set in the environment.
+
+    On exit, only aliases whose value is still what this call wrote are
+    popped. If something else (a nested ``ConfigLoader`` invocation or
+    user code) changed the bare-name value mid-context, that change is
+    preserved rather than blindly clobbered.
+
+    The empty-prefix branch is defensive: ``ConfigLoader._env_prefix``
+    is hardcoded to ``"FSM_"`` today, but the guard avoids walking
+    ``os.environ`` (and aliasing every var to itself) if a future
+    consumer sets ``_env_prefix = ""``.
+
+    Caveat: mutates ``os.environ`` for the duration of the context.
+    Concurrent calls in different threads may observe each other's
+    aliases. FSM config loading is a startup-time operation in every
+    in-tree consumer, so this is acceptable. Out-of-tree multi-thread
+    consumers should serialize loader calls.
+    """
+    aliased: list[tuple[str, str]] = []
+    try:
+        if prefix:
+            for key, value in list(os.environ.items()):
+                if key.startswith(prefix):
+                    bare = key[len(prefix):]
+                    if bare and bare not in os.environ:
+                        os.environ[bare] = value
+                        aliased.append((bare, value))
+        yield
+    finally:
+        for name, injected_value in aliased:
+            if os.environ.get(name) == injected_value:
+                os.environ.pop(name, None)
 
 
 class ConfigLoader:
@@ -230,64 +275,42 @@ class ConfigLoader:
 
     def _resolve_environment_vars(self, config: Any) -> Any:
         """Resolve environment variables in configuration.
-        
-        Supports:
-        - ${VAR_NAME} - Required variable
-        - ${VAR_NAME:-default} - Variable with default value
-        - ${VAR_NAME:?error message} - Required with custom error
-        
+
+        Delegates to ``dataknobs_config.substitute_env_vars`` for the actual
+        substitution. Adds an FSM-specific prefix-fallback: when a ``${VAR}``
+        reference is unset but ``${FSM_VAR}`` is set, the prefixed value is
+        used (the prefix comes from ``self._env_prefix``).
+
+        Supported syntax (canonical, post-Item 109):
+        - ``${VAR}`` — required; raises ``ValueError`` if unset
+        - ``${VAR:default}`` — DataKnobs legacy default form
+        - ``${VAR:-default}`` — bash-style default
+        - ``${VAR:?error_msg}`` — bash-style required with custom error
+
+        ``substitute_keys=False`` matches the pre-Item 111 inline parser,
+        which only walked dict values. Out-of-tree configs may have
+        literal ``${...}`` strings as dict keys; expanding them is a
+        behavior change beyond the migration's documented scope.
+
+        ``expand_user_paths=False`` matches the pre-Item 111 inline parser,
+        which returned ``os.environ[name]`` verbatim. The canonical helper
+        defaults to ``True``, but the other in-tree config-loading callers
+        (``Config._load_dict``, the legacy ``VariableSubstitution`` shim)
+        also pass ``False`` — letting downstream code decide whether to
+        expand ``~``-prefixed values.
+
         Args:
             config: Configuration to process.
-            
+
         Returns:
             Configuration with resolved environment variables.
         """
-        if isinstance(config, str):
-            # Check for environment variable pattern
-            if config.startswith("${") and config.endswith("}"):
-                var_expr = config[2:-1]
-                
-                # Handle default value
-                if ":-" in var_expr:
-                    var_name, default_value = var_expr.split(":-", 1)
-                    return os.environ.get(var_name, default_value)
-                
-                # Handle error message
-                elif ":?" in var_expr:
-                    var_name, error_msg = var_expr.split(":?", 1)
-                    if var_name not in os.environ:
-                        raise ValueError(f"Required environment variable: {error_msg}")
-                    return os.environ[var_name]
-                
-                # Simple variable
-                else:
-                    if var_expr not in os.environ:
-                        # Check with prefix
-                        prefixed_var = f"{self._env_prefix}{var_expr}"
-                        if prefixed_var in os.environ:
-                            return os.environ[prefixed_var]
-                        raise ValueError(f"Environment variable not found: {var_expr}")
-                    return os.environ[var_expr]
-            
-            # Also support $VAR_NAME format for compatibility
-            elif config.startswith("$") and not config.startswith("${"):
-                var_name = config[1:]
-                if var_name in os.environ:
-                    return os.environ[var_name]
-                prefixed_var = f"{self._env_prefix}{var_name}"
-                if prefixed_var in os.environ:
-                    return os.environ[prefixed_var]
-            
-            return config
-        
-        elif isinstance(config, dict):
-            return {key: self._resolve_environment_vars(value) for key, value in config.items()}
-        
-        elif isinstance(config, list):
-            return [self._resolve_environment_vars(item) for item in config]
-        
-        else:
-            return config
+        with _alias_prefixed_env_vars(self._env_prefix):
+            return substitute_env_vars(
+                config,
+                substitute_keys=False,
+                expand_user_paths=False,
+            )
 
     def _finalize_config(self, config: Dict[str, Any]) -> FSMConfig:
         """Apply final transformations and validate configuration.
