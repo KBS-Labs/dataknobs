@@ -109,7 +109,14 @@ class ConfigBindingResolver:
 
         Args:
             environment: Environment configuration for resource lookup
-            resolve_env_vars: Whether to resolve env vars before instantiation
+            resolve_env_vars: Whether to resolve env vars before
+                instantiation. Idempotent for ``EnvironmentConfig``
+                instances loaded via :meth:`EnvironmentConfig.load` /
+                :meth:`EnvironmentConfig.from_dict` (which substitute
+                by default); load-bearing for dataclass-constructed
+                instances. To opt out of all substitution, pass
+                ``substitute_vars=False`` to ``EnvironmentConfig.load``
+                and ``resolve_env_vars=False`` here.
         """
         self._environment = environment
         self._resolve_env_vars = resolve_env_vars
@@ -295,7 +302,11 @@ class ConfigBindingResolver:
             config = config.copy()
             config.update(overrides)
 
-        # Resolve environment variables
+        # Resolve environment variables. EnvironmentConfig.load() and
+        # from_dict() already substitute by default, so this pass is
+        # idempotent for those construction paths; it remains
+        # load-bearing for consumers that construct EnvironmentConfig
+        # directly via the dataclass constructor.
         if self._resolve_env_vars:
             config = substitute_env_vars(config)
 

@@ -120,6 +120,15 @@ The system automatically detects the current environment via:
 
 Manages environment-specific resource bindings.
 
+!!! note "Environment variable substitution"
+
+    `EnvironmentConfig.load()` and `EnvironmentConfig.from_dict()` apply
+    `${VAR}` / `${VAR:default}` substitution to every value by default,
+    matching the behaviour of `InheritableConfigLoader.load()`. Required
+    `${VAR}` refs without a default raise `ValueError` at load time. To
+    preserve raw `${VAR}` literals (e.g., for inspection or
+    transformation), pass the keyword-only `substitute_vars=False`.
+
 ```python
 from dataknobs_config import EnvironmentConfig
 
@@ -128,6 +137,9 @@ env = EnvironmentConfig.load()
 
 # Or specify explicitly
 env = EnvironmentConfig.load("production", config_dir="config/environments")
+
+# Preserve raw ${VAR} refs (e.g., for documentation or transformation)
+env = EnvironmentConfig.load("production", substitute_vars=False)
 
 # Get concrete config for a logical resource
 db_config = env.get_resource("databases", "conversations")
