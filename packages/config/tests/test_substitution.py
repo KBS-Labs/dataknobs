@@ -1,6 +1,7 @@
 """Test environment variable substitution."""
 
-import os
+import warnings
+
 import pytest
 
 from dataknobs_config.substitution import VariableSubstitution
@@ -8,11 +9,19 @@ from dataknobs_config.substitution import VariableSubstitution
 
 class TestVariableSubstitution:
     """Test environment variable substitution functionality."""
-    
+
     @pytest.fixture
     def substitution(self):
-        """Create a VariableSubstitution instance."""
-        return VariableSubstitution()
+        """Create a VariableSubstitution instance.
+
+        Suppresses the deprecation warning emitted on construction so the
+        behavioral-parity tests below do not flood pytest output. The
+        deprecation warning itself is asserted in
+        ``test_emits_deprecation_warning``.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return VariableSubstitution()
     
     def test_simple_substitution(self, substitution, monkeypatch):
         """Test simple variable substitution."""
@@ -145,3 +154,75 @@ class TestVariableSubstitution:
         assert substitution.has_variables({"key": "${VAR}"}) is True
         assert substitution.has_variables(["${VAR}", "text"]) is True
         assert substitution.has_variables(42) is False
+
+    def test_emits_deprecation_warning(self):
+        """Constructing VariableSubstitution emits a DeprecationWarning that
+        points at the canonical helper.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            VariableSubstitution()
+        deprecation_warnings = [
+            w for w in caught if issubclass(w.category, DeprecationWarning)
+        ]
+        assert deprecation_warnings, "expected a DeprecationWarning"
+        assert any(
+            "substitute_env_vars" in str(w.message) for w in deprecation_warnings
+        )
+
+    def test_question_mark_msg_passes_through_canonical(self, substitution, monkeypatch):
+        """${VAR:?multi word msg} preserves the canonical helper's wording.
+
+        The shim only rewrites errors that originated from the bare
+        ``${VAR}`` form. Bash-style ``${VAR:?error_msg}`` errors carry a
+        ``bash_form`` flag on the underlying ``RequiredEnvVarError`` so
+        we can pass them through unchanged regardless of whether the
+        message text happens to look like an identifier.
+        """
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        with pytest.raises(
+            ValueError,
+            match=r"Required environment variable not set: DB password is required",
+        ):
+            substitution.substitute("${MISSING_VAR:?DB password is required}")
+
+    def test_question_mark_msg_single_word_not_rewritten(self, substitution, monkeypatch):
+        """${VAR:?Required} with a single-word custom msg is NOT rewritten.
+
+        Regression test: an earlier version of the shim rewrote the
+        canonical "Required environment variable not set: X" message back
+        to "Environment variable 'X' not found" whenever ``X`` matched
+        ``[A-Za-z_][A-Za-z0-9_]*``. That guard misfired for single-word
+        custom error messages: ``${PORT:?Required}`` produced an error
+        like ``Environment variable 'Required' not found``, making the
+        user's chosen error word look like a variable name. The shim now
+        keys off the typed exception's ``bash_form`` attribute, so any
+        ``${VAR:?msg}`` error is passed through verbatim — even when
+        ``msg`` is a single identifier.
+        """
+        monkeypatch.delenv("PORT", raising=False)
+        with pytest.raises(
+            ValueError,
+            match=r"^Required environment variable not set: Required$",
+        ):
+            substitution.substitute("${PORT:?Required}")
+
+    def test_question_mark_empty_msg_uses_var_name_canonical(
+        self, substitution, monkeypatch
+    ):
+        """${VAR:?} with empty msg falls back to the var name + canonical wording.
+
+        ``${FOO:?}`` is bash-style with an empty error message. The
+        canonical helper substitutes the variable name as the message,
+        producing ``Required environment variable not set: FOO``. The
+        shim must preserve this canonical wording (it is bash-form),
+        rather than rewriting it to the historical
+        ``Environment variable 'FOO' not found`` as the bare ``${FOO}``
+        form would.
+        """
+        monkeypatch.delenv("FOO", raising=False)
+        with pytest.raises(
+            ValueError,
+            match=r"^Required environment variable not set: FOO$",
+        ):
+            substitution.substitute("${FOO:?}")

@@ -1,160 +1,102 @@
-"""Environment variable substitution for configuration values."""
+"""Environment variable substitution for configuration values.
 
-import os
-import re
-from typing import Any, Dict, List, Union
+DEPRECATED: Use :func:`substitute_env_vars` from
+:mod:`dataknobs_config.inheritance` (or the top-level
+``from dataknobs_config import substitute_env_vars``) instead. This class
+is retained as a thin compatibility shim and will be removed in a future
+release. See :mod:`dataknobs_config.inheritance` for the canonical helper
+and its options (``type_coerce``, ``expand_user_paths``, ``substitute_keys``).
+"""
+
+import warnings
+from typing import Any
+
+from .inheritance import (
+    VAR_PATTERN as _VAR_PATTERN,
+)
+from .inheritance import (
+    RequiredEnvVarError,
+    substitute_env_vars,
+)
 
 
 class VariableSubstitution:
-    """Handles environment variable substitution in configuration values.
-    
-    Supports patterns:
-    - ${VAR} - Replace with environment variable VAR, error if not found
-    - ${VAR:default} - Replace with VAR or use default if not found
-    - ${VAR:-default} - Same as above (bash-style)
+    """Deprecated env-var substitution helper.
+
+    Use :func:`substitute_env_vars(data, type_coerce=True, expand_user_paths=False, substitute_keys=False) <substitute_env_vars>`
+    from :mod:`dataknobs_config.inheritance` instead. This class is a thin
+    shim that preserves the historical semantics of ``VariableSubstitution``:
+
+    - ``type_coerce=True`` — whole-value placeholders coerce to int/float/bool.
+    - ``expand_user_paths=False`` — does not expand ``~`` in values.
+    - ``substitute_keys=False`` — only values are substituted, not dict keys.
+
+    Will be removed in a future release.
     """
 
-    # Pattern to match ${VAR} or ${VAR:default} or ${VAR:-default}
-    VAR_PATTERN = re.compile(r'\$\{([^}:]+)(?::(-)?([^}]*))?\}')
+    # Retained for backward compatibility — out-of-tree consumers may
+    # introspect this attribute.
+    VAR_PATTERN = _VAR_PATTERN
+
+    def __init__(self) -> None:
+        warnings.warn(
+            "VariableSubstitution is deprecated; use "
+            "dataknobs_config.substitute_env_vars(data, type_coerce=True, "
+            "expand_user_paths=False, substitute_keys=False) instead. "
+            "This class will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     def substitute(self, value: Any) -> Any:
         """Recursively substitute environment variables in a value.
-        
+
         Args:
-            value: Value to process (can be string, dict, list, or other)
-            
+            value: Value to process (string, dict, list, or other).
+
         Returns:
-            Value with environment variables substituted
-            
+            Value with environment variables substituted; whole-value
+            ``${VAR}`` placeholders may be coerced to int/float/bool.
+
         Raises:
-            ValueError: If a required environment variable is not found
+            ValueError: If a required environment variable is unset. For
+                the bare ``${VAR}`` form, the message format matches the
+                historical ``VariableSubstitution`` wording
+                (``"Environment variable 'VAR' not found"``). For the
+                bash-style ``${VAR:?error_msg}`` form, the canonical
+                helper's wording is preserved verbatim
+                (``"Required environment variable not set: <error_msg>"``,
+                using the variable name as the message when ``error_msg``
+                is empty), so user-supplied messages are never reframed
+                as variable names.
         """
-        if isinstance(value, str):
-            return self._substitute_string(value)
-        elif isinstance(value, dict):
-            return self._substitute_dict(value)
-        elif isinstance(value, list):
-            return self._substitute_list(value)
-        else:
-            # Return other types unchanged
-            return value
-
-    def _substitute_string(self, text: str) -> Union[str, int, float, bool]:
-        """Substitute environment variables in a string.
-        
-        Args:
-            text: String potentially containing ${VAR} patterns
-            
-        Returns:
-            String with substitutions, or converted type if entire string is a variable
-            
-        Raises:
-            ValueError: If a required environment variable is not found
-        """
-        # Check if the entire string is a single variable reference
-        if text.startswith('${') and text.endswith('}') and text.count('${') == 1:
-            # Single variable - can return non-string types
-            match = self.VAR_PATTERN.match(text)
-            if match:
-                var_name = match.group(1)
-                has_default = match.group(2) is not None or match.group(3) is not None
-                default_value = match.group(3) if match.group(3) is not None else ""
-
-                if var_name in os.environ:
-                    value = os.environ[var_name]
-                    # Try to convert to appropriate type
-                    return self._convert_type(value)
-                elif has_default:
-                    # Use default value and convert type
-                    return self._convert_type(default_value)
-                else:
-                    raise ValueError(f"Environment variable '{var_name}' not found")
-
-        # Multiple variables or mixed content - always return string
-        def replacer(match: re.Match) -> str:
-            var_name = match.group(1)
-            has_default = match.group(2) is not None or match.group(3) is not None
-            default_value = match.group(3) if match.group(3) is not None else ""
-
-            if var_name in os.environ:
-                return os.environ[var_name]
-            elif has_default:
-                return default_value
-            else:
-                raise ValueError(f"Environment variable '{var_name}' not found")
-
-        return self.VAR_PATTERN.sub(replacer, text)
-
-    def _substitute_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Recursively substitute variables in a dictionary.
-        
-        Args:
-            data: Dictionary to process
-            
-        Returns:
-            Dictionary with substituted values
-        """
-        result = {}
-        for key, value in data.items():
-            # Keys are not substituted, only values
-            result[key] = self.substitute(value)
-        return result
-
-    def _substitute_list(self, data: List[Any]) -> List[Any]:
-        """Recursively substitute variables in a list.
-        
-        Args:
-            data: List to process
-            
-        Returns:
-            List with substituted values
-        """
-        return [self.substitute(item) for item in data]
-
-    def _convert_type(self, value: str) -> Union[str, int, float, bool]:
-        """Convert a string value to appropriate type.
-        
-        Args:
-            value: String value to convert
-            
-        Returns:
-            Converted value (int, float, bool, or original string)
-        """
-        # Try to convert to boolean
-        if value.lower() in ('true', 'yes', '1'):
-            return True
-        elif value.lower() in ('false', 'no', '0'):
-            return False
-
-        # Try to convert to int
         try:
-            return int(value)
-        except ValueError:
-            pass
-
-        # Try to convert to float
-        try:
-            return float(value)
-        except ValueError:
-            pass
-
-        # Return as string
-        return value
+            return substitute_env_vars(
+                value,
+                type_coerce=True,
+                expand_user_paths=False,
+                substitute_keys=False,
+            )
+        except RequiredEnvVarError as exc:
+            if exc.bash_form:
+                raise
+            raise ValueError(
+                f"Environment variable '{exc.var_name}' not found"
+            ) from exc
 
     def has_variables(self, value: Any) -> bool:
         """Check if a value contains environment variable references.
-        
+
         Args:
-            value: Value to check
-            
+            value: Value to check.
+
         Returns:
-            True if value contains ${...} patterns
+            True if value contains ``${...}`` patterns.
         """
         if isinstance(value, str):
             return bool(self.VAR_PATTERN.search(value))
-        elif isinstance(value, dict):
+        if isinstance(value, dict):
             return any(self.has_variables(v) for v in value.values())
-        elif isinstance(value, list):
+        if isinstance(value, list):
             return any(self.has_variables(item) for item in value)
-        else:
-            return False
+        return False
