@@ -313,6 +313,124 @@ class TestConfigLoader:
         assert config.metadata["port"] == "5432"
         assert config.metadata["optional"] == "default"
 
+    @staticmethod
+    def _minimal_network() -> Dict[str, Any]:
+        return {
+            "networks": [
+                {
+                    "name": "main",
+                    "states": [
+                        {"name": "start", "is_start": True, "arcs": []},
+                    ],
+                },
+            ],
+            "main_network": "main",
+        }
+
+    def test_prefix_fallback_resolves_unprefixed_var(self, monkeypatch):
+        """Documented FSM_ prefix-fallback: ${PORT} resolves to env FSM_PORT."""
+        monkeypatch.delenv("PORT", raising=False)
+        monkeypatch.setenv("FSM_PORT", "5432")
+
+        loader = ConfigLoader()
+        config_dict = {"name": "${PORT}", **self._minimal_network()}
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "5432"
+
+    def test_unprefixed_takes_precedence_over_prefix_fallback(self, monkeypatch):
+        """When both VAR and FSM_VAR are set, unprefixed VAR wins."""
+        monkeypatch.setenv("PORT", "8080")
+        monkeypatch.setenv("FSM_PORT", "5432")
+
+        loader = ConfigLoader()
+        config_dict = {"name": "${PORT}", **self._minimal_network()}
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "8080"
+
+    def test_prefix_fallback_restored_after_load(self, monkeypatch):
+        """The context manager restores os.environ after a load — no PORT leak."""
+        monkeypatch.delenv("PORT", raising=False)
+        monkeypatch.setenv("FSM_PORT", "5432")
+
+        loader = ConfigLoader()
+        config_dict = {"name": "${PORT}", **self._minimal_network()}
+        loader.load_from_dict(config_dict)
+        assert os.environ.get("PORT") is None
+
+    def test_question_mark_syntax_raises_with_custom_message(self, monkeypatch):
+        """${VAR:?msg} preserved through migration: raises ValueError with the msg."""
+        monkeypatch.delenv("MISSING_TOKEN", raising=False)
+
+        loader = ConfigLoader()
+        config_dict = {
+            "name": "${MISSING_TOKEN:?Token must be configured}",
+            **self._minimal_network(),
+        }
+        with pytest.raises(ValueError, match="Token must be configured"):
+            loader.load_from_dict(config_dict)
+
+    def test_embedded_substitution_now_supported(self, monkeypatch):
+        """Embedded ${VAR} in a larger string substitutes (was literal pre-Item 111)."""
+        monkeypatch.setenv("HOST", "db.example.com")
+        monkeypatch.setenv("DB_PORT", "5432")
+
+        loader = ConfigLoader()
+        config_dict = {
+            "name": "endpoint=http://${HOST}:${DB_PORT}/db",
+            **self._minimal_network(),
+        }
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "endpoint=http://db.example.com:5432/db"
+
+    def test_legacy_dollar_var_form_no_longer_supported(self, monkeypatch):
+        """Legacy unbraced `$VAR` form is no longer substituted; treated as literal.
+
+        Documented breaking change. Pre-flight audit (Item 111) confirmed
+        zero in-tree usage and zero documentation; out-of-tree consumers
+        must migrate to ``${VAR}``.
+        """
+        monkeypatch.setenv("PORT", "5432")
+
+        loader = ConfigLoader()
+        config_dict = {"name": "$PORT", **self._minimal_network()}
+        config = loader.load_from_dict(config_dict)
+        assert config.name == "$PORT"
+
+    def test_alias_helper_with_empty_prefix_is_noop(self, monkeypatch):
+        """Defensive guard: empty prefix in _alias_prefixed_env_vars aliases nothing.
+
+        ``ConfigLoader._env_prefix`` is hardcoded to ``"FSM_"`` today, but
+        the helper guards against ``prefix=""`` to avoid aliasing every
+        variable to itself if a future consumer overrides the prefix.
+        """
+        from dataknobs_fsm.config.loader import _alias_prefixed_env_vars
+
+        monkeypatch.setenv("SOME_VAR", "value")
+        snapshot = dict(os.environ)
+        with _alias_prefixed_env_vars(""):
+            assert dict(os.environ) == snapshot
+        assert dict(os.environ) == snapshot
+
+    def test_alias_helper_preserves_external_mutation(self, monkeypatch):
+        """If something else changes a bare value mid-context, helper does not clobber.
+
+        Re-entrancy / defensive correctness: the context manager only pops
+        an alias whose current value matches what it injected. If outer
+        code (or a nested loader) writes a different value, that value
+        is preserved on exit.
+        """
+        from dataknobs_fsm.config.loader import _alias_prefixed_env_vars
+
+        monkeypatch.delenv("PORT", raising=False)
+        monkeypatch.setenv("FSM_PORT", "5432")
+
+        with _alias_prefixed_env_vars("FSM_"):
+            assert os.environ["PORT"] == "5432"
+            os.environ["PORT"] = "9999"
+        assert os.environ.get("PORT") == "9999"
+        # Cleanup so we don't leak into other tests
+        os.environ.pop("PORT", None)
+
     def test_load_from_template(self):
         """Test loading configuration from template."""
         loader = ConfigLoader()
