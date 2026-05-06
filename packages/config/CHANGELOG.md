@@ -45,29 +45,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Use `substitute_env_vars` directly. The class will be removed in a
   future release.
 
+### Changed
+- `Config._load_file` raises `ValidationError` for malformed YAML or
+  JSON config files. `yaml.YAMLError` and `json.JSONDecodeError` no
+  longer escape; callers should catch `ValidationError` (or its base,
+  `ConfigError`).
+- Loader error messages for a non-dict root now read
+  `"Expected a dict at the root of <path>, got <type>"` (previously
+  `"must contain a dictionary"` / `"must be a dictionary"`).
+  Exception types are unchanged.
+
 ### Internal
-- `InheritableConfigLoader._load_file`, `EnvironmentConfig._load_file` /
-  `_find_config_file`, `EnvironmentAwareConfig._load_file` /
-  `_find_config_file`, `Config._load_file`, and
-  `Config._load_referenced_file` now route through
-  `dataknobs_common.config_loading.load_yaml_or_json` and
-  `find_config_file`. Each loader continues to raise its existing public
-  error class (`InheritanceError`, `EnvironmentConfigError`,
+- `InheritableConfigLoader._load_file`, `EnvironmentConfig._load_file`,
+  `EnvironmentAwareConfig._load_file`, `Config._load_file`, and
+  `Config._load_referenced_file` share the
+  `dataknobs_common.config_loading` helpers
+  (`load_yaml_or_json`, `find_config_file`). Each loader wraps the
+  helper's `ConfigLoadError` as its existing public error class
+  (`InheritanceError`, `EnvironmentConfigError`,
   `EnvironmentAwareConfigError`, `ValidationError` /
-  `ConfigFileNotFoundError`) by wrapping the helper's
-  `ConfigLoadError`. Error message wording for non-dict roots is now
-  `"Expected a dict at the root of <path>, got <type>"` (was
-  `"must contain a dictionary"` / `"must be a dictionary"`); failure
-  type and exit semantics are unchanged.
-- `Config._load_file` previously let `yaml.YAMLError` and
-  `json.JSONDecodeError` propagate as themselves on a malformed
-  config file; they are now wrapped as `ValidationError` so the
-  loader has a single, stable failure type. Callers that previously
-  caught the stdlib parser exceptions should catch
-  `ValidationError` (or its base, `ConfigError`) instead.
-- `Config._load_referenced_file` continues to coerce empty / falsy
-  parsed payloads to `{}`, matching the historical
-  `yaml.safe_load(f) or {}` semantic.
+  `ConfigFileNotFoundError`).
+- `Config._load_referenced_file` coerces empty / falsy parsed
+  payloads to `{}`.
 
 ## v0.3.11 - 2026-05-06
 

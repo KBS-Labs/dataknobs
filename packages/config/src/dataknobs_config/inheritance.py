@@ -223,7 +223,9 @@ def _substitute_string(
         ``type_coerce`` matches a whole-value placeholder.
 
     Raises:
-        ValueError: If a required variable is unset.
+        RequiredEnvVarError: If a required ``${VAR}`` is unset, or if
+            the ``${VAR:?msg}`` form fires. Subclass of ``ValueError``,
+            so existing ``except ValueError`` callers continue to work.
     """
     if type_coerce:
         whole = VAR_PATTERN.fullmatch(value)
@@ -472,8 +474,8 @@ class InheritableConfigLoader:
         filepath = find_config_file(self.config_dir, name)
         if filepath is None:
             raise InheritanceError(
-                f"Configuration file not found: {name}.yaml or {name}.json "
-                f"in {self.config_dir}"
+                f"Configuration file not found: {name}.yaml, {name}.yml, "
+                f"or {name}.json in {self.config_dir}"
             )
 
         try:

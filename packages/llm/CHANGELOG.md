@@ -8,13 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Internal
-- `FileSystemPromptLibrary._load_file` now routes through
-  `dataknobs_common.config_loading.load_yaml_or_json`. The public
-  surface continues to raise `ValueError` for unsupported
-  extensions, parse failures, and read errors — the helper's
-  `ConfigLoadError` and `OSError` are wrapped at the call site.
-  Empty / falsy parsed payloads continue to collapse to `{}`,
-  matching the historical `yaml.safe_load(content) or {}` semantic.
+- `FileSystemPromptLibrary._load_file` uses
+  `dataknobs_common.config_loading.load_yaml_or_json`. Surface is
+  `ValueError` for unsupported extensions, parse failures, and read
+  errors. Empty / falsy parsed payloads collapse to `{}`.
 
 ## v0.5.10 - 2026-05-06
 

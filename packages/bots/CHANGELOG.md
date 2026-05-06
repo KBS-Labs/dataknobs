@@ -7,16 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+- Non-UTF-8 backend bytes for a knowledge-base config raise
+  `IngestionConfigError` from
+  `RAGKnowledgeBase._load_kb_config_from_backend`. Previously a
+  stray `UnicodeDecodeError` could escape this path.
+
 ### Internal
-- `RAGKnowledgeBase._load_kb_config_from_backend` now routes through
-  `dataknobs_common.config_loading.parse_yaml_or_json` for the bytes →
-  dict parse step. The public surface continues to raise
-  `IngestionConfigError`; the PyYAML-missing message and the
-  "did not decode to a dict" message are preserved verbatim.
-  Non-UTF-8 backend bytes now surface as `IngestionConfigError`
-  via the `ConfigParseError` wrap added in `dataknobs_common`
-  (previously a stray `UnicodeDecodeError` could escape the
-  pre-helper inline decode path).
+- `RAGKnowledgeBase._load_kb_config_from_backend` uses
+  `dataknobs_common.config_loading.parse_yaml_or_json` for the
+  bytes → dict parse. Surface is `IngestionConfigError`.
 
 ## v0.6.18 - 2026-05-06
 
