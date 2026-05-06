@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Execution Layer
+
+- `ParallelLLMExecutor` gains an opt-in `fail_fast` mode (default `False`,
+  no behavior change for existing consumers). When enabled at the executor
+  level (`__init__(fail_fast=True)`) or per call (`execute(...,
+  fail_fast=True)` / `execute_mixed(..., fail_fast=True)` /
+  `execute_sequential(..., fail_fast=True)`), the executor cancels
+  remaining pending tasks on the first task failure. Cancelled tasks
+  return `TaskResult(success=False, error=asyncio.CancelledError(...))`,
+  distinguishable from completion-failures by the error type. Under
+  `execute_sequential` the loop breaks on the first failure and the
+  returned list is shorter than the input list (callers can detect
+  short-circuit via `len(results) < len(tasks)`).
+- `ParallelLLMExecutor` accepts `default_per_task_timeout`; `LLMTask` and
+  `DeterministicTask` accept a per-task `timeout` override. When set,
+  each task's body is bounded by `asyncio.wait_for`, returning
+  `TaskResult(success=False, error=asyncio.TimeoutError(...))` on
+  overrun. With `RetryConfig`, the timeout bounds each retry attempt
+  individually (total elapsed across retries remains the consumer's
+  responsibility). Sync `DeterministicTask` callables run on the thread
+  executor and cannot be pre-empted mid-call; the awaiter stops waiting
+  but the underlying thread continues until the function returns.
+
 ## v0.5.9 - 2026-04-29
 
 ### Test Infrastructure

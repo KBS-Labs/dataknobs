@@ -177,6 +177,91 @@ async def test_sequential_with_context_passing(provider: EchoProvider) -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_sequential_fail_fast_stops_on_first_failure(
+    provider: EchoProvider,
+) -> None:
+    """fail_fast=True breaks out of the sequential loop on first failure.
+
+    The returned list is shorter than the input list. Callers can detect
+    short-circuit via ``len(results) < len(tasks)``.
+    """
+    provider.set_responses([
+        text_response("ok0"),
+        ErrorResponse(RuntimeError("step 1 fail")),
+        text_response("ok2"),
+        text_response("ok3"),
+    ])
+    executor = ParallelLLMExecutor(provider, max_concurrency=5)
+
+    results = await executor.execute_sequential(
+        [
+            LLMTask(messages=_msg("step0")),
+            LLMTask(messages=_msg("step1")),
+            LLMTask(messages=_msg("step2")),
+            LLMTask(messages=_msg("step3")),
+        ],
+        fail_fast=True,
+    )
+
+    assert len(results) == 2
+    assert results[0].success is True
+    assert results[1].success is False
+    assert isinstance(results[1].error, RuntimeError)
+    # Provider was only called twice; steps 2 and 3 never ran.
+    assert provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_sequential_fail_fast_default_off(
+    provider: EchoProvider,
+) -> None:
+    """Without fail_fast, sequential runs the full list (regression guard)."""
+    provider.set_responses([
+        text_response("ok0"),
+        ErrorResponse(RuntimeError("step 1 fail")),
+        text_response("ok2"),
+        text_response("ok3"),
+    ])
+    executor = ParallelLLMExecutor(provider, max_concurrency=5)
+
+    results = await executor.execute_sequential(
+        [
+            LLMTask(messages=_msg("step0")),
+            LLMTask(messages=_msg("step1")),
+            LLMTask(messages=_msg("step2")),
+            LLMTask(messages=_msg("step3")),
+        ],
+    )
+
+    assert len(results) == 4
+    assert results[0].success is True
+    assert results[1].success is False
+    assert isinstance(results[1].error, RuntimeError)
+    assert results[2].success is True
+    assert results[3].success is True
+    assert provider.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_execute_sequential_fail_fast_single_success_no_break(
+    provider: EchoProvider,
+) -> None:
+    """fail_fast=True must not spuriously break on a successful task."""
+    provider.set_responses([text_response("only")])
+    executor = ParallelLLMExecutor(provider, max_concurrency=5)
+
+    results = await executor.execute_sequential(
+        [LLMTask(messages=_msg("only"))],
+        fail_fast=True,
+    )
+
+    assert len(results) == 1
+    assert results[0].success is True
+    assert isinstance(results[0].value, LLMResponse)
+    assert provider.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_empty_tasks(provider: EchoProvider) -> None:
     """Executing empty task dict returns empty result."""
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
