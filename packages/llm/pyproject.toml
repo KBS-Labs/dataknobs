@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-llm"
-version = "0.5.9"
+version = "0.5.10"
 description = "LLM utilities for DataKnobs"
 readme = "README.md"
 authors = [
@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common>=1.3.11",
-    "dataknobs-config>=0.3.10",
+    "dataknobs-config>=0.3.11",
     "dataknobs-data>=0.4.16",
     "dataknobs-utils>=1.2.9",
     "pyyaml>=6.0",

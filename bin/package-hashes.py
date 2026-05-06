@@ -38,10 +38,18 @@ _VERSION_LINE_RE = re.compile(
     r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$'
 )
 
+# Cross-package dependency constraint lines — bumped by release-helper.sh
+# whenever a sibling dataknobs package's version changes. The dep itself
+# is hashed independently and propagates via the transitive-dirty graph,
+# so the constraint string adds no signal about *this* package's behavior.
+_DEP_CONSTRAINT_LINE_RE = re.compile(
+    r'^"dataknobs-[a-z]+(?:>=|==)[^"]+",?$'
+)
+
 # Increment when the hashing algorithm changes (e.g., adding version stripping).
 # A mismatch between stored and current version means hashes are incomparable
 # and the artifacts should be treated as needing a fresh baseline.
-_HASH_ALGORITHM_VERSION = 2
+_HASH_ALGORITHM_VERSION = 3
 
 
 def _load_changed_packages() -> Any:
@@ -87,13 +95,15 @@ def compute_package_hash(package_name: str) -> str:
         rel_path = str(filepath.relative_to(pkg_dir))
         content = filepath.read_bytes()
 
-        # Strip version-only lines so release bumps don't dirty packages.
-        # Version strings (in pyproject.toml and __init__.py) change during
-        # releases but have no effect on code quality or test outcomes.
+        # Strip release-time noise so version bumps don't dirty packages:
+        #   - own version lines in pyproject.toml / __init__.py
+        #   - cross-package dataknobs-* dep constraint lines in pyproject.toml
+        # Both change at release time but don't reflect this package's behavior.
         filtered_lines = [
             line
             for line in content.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
             if not _VERSION_LINE_RE.match(line.strip())
+            and not _DEP_CONSTRAINT_LINE_RE.match(line.strip())
         ]
         filtered_content = "".join(filtered_lines).encode("utf-8")
 

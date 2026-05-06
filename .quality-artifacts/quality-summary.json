@@ -1,22 +1,22 @@
 {
-  "timestamp": "2026-05-06T02:02:37Z",
+  "timestamp": "2026-05-06T14:27:56Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots llm",
-  "tested_packages": ["bots", "llm"],
+  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
   "package_hashes": {
-  "bots": "157ae45db8e9748d74b09166f934bf46a38e907db5e6be9d76d43c098979b450",
+  "bots": "7f5a67d2d90541341760a8c113f83e789a9dd1717b2f741c22b5bfc15d7a99eb",
   "common": "5b727cbd10a9ac777aad6d5bbf5b8fb7eed35354ed4df44756571ceeaa69c1b2",
-  "config": "9b259b8ad7c6a83123144c245159bdf1efdd730fc9533efcbb7bfb72614d8d0d",
-  "data": "e680315c7b30103837f45ff3c967e500b596af1eb8c7fc4bd89f33e13c8e4486",
-  "fsm": "a115867cf1bc4bd781113f653c1f1940ca3c1ff0a689c0772262dc9c1db917d0",
-  "legacy": "142fee804a6973d0ca8d6a2a25f8df7bc86d6ba45a9ffea95f7b7a836ef65901",
-  "llm": "1367240dfa9828d0d029a54f27260a4cfe24228bdb610ae98b1c89d5cdd2c4cf",
-  "structures": "27369672618fcd84ae26188c7b580c7242df1c5a46cdb65a52b0ee49d3c4fa74",
-  "utils": "f6a609a3470e5091438c5c1dfe87f80971a55934a0f7b15570309510dc1ffd5e",
-  "xization": "e70b67322c3ff8b44b97eef074e73905dfd531c4e93cc2e4e379b4f49d39c033",
-  "_algorithm_version": 2
+  "config": "313a1f0d7c7a1270cb856ffdfcbc5bcfc17da7cb060c802142c89fd337f6feaa",
+  "data": "c616b8030b5d5a2d46fa86e4dfc92e18863843a33090a191a463746c592fd575",
+  "fsm": "2bfd4fe8e232152b22d94ebd0d6143b68c0aabf299ad361b0acd12b9455377d8",
+  "legacy": "e169bda77654a8f5eb30a5729a069880afaff6c5662cccdc447ab064b0530eab",
+  "llm": "5267125109a2aaf3433ffc6cb71ec4940538b9da1649c5d81073c0db1e19ce28",
+  "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
+  "utils": "b06c187355e598c4050f0f4ad7c4a6735c3368429761df2e8d6b45fecb1a20ea",
+  "xization": "2c4fa17b982d2e37d8d339a534ee6592939b67dbca2b841ea8fb0e57ef2478e2",
+  "_algorithm_version": 3
 },
   "checks": {
     "documentation": {

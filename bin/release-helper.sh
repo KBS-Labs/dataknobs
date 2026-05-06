@@ -931,8 +931,10 @@ EOF
         # Update cross-package dependency constraints in sibling packages
         update_cross_package_deps "$package" "$new_version"
 
-        # Update CHANGELOG.md Unreleased section to versioned heading
-        update_changelog "$package" "$new_version"
+        # Update CHANGELOG.md Unreleased section to versioned heading.
+        # Non-zero return means "no CHANGELOG" or "no Unreleased section" — both
+        # are expected for some packages and must not abort the bump loop.
+        update_changelog "$package" "$new_version" || true
     fi
 }
 
