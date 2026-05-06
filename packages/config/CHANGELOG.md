@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+- `EnvironmentConfig.load()` and `EnvironmentConfig.from_dict()` now apply
+  `${VAR}` / `${VAR:default}` substitution by default, matching the
+  behaviour of `InheritableConfigLoader.load()`. Pass the new keyword-only
+  `substitute_vars=False` to opt out (e.g., to inspect raw refs). Required
+  `${VAR}` refs without a default raise `ValueError` at load time.
+
 ## v0.3.11 - 2026-05-06
 
 ## v0.1.0 - 2025-01-12

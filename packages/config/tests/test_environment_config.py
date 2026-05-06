@@ -66,8 +66,9 @@ class TestEnvironmentConfigLoading:
         env_dir.mkdir()
         return env_dir
 
-    def test_load_yaml_config(self, env_dir):
+    def test_load_yaml_config(self, env_dir, monkeypatch):
         """Test loading YAML environment config."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
         config_file = env_dir / "production.yaml"
         config_file.write_text(yaml.dump({
             "name": "production",
@@ -89,6 +90,10 @@ class TestEnvironmentConfigLoading:
         assert env.description == "Production environment"
         assert env.settings["log_level"] == "INFO"
         assert "default" in env.resources["databases"]
+        assert (
+            env.resources["databases"]["default"]["connection_string"]
+            == "postgresql://localhost/test"
+        )
 
     def test_load_yml_extension(self, env_dir):
         """Test loading .yml extension."""
@@ -350,3 +355,120 @@ class TestResourceBinding:
         assert binding.name == "default"
         assert binding.resource_type == "databases"
         assert binding.config["backend"] == "postgres"
+
+
+class TestEnvironmentConfigEnvVarSubstitution:
+    """Test ${VAR} substitution in EnvironmentConfig.load()/from_dict().
+
+    Mirrors InheritableConfigLoader.load() substitution behaviour, applied
+    by default to env-config YAML so resource blocks containing ${VAR}
+    refs are resolved at load time rather than surviving into consumer
+    code as literal strings.
+    """
+
+    def test_load_substitutes_env_vars(self, tmp_path, monkeypatch):
+        """Default load() applies ${VAR} substitution to resource values."""
+        monkeypatch.setenv("DB_HOST", "rds.example.com")
+        monkeypatch.setenv("DB_PORT", "5432")
+        monkeypatch.delenv("MISSING", raising=False)
+        config_path = tmp_path / "test.yaml"
+        config_path.write_text(
+            "name: test\n"
+            "resources:\n"
+            "  databases:\n"
+            "    primary:\n"
+            "      host: ${DB_HOST}\n"
+            "      port: ${DB_PORT}\n"
+            "      extra: ${MISSING:fallback}\n"
+        )
+        cfg = EnvironmentConfig.load("test", tmp_path)
+        primary = cfg.get_resource("databases", "primary")
+        assert primary == {
+            "host": "rds.example.com",
+            "port": "5432",
+            "extra": "fallback",
+        }
+
+    def test_load_required_var_missing_raises(self, tmp_path, monkeypatch):
+        """Required ${VAR} without a default raises ValueError, like domain configs."""
+        monkeypatch.delenv("REQUIRED_VAR", raising=False)
+        config_path = tmp_path / "test.yaml"
+        config_path.write_text(
+            "name: test\n"
+            "resources:\n"
+            "  databases:\n"
+            "    primary:\n"
+            "      url: ${REQUIRED_VAR}\n"
+        )
+        with pytest.raises(ValueError, match="REQUIRED_VAR"):
+            EnvironmentConfig.load("test", tmp_path)
+
+    def test_load_substitute_vars_false_preserves_literals(self, tmp_path):
+        """Opt-out for consumers that want to inspect raw refs."""
+        config_path = tmp_path / "test.yaml"
+        config_path.write_text(
+            "name: test\n"
+            "resources:\n"
+            "  databases:\n"
+            "    primary:\n"
+            "      url: ${DB_URL}\n"
+        )
+        cfg = EnvironmentConfig.load(
+            "test", tmp_path, substitute_vars=False
+        )
+        assert cfg.get_resource("databases", "primary") == {"url": "${DB_URL}"}
+
+    def test_from_dict_substitutes_env_vars(self, monkeypatch):
+        """from_dict applies the same substitution path."""
+        monkeypatch.setenv("DB_HOST", "rds.example.com")
+        cfg = EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {
+                    "databases": {"primary": {"host": "${DB_HOST}"}}
+                },
+            }
+        )
+        assert cfg.get_resource("databases", "primary") == {
+            "host": "rds.example.com"
+        }
+
+    def test_from_dict_substitute_vars_false_preserves_literals(self):
+        """from_dict opt-out matches load() opt-out."""
+        cfg = EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {"databases": {"primary": {"url": "${DB_URL}"}}},
+            },
+            substitute_vars=False,
+        )
+        assert cfg.get_resource("databases", "primary") == {"url": "${DB_URL}"}
+
+    def test_binding_resolver_with_env_substituted_config(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end: ConfigBindingResolver sees substituted values from load-time substitution."""
+        from dataknobs_config.binding_resolver import (
+            ConfigBindingResolver,
+            SimpleFactory,
+        )
+
+        class _Resource:
+            def __init__(self, host: str) -> None:
+                self.host = host
+
+        monkeypatch.setenv("TEST_HOST", "rds.example.com")
+        config_path = tmp_path / "test.yaml"
+        config_path.write_text(
+            "name: test\n"
+            "resources:\n"
+            "  databases:\n"
+            "    primary:\n"
+            "      host: ${TEST_HOST}\n"
+        )
+        env = EnvironmentConfig.load("test", tmp_path)
+        resolver = ConfigBindingResolver(env)
+        resolver.register_factory("databases", SimpleFactory(_Resource))
+
+        instance = resolver.resolve("databases", "primary")
+        assert instance.host == "rds.example.com"

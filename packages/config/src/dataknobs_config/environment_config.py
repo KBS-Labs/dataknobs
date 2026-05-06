@@ -8,6 +8,10 @@ Key features:
 - Environment detection (via DATAKNOBS_ENVIRONMENT or cloud indicators)
 - Resource bindings (logical names -> concrete implementations)
 - Environment-wide settings management
+- ``${VAR}`` / ``${VAR:default}`` substitution applied by default in
+  :meth:`EnvironmentConfig.load` and :meth:`EnvironmentConfig.from_dict`,
+  matching the behaviour of :meth:`InheritableConfigLoader.load` for
+  domain configs (pass ``substitute_vars=False`` to opt out).
 
 Example:
     ```python
@@ -158,18 +162,30 @@ class EnvironmentConfig:
         cls,
         environment: str | None = None,
         config_dir: str | Path = "config/environments",
+        *,
+        substitute_vars: bool = True,
     ) -> EnvironmentConfig:
         """Load environment configuration from file.
 
         Args:
             environment: Environment name, or None to auto-detect
             config_dir: Directory containing environment config files
+            substitute_vars: When True (default), apply ``${VAR}`` /
+                ``${VAR:default}`` substitution to every value in the
+                loaded YAML before constructing the model — matching the
+                behaviour of :meth:`InheritableConfigLoader.load` for
+                domain configs. Pass ``False`` only if you specifically
+                need to preserve raw refs (e.g., to inspect or transform
+                them).
 
         Returns:
             Loaded EnvironmentConfig instance
 
         Raises:
             EnvironmentConfigError: If config file is invalid
+            ValueError: If ``substitute_vars=True`` and a required
+                ``${VAR}`` ref has no default and no value in the
+                environment.
         """
         if environment is None:
             environment = cls.detect_environment()
@@ -196,6 +212,14 @@ class EnvironmentConfig:
                 f"Failed to read environment config {config_path}: {e}"
             ) from e
 
+        if substitute_vars:
+            # Local import to keep the dependency on inheritance.py
+            # explicit at the call site and defensive against future
+            # refactors that could re-introduce a top-level cycle.
+            from .inheritance import substitute_env_vars
+
+            data = substitute_env_vars(data)
+
         return cls(
             name=data.get("name", environment),
             resources=data.get("resources", {}),
@@ -204,15 +228,33 @@ class EnvironmentConfig:
         )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> EnvironmentConfig:
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        substitute_vars: bool = True,
+    ) -> EnvironmentConfig:
         """Create EnvironmentConfig from a dictionary.
 
         Args:
             data: Configuration dictionary
+            substitute_vars: When True (default), apply ``${VAR}`` /
+                ``${VAR:default}`` substitution to every value in
+                ``data`` before constructing the model — same semantics
+                as :meth:`load`.
 
         Returns:
             EnvironmentConfig instance
+
+        Raises:
+            ValueError: If ``substitute_vars=True`` and a required
+                ``${VAR}`` ref has no default and no value in the
+                environment.
         """
+        if substitute_vars:
+            from .inheritance import substitute_env_vars
+
+            data = substitute_env_vars(data)
         return cls(
             name=data.get("name", "unknown"),
             resources=data.get("resources", {}),
