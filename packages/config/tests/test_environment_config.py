@@ -143,7 +143,7 @@ class TestEnvironmentConfigLoading:
         config_file = env_dir / "list.yaml"
         config_file.write_text("- item1\n- item2")
 
-        with pytest.raises(EnvironmentConfigError, match="must be a dictionary"):
+        with pytest.raises(EnvironmentConfigError, match="Expected a dict at the root"):
             EnvironmentConfig.load("list", config_dir=env_dir)
 
 

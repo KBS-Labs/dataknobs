@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `dataknobs_common.config_loading` module with `find_config_file()`,
+  `load_yaml_or_json()`, and `parse_yaml_or_json()` helpers, plus a
+  `ConfigLoadError` exception hierarchy
+  (`ConfigParseError`, `ConfigShapeError`,
+  `ConfigUnsupportedFormatError`, `ConfigYAMLNotInstalledError`).
+  Consolidates the YAML/JSON file→dict and bytes→dict
+  parse-and-validate chain previously duplicated across nine sites
+  in five packages (`dataknobs_config`, `dataknobs_xization`,
+  `dataknobs_fsm`, `dataknobs_bots`, `dataknobs_llm`). PyYAML is
+  lazy-imported — no hard dependency added to `dataknobs-common`.
+  `find_config_file` adds a leading dot automatically when callers
+  pass extensions without one (`"yaml"` → `".yaml"`).
+  `parse_yaml_or_json` wraps `UnicodeDecodeError` from non-UTF-8
+  byte input as `ConfigParseError`, so consumers reading from
+  binary backends never see the stdlib decode error leak past the
+  helper. The helpers are also re-exported from the top-level
+  `dataknobs_common` namespace.
+
 ## v1.3.11 - 2026-04-29
 
 ### Test Infrastructure

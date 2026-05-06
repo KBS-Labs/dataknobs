@@ -38,14 +38,17 @@ Example:
     ```
 """
 
-import json
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
 
-import yaml
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    find_config_file,
+    load_yaml_or_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -466,43 +469,21 @@ class InheritableConfigLoader:
         Raises:
             InheritanceError: If file not found or parse error
         """
-        # Try YAML first, then JSON
-        yaml_path = self.config_dir / f"{name}.yaml"
-        yml_path = self.config_dir / f"{name}.yml"
-        json_path = self.config_dir / f"{name}.json"
-
-        if yaml_path.exists():
-            filepath = yaml_path
-        elif yml_path.exists():
-            filepath = yml_path
-        elif json_path.exists():
-            filepath = json_path
-        else:
+        filepath = find_config_file(self.config_dir, name)
+        if filepath is None:
             raise InheritanceError(
                 f"Configuration file not found: {name}.yaml or {name}.json "
                 f"in {self.config_dir}"
             )
 
         try:
-            with open(filepath, encoding="utf-8") as f:
-                if filepath.suffix in [".yaml", ".yml"]:
-                    data = yaml.safe_load(f)
-                else:
-                    data = json.load(f)
-
-            if not isinstance(data, dict):
-                raise InheritanceError(
-                    f"Configuration file must contain a dictionary: {filepath}"
-                )
-
-            return data
-
-        except yaml.YAMLError as e:
-            raise InheritanceError(f"Failed to parse YAML file {filepath}: {e}") from e
-        except json.JSONDecodeError as e:
-            raise InheritanceError(f"Failed to parse JSON file {filepath}: {e}") from e
+            return load_yaml_or_json(filepath)
+        except ConfigLoadError as e:
+            raise InheritanceError(str(e)) from e
         except OSError as e:
-            raise InheritanceError(f"Failed to read configuration file {filepath}: {e}") from e
+            raise InheritanceError(
+                f"Failed to read configuration file {filepath}: {e}"
+            ) from e
 
     def clear_cache(self, name: str | None = None) -> None:
         """Clear configuration cache.

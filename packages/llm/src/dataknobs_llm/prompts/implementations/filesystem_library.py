@@ -29,11 +29,14 @@ File Format (YAML):
         version: "1.0"
 """
 
-import json
 import logging
-import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Union
+
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    load_yaml_or_json,
+)
 
 from ..base import (
     BasePromptLibrary,
@@ -239,20 +242,14 @@ class FileSystemPromptLibrary(BasePromptLibrary):
             ValueError: If file format is unsupported or parsing fails
         """
         try:
-            with open(file_path, encoding='utf-8') as f:
-                content = f.read()
-
-            if file_path.suffix in [".yaml", ".yml"]:
-                return yaml.safe_load(content) or {}
-
-            elif file_path.suffix == ".json":
-                return json.loads(content)
-
-            else:
-                raise ValueError(f"Unsupported file extension: {file_path.suffix}")
-
-        except Exception as e:
+            data = load_yaml_or_json(file_path, require_dict=False)
+        except ConfigLoadError as e:
             raise ValueError(f"Error loading file {file_path}: {e}") from e
+        except OSError as e:
+            raise ValueError(f"Error loading file {file_path}: {e}") from e
+        # Preserve the historical ``yaml.safe_load(content) or {}``
+        # semantic so empty / falsy roots collapse to an empty dict.
+        return data if data else {}
 
     # Note: _parse_prompt_template(), _parse_validation_config(), and
     # _parse_rag_config() are now inherited from BasePromptLibrary

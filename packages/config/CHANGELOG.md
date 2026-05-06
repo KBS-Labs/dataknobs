@@ -45,6 +45,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Use `substitute_env_vars` directly. The class will be removed in a
   future release.
 
+### Internal
+- `InheritableConfigLoader._load_file`, `EnvironmentConfig._load_file` /
+  `_find_config_file`, `EnvironmentAwareConfig._load_file` /
+  `_find_config_file`, `Config._load_file`, and
+  `Config._load_referenced_file` now route through
+  `dataknobs_common.config_loading.load_yaml_or_json` and
+  `find_config_file`. Each loader continues to raise its existing public
+  error class (`InheritanceError`, `EnvironmentConfigError`,
+  `EnvironmentAwareConfigError`, `ValidationError` /
+  `ConfigFileNotFoundError`) by wrapping the helper's
+  `ConfigLoadError`. Error message wording for non-dict roots is now
+  `"Expected a dict at the root of <path>, got <type>"` (was
+  `"must contain a dictionary"` / `"must be a dictionary"`); failure
+  type and exit semantics are unchanged.
+- `Config._load_file` previously let `yaml.YAMLError` and
+  `json.JSONDecodeError` propagate as themselves on a malformed
+  config file; they are now wrapped as `ValidationError` so the
+  loader has a single, stable failure type. Callers that previously
+  caught the stdlib parser exceptions should catch
+  `ValidationError` (or its base, `ConfigError`) instead.
+- `Config._load_referenced_file` continues to coerce empty / falsy
+  parsed payloads to `{}`, matching the historical
+  `yaml.safe_load(f) or {}` semantic.
+
 ## v0.3.11 - 2026-05-06
 
 ## v0.1.0 - 2025-01-12

@@ -47,6 +47,17 @@ from dataknobs_common.events import (
     Subscription,
     create_event_bus,
 )
+from dataknobs_common.config_loading import (
+    DEFAULT_CONFIG_EXTENSIONS,
+    ConfigLoadError,
+    ConfigParseError,
+    ConfigShapeError,
+    ConfigUnsupportedFormatError,
+    ConfigYAMLNotInstalledError,
+    find_config_file,
+    load_yaml_or_json,
+    parse_yaml_or_json,
+)
 from dataknobs_common.exceptions import (
     ConcurrencyError,
     ConfigurationError,
@@ -142,6 +153,16 @@ __all__ = [
     "SerializationError",
     "TimeoutError",
     "RateLimitError",
+    # Config loading
+    "DEFAULT_CONFIG_EXTENSIONS",
+    "ConfigLoadError",
+    "ConfigParseError",
+    "ConfigShapeError",
+    "ConfigUnsupportedFormatError",
+    "ConfigYAMLNotInstalledError",
+    "find_config_file",
+    "load_yaml_or_json",
+    "parse_yaml_or_json",
     # Postgres config
     "normalize_postgres_connection_config",
     # Rate Limiting

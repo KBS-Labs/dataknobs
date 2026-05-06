@@ -54,14 +54,17 @@ Environment file format (config/environments/production.yaml):
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    find_config_file,
+    load_yaml_or_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,16 +204,7 @@ class EnvironmentConfig:
             )
             return cls(name=environment)
 
-        try:
-            data = cls._load_file(config_path)
-        except (yaml.YAMLError, json.JSONDecodeError) as e:
-            raise EnvironmentConfigError(
-                f"Failed to parse environment config {config_path}: {e}"
-            ) from e
-        except OSError as e:
-            raise EnvironmentConfigError(
-                f"Failed to read environment config {config_path}: {e}"
-            ) from e
+        data = cls._load_file(config_path)
 
         if substitute_vars:
             # Local import to keep the dependency on inheritance.py
@@ -273,11 +267,7 @@ class EnvironmentConfig:
         Returns:
             Path to config file, or None if not found
         """
-        for ext in [".yaml", ".yml", ".json"]:
-            path = config_dir / f"{environment}{ext}"
-            if path.exists():
-                return path
-        return None
+        return find_config_file(config_dir, environment)
 
     @classmethod
     def _load_file(cls, path: Path) -> dict[str, Any]:
@@ -289,18 +279,16 @@ class EnvironmentConfig:
         Returns:
             Parsed configuration dictionary
         """
-        with open(path, encoding="utf-8") as f:
-            if path.suffix in [".yaml", ".yml"]:
-                data = yaml.safe_load(f)
-            else:
-                data = json.load(f)
-
-        if not isinstance(data, dict):
+        try:
+            return load_yaml_or_json(path)
+        except ConfigLoadError as e:
             raise EnvironmentConfigError(
-                f"Environment config must be a dictionary: {path}"
-            )
-
-        return data
+                f"Failed to load environment config {path}: {e}"
+            ) from e
+        except OSError as e:
+            raise EnvironmentConfigError(
+                f"Failed to read environment config {path}: {e}"
+            ) from e
 
     def get_resource(
         self,

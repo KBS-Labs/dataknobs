@@ -683,7 +683,7 @@ llm:
         """Test error when config is not a dict."""
         (config_dir / "list.yaml").write_text("- item1\n- item2")
 
-        with pytest.raises(InheritanceError, match="must contain a dictionary"):
+        with pytest.raises(InheritanceError, match="Expected a dict at the root"):
             loader.load("list")
 
     def test_default_config_dir(self):

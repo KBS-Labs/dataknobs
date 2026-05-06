@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Internal
+- `KnowledgeBaseConfig._load_file` now routes through
+  `dataknobs_common.config_loading.load_yaml_or_json`, wrapping the
+  helper's `ConfigLoadError` so the public surface continues to raise
+  `IngestionConfigError`. The PyYAML-missing user-facing message is
+  preserved verbatim.
+- `KnowledgeBaseConfig._load_file` previously let `yaml.YAMLError`,
+  `json.JSONDecodeError`, and `OSError` propagate as themselves on a
+  malformed or unreadable config file. They are now wrapped as
+  `IngestionConfigError`, giving the loader a single, stable failure
+  type. Callers that previously caught the stdlib exceptions should
+  catch `IngestionConfigError` instead.
+
 ## v1.3.4 - 2026-05-06
 
 ## v1.3.3 - 2026-04-23

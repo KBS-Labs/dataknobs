@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Union
 
 import yaml  # type: ignore[import-untyped]
 from dataknobs_common import NotFoundError, Registry
+from dataknobs_common.config_loading import (
+    ConfigLoadError,
+    ConfigUnsupportedFormatError,
+    load_yaml_or_json,
+)
 
 from .builders import ObjectBuilder
 from .environment import EnvironmentOverrides
@@ -105,15 +110,14 @@ class Config:
         if not self._settings_manager.get_setting("config_root"):
             self._settings_manager.set_setting("config_root", str(path.parent))
 
-        # Load file based on extension
-        suffix = path.suffix.lower()
-        with open(path) as f:
-            if suffix in [".yaml", ".yml"]:
-                data = yaml.safe_load(f)
-            elif suffix == ".json":
-                data = json.load(f)
-            else:
-                raise ValidationError(f"Unsupported file format: {suffix}")
+        # Tolerates non-dict / empty roots — see _load_dict for atomic-config
+        # validation that runs only when data is truthy.
+        try:
+            data = load_yaml_or_json(path, require_dict=False)
+        except ConfigUnsupportedFormatError as e:
+            raise ValidationError(str(e)) from e
+        except ConfigLoadError as e:
+            raise ValidationError(f"Failed to load {path}: {e}") from e
 
         if data:
             self._load_dict(data)
@@ -193,16 +197,17 @@ class Config:
         if not path_obj.exists():
             raise ConfigFileNotFoundError(f"Referenced configuration file not found: {path_obj}")
 
-        # Load file based on extension
-        suffix = path_obj.suffix.lower()
-        with open(path_obj) as f:
-            if suffix in [".yaml", ".yml"]:
-                return yaml.safe_load(f) or {}
-            elif suffix == ".json":
-                data: Dict[Any, Any] = json.load(f)
-                return data
-            else:
-                raise ValidationError(f"Unsupported file format: {suffix}")
+        # Referenced files may be lists or empty — caller normalizes.
+        try:
+            data = load_yaml_or_json(path_obj, require_dict=False)
+        except ConfigUnsupportedFormatError as e:
+            raise ValidationError(str(e)) from e
+        except ConfigLoadError as e:
+            raise ValidationError(f"Failed to load {path_obj}: {e}") from e
+        # Preserve the historical ``yaml.safe_load(f) or {}`` semantic:
+        # any falsy parsed value (None, empty list, empty dict, etc.)
+        # collapses to ``{}``.
+        return data if data else {}
 
     def _normalize_atomic_config(self, config: dict, type_name: str, idx: int) -> dict:
         """Normalize an atomic configuration.
