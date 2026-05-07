@@ -78,7 +78,33 @@ class SQLRecordSerializer:
         
         # Ensure storage_id is set
         return ensure_record_id(record, row["id"])
+
+    @staticmethod
+    def record_to_row(
+        record: Record, id: str | None = None
+    ) -> dict[str, Any]:
+        """Convert a Record to a database row (outbound counterpart
+        to ``row_to_record``).
+
+        Centralizes the ``id`` / ``data`` / ``metadata`` shape so sync
+        and async SQL backends do not duplicate the body and silently
+        drift. ``id=None`` produces a fresh ``str(uuid.uuid4())`` (the
+        hyphenated 36-character form).
+        """
+        return {
+            "id": id or str(uuid.uuid4()),
+            "data": SQLRecordSerializer.record_to_json(record),
+            "metadata": (
+                json.dumps(record.metadata) if record.metadata else None
+            ),
+        }
 ```
+
+The pair `row_to_record` / `record_to_row` is the canonical inbound /
+outbound boundary for SQL backends. Backend implementations must
+delegate to these statics rather than duplicating the body inline —
+the inbound divergence between sync and async PostgreSQL (Item 114)
+is the cautionary tale for what happens when they don't.
 
 ## VectorField Serialization
 

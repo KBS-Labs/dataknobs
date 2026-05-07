@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`AsyncPostgresDatabase.update_batch()` no longer raises
+  `PostgresSyntaxError` from a duplicated `RETURNING id` clause**.
+  The query was built by `SQLQueryBuilder.build_batch_update_query`,
+  which already appends ` RETURNING id` for the postgres dialect
+  (sql_base.py:559-561), and then `update_batch` appended
+  ` RETURNING id` a second time at postgres.py:1484 — producing
+  invalid SQL ending in `RETURNING id RETURNING id`. asyncpg
+  rejected the query before any row was updated. Pre-existing
+  latent bug uncovered while reviewing PR #303 — no prior test
+  exercised `AsyncPostgresDatabase.update_batch` against a real
+  Postgres (only sqlite/duckdb async `update_batch` had coverage).
+  Fix removes the second `RETURNING id` append; the builder's
+  output is already postgres-ready. Sync `SyncPostgresDatabase.
+  update_batch` was already correct (its comment "query now
+  includes RETURNING clause" was accurate).
+- **`AsyncPostgresDatabase.stream_read()` no longer raises
+  `TypeError: 'async for' requires an object with __aiter__ method,
+  got Cursor`**. The cursor was constructed via
+  ``cursor = await conn.cursor(sql, *params)``, which returns an
+  asyncpg ``Cursor`` (intended for the explicit-fetch API
+  ``await cur.fetch(n)``) and is not an async iterator; the
+  subsequent ``async for row in cursor`` then failed before yielding
+  the first row. Pre-existing bug uncovered by the new
+  ``test_async_stream_read_preserves_record_id`` parity test added
+  for the Item 114 fix above (no prior test exercised
+  ``AsyncPostgresDatabase.stream_read`` against a real Postgres). Fix
+  iterates the ``CursorFactory`` returned by
+  ``conn.cursor(sql, *params)`` directly — matching the asyncpg
+  pattern used elsewhere in this file. ``stream_read`` now actually
+  streams rows from Postgres for the first time.
+- **`AsyncPostgresDatabase.read()`, `search()`, `vector_search()`,
+  `stream_read()`, and `_text_search_for_hybrid()` now return records
+  with populated `record.id` / `record.storage_id`**, matching the
+  sync `SyncPostgresDatabase` behavior. The async `_row_to_record`
+  previously copy-pasted the sync serializer body but dropped the
+  `ensure_record_id` step, so `await db.read(id)` returned records
+  where `record.id` / `record.storage_id` were whatever was in the
+  JSON payload (typically `None`) — silently differing from
+  `db.read(id)` on the sync backend for the same on-disk row.
+  `search()` was the only async call site that compensated explicitly
+  (`record.storage_id = str(row['id'])` after `_row_to_record`); the
+  other four were silently broken. The fix delegates the async
+  `_row_to_record` to the shared
+  `SQLRecordSerializer.row_to_record(dict(row))` static helper that
+  the sync sibling already uses, so all five async call sites now
+  populate the id uniformly. Strictly information-additive — the
+  sync backend has always returned the populated id, so consumers
+  working against both backends already handle the populated case.
+
+### Changed
+
+- **`SQLRecordSerializer.record_to_row(record, id=None)`** added as
+  the outbound counterpart to the existing
+  `SQLRecordSerializer.row_to_record(row)` static. Centralizes the
+  `id` / `data` / `metadata` row shape so sync and async SQL
+  backends do not duplicate the body and silently drift — the same
+  shape that produced the inbound `_row_to_record` divergence.
+- `SyncPostgresDatabase._record_to_row` and
+  `AsyncPostgresDatabase._record_to_row` are now one-line delegations
+  to `SQLRecordSerializer.record_to_row`. Behavior is unchanged
+  (both bodies were functionally identical pre-consolidation); the
+  consolidation eliminates the parallel-implementation drift surface.
+- **All four redundant `record.storage_id = str(row['id'])`
+  assignments in SQL backend `search()` paths have been removed.**
+  After the `_row_to_record`-delegation fix above, every SQL
+  backend's search path now goes through
+  `SQLRecordSerializer.row_to_record` (directly, or via
+  `SQLQueryBuilder.row_to_record`), which calls `ensure_record_id`
+  before returning — so the post-call explicit assignments were
+  no-ops. Cleanups: `AsyncPostgresDatabase.search()` (postgres.py:
+  1362-1363), `SyncPostgresDatabase.search()` (postgres.py:419-420),
+  `AsyncSQLiteDatabase.search()` (sqlite_async.py:271-272),
+  `AsyncDuckDBDatabase.search()` (duckdb.py:404-405), and
+  `SyncDuckDBDatabase.search()` (duckdb.py:952). Behavior unchanged
+  (each was a redundant double-write of the same value); the
+  cleanup eliminates the future-confusion surface ("why does this
+  set storage_id when `_row_to_record` already does?").
+- New unit-test module `tests/test_backends/test_sql_record_
+  serializer.py` covers `SQLRecordSerializer.row_to_record` and
+  `SQLRecordSerializer.record_to_row` directly (round-trip,
+  id-population, metadata serialization edge cases). The new
+  helpers were previously covered only transitively via integration
+  tests requiring a live Postgres.
+- `packages/data/docs/RECORD_SERIALIZATION.md` documents the new
+  `record_to_row` static and the inbound/outbound boundary
+  contract, with a forward-reference to the Item 114 cautionary
+  tale.
+
 ## v0.4.16 - 2026-04-29
 
 ### Security

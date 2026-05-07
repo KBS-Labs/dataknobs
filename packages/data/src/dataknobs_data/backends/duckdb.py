@@ -400,10 +400,6 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
             # Convert tuple result to dict
             row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
             record = SQLQueryBuilder.row_to_record(row_dict)
-
-            # Populate storage_id from database ID
-            record.storage_id = str(row_dict['id'])
-
             records.append(record)
 
         # Apply field projection if specified
@@ -949,7 +945,6 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
         for result in results:
             row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
             record = SQLQueryBuilder.row_to_record(row_dict)
-            record.storage_id = str(row_dict['id'])
             records.append(record)
 
         # Apply field projection if specified

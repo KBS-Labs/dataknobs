@@ -267,10 +267,6 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             for row in rows:
                 row_dict = dict(row)
                 record = SQLQueryBuilder.row_to_record(row_dict)
-
-                # Populate storage_id from database ID
-                record.storage_id = str(row_dict['id'])
-
                 records.append(record)
 
             # Apply field projection if specified

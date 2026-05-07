@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -271,15 +270,11 @@ class SyncPostgresDatabase(
         self.db.execute(create_table_sql)
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
-        """Convert a Record to a database row."""
-        return {
-            "id": id or str(uuid.uuid4()),
-            "data": self.record_to_json(record),
-            "metadata": json.dumps(record.metadata) if record.metadata else None,
-        }
+        """Convert a Record to a database row (delegates to shared serializer)."""
+        return SQLRecordSerializer.record_to_row(record, id)
 
     def _row_to_record(self, row: dict[str, Any]) -> Record:
-        """Convert a database row to a Record."""
+        """Convert a database row to a Record (delegates to shared serializer)."""
         return self.row_to_record(row)
 
     def create(self, record: Record) -> str:
@@ -420,9 +415,6 @@ class SyncPostgresDatabase(
         for _, row in df.iterrows():
             row_dict = row.to_dict()
             record = self._row_to_record(row_dict)
-
-            # Populate storage_id from database ID
-            record.storage_id = str(row_dict['id'])
 
             # Apply field projection if specified
             if query.fields:
@@ -1098,30 +1090,31 @@ class AsyncPostgresDatabase(
         self._check_async_connection()
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
-        """Convert a Record to a database row using common serializer."""
-        from .sql_base import SQLRecordSerializer
+        """Convert a Record to a database row (delegates to shared serializer).
 
-        return {
-            "id": id or str(uuid.uuid4()),
-            "data": SQLRecordSerializer.record_to_json(record),
-            "metadata": json.dumps(record.metadata) if record.metadata else None,
-        }
+        Mirrors :meth:`SyncPostgresDatabase._record_to_row`: both sync
+        and async route through ``SQLRecordSerializer.record_to_row``
+        so the outbound ``id`` / ``data`` / ``metadata`` shape lives
+        in one place and cannot drift between siblings (the same trap
+        that produced the inbound ``_row_to_record`` divergence).
+        """
+        return SQLRecordSerializer.record_to_row(record, id)
 
     def _row_to_record(self, row: asyncpg.Record) -> Record:
-        """Convert a database row to a Record using the common serializer."""
-        from .sql_base import SQLRecordSerializer
+        """Convert a database row to a Record (delegates to shared serializer).
 
-        # Convert asyncpg.Record to dict format expected by SQLRecordSerializer
-        data_json = row.get("data", {})
-        if not isinstance(data_json, str):
-            data_json = json.dumps(data_json)
-
-        metadata_json = row.get("metadata")
-        if metadata_json and not isinstance(metadata_json, str):
-            metadata_json = json.dumps(metadata_json)
-
-        # Use the common serializer to reconstruct the record
-        return SQLRecordSerializer.json_to_record(data_json, metadata_json)
+        Mirrors :meth:`SyncPostgresDatabase._row_to_record`: delegates
+        to ``SQLRecordSerializer.row_to_record`` so the
+        ``ensure_record_id`` step is applied uniformly. Without the
+        delegation, async ``read()`` returned records where
+        ``record.id`` / ``record.storage_id`` were whatever was in the
+        JSON payload (typically ``None``) — silently differing from
+        ``db.read(id)`` on the sync backend for the same on-disk row.
+        ``asyncpg.Record`` supports ``dict()`` conversion via the
+        mapping protocol; the explicit cast keeps the static helper's
+        ``dict[str, Any]`` contract clean.
+        """
+        return SQLRecordSerializer.row_to_record(dict(row))
 
     @staticmethod
     def _build_vector_params(
@@ -1359,9 +1352,6 @@ class AsyncPostgresDatabase(
         for row in rows:
             record = self._row_to_record(row)
 
-            # Populate storage_id from database ID
-            record.storage_id = str(row['id'])
-
             # Apply field projection if specified
             if query.fields:
                 record = record.project(query.fields)
@@ -1483,12 +1473,12 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch update query builder
-        # It already produces positional parameters ($1, $2) for PostgreSQL
+        # Use the shared batch update query builder. It already
+        # produces positional parameters ($1, $2) AND appends
+        # ``RETURNING id`` when ``dialect="postgres"``
+        # (sql_base.py:559-561) — do NOT append a second ``RETURNING
+        # id`` here, that produces invalid SQL.
         query, params = query_builder.build_batch_update_query(updates)
-
-        # Add RETURNING clause for PostgreSQL to get updated IDs
-        query = query.rstrip() + " RETURNING id"
 
         # Execute the batch update
         async with self._pool.acquire() as conn:
@@ -1875,13 +1865,15 @@ class AsyncPostgresDatabase(
             if where_clauses:
                 sql += " WHERE " + " AND ".join(where_clauses)
 
-        # Use cursor for efficient streaming
+        # Use cursor for efficient streaming. asyncpg's
+        # ``conn.cursor(sql, *args)`` returns a ``CursorFactory`` that
+        # supports ``async for``; ``await``-ing it returns a ``Cursor``
+        # object intended for the explicit-fetch API
+        # (``await cur.fetch(n)``) and is NOT an async iterator.
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                cursor = await conn.cursor(sql, *params)
-
                 batch = []
-                async for row in cursor:
+                async for row in conn.cursor(sql, *params):
                     record = self._row_to_record(row)
                     if query and query.fields:
                         record = record.project(query.fields)
