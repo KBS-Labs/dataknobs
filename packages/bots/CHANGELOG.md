@@ -7,7 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `RegistryBackend.peek_config(bot_id)` — non-mutating sibling of
+  `get_config`. Returns the stored config dict without updating
+  `last_accessed_at`, for inspection / audit / bookkeeping reads
+  that should not register as user activity. Implemented on
+  `InMemoryBackend`, `DataKnobsRegistryAdapter`, and
+  `HTTPRegistryBackend`. The HTTP backend has no client-side
+  activity state, so its `peek_config` delegates to `get_config`;
+  servers that want to distinguish a non-touching peek may define
+  their own contract (header, query parameter, or sibling
+  endpoint) — this client deliberately does not impose one.
+
 ### Changed
+- `BotRegistry.get_config()` now routes through
+  `RegistryBackend.peek_config` rather than `get_config`.
+  Inspection-style reads no longer bump `last_accessed_at`;
+  consumers needing the touching behavior should use
+  `BotRegistry.get_bot()`, which is the user-facing resolution
+  path.
+- `BotRegistry.get_bot()` now touches the backend on every call
+  (cache hit and miss alike) so `last_accessed_at` reliably
+  reflects user activity. Previously the backend `get_config`
+  was issued only on the cache-miss branch, which produced an
+  inverted activity signal — hot bots (always cache hits) never
+  updated, cold bots updated only on TTL expiry. The change adds
+  one backend read per `get_bot` call; for the HTTP backend that
+  is one extra round trip per call, for the
+  `DataKnobsRegistryAdapter` it is one extra `db.read` plus the
+  pre-existing `db.update` that `get_config` already performed.
+- `ConfigCachingManager.get_raw_config()` now routes through
+  `RegistryBackend.peek_config`. Bypassing the cache also bypasses
+  the activity bump, matching the inspection-path role the method
+  already documents.
+- `CachingRegistryManager.get_or_create()` cache-miss reads now
+  route through `RegistryBackend.peek_config`. Previously
+  `last_accessed_at` was bumped only on cache misses (cache hits
+  bypass the backend), producing an inverted activity signal —
+  hot bots never updated, cold bots updated only on TTL expiry.
+  Storage timestamps now reflect direct backend reads only;
+  user-activity tracking for `CachingRegistryManager` consumers
+  belongs at the `get_or_create` caller (or higher) — if your
+  deployment relied on cache-miss-as-activity, call
+  `backend.get_config()` directly in the request-handling path,
+  or migrate the call site to `BotRegistry.get_bot()` (which now
+  bumps unconditionally).
 - Non-UTF-8 backend bytes for a knowledge-base config raise
   `IngestionConfigError` from
   `RAGKnowledgeBase._load_kb_config_from_backend`. Previously a

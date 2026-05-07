@@ -304,6 +304,7 @@ class TestDataKnobsRegistryAdapterProtocolCompliance:
             "register",
             "get",
             "get_config",
+            "peek_config",
             "exists",
             "unregister",
             "deactivate",
@@ -347,6 +348,95 @@ class TestDataKnobsRegistryAdapterProtocolCompliance:
         all_regs = await adapter.list_all()
         assert isinstance(all_regs, list)
         assert all(isinstance(r, Registration) for r in all_regs)
+
+
+class TestDataKnobsRegistryAdapterPeekConfig:
+    """Tests for non-mutating peek_config on the adapter."""
+
+    @pytest.fixture
+    async def adapter(self):
+        adapter = DataKnobsRegistryAdapter(backend_type="memory")
+        await adapter.initialize()
+        yield adapter
+        await adapter.close()
+
+    @pytest.mark.asyncio
+    async def test_peek_config_returns_config(self, adapter):
+        """peek_config returns the same config dict as get_config."""
+        config = {"llm": {"provider": "anthropic"}}
+        await adapter.register("peek-bot", config)
+
+        result = await adapter.peek_config("peek-bot")
+
+        assert result == config
+
+    @pytest.mark.asyncio
+    async def test_peek_config_nonexistent_returns_none(self, adapter):
+        """peek_config returns None for missing bot."""
+        result = await adapter.peek_config("missing")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_peek_config_does_not_bump_last_accessed_at(self, adapter):
+        """peek_config leaves last_accessed_at unchanged (contract guarantee).
+
+        Verifies via list_all() — which the adapter does not mutate.
+        """
+        await adapter.register("peek-bot", {"k": "v"})
+
+        baseline = next(
+            r for r in await adapter.list_all() if r.bot_id == "peek-bot"
+        ).last_accessed_at
+
+        await asyncio.sleep(0.01)
+        await adapter.peek_config("peek-bot")
+
+        after_peek = next(
+            r for r in await adapter.list_all() if r.bot_id == "peek-bot"
+        ).last_accessed_at
+        assert after_peek == baseline
+
+    @pytest.mark.asyncio
+    async def test_peek_config_does_not_bump_while_get_config_does(self, adapter):
+        """Pin the asymmetry: peek leaves the timestamp; get bumps it."""
+        await adapter.register("compare-bot", {"k": "v"})
+
+        baseline = next(
+            r for r in await adapter.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+
+        await asyncio.sleep(0.01)
+        await adapter.peek_config("compare-bot")
+        after_peek = next(
+            r for r in await adapter.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+        assert after_peek == baseline
+
+        await asyncio.sleep(0.01)
+        await adapter.get_config("compare-bot")
+        after_get = next(
+            r for r in await adapter.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+        assert after_get > baseline
+
+    @pytest.mark.asyncio
+    async def test_get_config_updates_last_accessed_at(self, adapter):
+        """Regression-pin: get_config bumps last_accessed_at.
+
+        Guards against silent drift toward making get_config non-touching
+        — the touching contract is the user-facing read's defining
+        property; that's why peek_config exists as the explicit non-
+        touching sibling.
+        """
+        reg1 = await adapter.register("touch-bot", {"k": "v"})
+        original_access = reg1.last_accessed_at
+
+        await asyncio.sleep(0.01)
+        await adapter.get_config("touch-bot")
+
+        reg2 = await adapter.get("touch-bot")
+        assert reg2.last_accessed_at > original_access
 
 
 class TestDataKnobsRegistryAdapterEdgeCases:

@@ -130,6 +130,11 @@ class InMemoryBackend:
     async def get_config(self, bot_id: str) -> dict[str, Any] | None:
         """Get just the config.
 
+        Note:
+            The returned dict is the same object stored internally.
+            Callers that mutate it will mutate stored state. Copy
+            before mutation if isolation is required.
+
         Args:
             bot_id: Bot identifier
 
@@ -138,6 +143,27 @@ class InMemoryBackend:
         """
         reg = await self.get(bot_id)
         return reg.config if reg else None
+
+    async def peek_config(self, bot_id: str) -> dict[str, Any] | None:
+        """Get just the config WITHOUT updating last_accessed_at.
+
+        Reads directly from internal storage; does not invoke ``get``.
+
+        Note:
+            As with :meth:`get_config`, the returned dict is aliased
+            to internal storage. Callers that mutate it will mutate
+            stored state. Copy before mutation if isolation is
+            required.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            Config dict if found, None otherwise
+        """
+        async with self._lock:
+            reg = self._registrations.get(bot_id)
+            return reg.config if reg else None
 
     async def exists(self, bot_id: str) -> bool:
         """Check if active registration exists.

@@ -271,7 +271,9 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
     async def get_raw_config(self, config_id: str) -> dict[str, Any] | None:
         """Get the raw (unresolved) configuration from backend.
 
-        Bypasses the cache and returns the original configuration.
+        Bypasses the cache and returns the original configuration
+        without registering an access — suitable for inspection,
+        audit, and re-resolution paths.
 
         Args:
             config_id: Configuration identifier
@@ -279,4 +281,4 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
         Returns:
             Raw configuration dict or None if not found
         """
-        return await self._backend.get_config(config_id)
+        return await self._backend.peek_config(config_id)

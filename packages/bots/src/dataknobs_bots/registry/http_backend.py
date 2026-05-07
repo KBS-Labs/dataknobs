@@ -291,6 +291,29 @@ class HTTPRegistryBackend(RegistryBackend):
         reg = await self.get(bot_id)
         return reg.config if reg else None
 
+    async def peek_config(self, bot_id: str) -> dict[str, Any] | None:
+        """Get config without client-side activity-tracking mutation.
+
+        ``HTTPRegistryBackend`` does not maintain client-side
+        ``last_accessed_at`` state — the server controls activity
+        tracking via its own contract. The Protocol's non-mutation
+        guarantee is therefore satisfied at the client surface
+        unconditionally; behavior is identical to :meth:`get_config`.
+
+        Servers that distinguish ``GET /configs/{id}`` from a
+        non-touching peek MAY surface that distinction via header,
+        query parameter, or sibling endpoint — that is a server-side
+        contract. This client deliberately does not impose a
+        wire-protocol distinction.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            Config dict if found, None otherwise
+        """
+        return await self.get_config(bot_id)
+
     async def exists(self, bot_id: str) -> bool:
         """Check if an active registration exists.
 

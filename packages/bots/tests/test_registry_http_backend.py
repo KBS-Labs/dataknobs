@@ -428,6 +428,100 @@ class TestHTTPRegistryBackendWithMockServer:
         assert excinfo.value.status == 500
 
     @pytest.mark.asyncio
+    async def test_peek_config_success(self, backend, mock_responses):
+        """peek_config returns the config dict for an existing bot."""
+        mock_responses.get(
+            "https://config-service.test/api/v1/configs/peek-bot",
+            payload={
+                "bot_id": "peek-bot",
+                "config": {"llm": {"provider": "anthropic"}},
+                "status": "active",
+            },
+        )
+
+        config = await backend.peek_config("peek-bot")
+
+        assert config == {"llm": {"provider": "anthropic"}}
+
+    @pytest.mark.asyncio
+    async def test_peek_config_not_found(self, backend, mock_responses):
+        """peek_config returns None when the bot is missing."""
+        mock_responses.get(
+            "https://config-service.test/api/v1/configs/missing",
+            status=404,
+        )
+
+        config = await backend.peek_config("missing")
+
+        assert config is None
+
+    @pytest.mark.asyncio
+    async def test_peek_config_does_not_impose_wire_protocol(
+        self, backend, mock_responses
+    ):
+        """peek_config issues a plain GET — no client-imposed wire protocol.
+
+        The HTTP backend does not maintain client-side ``last_accessed_at``
+        state, so the Protocol's non-mutation guarantee is satisfied
+        unconditionally without a transport-level peek hint. Servers
+        that want to distinguish peek from get must define their own
+        contract.
+
+        Pinned by inspecting the captured request URLs directly: the
+        ``aioresponses`` ``match_querystring`` default is False, so a
+        registered bare URL would still match a ``?peek=true`` request
+        — which means the response setup alone cannot pin the absence
+        of a query string. We assert it via the recorded request keys.
+        """
+        mock_responses.get(
+            "https://config-service.test/api/v1/configs/hint-bot",
+            payload={
+                "bot_id": "hint-bot",
+                "config": {"k": "v"},
+                "status": "active",
+            },
+        )
+
+        config = await backend.peek_config("hint-bot")
+        assert config == {"k": "v"}
+
+        # mock_responses.requests is keyed by (method, normalized_url)
+        # where the URL reflects whatever the client actually sent
+        # (query string included). Iterate and assert no request URL
+        # carries a query string at all.
+        request_keys = list(mock_responses.requests.keys())
+        assert request_keys, "expected at least one captured request"
+        for method, url in request_keys:
+            url_str = str(url)
+            assert "?" not in url_str, (
+                f"peek_config issued {method} {url_str} — the client "
+                "must not impose a wire-protocol query parameter on "
+                "the server"
+            )
+
+    @pytest.mark.asyncio
+    async def test_peek_config_works_in_read_only_mode(self, mock_responses):
+        """peek_config is a read; allowed in read-only mode."""
+        backend = HTTPRegistryBackend(
+            base_url="https://config-service.test/api/v1",
+            read_only=True,
+        )
+        await backend.initialize()
+        try:
+            mock_responses.get(
+                "https://config-service.test/api/v1/configs/ro-bot",
+                payload={
+                    "bot_id": "ro-bot",
+                    "config": {"k": "v"},
+                    "status": "active",
+                },
+            )
+            config = await backend.peek_config("ro-bot")
+            assert config == {"k": "v"}
+        finally:
+            await backend.close()
+
+    @pytest.mark.asyncio
     async def test_auth_header_sent(self, mock_responses):
         """Test that auth header is included in requests."""
         backend = HTTPRegistryBackend(

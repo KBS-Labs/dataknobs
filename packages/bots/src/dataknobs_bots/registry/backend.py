@@ -100,6 +100,39 @@ class RegistryBackend(Protocol):
         """
         ...
 
+    async def peek_config(self, bot_id: str) -> dict[str, Any] | None:
+        """Get just the config for a bot WITHOUT updating ``last_accessed_at``.
+
+        Companion to :meth:`get_config` for callers that need to read a
+        stored config as part of internal bookkeeping (e.g. preserving a
+        derived field across re-registration, audit-counting bound bots)
+        and don't want the read to register as user activity. Backends
+        MUST guarantee this method leaves any activity-tracking state
+        the backend itself maintains unchanged.
+
+        The contract scopes only to backend-local activity-tracking
+        state. Backends without local activity tracking — for example,
+        clients that delegate to a server which owns its own
+        access-tracking semantics — MAY satisfy this contract by
+        delegating to :meth:`get_config`; the non-mutation guarantee is
+        then trivially satisfied at the client surface. Such backends
+        deliberately do not impose a wire-protocol distinction (e.g. a
+        ``?peek=true`` query parameter) on the server; servers that
+        want to honor the distinction define their own contract
+        independently.
+
+        Use ``get_config`` for user-facing reads where "this bot was
+        accessed" is the right signal. Use ``peek_config`` for
+        infrastructure reads where it is not.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            Config dict if found, None otherwise
+        """
+        ...
+
     async def exists(self, bot_id: str) -> bool:
         """Check if an active registration exists.
 
