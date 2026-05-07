@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-05-07T17:56:27Z",
+  "timestamp": "2026-05-07T18:29:16Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots",
   "tested_packages": ["bots"],
   "package_hashes": {
-  "bots": "d25472c2b2a14864961f468448f63ba42776876d13445d85f5908ae57c0c66f0",
+  "bots": "634a557a4a018847fb75a14c3ca7a6020a23fb0e07cf5086e35603d8d633059b",
   "common": "34ee8fe47e170646f90dd495bd85c9b9466d2f0a19a8a40a7a144242f4b301e4",
   "config": "8fe8f0f6b7a04db1d196e4582daa1429619cc3c76cfe43f01cf347a4bf00ba78",
   "data": "c616b8030b5d5a2d46fa86e4dfc92e18863843a33090a191a463746c592fd575",
@@ -22,7 +22,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {

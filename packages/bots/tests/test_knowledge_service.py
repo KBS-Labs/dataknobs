@@ -8,6 +8,7 @@ This approach catches integration issues early and validates real behavior.
 """
 
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -312,11 +313,45 @@ class TestEnsureIngestionResult:
         assert "total_files" in d
         assert "total_chunks" in d
 
+    def test_completed_at_populated_on_construction_skipped(self) -> None:
+        """completed_at is populated on a skip construction (default factory)."""
+        before = datetime.now(timezone.utc)
+        result = EnsureIngestionResult(skipped=True, reason="already_populated")
+        after = datetime.now(timezone.utc)
+        assert result.completed_at is not None
+        assert before <= result.completed_at <= after
+
+    def test_completed_at_populated_on_construction_error(self) -> None:
+        """completed_at is populated on an error construction (default factory)."""
+        result = EnsureIngestionResult(error="boom")
+        assert result.completed_at is not None
+
+    def test_completed_at_explicit_value_preserved(self) -> None:
+        """Explicit completed_at at construction bypasses the default factory."""
+        explicit = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        result = EnsureIngestionResult(skipped=True, completed_at=explicit)
+        assert result.completed_at == explicit
+
+    def test_to_dict_includes_started_and_completed_timestamps(self) -> None:
+        """to_dict serializes started_at, completed_at, duration_seconds."""
+        result = EnsureIngestionResult(skipped=True, reason="already_populated")
+        d = result.to_dict()
+        assert "started_at" in d
+        assert "completed_at" in d
+        assert "duration_seconds" in d
+        assert d["completed_at"] is not None
+        assert isinstance(d["started_at"], str)  # iso format
+        assert isinstance(d["completed_at"], str)
+        assert isinstance(d["duration_seconds"], float)
+
+    def test_duration_seconds_is_non_negative(self) -> None:
+        """duration_seconds is computed from started_at to completed_at."""
+        result = EnsureIngestionResult(skipped=True, reason="already_populated")
+        assert result.duration_seconds >= 0.0
+
     @pytest.mark.asyncio
     async def test_from_ingestion_result(self) -> None:
         """Should convert IngestionResult to EnsureIngestionResult."""
-        from datetime import datetime, timezone
-
         # Create an IngestionResult (as from KnowledgeIngestionManager)
         ingestion_result = IngestionResult(
             domain_id="test-domain",
@@ -334,6 +369,11 @@ class TestEnsureIngestionResult:
         assert ensure_result.total_chunks == 25
         assert len(ensure_result.errors) == 1
         assert ensure_result.success is False  # Has errors
+        # The explicit timestamp passed through from the source
+        # IngestionResult must be preserved (no boundary coalescing
+        # when source.completed_at is set).
+        assert ensure_result.started_at == ingestion_result.started_at
+        assert ensure_result.completed_at == ingestion_result.completed_at
 
 
 class TestRAGKnowledgeBaseCount:
