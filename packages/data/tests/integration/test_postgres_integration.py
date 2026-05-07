@@ -82,8 +82,29 @@ class TestPostgresIntegration:
         success = db.delete(id)
         assert success is True
         assert db.read(id) is None
-        
+
         db.close()
+
+    def test_read_preserves_record_id(self, postgres_test_db):
+        """``db.read(id)`` returns a record where ``record.id == id``.
+
+        Pins the round-trip property that the async sibling silently
+        dropped pre-Item-114. Mirroring the assertion on the sync side
+        keeps both backends honest about id round-trip — a future
+        regression in either direction trips the parity test.
+        """
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
+        rec_id = f"test-id-sync-114-{uuid.uuid4().hex}"
+        try:
+            db.create(Record({"value": "hello"}, id=rec_id))
+
+            loaded = db.read(rec_id)
+            assert loaded is not None
+            assert loaded.id == rec_id
+            assert loaded.storage_id == rec_id
+        finally:
+            db.delete(rec_id)
+            db.close()
 
     def test_batch_operations_with_sample_data(self, postgres_test_db, sample_records):
         """Test batch operations with sample dataset."""
@@ -414,8 +435,80 @@ class TestPostgresAsyncIntegration:
         success = await db.delete(id)
         assert success is True
         assert await db.read(id) is None
-        
+
         await db.close()
+
+    async def test_async_read_preserves_record_id(self, postgres_test_db):
+        """Async ``db.read(id)`` returns a record where ``record.id == id``.
+
+        Reproduces the Item 114 bug: pre-fix, async ``_row_to_record``
+        copy-pasted the sync serializer body but dropped the
+        ``ensure_record_id`` step. ``record.id`` was whatever was in
+        the JSON payload — typically ``None`` for records written
+        without an explicit ``id`` field. Sync sibling has always
+        preserved it, so this test pins parity.
+        """
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
+        rec_id = f"test-id-async-114-{uuid.uuid4().hex}"
+        try:
+            await db.create(Record({"value": "hello"}, id=rec_id))
+
+            loaded = await db.read(rec_id)
+            assert loaded is not None
+            assert loaded.id == rec_id
+            assert loaded.storage_id == rec_id
+        finally:
+            await db.delete(rec_id)
+            await db.close()
+
+    async def test_async_search_preserves_record_id(self, postgres_test_db):
+        """``search()`` results carry populated ``record.id``.
+
+        Pre-Item-114 this worked via an explicit
+        ``record.storage_id = str(row['id'])`` compensation at the
+        search call site. Post-fix the compensation is removed and
+        ``_row_to_record`` populates the id directly. Pins the
+        post-fix behavior so a regression at either layer is caught.
+        """
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
+        rec_id = f"test-id-search-114-{uuid.uuid4().hex}"
+        try:
+            await db.create(Record({"value": "search-hello"}, id=rec_id))
+
+            results = await db.search(Query())
+            matched = [r for r in results if r.id == rec_id]
+            assert len(matched) == 1
+            assert matched[0].storage_id == rec_id
+        finally:
+            await db.delete(rec_id)
+            await db.close()
+
+    async def test_async_stream_read_preserves_record_id(self, postgres_test_db):
+        """Streamed records carry populated ``record.id``.
+
+        Pre-Item-114 ``stream_read`` was one of four async call sites
+        of ``_row_to_record`` that did NOT compensate with an explicit
+        ``storage_id`` assignment. Post-fix the delegation in
+        ``_row_to_record`` populates the id uniformly across all call
+        sites — pin one of them.
+        """
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
+        run_tag = uuid.uuid4().hex
+        rec_ids = [f"test-stream-114-{run_tag}-{i}" for i in range(3)]
+        try:
+            for rid in rec_ids:
+                await db.create(Record({"value": f"stream-{rid}"}, id=rid))
+
+            streamed_ids = set()
+            async for rec in db.stream_read():
+                if rec.id and rec.id.startswith(f"test-stream-114-{run_tag}-"):
+                    streamed_ids.add(rec.id)
+
+            assert streamed_ids == set(rec_ids)
+        finally:
+            for rid in rec_ids:
+                await db.delete(rid)
+            await db.close()
 
     async def test_async_batch_operations(self, postgres_test_db, sample_records):
         """Test async batch operations."""

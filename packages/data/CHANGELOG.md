@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`AsyncPostgresDatabase.stream_read()` no longer raises
+  `TypeError: 'async for' requires an object with __aiter__ method,
+  got Cursor`**. The cursor was constructed via
+  ``cursor = await conn.cursor(sql, *params)``, which returns an
+  asyncpg ``Cursor`` (intended for the explicit-fetch API
+  ``await cur.fetch(n)``) and is not an async iterator; the
+  subsequent ``async for row in cursor`` then failed before yielding
+  the first row. Pre-existing bug uncovered by the new
+  ``test_async_stream_read_preserves_record_id`` parity test added
+  for the Item 114 fix above (no prior test exercised
+  ``AsyncPostgresDatabase.stream_read`` against a real Postgres). Fix
+  iterates the ``CursorFactory`` returned by
+  ``conn.cursor(sql, *params)`` directly — matching the asyncpg
+  pattern used elsewhere in this file. ``stream_read`` now actually
+  streams rows from Postgres for the first time.
+- **`AsyncPostgresDatabase.read()`, `search()`, `vector_search()`,
+  `stream_read()`, and `_text_search_for_hybrid()` now return records
+  with populated `record.id` / `record.storage_id`**, matching the
+  sync `SyncPostgresDatabase` behavior. The async `_row_to_record`
+  previously copy-pasted the sync serializer body but dropped the
+  `ensure_record_id` step, so `await db.read(id)` returned records
+  where `record.id` / `record.storage_id` were whatever was in the
+  JSON payload (typically `None`) — silently differing from
+  `db.read(id)` on the sync backend for the same on-disk row.
+  `search()` was the only async call site that compensated explicitly
+  (`record.storage_id = str(row['id'])` after `_row_to_record`); the
+  other four were silently broken. The fix delegates the async
+  `_row_to_record` to the shared
+  `SQLRecordSerializer.row_to_record(dict(row))` static helper that
+  the sync sibling already uses, so all five async call sites now
+  populate the id uniformly. Strictly information-additive — the
+  sync backend has always returned the populated id, so consumers
+  working against both backends already handle the populated case.
+
+### Changed
+
+- **`SQLRecordSerializer.record_to_row(record, id=None)`** added as
+  the outbound counterpart to the existing
+  `SQLRecordSerializer.row_to_record(row)` static. Centralizes the
+  `id` / `data` / `metadata` row shape so sync and async SQL
+  backends do not duplicate the body and silently drift — the same
+  shape that produced the inbound `_row_to_record` divergence.
+- `SyncPostgresDatabase._record_to_row` and
+  `AsyncPostgresDatabase._record_to_row` are now one-line delegations
+  to `SQLRecordSerializer.record_to_row`. Behavior is unchanged
+  (both bodies were functionally identical pre-consolidation); the
+  consolidation eliminates the parallel-implementation drift surface.
+- The redundant `record.storage_id = str(row['id'])` assignment in
+  `AsyncPostgresDatabase.search()` (post-`_row_to_record`) has been
+  removed; `_row_to_record` now populates `storage_id` itself, so
+  the explicit assignment was a no-op.
+
 ## v0.4.16 - 2026-04-29
 
 ### Security

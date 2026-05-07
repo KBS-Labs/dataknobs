@@ -123,10 +123,10 @@ class SQLRecordSerializer:
     @staticmethod
     def row_to_record(row: dict[str, Any]) -> Record:
         """Convert a database row to a Record.
-        
+
         Args:
             row: Database row as dictionary with 'id', 'data' and optional 'metadata' fields
-            
+
         Returns:
             Reconstructed Record object with ID set
         """
@@ -146,6 +146,35 @@ class SQLRecordSerializer:
             record = ensure_record_id(record, row["id"])
 
         return record
+
+    @staticmethod
+    def record_to_row(
+        record: Record, id: str | None = None
+    ) -> dict[str, Any]:
+        """Convert a Record to a database row.
+
+        Outbound counterpart to :meth:`row_to_record`. Centralizes the
+        ``id`` / ``data`` / ``metadata`` shape so sync and async SQL
+        backends do not duplicate the body and silently drift (the
+        same shape that produced the inbound `_row_to_record`
+        divergence).
+
+        Args:
+            record: Record to serialize.
+            id: Row id; if ``None``, a fresh ``str(uuid.uuid4())``
+                (hyphenated 36-character form) is used.
+
+        Returns:
+            Dict with keys ``id`` (str), ``data`` (JSON str), and
+            ``metadata`` (JSON str or ``None``).
+        """
+        return {
+            "id": id or str(uuid.uuid4()),
+            "data": SQLRecordSerializer.record_to_json(record),
+            "metadata": (
+                json.dumps(record.metadata) if record.metadata else None
+            ),
+        }
 
 
 class SQLQueryBuilder:
