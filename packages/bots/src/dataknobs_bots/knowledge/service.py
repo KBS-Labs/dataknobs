@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 class EnsureIngestionResult:
     """Result of an ensure_ingested operation.
 
+    Invariants:
+        ``completed_at`` is populated on every terminal state — skip,
+        error, and success — so consumers can rely on it as an
+        "operation finished" timestamp regardless of which path was
+        taken. Use :meth:`finish` at every return site to enforce this.
+        It is only ``None`` if a caller constructs the dataclass
+        directly without invoking ``finish()``.
+
     Relationship to IngestionResult:
     --------------------------------
     DataKnobs has TWO result types for ingestion at different abstraction levels:
@@ -81,6 +89,16 @@ class EnsureIngestionResult:
     error: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
+
+    def finish(self) -> EnsureIngestionResult:
+        """Stamp ``completed_at`` on the first call; idempotent thereafter.
+
+        Returns ``self`` so it can be chained at return sites:
+        ``return EnsureIngestionResult(skipped=True, reason="...").finish()``.
+        """
+        if self.completed_at is None:
+            self.completed_at = datetime.now(timezone.utc)
+        return self
 
     @property
     def success(self) -> bool:
@@ -196,8 +214,7 @@ class KnowledgeIngestionService:
         documents_path = kb_config.get("documents_path")
         if not documents_path:
             result.error = "No documents_path specified in knowledge_base config"
-            result.completed_at = datetime.now(timezone.utc)
-            return result
+            return result.finish()
 
         # Resolve path
         docs_path = Path(documents_path)
@@ -210,8 +227,7 @@ class KnowledgeIngestionService:
 
         if not docs_path.exists():
             result.error = f"Documents path does not exist: {documents_path}"
-            result.completed_at = datetime.now(timezone.utc)
-            return result
+            return result.finish()
 
         document_pattern = kb_config.get("document_pattern", "**/*.md")
 
@@ -247,8 +263,7 @@ class KnowledgeIngestionService:
             self._logger.error("Ingestion failed: %s", e)
             result.error = str(e)
 
-        result.completed_at = datetime.now(timezone.utc)
-        return result
+        return result.finish()
 
     async def ensure_ingested(
         self,
@@ -274,7 +289,7 @@ class KnowledgeIngestionService:
             return EnsureIngestionResult(
                 skipped=True,
                 reason="knowledge_base_disabled",
-            )
+            ).finish()
 
         # Check if we need to ingest
         if not force:
@@ -284,7 +299,7 @@ class KnowledgeIngestionService:
                 return EnsureIngestionResult(
                     skipped=True,
                     reason="already_populated",
-                )
+                ).finish()
 
         # Run ingestion
         self._logger.info("Running knowledge base ingestion")
