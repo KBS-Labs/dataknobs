@@ -81,8 +81,12 @@ registration = await backend.register("my-bot", {
 })
 print(f"Registered at: {registration.created_at}")
 
-# Get config
+# Get config (registers an access — bumps last_accessed_at)
 config = await backend.get_config("my-bot")
+
+# Peek config (no-touch read — for inspection / audit / bookkeeping
+# paths that should not register as user activity)
+config = await backend.peek_config("my-bot")
 
 # List all active
 active = await backend.list_active()
@@ -146,6 +150,13 @@ await backend.initialize()
 # Get config
 config = await backend.get_config("my-bot")
 
+# Peek config: identical wire call to get_config — the HTTP backend
+# has no client-side activity state to skip, so non-mutation is
+# satisfied trivially at the client surface. Server-side activity
+# tracking remains the server's contract; this client deliberately
+# does not impose a wire-protocol distinction (e.g. ?peek=true).
+config = await backend.peek_config("my-bot")
+
 # List all
 configs = await backend.list_all()
 ```
@@ -159,6 +170,29 @@ POST /bots              → Create registration
 PUT  /bots/{bot_id}     → Update registration
 DELETE /bots/{bot_id}   → Delete registration
 ```
+
+### Reading configs: `get_config` vs `peek_config`
+
+Every `RegistryBackend` exposes two read APIs that differ only in
+whether they register as user activity:
+
+| Method | Updates `last_accessed_at`? | Use for |
+|--------|-----------------------------|---------|
+| `get_config(bot_id)` | Yes (where the backend tracks activity locally) | User-facing reads — the canonical "this bot was used" signal |
+| `peek_config(bot_id)` | No (at the client surface) | Inspection, audit, hot-reload polling, admin tooling — reads that should not register as user activity |
+
+The non-mutation guarantee for `peek_config` scopes to **backend-local
+activity-tracking state**. Backends without local activity tracking
+(notably `HTTPRegistryBackend`, where the server owns its own
+access-tracking semantics) MAY satisfy the contract by delegating to
+`get_config` — the guarantee then holds trivially at the client
+surface. Servers that want to distinguish a non-touching peek define
+that distinction in their own contract; the HTTP client does not
+impose one on the wire.
+
+`BotRegistry.get_config()` routes through `peek_config` for inspection
+paths; use `BotRegistry.get_bot()` for user-facing bot resolution
+(which always registers an access).
 
 ### Factory Function
 

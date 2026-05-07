@@ -130,6 +130,10 @@ class InMemoryBackend:
     async def get_config(self, bot_id: str) -> dict[str, Any] | None:
         """Get just the config.
 
+        Updates ``last_accessed_at`` via :meth:`get` (registers an
+        access). For non-touching inspection reads, use
+        :meth:`peek_config`.
+
         Note:
             The returned dict is the same object stored internally.
             Callers that mutate it will mutate stored state. Copy

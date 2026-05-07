@@ -359,11 +359,23 @@ class BotRegistry:
         """Get stored configuration for a bot.
 
         Returns the portable configuration as stored, without
-        environment resolution applied. **Does not register an
-        access** — this is an inspection method, intended for admin
-        / audit / introspection paths. Use :meth:`get_bot` for
-        user-facing bot resolution (which does register an access
-        through its caching layer).
+        environment resolution applied. Routes through
+        :meth:`RegistryBackend.peek_config` so the read does not
+        register a client-side access — this is an inspection method,
+        intended for admin / audit / introspection paths. Use
+        :meth:`get_bot` for user-facing bot resolution (which does
+        register an access through its caching layer).
+
+        Note:
+            The non-mutation guarantee scopes to **backend-local**
+            activity-tracking state. Backends without local activity
+            tracking — notably ``HTTPRegistryBackend``, whose
+            ``peek_config`` delegates to ``get_config`` because the
+            server owns its own access-tracking semantics — may
+            still register a server-side access on this read. If
+            full no-touch reads (including server-side) are required
+            against an HTTP backend, that distinction belongs in the
+            server's wire contract.
 
         Args:
             bot_id: Bot identifier

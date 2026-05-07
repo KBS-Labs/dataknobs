@@ -282,6 +282,13 @@ class HTTPRegistryBackend(RegistryBackend):
     async def get_config(self, bot_id: str) -> dict[str, Any] | None:
         """Get just the config dict for a bot.
 
+        Server-side activity-tracking semantics apply. This client
+        does not maintain client-side ``last_accessed_at`` state, so
+        whether this read registers as user activity is determined
+        entirely by the remote server's contract. :meth:`peek_config`
+        intentionally has the same wire behavior (see its docstring
+        for the rationale).
+
         Args:
             bot_id: Bot identifier
 
