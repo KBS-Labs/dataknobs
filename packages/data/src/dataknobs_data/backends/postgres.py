@@ -416,9 +416,6 @@ class SyncPostgresDatabase(
             row_dict = row.to_dict()
             record = self._row_to_record(row_dict)
 
-            # Populate storage_id from database ID
-            record.storage_id = str(row_dict['id'])
-
             # Apply field projection if specified
             if query.fields:
                 record = record.project(query.fields)
@@ -1476,12 +1473,12 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch update query builder
-        # It already produces positional parameters ($1, $2) for PostgreSQL
+        # Use the shared batch update query builder. It already
+        # produces positional parameters ($1, $2) AND appends
+        # ``RETURNING id`` when ``dialect="postgres"``
+        # (sql_base.py:559-561) — do NOT append a second ``RETURNING
+        # id`` here, that produces invalid SQL.
         query, params = query_builder.build_batch_update_query(updates)
-
-        # Add RETURNING clause for PostgreSQL to get updated IDs
-        query = query.rstrip() + " RETURNING id"
 
         # Execute the batch update
         async with self._pool.acquire() as conn:

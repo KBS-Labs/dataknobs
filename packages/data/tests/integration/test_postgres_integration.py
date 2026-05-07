@@ -510,6 +510,39 @@ class TestPostgresAsyncIntegration:
                 await db.delete(rid)
             await db.close()
 
+    async def test_async_update_batch_executes_without_sql_syntax_error(
+        self, postgres_test_db
+    ):
+        """``update_batch`` produces valid SQL.
+
+        Pre-fix, the query was built by
+        ``SQLQueryBuilder.build_batch_update_query`` (which already
+        appends ``RETURNING id`` for the postgres dialect at
+        sql_base.py:559-561) and then ``" RETURNING id"`` was appended
+        a *second* time at postgres.py:1484, producing invalid SQL
+        ending in ``RETURNING id RETURNING id``. asyncpg raised
+        ``PostgresSyntaxError`` before any row was updated. No prior
+        test exercised ``AsyncPostgresDatabase.update_batch`` (only
+        sqlite/duckdb async ``update_batch`` had coverage), so the
+        bug had been latent indefinitely.
+        """
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
+        rec_id = f"test-update-batch-{uuid.uuid4().hex}"
+        try:
+            await db.create(Record({"value": "original"}, id=rec_id))
+
+            results = await db.update_batch([
+                (rec_id, Record({"value": "updated"}, id=rec_id)),
+            ])
+            assert results == [True]
+
+            loaded = await db.read(rec_id)
+            assert loaded is not None
+            assert loaded.data["value"] == "updated"
+        finally:
+            await db.delete(rec_id)
+            await db.close()
+
     async def test_async_batch_operations(self, postgres_test_db, sample_records):
         """Test async batch operations."""
         db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
