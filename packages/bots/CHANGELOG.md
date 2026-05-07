@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `EnsureIngestionResult.duration_seconds` property — counterpart
+  to `IngestionResult.duration_seconds`. Computes
+  `completed_at - started_at` in seconds. Returns `float` (not
+  `float | None`): `EnsureIngestionResult.completed_at` is typed
+  as `datetime` with a construction-time default factory, so a
+  terminal result's duration is always defined.
 - `RegistryBackend.peek_config(bot_id)` — non-mutating sibling of
   `get_config`. Returns the stored config dict without updating
   `last_accessed_at`, for inspection / audit / bookkeeping reads
@@ -56,6 +62,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IngestionConfigError` from
   `RAGKnowledgeBase._load_kb_config_from_backend`. Previously a
   stray `UnicodeDecodeError` could escape this path.
+- `EnsureIngestionResult.completed_at` is typed as `datetime`
+  (non-optional) with a construction-time default factory. Every
+  terminal state — skip, error, success — produced by
+  `KnowledgeIngestionService.ensure_ingested`,
+  `KnowledgeIngestionService.ingest_from_config`, and
+  `AutoIngestionMixin._ensure_knowledge_base_ingested` carries a
+  real timestamp; consumers that serialize via `to_dict()` see a
+  consistent `"completed_at"` on every result. The
+  ``IngestionResult`` → ``EnsureIngestionResult`` boundary in
+  `from_ingestion_result` coalesces a not-yet-completed source
+  (`IngestionResult.completed_at is None`) to
+  `datetime.now(timezone.utc)` rather than weakening the
+  invariant.
+- `EnsureIngestionResult.to_dict()` now serializes `started_at`
+  (ISO format), `completed_at` (ISO format), and
+  `duration_seconds` — bringing it into shape parity with
+  `IngestionResult.to_dict()`. Strict superset of prior keys; no
+  removed keys.
 
 ### Internal
 - `RAGKnowledgeBase._load_kb_config_from_backend` uses

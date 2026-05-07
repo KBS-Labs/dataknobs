@@ -43,12 +43,17 @@ class EnsureIngestionResult:
     """Result of an ensure_ingested operation.
 
     Invariants:
-        ``completed_at`` is populated on every terminal state — skip,
-        error, and success — so consumers can rely on it as an
-        "operation finished" timestamp regardless of which path was
-        taken. Use :meth:`finish` at every return site to enforce this.
-        It is only ``None`` if a caller constructs the dataclass
-        directly without invoking ``finish()``.
+        ``completed_at`` is non-``None`` on every constructed result —
+        skip, error, and success. The invariant is encoded in the
+        field type itself: ``completed_at: datetime`` with a
+        construction-time default factory. Consumers can rely on
+        ``completed_at`` and :attr:`duration_seconds` without
+        ``None`` checks. The accumulator pattern in
+        :meth:`KnowledgeIngestionService.ingest_from_config`
+        overwrites ``completed_at`` with the actual end-of-work time
+        before returning, so duration measurements remain precise
+        for long-running ingests rather than reflecting the
+        construction stamp.
 
     Relationship to IngestionResult:
     --------------------------------
@@ -88,22 +93,28 @@ class EnsureIngestionResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: datetime | None = None
-
-    def finish(self) -> EnsureIngestionResult:
-        """Stamp ``completed_at`` on the first call; idempotent thereafter.
-
-        Returns ``self`` so it can be chained at return sites:
-        ``return EnsureIngestionResult(skipped=True, reason="...").finish()``.
-        """
-        if self.completed_at is None:
-            self.completed_at = datetime.now(timezone.utc)
-        return self
+    completed_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
     @property
     def success(self) -> bool:
         """Check if operation succeeded (skipped counts as success)."""
         return self.skipped or (self.error is None and len(self.errors) == 0)
+
+    @property
+    def duration_seconds(self) -> float:
+        """Duration in seconds between ``started_at`` and ``completed_at``.
+
+        Counterpart to :attr:`IngestionResult.duration_seconds`.
+        ``IngestionResult`` models a long-running operation whose
+        ``completed_at`` may be ``None`` while in flight, so its
+        duration is ``float | None``. ``EnsureIngestionResult`` models
+        a terminal state and its field-level invariant guarantees
+        ``completed_at`` is always set, so the duration is always a
+        real ``float``.
+        """
+        return (self.completed_at - self.started_at).total_seconds()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -114,6 +125,9 @@ class EnsureIngestionResult:
             "total_chunks": self.total_chunks,
             "errors": self.errors,
             "error": self.error,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat(),
+            "duration_seconds": self.duration_seconds,
             "success": self.success,
         }
 
@@ -124,18 +138,25 @@ class EnsureIngestionResult:
     ) -> EnsureIngestionResult:
         """Create from a KnowledgeIngestionManager IngestionResult.
 
+        ``IngestionResult.completed_at`` is ``datetime | None`` because
+        the type models in-flight operations. ``EnsureIngestionResult``
+        is terminal-state only, so when the source has not yet
+        completed we stamp ``datetime.now(timezone.utc)`` at the
+        boundary rather than weakening the invariant.
+
         Args:
             result: IngestionResult from KnowledgeIngestionManager
 
         Returns:
             Equivalent EnsureIngestionResult
         """
+        completed_at = result.completed_at or datetime.now(timezone.utc)
         return cls(
             total_files=result.files_processed,
             total_chunks=result.chunks_created,
             errors=result.errors,
             started_at=result.started_at,
-            completed_at=result.completed_at,
+            completed_at=completed_at,
         )
 
 
@@ -214,7 +235,8 @@ class KnowledgeIngestionService:
         documents_path = kb_config.get("documents_path")
         if not documents_path:
             result.error = "No documents_path specified in knowledge_base config"
-            return result.finish()
+            result.completed_at = datetime.now(timezone.utc)
+            return result
 
         # Resolve path
         docs_path = Path(documents_path)
@@ -227,7 +249,8 @@ class KnowledgeIngestionService:
 
         if not docs_path.exists():
             result.error = f"Documents path does not exist: {documents_path}"
-            return result.finish()
+            result.completed_at = datetime.now(timezone.utc)
+            return result
 
         document_pattern = kb_config.get("document_pattern", "**/*.md")
 
@@ -263,7 +286,8 @@ class KnowledgeIngestionService:
             self._logger.error("Ingestion failed: %s", e)
             result.error = str(e)
 
-        return result.finish()
+        result.completed_at = datetime.now(timezone.utc)
+        return result
 
     async def ensure_ingested(
         self,
@@ -289,7 +313,7 @@ class KnowledgeIngestionService:
             return EnsureIngestionResult(
                 skipped=True,
                 reason="knowledge_base_disabled",
-            ).finish()
+            )
 
         # Check if we need to ingest
         if not force:
@@ -299,7 +323,7 @@ class KnowledgeIngestionService:
                 return EnsureIngestionResult(
                     skipped=True,
                     reason="already_populated",
-                ).finish()
+                )
 
         # Run ingestion
         self._logger.info("Running knowledge base ingestion")
