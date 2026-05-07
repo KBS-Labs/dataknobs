@@ -225,6 +225,54 @@ class TestKnowledgeIngestionService:
         assert result.error is not None
         assert "does not exist" in result.error
 
+    @pytest.mark.asyncio
+    async def test_ensure_ingested_disabled_sets_completed_at(
+        self,
+        real_knowledge_base: RAGKnowledgeBase,
+    ) -> None:
+        """Disabled-skip path populates completed_at like the success path does."""
+        service = KnowledgeIngestionService()
+        result = await service.ensure_ingested(
+            real_knowledge_base, {"enabled": False}
+        )
+        assert result.skipped is True
+        assert result.reason == "knowledge_base_disabled"
+        assert result.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_ensure_ingested_already_populated_sets_completed_at(
+        self,
+        real_knowledge_base: RAGKnowledgeBase,
+    ) -> None:
+        """Already-populated skip path populates completed_at."""
+        service = KnowledgeIngestionService()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            doc_path = Path(tmp_dir) / "existing.md"
+            doc_path.write_text("# Existing\n\nAlready here.")
+            await real_knowledge_base.load_markdown_document(str(doc_path))
+
+            result = await service.ensure_ingested(
+                real_knowledge_base,
+                {"enabled": True, "documents_path": tmp_dir},
+            )
+            assert result.skipped is True
+            assert result.reason == "already_populated"
+            assert result.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_ingest_from_config_no_path_sets_completed_at(
+        self,
+        real_knowledge_base: RAGKnowledgeBase,
+    ) -> None:
+        """No-documents_path error path populates completed_at (regression guard)."""
+        service = KnowledgeIngestionService()
+        result = await service.ingest_from_config(
+            real_knowledge_base, {"enabled": True}
+        )
+        assert result.error is not None
+        assert result.completed_at is not None
+
 
 class TestEnsureIngestionResult:
     """Tests for EnsureIngestionResult dataclass."""

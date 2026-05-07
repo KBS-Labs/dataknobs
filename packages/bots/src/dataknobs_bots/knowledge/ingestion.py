@@ -28,6 +28,12 @@ class IngestionResult:
 
     Contains statistics about files processed, chunks created, and any errors
     encountered during ingestion.
+
+    Invariants:
+        ``completed_at`` is populated on every terminal state — call
+        :meth:`finish` at every return site (or in a ``finally`` block)
+        to enforce this. ``IngestionResult`` is the lower-level sibling
+        of :class:`EnsureIngestionResult` and shares this invariant.
     """
 
     domain_id: str
@@ -37,6 +43,16 @@ class IngestionResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
+
+    def finish(self) -> IngestionResult:
+        """Stamp ``completed_at`` on the first call; idempotent thereafter.
+
+        Returns ``self`` so it can be chained at return sites or used
+        from a ``finally`` block.
+        """
+        if self.completed_at is None:
+            self.completed_at = datetime.now(timezone.utc)
+        return self
 
     @property
     def success(self) -> bool:
@@ -194,7 +210,7 @@ class KnowledgeIngestionManager:
             await self._source.set_ingestion_status(domain_id, "error", str(e))
             raise
         finally:
-            result.completed_at = datetime.now(timezone.utc)
+            result.finish()
 
         return result
 
