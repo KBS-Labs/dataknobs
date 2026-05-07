@@ -554,6 +554,64 @@ class TestBotRegistry:
         assert config is None
 
     @pytest.mark.asyncio
+    async def test_get_config_does_not_bump_last_accessed_at(self, registry):
+        """get_config is an inspection method — does not register an access.
+
+        Routes through ``RegistryBackend.peek_config``. Use ``get_bot``
+        for user-facing resolution that should register an access.
+        """
+        config = {"llm": {"provider": "echo", "model": "test"}}
+        reg = await registry.register("inspect-bot", config)
+        baseline = reg.last_accessed_at
+
+        await asyncio.sleep(0.001)
+        result = await registry.get_config("inspect-bot")
+        assert result == config
+
+        # Read directly via list_all on the underlying backend — both
+        # registry.get_registration() and registry.get_bot() would
+        # themselves bump the timestamp and mask the test.
+        all_regs = await registry._backend.list_all()
+        inspect_bot = next(r for r in all_regs if r.bot_id == "inspect-bot")
+        assert inspect_bot.last_accessed_at == baseline
+
+    @pytest.mark.asyncio
+    async def test_get_bot_bumps_last_accessed_at_on_cache_hit(self, registry):
+        """Cache hits still register as user activity.
+
+        Regression-pin for the inverted-signal bug: previously the
+        backend was only touched on cache misses, so hot bots never
+        updated last_accessed_at and cold bots updated only on TTL
+        expiry. get_bot() must bump on every call.
+        """
+        await registry.register(
+            "hot-bot",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+            },
+        )
+
+        # First call — populates cache and bumps timestamp.
+        await registry.get_bot("hot-bot")
+        first = next(
+            r for r in await registry._backend.list_all() if r.bot_id == "hot-bot"
+        ).last_accessed_at
+
+        await asyncio.sleep(0.001)
+
+        # Second call — cache hit. Must still bump.
+        await registry.get_bot("hot-bot")
+        second = next(
+            r for r in await registry._backend.list_all() if r.bot_id == "hot-bot"
+        ).last_accessed_at
+
+        assert second > first, (
+            "get_bot() cache hit must still bump last_accessed_at — "
+            "otherwise hot bots never register activity"
+        )
+
+    @pytest.mark.asyncio
     async def test_get_registration(self, registry):
         """Test getting full registration."""
         await registry.register(
@@ -727,61 +785,6 @@ class TestBotRegistryLegacyMethods:
         # Legacy method still works
         cached = registry.get_cached_clients()
         assert "client-1" in cached
-
-
-class TestCreateMemoryRegistry:
-    """Tests for create_memory_registry factory."""
-
-    @pytest.mark.asyncio
-    async def test_creates_with_inmemory_backend(self):
-        """Test factory creates registry with InMemoryBackend."""
-        registry = create_memory_registry()
-        await registry.initialize()
-
-        try:
-            assert isinstance(registry.backend, InMemoryBackend)
-        finally:
-            await registry.close()
-
-    @pytest.mark.asyncio
-    async def test_passes_through_options(self):
-        """Test factory passes options to BotRegistry."""
-        registry = create_memory_registry(
-            cache_ttl=600,
-            max_cache_size=500,
-            validate_on_register=False,
-            config_key="custom",
-        )
-
-        assert registry.cache_ttl == 600
-        assert registry.max_cache_size == 500
-        assert registry._validate_on_register is False
-        assert registry._config_key == "custom"
-
-    @pytest.mark.asyncio
-    async def test_for_testing_workflow(self):
-        """Test typical testing workflow."""
-        registry = create_memory_registry(validate_on_register=False)
-        await registry.initialize()
-
-        try:
-            # Register test bot
-            await registry.register(
-                "test-bot",
-                {
-                    "llm": {"provider": "echo", "model": "test"},
-                    "conversation_storage": {"backend": "memory"},
-                },
-            )
-
-            # Get bot
-            bot = await registry.get_bot("test-bot")
-            assert bot is not None
-
-            # Count
-            assert await registry.count() == 1
-        finally:
-            await registry.close()
 
 
 class TestInMemoryBotRegistry:

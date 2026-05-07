@@ -307,6 +307,16 @@ class BotRegistry:
             ```
         """
         async with self._lock:
+            # Touch the backend on every call so last_accessed_at
+            # reflects user-facing usage. Cache hits are still user
+            # activity; doing the touch only on cache misses produced
+            # an inverted signal (hot bots never updated, cold bots
+            # only on TTL expiry). The config returned here is also
+            # used by the cache-miss path below.
+            config = await self._backend.get_config(bot_id)
+            if config is None:
+                raise KeyError(f"No bot configuration found for: {bot_id}")
+
             # Check cache
             if not force_refresh and bot_id in self._cache:
                 bot, cached_at = self._cache[bot_id]
@@ -318,11 +328,6 @@ class BotRegistry:
             if bot_id in self._cache:
                 old_bot, _ = self._cache.pop(bot_id)
                 await self._close_bot(bot_id, old_bot)
-
-            # Load configuration from backend
-            config = await self._backend.get_config(bot_id)
-            if config is None:
-                raise KeyError(f"No bot configuration found for: {bot_id}")
 
             # Create bot with environment resolution if configured
             if self._environment is not None:
@@ -354,7 +359,23 @@ class BotRegistry:
         """Get stored configuration for a bot.
 
         Returns the portable configuration as stored, without
-        environment resolution applied.
+        environment resolution applied. Routes through
+        :meth:`RegistryBackend.peek_config` so the read does not
+        register a client-side access — this is an inspection method,
+        intended for admin / audit / introspection paths. Use
+        :meth:`get_bot` for user-facing bot resolution (which does
+        register an access through its caching layer).
+
+        Note:
+            The non-mutation guarantee scopes to **backend-local**
+            activity-tracking state. Backends without local activity
+            tracking — notably ``HTTPRegistryBackend``, whose
+            ``peek_config`` delegates to ``get_config`` because the
+            server owns its own access-tracking semantics — may
+            still register a server-side access on this read. If
+            full no-touch reads (including server-side) are required
+            against an HTTP backend, that distinction belongs in the
+            server's wire contract.
 
         Args:
             bot_id: Bot identifier
@@ -362,7 +383,7 @@ class BotRegistry:
         Returns:
             Configuration dict if found, None otherwise
         """
-        return await self._backend.get_config(bot_id)
+        return await self._backend.peek_config(bot_id)
 
     async def get_registration(self, bot_id: str) -> Registration | None:
         """Get full registration including metadata.

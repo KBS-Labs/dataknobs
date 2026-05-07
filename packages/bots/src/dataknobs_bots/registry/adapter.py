@@ -259,6 +259,25 @@ class DataKnobsRegistryAdapter:
 
         return record.get_value("config")
 
+    async def peek_config(self, bot_id: str) -> dict[str, Any] | None:
+        """Get just the config dict WITHOUT updating last_accessed_at.
+
+        Skips the trailing ``self._db.update`` that ``get_config`` performs
+        to bump the access timestamp. Suitable for infrastructure reads
+        (e.g. preserving a derived field across re-registration) that
+        should not register as user activity.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            Config dict if found, None otherwise
+        """
+        record = await self._db.read(bot_id)
+        if not record:
+            return None
+        return record.get_value("config")
+
     async def exists(self, bot_id: str) -> bool:
         """Check if an active registration exists.
 

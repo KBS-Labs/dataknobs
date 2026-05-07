@@ -211,8 +211,15 @@ class CachingRegistryManager(ABC, Generic[T]):
                         )
                     del self._cache[instance_id]
 
-            # Load configuration from backend
-            config = await self._backend.get_config(instance_id)
+            # Load configuration from backend. Use peek_config rather than
+            # get_config: the cache-miss read is bookkeeping, not a user-
+            # activity event in its own right. Cache hits already bypass the
+            # backend entirely, so bumping last_accessed_at on the miss path
+            # produced an inverted activity signal (hot bots never updated,
+            # cold bots updated only on TTL expiry). Higher-level activity
+            # tracking belongs at the get_or_create caller, not the storage
+            # round-trip.
+            config = await self._backend.peek_config(instance_id)
             if config is None:
                 raise KeyError(f"No configuration found for: {instance_id}")
 

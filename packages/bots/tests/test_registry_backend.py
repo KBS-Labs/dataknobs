@@ -1,5 +1,6 @@
 """Tests for registry backends."""
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -54,8 +55,6 @@ class TestInMemoryBackend:
         original_created = reg1.created_at
 
         # Wait a tiny bit to ensure timestamps differ
-        import asyncio
-
         await asyncio.sleep(0.001)
 
         # Update
@@ -104,8 +103,6 @@ class TestInMemoryBackend:
         await backend.initialize()
         reg1 = await backend.register("access-bot", {})
         original_access = reg1.last_accessed_at
-
-        import asyncio
 
         await asyncio.sleep(0.001)
 
@@ -273,14 +270,99 @@ class TestInMemoryBackend:
         assert "count=" in repr_str
 
 
+class TestInMemoryBackendPeekConfig:
+    """Tests for non-mutating peek_config."""
+
+    @pytest.fixture
+    def backend(self):
+        return InMemoryBackend()
+
+    @pytest.mark.asyncio
+    async def test_peek_config_returns_config(self, backend):
+        """peek_config returns the same config dict as get_config."""
+        await backend.initialize()
+        await backend.register("peek-bot", {"key": "value"})
+
+        config = await backend.peek_config("peek-bot")
+
+        assert config == {"key": "value"}
+
+    @pytest.mark.asyncio
+    async def test_peek_config_nonexistent_returns_none(self, backend):
+        """peek_config returns None for missing bot."""
+        await backend.initialize()
+
+        config = await backend.peek_config("missing")
+
+        assert config is None
+
+    @pytest.mark.asyncio
+    async def test_peek_config_does_not_bump_last_accessed_at(self, backend):
+        """peek_config leaves last_accessed_at unchanged (contract guarantee)."""
+        await backend.initialize()
+        reg = await backend.register("peek-bot", {"key": "value"})
+        original_access = reg.last_accessed_at
+
+        await asyncio.sleep(0.001)
+        await backend.peek_config("peek-bot")
+
+        # Re-read via list_all (also non-mutating in-memory) to inspect timestamp
+        all_regs = await backend.list_all()
+        peek_bot = next(r for r in all_regs if r.bot_id == "peek-bot")
+        assert peek_bot.last_accessed_at == original_access
+
+    @pytest.mark.asyncio
+    async def test_peek_config_does_not_bump_while_get_config_does(self, backend):
+        """Pin the asymmetry: peek does not touch, get does."""
+        await backend.initialize()
+        await backend.register("compare-bot", {"k": "v"})
+
+        # Snapshot baseline access time via list_all
+        baseline = next(
+            r for r in await backend.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+
+        await asyncio.sleep(0.001)
+        await backend.peek_config("compare-bot")
+        after_peek = next(
+            r for r in await backend.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+        assert after_peek == baseline  # peek did NOT touch
+
+        await asyncio.sleep(0.001)
+        await backend.get_config("compare-bot")
+        after_get = next(
+            r for r in await backend.list_all() if r.bot_id == "compare-bot"
+        ).last_accessed_at
+        assert after_get > baseline  # get DID touch
+
+    @pytest.mark.asyncio
+    async def test_get_config_updates_last_accessed_at(self, backend):
+        """Regression-pin: get_config bumps last_accessed_at.
+
+        Guards against silent drift toward making get_config non-touching
+        — the touching contract is the user-facing read's defining
+        property; that's why peek_config exists as the explicit non-
+        touching sibling.
+        """
+        await backend.initialize()
+        reg1 = await backend.register("touch-bot", {"k": "v"})
+        original_access = reg1.last_accessed_at
+
+        await asyncio.sleep(0.001)
+        await backend.get_config("touch-bot")
+
+        # get() also touches; we use it here to read the current timestamp.
+        reg2 = await backend.get("touch-bot")
+        assert reg2.last_accessed_at > original_access
+
+
 class TestInMemoryBackendConcurrency:
     """Tests for InMemoryBackend thread safety."""
 
     @pytest.mark.asyncio
     async def test_concurrent_registers(self):
         """Test concurrent registration is thread-safe."""
-        import asyncio
-
         backend = InMemoryBackend()
         await backend.initialize()
 
@@ -295,8 +377,6 @@ class TestInMemoryBackendConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_read_write(self):
         """Test concurrent reads and writes."""
-        import asyncio
-
         backend = InMemoryBackend()
         await backend.initialize()
 
