@@ -340,11 +340,10 @@ class TestDatabaseStorageFactory:
     async def test_factory_path_uses_canonical_backend_enum(self) -> None:
         """Item 116: ``_setup_backend`` reads from ``StorageConfig.backend``.
 
-        Reproduces Bug B15 (Gabe production, 2026-05-01): when
-        ``connection_params`` does NOT redundantly carry a ``'type'``
-        key, the prior implementation defaulted to ``'memory'`` and
-        silently constructed an ``AsyncMemoryDatabase`` regardless of
-        the requested backend.
+        Reproduces Bug B15: when ``connection_params`` does NOT
+        redundantly carry a ``'type'`` key, the prior implementation
+        defaulted to ``'memory'`` and silently constructed an
+        ``AsyncMemoryDatabase`` regardless of the requested backend.
 
         Uses ``StorageBackend.SQLITE`` (not ``MEMORY``) deliberately
         so the bug surfaces visibly: the pre-fix ``'memory'`` default

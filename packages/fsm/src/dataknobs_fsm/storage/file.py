@@ -19,12 +19,20 @@ if TYPE_CHECKING:
 class FileStorage(UnifiedDatabaseStorage):
     """File storage implementation using dataknobs_data's file backend.
 
-    This storage backend uses dataknobs_data's AsyncFileDatabase which
-    stores records as JSON or YAML files with support for:
-    - Directory-based organization
-    - File rotation policies
-    - Compression
-    - Indexing via metadata files
+    This storage backend uses dataknobs_data's ``AsyncFileDatabase``,
+    which persists *all* records to a single JSON or YAML file at the
+    configured ``path``.  Configuration knobs:
+
+    - ``path``: the on-disk file (not a directory).  ``AsyncFileDatabase``
+      treats it as a single document; if a ``.gz`` suffix is present
+      or ``compression='gzip'`` is set, the file is gzip-compressed
+      transparently.
+    - ``format``: ``'json'`` (default) or ``'yaml'``.
+    - ``compression``: ``'gzip'`` or ``None``.  Forwarded from
+      ``StorageConfig.compression`` (a bool).
+
+    Note: there is no directory layout, no file rotation, and no
+    separate metadata index — everything lives in the one file.
     """
 
     def __init__(

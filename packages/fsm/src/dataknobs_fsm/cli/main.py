@@ -667,7 +667,28 @@ def _status_style(status: str) -> str:
         return 'red'
     if s == 'skipped':
         return 'yellow'
+    if s in ('in_progress', 'running'):
+        return 'cyan'
     return 'white'
+
+
+def _derive_history_status(
+    end_time: float | None,
+    failed_steps: int,
+) -> str:
+    """Derive the displayed history status from terminal-state fields.
+
+    The storage layer writes ``status='completed'`` whenever
+    ``end_time`` is set, which loses the failed-vs-clean distinction.
+    The CLI re-derives status from the structured fields so display
+    is consistent across in-progress runs, failed runs, and clean
+    completions.
+    """
+    if end_time is None:
+        return 'in_progress'
+    if failed_steps:
+        return 'failed'
+    return 'completed'
 
 
 @cli.group()
@@ -710,7 +731,10 @@ def list_history(fsm_name: str | None, limit: int, format: str):
         table.add_column("Failed", justify="right")
 
         for entry in entries:
-            status = entry.get('status') or 'unknown'
+            status = _derive_history_status(
+                entry.get('end_time'),
+                int(entry.get('failed_steps', 0) or 0),
+            )
             table.add_row(
                 str(entry['id'])[:8],
                 str(entry.get('fsm_name', '-')),
@@ -752,7 +776,10 @@ def show_execution(execution_id: str, verbose: bool):
         if history_obj.end_time is not None
         else 'In progress'
     )
-    status = 'failed' if history_obj.failed_steps else 'completed'
+    status = _derive_history_status(
+        history_obj.end_time,
+        history_obj.failed_steps,
+    )
 
     console.print("[bold]Execution Details:[/bold]")
     console.print(f"  ID: {history_obj.execution_id}")

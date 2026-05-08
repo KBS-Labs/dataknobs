@@ -65,6 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed with `IsADirectoryError` whenever the directory existed.
   Behavioral CLI tests added in
   `test_cli_real.py::TestHistoryCLICommands`.
+- **`fsm history list` / `show-execution` status display is now
+  consistent for in-progress runs.**  Status is derived from
+  `(end_time, failed_steps)` via a shared `_derive_history_status`
+  helper, so a run with `end_time=None` is reported as
+  `in_progress` (cyan) instead of contradicting itself with
+  `End: In progress` alongside `Status: completed`.  `_status_style`
+  also colorises `in_progress`/`running`.  Behavioral coverage
+  added in `test_cli_real.py::test_show_execution_in_progress_run_status_consistent`
+  and `::test_list_in_progress_run_shows_in_progress_status`.
+- **`FileStorage` class docstring corrected.**  Previously
+  advertised "Directory-based organization", "File rotation
+  policies", and "Indexing via metadata files" — none of which
+  `AsyncFileDatabase` provides.  The docstring now describes the
+  real single-file behavior and the actual config knobs (`path`,
+  `format`, `compression`).
 
 ### Deprecated
 

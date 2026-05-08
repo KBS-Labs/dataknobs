@@ -748,12 +748,19 @@ class TestHistoryCLICommands:
         fsm_name: str,
         *,
         fail_one_step: bool = False,
+        in_progress: bool = False,
     ) -> None:
         """Write a single ExecutionHistory + its steps to the history file.
 
         Uses the real ``FileStorage`` + ``BaseHistoryStorage`` API, so
         whatever shape the CLI reads back is exactly what production
         callers would write.
+
+        When ``in_progress`` is True, ``end_time`` is left unset so the
+        history record is persisted in the same shape an actively-running
+        execution would have on disk.  Mutually exclusive with
+        ``fail_one_step``: an in-progress run has no terminal status to
+        compare.
         """
         from dataknobs_fsm.core.data_modes import DataHandlingMode
         from dataknobs_fsm.execution.history import ExecutionHistory
@@ -782,7 +789,8 @@ class TestHistoryCLICommands:
                     hist.failed_steps = 1
                 else:
                     step2.complete(arc_taken='done')
-                hist.end_time = hist.start_time + 1.5
+                if not in_progress:
+                    hist.end_time = hist.start_time + 1.5
                 hist.total_steps = 2
                 await storage.save_history(hist)
                 await storage.save_step(execution_id, step1)
@@ -915,3 +923,54 @@ class TestHistoryCLICommands:
         )
         assert result.exit_code != 0
         assert 'not found' in result.output.lower()
+
+    def test_show_execution_in_progress_run_status_consistent(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """In-progress runs display 'in_progress' status, not 'completed'.
+
+        Storage writes ``status='completed'`` whenever ``end_time`` is
+        set, so the CLI must derive its display status from
+        ``(end_time, failed_steps)`` rather than echo the stored field.
+        Pre-fix, ``status`` was hard-coded to ``'failed' if failed_steps
+        else 'completed'`` and contradicted the ``End: In progress``
+        line for executions with no terminal time.
+        """
+        self._seed_history(
+            history_dir,
+            execution_id='exec-running-1',
+            fsm_name='running_fsm',
+            in_progress=True,
+        )
+        result = runner.invoke(
+            cli, ['history', 'show-execution', 'exec-running-1'], env=home_env,
+        )
+        assert result.exit_code == 0, result.output
+        assert 'End: In progress' in result.output
+        # Status line and end-time line must agree.
+        assert 'in_progress' in result.output
+        # Sanity: 'completed' must not appear as the bot's status when
+        # End is 'In progress' (it can still appear in unrelated text;
+        # we check the colourised status token specifically).
+        assert 'Status: [green]completed' not in result.output
+
+    def test_list_in_progress_run_shows_in_progress_status(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """``history list`` derives in-progress status from end_time.
+
+        The storage record's ``status`` field is ``'in_progress'`` for
+        a running execution (set in ``save_history``), but the CLI
+        re-derives so list and show-execution stay aligned even if a
+        backend ever stops writing the field.
+        """
+        self._seed_history(
+            history_dir,
+            execution_id='exec-listrun-1',
+            fsm_name='listrun_fsm',
+            in_progress=True,
+        )
+        result = runner.invoke(cli, ['history', 'list'], env=home_env)
+        assert result.exit_code == 0, result.output
+        assert 'exec-lis' in result.output
+        assert 'in_progress' in result.output

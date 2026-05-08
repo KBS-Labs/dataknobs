@@ -1,12 +1,11 @@
 """End-to-end regression tests for ``UnifiedDatabaseStorage`` factory
 path against a real PostgreSQL backend.
 
-Items 116 + 117 — Gabe production bug (FRAMEWORK-GAPS-GABE.B,
-2026-05-01).  Pre-fix, the only way to use ``UnifiedDatabaseStorage``
-with PG was to pre-build ``AsyncPostgresDatabase`` and inject via
-``database=``; the factory path silently downgraded to
-``AsyncMemoryDatabase`` (Item 116) or, if that was bypassed, crashed
-with ``PostgresSyntaxError`` on the first ``CREATE TABLE`` (Item 117).
+Pre-fix, the only way to use ``UnifiedDatabaseStorage`` with PG was
+to pre-build ``AsyncPostgresDatabase`` and inject via ``database=``;
+the factory path silently downgraded to ``AsyncMemoryDatabase``, or,
+if that was bypassed, crashed with ``PostgresSyntaxError`` on the
+first ``CREATE TABLE``.
 """
 
 from __future__ import annotations
@@ -84,10 +83,10 @@ class TestPostgresFactoryPath:
     ) -> None:
         """Round-trip: factory-path PG storage actually persists.
 
-        The user-visible bug Gabe diagnosed in production: 17h of
-        runtime, zero history rows persisted.  Pin a save → query
-        round-trip via the factory path so a future regression
-        cannot silently revert.
+        The user-visible bug pre-fix: hours of runtime with zero
+        history rows persisted.  Pin a save → query round-trip via
+        the factory path so a future regression cannot silently
+        revert.
 
         The leading ``isinstance`` guard ensures this test fails
         pre-fix on the silent-fallback bug (Item 116) rather than
