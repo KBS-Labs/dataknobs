@@ -45,6 +45,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_fsm.storage.base` code.  The previous `stacklevel=2`
   pointed at framework code, which made the migration target
   invisible.
+- **`fsm history list` and `fsm history show-execution` CLI
+  commands now actually work**.  Previously both commands had
+  multiple compounding bugs hidden behind `# type: ignore`:
+  `FileStorage(Path(...))` mis-constructed the storage (constructor
+  expects a `StorageConfig`), `ExecutionHistory(storage)` misused
+  the history dataclass as a manager, and the `query_history` /
+  `get_execution` methods called on it do not exist on any class
+  in the codebase.  The display code further read keys
+  (`execution_id`, `success`, `states`, `arcs`) that have never
+  been part of `BaseHistoryStorage`'s actual return shape.
+  Both commands have been rewritten to call the real
+  `BaseHistoryStorage` API (`query_histories` / `load_history` /
+  `load_steps`) with timestamp formatting, status colorization,
+  and a working `--verbose` step listing.  The on-disk location
+  is now `~/.fsm/history.json` (a single JSON file managed by
+  `AsyncFileDatabase`); the previous code tried to use the bare
+  `~/.fsm/history` directory path as if it were a file, which
+  failed with `IsADirectoryError` whenever the directory existed.
+  Behavioral CLI tests added in
+  `test_cli_real.py::TestHistoryCLICommands`.
 
 ### Deprecated
 

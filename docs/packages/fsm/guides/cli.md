@@ -222,7 +222,8 @@ fsm history show abc123def456
 fsm history show abc123def456 --verbose
 ```
 
-History is stored in `~/.fsm/history/` using FileStorage backend.
+History is stored in `~/.fsm/history.json` using the `FileStorage` backend
+(a single JSON file managed by `dataknobs_data`'s `AsyncFileDatabase`).
 
 ## Pattern Commands
 

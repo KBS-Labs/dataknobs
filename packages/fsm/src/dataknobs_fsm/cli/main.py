@@ -7,27 +7,30 @@ This module provides a command-line interface for:
 - Debugging and profiling FSM operations
 """
 
-import click
-import json
-from dataknobs_fsm.utils.json_encoder import dumps as json_dumps
-import yaml
-import sys
-from pathlib import Path
-from rich.console import Console
-from rich.table import Table
-from rich.syntax import Syntax
-from rich.tree import Tree
-from rich.progress import Progress, SpinnerColumn, TextColumn
 import asyncio
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import click
+import yaml
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.tree import Tree
 
 from .. import __version__
-from ..api.simple import SimpleFSM
 from ..api.advanced import AdvancedFSM
+from ..api.simple import SimpleFSM
 from ..config.loader import ConfigLoader
-from ..execution.history import ExecutionHistory
-from ..storage.file import FileStorage
 from ..patterns.etl import create_etl_pipeline, ETLMode
 from ..patterns.file_processing import create_csv_processor, create_json_stream_processor
+from ..storage.base import StorageBackend, StorageConfig
+from ..storage.file import FileStorage
+from ..utils.json_encoder import dumps as json_dumps
 
 console = Console()
 
@@ -612,6 +615,61 @@ def run(config_file: str, data: str | None, breakpoint: tuple,
     asyncio.run(run_debug())
 
 
+def _default_history_path() -> Path:
+    """Default on-disk file for FSM execution history.
+
+    ``AsyncFileDatabase`` (the backend behind ``FileStorage``) treats
+    ``path`` as a single JSON file, not a directory.  We therefore
+    point the CLI at ``~/.fsm/history.json`` and create the parent
+    ``~/.fsm/`` directory on demand.
+
+    Resolved on each call so tests (and consumers overriding ``HOME``)
+    pick up the current value of ``$HOME``.  ``Path.home()`` reads
+    the environment, so this is naturally test-overridable via
+    ``CliRunner(env={"HOME": ...})`` or similar.
+    """
+    return Path.home() / '.fsm' / 'history.json'
+
+
+def _open_history_storage(history_path: Path) -> FileStorage:
+    """Build a ``FileStorage`` for the CLI history file.
+
+    Ensures the parent directory exists so first-run usage (no
+    ``~/.fsm/`` yet) does not crash with ``FileNotFoundError`` when
+    ``AsyncFileDatabase`` writes the file.
+
+    The caller is responsible for ``await storage.initialize()`` and
+    ``await storage.close()`` — kept sync here so tests can construct
+    storage and inspect/seed it without an event loop.
+    """
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    return FileStorage(
+        StorageConfig(
+            backend=StorageBackend.FILE,
+            connection_params={'path': str(history_path)},
+        )
+    )
+
+
+def _format_timestamp(ts: float | None, fallback: str = '-') -> str:
+    """Render a Unix-epoch float as a human-readable local datetime."""
+    if ts is None:
+        return fallback
+    return datetime.fromtimestamp(ts).isoformat(sep=' ', timespec='seconds')
+
+
+def _status_style(status: str) -> str:
+    """Map a status string to a Rich color tag."""
+    s = (status or '').lower()
+    if s in ('completed', 'success'):
+        return 'green'
+    if s in ('failed', 'error'):
+        return 'red'
+    if s == 'skipped':
+        return 'yellow'
+    return 'white'
+
+
 @cli.group()
 def history():
     """Manage FSM execution history"""
@@ -624,42 +682,45 @@ def history():
 @click.option('--format', '-f', type=click.Choice(['table', 'json']), default='table')
 def list_history(fsm_name: str | None, limit: int, format: str):
     """List execution history"""
-    # Create history manager with file backend
-    storage = FileStorage(Path.home() / '.fsm' / 'history')
-    manager = ExecutionHistory(storage)  # type: ignore
-    
-    # Query history
-    entries = asyncio.run(manager.query_history(
-        fsm_name=fsm_name,
-        limit=limit
-    ))
-    
+    async def _run() -> list[dict[str, Any]]:
+        storage = _open_history_storage(_default_history_path())
+        await storage.initialize()
+        try:
+            filters: dict[str, Any] = {}
+            if fsm_name:
+                filters['fsm_name'] = fsm_name
+            return await storage.query_histories(filters, limit=limit)
+        finally:
+            await storage.close()
+
+    entries = asyncio.run(_run())
+
     if not entries:
         console.print("[yellow]No history entries found[/yellow]")
         return
-    
+
     if format == 'table':
         table = Table(title="Execution History")
         table.add_column("Execution ID", style="cyan")
         table.add_column("FSM Name", style="green")
         table.add_column("Start Time")
         table.add_column("End Time")
-        table.add_column("Status", style="yellow")
-        table.add_column("States")
-        
+        table.add_column("Status")
+        table.add_column("Steps", justify="right")
+        table.add_column("Failed", justify="right")
+
         for entry in entries:
-            status = "Success" if entry.get('success') else "Failed"
-            states = len(entry.get('states', []))
-            
+            status = entry.get('status') or 'unknown'
             table.add_row(
-                entry['execution_id'][:8],
-                entry['fsm_name'],
-                entry['start_time'],
-                entry.get('end_time', '-'),
-                status,
-                str(states)
+                str(entry['id'])[:8],
+                str(entry.get('fsm_name', '-')),
+                _format_timestamp(entry.get('start_time')),
+                _format_timestamp(entry.get('end_time')),
+                f"[{_status_style(status)}]{status}[/{_status_style(status)}]",
+                str(entry.get('total_steps', 0)),
+                str(entry.get('failed_steps', 0)),
             )
-        
+
         console.print(table)
     else:
         console.print(json_dumps(entries, indent=2))
@@ -670,37 +731,55 @@ def list_history(fsm_name: str | None, limit: int, format: str):
 @click.option('--verbose', '-v', is_flag=True, help='Show detailed information')
 def show_execution(execution_id: str, verbose: bool):
     """Show details of a specific execution"""
-    # Create history manager
-    storage = FileStorage(Path.home() / '.fsm' / 'history')
-    manager = ExecutionHistory(storage)  # type: ignore
-    
-    # Get execution details
-    entry = asyncio.run(manager.get_execution(execution_id))
-    
-    if not entry:
+    async def _run() -> tuple[Any, list[Any]]:
+        storage = _open_history_storage(_default_history_path())
+        await storage.initialize()
+        try:
+            history_obj = await storage.load_history(execution_id)
+            steps = await storage.load_steps(execution_id) if history_obj else []
+            return history_obj, steps
+        finally:
+            await storage.close()
+
+    history_obj, steps = asyncio.run(_run())
+
+    if history_obj is None:
         console.print(f"[red]Execution {execution_id} not found[/red]")
         sys.exit(1)
-    
+
+    end_display = (
+        _format_timestamp(history_obj.end_time)
+        if history_obj.end_time is not None
+        else 'In progress'
+    )
+    status = 'failed' if history_obj.failed_steps else 'completed'
+
     console.print("[bold]Execution Details:[/bold]")
-    console.print(f"  ID: {entry['execution_id']}")
-    console.print(f"  FSM: {entry['fsm_name']}")
-    console.print(f"  Start: {entry['start_time']}")
-    console.print(f"  End: {entry.get('end_time', 'In progress')}")
-    console.print(f"  Status: {'Success' if entry.get('success') else 'Failed'}")
-    
-    if verbose:
+    console.print(f"  ID: {history_obj.execution_id}")
+    console.print(f"  FSM: {history_obj.fsm_name}")
+    console.print(f"  Start: {_format_timestamp(history_obj.start_time)}")
+    console.print(f"  End: {end_display}")
+    console.print(
+        f"  Status: [{_status_style(status)}]{status}[/{_status_style(status)}]"
+    )
+    console.print(f"  Total steps: {history_obj.total_steps}")
+    if history_obj.failed_steps:
+        console.print(f"  Failed steps: [red]{history_obj.failed_steps}[/red]")
+    if history_obj.skipped_steps:
+        console.print(f"  Skipped steps: [yellow]{history_obj.skipped_steps}[/yellow]")
+
+    if verbose and steps:
         console.print("\n[bold]Execution Path:[/bold]")
-        for i, state in enumerate(entry.get('states', [])):
-            console.print(f"  {i+1}. {state['name']} @ {state['timestamp']}")
-        
-        if 'arcs' in entry:
-            console.print("\n[bold]Transitions:[/bold]")
-            for arc in entry['arcs']:
-                console.print(f"  {arc['from']} � {arc['to']} [{arc['name']}]")
-        
-        if 'error' in entry:
-            console.print("\n[bold red]Error:[/bold red]")
-            console.print(f"  {entry['error']}")
+        for i, step in enumerate(steps, start=1):
+            step_status = step.status.value if hasattr(step.status, 'value') else str(step.status)
+            arc_display = f" → [{step.arc_taken}]" if step.arc_taken else ''
+            console.print(
+                f"  {i}. {step.state_name}{arc_display} "
+                f"@ {_format_timestamp(step.timestamp)} "
+                f"[{_status_style(step_status)}]({step_status})[/{_status_style(step_status)}]"
+            )
+            if step.error is not None:
+                console.print(f"     [red]error: {step.error}[/red]")
 
 
 @cli.group()

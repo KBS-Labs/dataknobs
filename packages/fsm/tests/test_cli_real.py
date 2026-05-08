@@ -692,10 +692,226 @@ class TestAsyncCLIOperations:
         # SimpleFSM expects a file path, not a config object
         fsm = SimpleFSM(temp_config_file)
         batch_data = [{'id': i} for i in range(3)]
-        
+
         # Note: process_batch internally uses async but returns sync results
         results = fsm.process_batch(batch_data)
-        
+
         assert len(results) == 3
         for result in results:
             assert 'final_state' in result
+
+
+class TestHistoryCLICommands:
+    """End-to-end tests for ``fsm history list`` and ``fsm history show-execution``.
+
+    Until this point the commands had latent breakage hidden by
+    ``# type: ignore``: ``ExecutionHistory(storage)`` mis-used the
+    history dataclass as a manager, and ``query_history`` /
+    ``get_execution`` were never methods on any class.  These tests
+    exercise the rewritten commands against a real ``FileStorage``
+    backend seeded via the ``BaseHistoryStorage`` API.
+
+    Tests redirect ``Path.home()`` by setting ``HOME`` (and ``USERPROFILE``
+    on Windows) for the ``CliRunner`` invocation, so the CLI's default
+    history location ``~/.fsm/history.json`` resolves under ``tmp_path``
+    without any production-code changes.
+    """
+
+    @pytest.fixture
+    def history_dir(self, tmp_path: Path) -> Path:
+        """Path to the CLI's history file under ``tmp_path``.
+
+        ``AsyncFileDatabase`` stores data in a single JSON file, so
+        the CLI's canonical location is ``~/.fsm/history.json`` (not
+        a directory).  This fixture creates the parent ``~/.fsm/``
+        directory and returns the file path; the file itself is
+        created lazily by the storage on first write.
+
+        The fixture name is preserved for compatibility with the rest
+        of this suite even though it now returns a file.
+        """
+        parent = tmp_path / '.fsm'
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent / 'history.json'
+
+    @pytest.fixture
+    def home_env(self, tmp_path: Path) -> dict[str, str]:
+        """Env overlay that points ``Path.home()`` at ``tmp_path``."""
+        # ``Path.home()`` consults ``HOME`` on POSIX and ``USERPROFILE``
+        # on Windows.  Set both so the test is platform-agnostic.
+        return {'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path)}
+
+    @staticmethod
+    def _seed_history(
+        history_path: Path,
+        execution_id: str,
+        fsm_name: str,
+        *,
+        fail_one_step: bool = False,
+    ) -> None:
+        """Write a single ExecutionHistory + its steps to the history file.
+
+        Uses the real ``FileStorage`` + ``BaseHistoryStorage`` API, so
+        whatever shape the CLI reads back is exactly what production
+        callers would write.
+        """
+        from dataknobs_fsm.core.data_modes import DataHandlingMode
+        from dataknobs_fsm.execution.history import ExecutionHistory
+        from dataknobs_fsm.storage.base import StorageBackend, StorageConfig
+        from dataknobs_fsm.storage.file import FileStorage
+
+        async def _seed() -> None:
+            storage = FileStorage(
+                StorageConfig(
+                    backend=StorageBackend.FILE,
+                    connection_params={'path': str(history_path)},
+                )
+            )
+            await storage.initialize()
+            try:
+                hist = ExecutionHistory(
+                    fsm_name=fsm_name,
+                    execution_id=execution_id,
+                    data_mode=DataHandlingMode.COPY,
+                )
+                step1 = hist.add_step('start', 'main')
+                step1.complete(arc_taken='begin')
+                step2 = hist.add_step('process', 'main', parent_step_id=step1.step_id)
+                if fail_one_step:
+                    step2.fail(RuntimeError("synthetic failure"))
+                    hist.failed_steps = 1
+                else:
+                    step2.complete(arc_taken='done')
+                hist.end_time = hist.start_time + 1.5
+                hist.total_steps = 2
+                await storage.save_history(hist)
+                await storage.save_step(execution_id, step1)
+                await storage.save_step(execution_id, step2)
+            finally:
+                await storage.close()
+
+        asyncio.run(_seed())
+
+    def test_list_empty(self, runner, history_dir, home_env):
+        """An empty history dir reports no entries cleanly."""
+        result = runner.invoke(cli, ['history', 'list'], env=home_env)
+        assert result.exit_code == 0, result.output
+        assert 'No history entries found' in result.output
+
+    def test_list_with_entries_table(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """Seeded history shows up in the table output with correct columns."""
+        self._seed_history(
+            history_dir, execution_id='exec-aaaaaaaaaa', fsm_name='etl_pipeline',
+        )
+        result = runner.invoke(cli, ['history', 'list'], env=home_env)
+
+        assert result.exit_code == 0, result.output
+        # ID column shows first 8 chars of the execution id
+        assert 'exec-aaa' in result.output
+        # FSM name column
+        assert 'etl_pipeline' in result.output
+        # Status comes from BaseHistoryStorage's status field, not a hallucinated bool
+        assert 'completed' in result.output.lower()
+        # Total steps column populated
+        assert ' 2 ' in result.output or '\n2' in result.output
+
+    def test_list_filters_by_fsm_name(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """``--fsm-name`` filters server-side via ``query_histories``."""
+        self._seed_history(
+            history_dir, execution_id='exec-keep-1', fsm_name='target_fsm',
+        )
+        self._seed_history(
+            history_dir, execution_id='exec-skip-2', fsm_name='other_fsm',
+        )
+
+        result = runner.invoke(
+            cli, ['history', 'list', '--fsm-name', 'target_fsm'], env=home_env,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert 'exec-kee' in result.output
+        assert 'exec-ski' not in result.output
+
+    def test_list_json_format(self, runner, tmp_path, history_dir, home_env):
+        """``--format json`` emits parseable JSON with the real schema."""
+        self._seed_history(
+            history_dir, execution_id='exec-json-1234', fsm_name='json_fsm',
+        )
+        result = runner.invoke(
+            cli, ['history', 'list', '--format', 'json'], env=home_env,
+        )
+        assert result.exit_code == 0, result.output
+
+        payload = json.loads(result.output)
+        assert isinstance(payload, list)
+        assert len(payload) == 1
+        # query_histories returns: id, fsm_name, status, start_time, end_time,
+        # total_steps, failed_steps, metadata, data_mode
+        entry = payload[0]
+        assert entry['id'] == 'exec-json-1234'
+        assert entry['fsm_name'] == 'json_fsm'
+        assert 'status' in entry
+        assert 'total_steps' in entry
+
+    def test_show_execution_found(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """``show-execution <id>`` prints details for a known execution."""
+        self._seed_history(
+            history_dir, execution_id='exec-show-12', fsm_name='show_fsm',
+        )
+        result = runner.invoke(
+            cli, ['history', 'show-execution', 'exec-show-12'], env=home_env,
+        )
+        assert result.exit_code == 0, result.output
+        assert 'exec-show-12' in result.output
+        assert 'show_fsm' in result.output
+        assert 'Total steps: 2' in result.output
+
+    def test_show_execution_verbose_lists_steps(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """``--verbose`` includes the per-step execution path."""
+        self._seed_history(
+            history_dir, execution_id='exec-verbose-1', fsm_name='verbose_fsm',
+        )
+        result = runner.invoke(
+            cli,
+            ['history', 'show-execution', 'exec-verbose-1', '--verbose'],
+            env=home_env,
+        )
+        assert result.exit_code == 0, result.output
+        assert 'Execution Path' in result.output
+        # Both seeded states should appear in the path listing
+        assert 'start' in result.output
+        assert 'process' in result.output
+
+    def test_show_execution_failed_run_reports_failure(
+        self, runner, tmp_path, history_dir, home_env
+    ):
+        """``failed_steps`` from the underlying history surfaces in the output."""
+        self._seed_history(
+            history_dir,
+            execution_id='exec-failed-1',
+            fsm_name='failing_fsm',
+            fail_one_step=True,
+        )
+        result = runner.invoke(
+            cli, ['history', 'show-execution', 'exec-failed-1'], env=home_env,
+        )
+        assert result.exit_code == 0, result.output
+        assert 'Failed steps: 1' in result.output
+
+    def test_show_execution_not_found_exits_nonzero(
+        self, runner, history_dir, home_env
+    ):
+        """Unknown execution id exits with a non-zero status."""
+        result = runner.invoke(
+            cli, ['history', 'show-execution', 'does-not-exist'], env=home_env,
+        )
+        assert result.exit_code != 0
+        assert 'not found' in result.output.lower()
