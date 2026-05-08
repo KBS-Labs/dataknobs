@@ -7,8 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`validate_database_name()` now raises `ConfigurationError`
+  instead of `ValueError`** for consistent exception typing across
+  the postgres identifier-validation surface (the new
+  `validate_pg_identifier` already raised `ConfigurationError`,
+  and config-shape errors belong to the
+  `dataknobs_common.exceptions` hierarchy).  External callers that
+  catch `ValueError` specifically must update to catch
+  `ConfigurationError` (or its base `DataknobsError`).
+  `validate_database_name` is internal infrastructure with no
+  publicly documented `ValueError` contract, so this is a small
+  behavior change rather than a breaking API change.
+
 ### Fixed
 
+- **`PostgresBaseConfig._parse_postgres_config` now raises
+  `ConfigurationError` when the `table` or `schema` config key is
+  not a valid string identifier**, instead of silently propagating
+  non-string values through `quote_ident()` and producing broken
+  SQL at first query.  Defense-in-depth — the canonical fix for
+  the FSM-side `schema`-key collision lives in `dataknobs-fsm`
+  (Item 117).  This validator catches misuse from any future
+  consumer that accidentally injects a non-identifier value via
+  either key.  The same identifier shape (`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+  used by `validate_database_name` is enforced for both keys
+  through the public `validate_pg_identifier` helper in
+  `dataknobs_data.backends.postgres_mixins`.
+- **`PgVectorStore` now validates `schema` and `table_name`
+  identifiers at construction**, closing the third Postgres
+  consumer's parallel hazard.  `PgVectorStore._parse_backend_config`
+  reads these keys directly (it does not flow through
+  `_parse_postgres_config`), so the records-backend fix above did
+  not cover it.  Both consumers now use the same
+  `validate_pg_identifier` helper, so a malformed identifier is
+  caught with a clear `ConfigurationError` at construction
+  regardless of which Postgres consumer the application uses.
 - **`AsyncPostgresDatabase.update_batch()` no longer raises
   `PostgresSyntaxError` from a duplicated `RETURNING id` clause**.
   The query was built by `SQLQueryBuilder.build_batch_update_query`,

@@ -5,6 +5,7 @@ These tests do NOT require a running PostgreSQL instance.
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_data.backends.postgres_mixins import (
     PostgresBaseConfig,
     validate_database_name,
@@ -93,7 +94,7 @@ class TestValidateDatabaseName:
         ("my/db", "slashes"),
     ])
     def test_invalid_names(self, name: str, reason: str) -> None:
-        with pytest.raises(ValueError, match="Invalid database name"):
+        with pytest.raises(ConfigurationError, match="Invalid database name"):
             validate_database_name(name)
 
 
