@@ -45,9 +45,12 @@ class FileStorage(UnifiedDatabaseStorage):
         config = copy.copy(config)
         config.connection_params = dict(config.connection_params)
 
-        # Ensure we use the file backend
-        if 'type' not in config.connection_params:
-            config.connection_params['type'] = 'file'
+        # Backend selection is now driven by ``StorageConfig.backend``
+        # (the canonical enum), so no ``'type'`` injection is needed
+        # — see Item 116.  This class is registered for
+        # ``StorageBackend.FILE`` and the parent's ``_setup_backend``
+        # reads from the enum, so the file backend is selected
+        # automatically.
 
         # Set default file path if not provided
         if 'path' not in config.connection_params:
@@ -57,9 +60,17 @@ class FileStorage(UnifiedDatabaseStorage):
         if 'format' not in config.connection_params:
             config.connection_params['format'] = 'json'
 
-        # Enable compression by default for file storage
-        if 'compress' not in config.connection_params:
-            config.connection_params['compress'] = config.compression
+        # Forward FSM ``StorageConfig.compression`` to the data
+        # backend's ``compression`` config key (the established
+        # ``AsyncFileDatabase`` API at backends/file.py — read at
+        # ``self.config.get("compression", None)``).  An earlier
+        # implementation injected ``'compress'`` here, which the data
+        # backend silently ignored, so file storage was effectively
+        # uncompressed regardless of ``StorageConfig.compression``.
+        if 'compression' not in config.connection_params:
+            config.connection_params['compression'] = (
+                'gzip' if config.compression else None
+            )
 
         super().__init__(config, database=database, steps_database=steps_database)
 

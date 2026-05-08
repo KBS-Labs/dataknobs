@@ -45,9 +45,12 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         config.connection_params = dict(config.connection_params)
         config.mode_specific_config = dict(config.mode_specific_config)
 
-        # Ensure we use the memory backend
-        if 'type' not in config.connection_params:
-            config.connection_params['type'] = 'memory'
+        # Backend selection is now driven by ``StorageConfig.backend``
+        # (the canonical enum), so no ``'type'`` injection is needed
+        # — see Item 116.  This class is registered for
+        # ``StorageBackend.MEMORY`` and the parent's ``_setup_backend``
+        # reads from the enum, so the memory backend is selected
+        # automatically.
 
         # Set memory-specific defaults
         if 'max_size' not in config.connection_params:
