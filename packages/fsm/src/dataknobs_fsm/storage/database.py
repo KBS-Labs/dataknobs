@@ -10,11 +10,11 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import warnings
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
-from dataknobs_data.schema import DatabaseSchema, FieldSchema
 
 if TYPE_CHECKING:
     from dataknobs_data.database import AsyncDatabase
@@ -51,7 +51,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         """Initialize database storage.
 
         Args:
-            config: Storage configuration with backend type in connection_params.
+            config: Storage configuration. Backend selection is driven
+                by ``config.backend`` (the canonical ``StorageBackend``
+                enum); ``config.connection_params`` carries
+                backend-specific options (host/port/path/etc.) that are
+                forwarded to the underlying ``AsyncDatabase``.
             database: Optional pre-built AsyncDatabase instance. When provided,
                 ``_setup_backend()`` skips factory creation and uses this instance
                 directly. Enables connection pool sharing across components.
@@ -74,188 +78,61 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         self._steps_db: AsyncDatabase | None = steps_database or database
     
     async def _setup_backend(self) -> None:
-        """Set up the database backend using dataknobs_data factory.
+        """Set up the database backend using the dataknobs_data factory.
 
-        If a database was injected via ``__init__()``, this method reuses
-        it instead of creating a new instance through the factory.
+        Backend selection is driven by ``self.config.backend`` (the
+        typed ``StorageBackend`` enum on ``StorageConfig``).  Connection
+        parameters in ``self.config.connection_params`` are forwarded
+        as-is to the dataknobs_data backend constructor.
+
+        If a database was injected via ``__init__()``, this method
+        reuses it instead of creating a new instance through the
+        factory.
         """
         if self._db is not None:
             # Database was injected — skip factory creation
             return
 
-        # Extract backend type from config
-        backend_type = self.config.connection_params.get('type', 'memory')
-        
-        # Prepare dataknobs_data configuration
-        db_config = {
+        backend_type = self.config.backend.value
+
+        # Honor the deprecated ``type`` alias for one release: emit a
+        # warning, ignore the value, and continue with the canonical
+        # enum.  Existing consumers that redundantly populate ``type``
+        # keep working across the transition.  Alias removal is
+        # scheduled for the next minor release — see CHANGELOG.
+        if self.config.connection_params.get('type') is not None:
+            warnings.warn(
+                "Passing 'type' in connection_params to "
+                "UnifiedDatabaseStorage is deprecated; "
+                "StorageConfig.backend is the source of truth. "
+                "Remove 'type' from connection_params.",
+                DeprecationWarning,
+                # stacklevel=3 attributes the warning to the caller of
+                # the public ``initialize()`` (frame layout at the call
+                # site is: warnings.warn → _setup_backend →
+                # initialize → user code).
+                stacklevel=3,
+            )
+
+        db_config: dict[str, Any] = {
             **self.config.connection_params,
-            'schema': self._create_history_schema()
+            'backend': backend_type,
         }
-        
-        # Remove 'type' as it's not needed by dataknobs_data
-        db_config.pop('type', None)
-        
-        # Use AsyncDatabaseFactory to create database instance
+        db_config.pop('type', None)  # strip the deprecated alias
+
         from dataknobs_data.factory import AsyncDatabaseFactory
-        factory = AsyncDatabaseFactory()
-        
-        # The factory expects 'backend' not 'type'
-        db_config['backend'] = backend_type
-        
-        self._db = factory.create(**db_config)
-        
+        self._db = AsyncDatabaseFactory().create(**db_config)
+
         # Connect to the database if it has a connect method
         if hasattr(self._db, 'connect'):
             await self._db.connect()
-        
+
         # Use the same database for steps unless one was injected.
         # When shared, read methods filter by field existence
         # (history_data / step_data) to isolate record types —
         # see _history_query() and _steps_query().
         if self._steps_db is None:
             self._steps_db = self._db
-    
-    def _create_history_schema(self) -> DatabaseSchema:
-        """Create schema for history records."""
-        from dataknobs_data.fields import FieldType
-        
-        schema = DatabaseSchema()
-        
-        # Core fields
-        schema.add_field(FieldSchema(
-            name='id', 
-            type=FieldType.TEXT,
-            metadata={'primary_key': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='execution_id',
-            type=FieldType.TEXT,
-            metadata={'indexed': True, 'unique': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='fsm_name',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='data_mode',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='status',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        
-        # Timing fields
-        schema.add_field(FieldSchema(
-            name='start_time',
-            type=FieldType.FLOAT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='end_time',
-            type=FieldType.FLOAT,
-            required=False
-        ))
-        
-        # Metrics
-        schema.add_field(FieldSchema(
-            name='total_steps',
-            type=FieldType.INTEGER,
-            default=0
-        ))
-        schema.add_field(FieldSchema(
-            name='failed_steps',
-            type=FieldType.INTEGER,
-            default=0
-        ))
-        schema.add_field(FieldSchema(
-            name='skipped_steps',
-            type=FieldType.INTEGER,
-            default=0
-        ))
-        
-        # Record type (informational; isolation uses EXISTS on history_data/step_data)
-        schema.add_field(FieldSchema(
-            name='record_type',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        # JSON data fields
-        schema.add_field(FieldSchema(
-            name='history_data',
-            type=FieldType.JSON
-        ))
-        # Timestamps
-        schema.add_field(FieldSchema(
-            name='created_at',
-            type=FieldType.FLOAT
-        ))
-        schema.add_field(FieldSchema(
-            name='updated_at',
-            type=FieldType.FLOAT
-        ))
-
-        return schema
-
-    def _create_steps_schema(self) -> DatabaseSchema:
-        """Create schema for step records."""
-        from dataknobs_data.fields import FieldType
-        
-        schema = DatabaseSchema()
-        
-        schema.add_field(FieldSchema(
-            name='id',
-            type=FieldType.TEXT,
-            metadata={'primary_key': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='execution_id',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='step_id',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='parent_id',
-            type=FieldType.TEXT,
-            required=False
-        ))
-        schema.add_field(FieldSchema(
-            name='state_name',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='network_name',
-            type=FieldType.TEXT
-        ))
-        schema.add_field(FieldSchema(
-            name='status',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='timestamp',
-            type=FieldType.FLOAT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='record_type',
-            type=FieldType.TEXT,
-            metadata={'indexed': True}
-        ))
-        schema.add_field(FieldSchema(
-            name='step_data',
-            type=FieldType.JSON
-        ))
-
-        return schema
 
     @property
     def _uses_shared_db(self) -> bool:
@@ -568,7 +445,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 'total_histories': 0,
                 'mode_distribution': {},
                 'status_distribution': {},
-                'backend_type': self.config.connection_params.get('type', 'unknown')
+                'backend_type': self.config.backend.value,
             }
             
             all_records = await self._db.search(self._history_query())

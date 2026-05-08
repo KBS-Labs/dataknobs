@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..records import Record
@@ -17,7 +18,11 @@ from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
-# Valid PostgreSQL identifier pattern (unquoted identifiers)
+# Valid unquoted PostgreSQL identifier pattern: letters, digits,
+# underscores; must start with a letter or underscore.  Used to
+# validate database names, table names, and schema names — any
+# config key that flows into ``quote_ident()`` and produces a SQL
+# identifier.
 _VALID_DB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -28,13 +33,47 @@ def validate_database_name(name: str) -> None:
         name: Database name to validate.
 
     Raises:
-        ValueError: If the name contains invalid characters.
+        ConfigurationError: If the name contains invalid characters.
     """
     if not _VALID_DB_NAME_RE.match(name):
-        raise ValueError(
+        raise ConfigurationError(
             f"Invalid database name {name!r}: must start with a letter or "
             "underscore and contain only alphanumeric characters and underscores"
         )
+
+
+def validate_pg_identifier(value: Any, key: str) -> str:
+    """Validate that a config value is a safe Postgres identifier.
+
+    Raises ``ConfigurationError`` with a clear message when the value
+    is not a string (e.g. a ``DatabaseSchema`` object accidentally
+    injected via a config-key collision — see Item 117) or has an
+    unsupported identifier shape (e.g. embedded spaces or quotes).
+
+    Args:
+        value: Config value to validate.
+        key: Config key name (``"table"`` / ``"schema"`` / etc.) for
+            error messages.
+
+    Returns:
+        The validated identifier string.
+
+    Raises:
+        ConfigurationError: If the value is not a string or does not
+            match the unquoted-identifier pattern.
+    """
+    if not isinstance(value, str):
+        raise ConfigurationError(
+            f"Postgres '{key}' must be a string identifier, got "
+            f"{type(value).__name__}.  If you intended to pass a "
+            "non-identifier payload, use a different config key."
+        )
+    if not _VALID_DB_NAME_RE.match(value):
+        raise ConfigurationError(
+            f"Invalid Postgres '{key}' identifier: {value!r}.  Must "
+            f"match {_VALID_DB_NAME_RE.pattern}."
+        )
+    return value
 
 
 class PostgresBaseConfig(VectorConfigMixin):
@@ -57,9 +96,14 @@ class PostgresBaseConfig(VectorConfigMixin):
         # Parse vector configuration using the mixin
         self._parse_vector_config(config)
 
-        # Extract PostgreSQL-specific configuration
-        table_name = config.pop("table", config.pop("table_name", "records"))
-        schema_name = config.pop("schema", config.pop("schema_name", "public"))
+        # Extract PostgreSQL-specific configuration.  Validate both
+        # ``table`` and ``schema`` early to catch non-string or
+        # malformed identifiers before they propagate to broken DDL
+        # at first query (Item 117 Change C).
+        raw_table = config.pop("table", config.pop("table_name", "records"))
+        raw_schema = config.pop("schema", config.pop("schema_name", "public"))
+        table_name = validate_pg_identifier(raw_table, "table")
+        schema_name = validate_pg_identifier(raw_schema, "schema")
 
         # Remove vector config parameters since they've been processed
         config.pop("vector_enabled", None)

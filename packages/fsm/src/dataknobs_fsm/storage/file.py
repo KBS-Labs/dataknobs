@@ -19,12 +19,20 @@ if TYPE_CHECKING:
 class FileStorage(UnifiedDatabaseStorage):
     """File storage implementation using dataknobs_data's file backend.
 
-    This storage backend uses dataknobs_data's AsyncFileDatabase which
-    stores records as JSON or YAML files with support for:
-    - Directory-based organization
-    - File rotation policies
-    - Compression
-    - Indexing via metadata files
+    This storage backend uses dataknobs_data's ``AsyncFileDatabase``,
+    which persists *all* records to a single JSON or YAML file at the
+    configured ``path``.  Configuration knobs:
+
+    - ``path``: the on-disk file (not a directory).  ``AsyncFileDatabase``
+      treats it as a single document; if a ``.gz`` suffix is present
+      or ``compression='gzip'`` is set, the file is gzip-compressed
+      transparently.
+    - ``format``: ``'json'`` (default) or ``'yaml'``.
+    - ``compression``: ``'gzip'`` or ``None``.  Forwarded from
+      ``StorageConfig.compression`` (a bool).
+
+    Note: there is no directory layout, no file rotation, and no
+    separate metadata index — everything lives in the one file.
     """
 
     def __init__(
@@ -45,9 +53,12 @@ class FileStorage(UnifiedDatabaseStorage):
         config = copy.copy(config)
         config.connection_params = dict(config.connection_params)
 
-        # Ensure we use the file backend
-        if 'type' not in config.connection_params:
-            config.connection_params['type'] = 'file'
+        # Backend selection is now driven by ``StorageConfig.backend``
+        # (the canonical enum), so no ``'type'`` injection is needed
+        # — see Item 116.  This class is registered for
+        # ``StorageBackend.FILE`` and the parent's ``_setup_backend``
+        # reads from the enum, so the file backend is selected
+        # automatically.
 
         # Set default file path if not provided
         if 'path' not in config.connection_params:
@@ -57,9 +68,17 @@ class FileStorage(UnifiedDatabaseStorage):
         if 'format' not in config.connection_params:
             config.connection_params['format'] = 'json'
 
-        # Enable compression by default for file storage
-        if 'compress' not in config.connection_params:
-            config.connection_params['compress'] = config.compression
+        # Forward FSM ``StorageConfig.compression`` to the data
+        # backend's ``compression`` config key (the established
+        # ``AsyncFileDatabase`` API at backends/file.py — read at
+        # ``self.config.get("compression", None)``).  An earlier
+        # implementation injected ``'compress'`` here, which the data
+        # backend silently ignored, so file storage was effectively
+        # uncompressed regardless of ``StorageConfig.compression``.
+        if 'compression' not in config.connection_params:
+            config.connection_params['compression'] = (
+                'gzip' if config.compression else None
+            )
 
         super().__init__(config, database=database, steps_database=steps_database)
 

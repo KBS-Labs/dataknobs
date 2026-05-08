@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_utils.sql_utils import quote_ident
 
+from ...backends.postgres_mixins import validate_pg_identifier
 from ..types import DistanceMetric
 from .base import VectorStore
 
@@ -165,8 +166,20 @@ class PgVectorStore(VectorStore):
             )
         self.connection_string = normalized["connection_string"]
 
-        self.table_name = self.config.get("table_name", "knowledge_embeddings")
-        self.schema = self.config.get("schema", "edubot")
+        # Validate identifier shape early so misconfiguration surfaces
+        # as ``ConfigurationError`` at construction rather than as a
+        # ``PostgresSyntaxError`` at first DDL.  Same defense-in-depth
+        # the records backends apply via ``_parse_postgres_config``
+        # (Item 117); the third Postgres consumer goes through this
+        # path independently.
+        self.table_name = validate_pg_identifier(
+            self.config.get("table_name", "knowledge_embeddings"),
+            "table_name",
+        )
+        self.schema = validate_pg_identifier(
+            self.config.get("schema", "edubot"),
+            "schema",
+        )
         self._q_schema = quote_ident(self.schema)
         self._q_table = quote_ident(self.table_name)
         self._q_qualified = f"{self._q_schema}.{self._q_table}"
