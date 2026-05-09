@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `aiohttp` requirement (extras: `ollama`, `huggingface`)
+  from `>=3.8.0` to `>=3.13.4` to exclude 22 known CVEs (highest
+  CVSS 9.1: GHSA-63hf-3vf5-4wqf), including CVE-2024-23334 / GHSA-5m98-qgg9-wh84.
+- Bumped minimum `transformers` requirement (extra: `embeddings`) from
+  `>=4.30.0` to `>=4.53.0` to exclude 16 known CVEs (highest CVSS 9.0:
+  PYSEC-2023-300).
+- Bumped minimum `jinja2` requirement from `>=3.1.0` to `>=3.1.6` to
+  exclude versions affected by GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699,
+  GHSA-h75v-3vvj-5mfj, and GHSA-q2x7-8rv6-6q7h.
+- `torch>=2.6.0` (extra: `embeddings`) is unchanged. Two newer CVEs at
+  CVSS 3.3 / 4.8 are tracked but the fix versions are 2.7.1-rc1 (not
+  GA) / 2.8.0; will be revisited via the weekly CVE-audit workflow once
+  GA wheels are available across supported platforms.
+
 ### Internal
 - `FileSystemPromptLibrary._load_file` uses
   `dataknobs_common.config_loading.load_yaml_or_json`. Surface is

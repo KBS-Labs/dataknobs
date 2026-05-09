@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `duckdb` requirement (extra: `duckdb`) from `>=0.9.0`
+  to `>=1.1.0` to exclude versions affected by PYSEC-2024-25 (CVSS
+  9.8) and PYSEC-2024-203. This is a major-version bump (0.x → 1.x);
+  the public DuckDB API used by `SyncDuckDBDatabase` /
+  `AsyncDuckDBDatabase` (connection management, `execute`, `query`,
+  Arrow result conversion) is stable across this range.
+- Bumped minimum `pyarrow` requirement (extra: `parquet`) from
+  `>=14.0.0` to `>=17.0.0` to exclude versions affected by
+  PYSEC-2023-238 (CVSS 9.8) and PYSEC-2024-161.
+
 ### Changed
 
 - **`validate_database_name()` now raises `ConfigurationError`

@@ -17,7 +17,7 @@ dependencies = [
     "dataknobs-fsm>=0.1.17",
     "pyyaml>=6.0",
     "numpy>=1.24.0",
-    "jinja2>=3.1.0",
+    "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6
 ]
 
 [project.optional-dependencies]
