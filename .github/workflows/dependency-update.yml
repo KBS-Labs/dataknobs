@@ -83,6 +83,12 @@ jobs:
       if: steps.debounce.outputs.skip != 'true'
       run: |
         uv lock --upgrade
+        # Snapshot the upgraded resolve. The PR commits this exact
+        # file at the end so the committed uv.lock is bit-identical
+        # to what was audited and validated — no re-resolution at
+        # the end of the workflow that could pick up a new release
+        # published mid-run.
+        cp uv.lock uv.lock.initial
 
     - name: Verify lock file resolves
       if: steps.debounce.outputs.skip != 'true'
@@ -169,12 +175,13 @@ jobs:
         # reachable by fresh consumer installs that don't inherit our
         # uv.lock pins.
         #
-        # `uv lock` always writes to uv.lock; back up the upgraded
-        # resolve, regenerate as lowest-direct, copy aside, restore.
-        cp uv.lock uv.lock.upgraded
+        # `uv lock` always writes to uv.lock; regenerate as
+        # lowest-direct, save the result as uv-lowest.lock, then
+        # restore the upgraded resolve from the immutable snapshot
+        # taken at workflow start.
         uv lock --resolution lowest-direct
         cp uv.lock uv-lowest.lock
-        mv uv.lock.upgraded uv.lock
+        cp uv.lock.initial uv.lock
 
     - name: Audit floor resolve for known vulnerabilities
       id: audit_floor
@@ -213,10 +220,11 @@ jobs:
       if: steps.debounce.outputs.skip != 'true'
       run: |
         # Install the floor resolve so the next step can validate
-        # against it. uv.lock is currently the upgraded resolve;
-        # `uv sync --resolution lowest-direct` rewrites uv.lock to
-        # the floor resolve and installs from it.
-        uv sync --resolution lowest-direct --all-packages
+        # against it. Overwrite uv.lock with the saved floor
+        # lockfile and frozen-sync, so we install exactly what we
+        # just audited (no fresh re-resolution).
+        cp uv-lowest.lock uv.lock
+        uv sync --all-packages --frozen
 
     - name: Validate floor resolve
       id: validate_floor
@@ -244,12 +252,12 @@ jobs:
     - name: Restore upgraded resolve
       if: steps.debounce.outputs.skip != 'true'
       run: |
-        # The PR is opened with uv.lock at the upgraded resolve, since
-        # that is what `uv lock --upgrade` produced and what the PR is
-        # for. Re-run the upgrade lock + sync so peter-evans sees the
-        # right uv.lock state.
-        uv lock --upgrade
-        uv sync --all-packages
+        # Restore the upgraded uv.lock from the immutable snapshot
+        # taken at workflow start. Frozen sync installs exactly what
+        # we'll commit — no fresh re-resolution that could differ
+        # from the audited and validated lockfile.
+        mv uv.lock.initial uv.lock
+        uv sync --all-packages --frozen
         # uv-lowest.lock is gitignored but tidy up anyway so the PR
         # checkout doesn't include it as an untracked file.
         rm -f uv-lowest.lock
@@ -281,7 +289,14 @@ jobs:
           version. Bump the affected `pyproject.toml` floors with
           inline CVE-rationale comments matching the precedent at
           `packages/llm/pyproject.toml:34` (e.g.,
-          `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and run
-          `bin/release-helper.sh bump` for the affected packages.
+          `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
+          `### Security` entry to each affected package's
+          `CHANGELOG.md` under `## Unreleased`.
+
+          Do **not** bump package versions or run
+          `bin/release-helper.sh bump` for floor changes — entries
+          accumulate under `## Unreleased` and ship with the next
+          release. See `docs/development/dependency-updates.md` for
+          the full review and floor-bump procedure.
         branch: update-dependencies
         delete-branch: true

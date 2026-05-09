@@ -30,20 +30,24 @@ The workflow audits **two distinct resolves** of the workspace:
 
 Each resolve is audited for CVEs and validated for quality:
 
-1. **Refresh** `uv.lock` via `uv lock --upgrade`
+1. **Refresh** `uv.lock` via `uv lock --upgrade`, then snapshot it as
+   `uv.lock.initial` -- the bit-identical file that will be committed
+   to the PR after both audits and validations finish
 2. **Sync** the upgraded resolve via `uv sync --all-packages`
 3. **Audit upgraded resolve** with `osv-scanner` against `uv.lock`
 4. **Validate upgraded resolve** by running `bin/dk pr --all`
-5. **Generate floor resolve** by saving `uv.lock`, regenerating with
-   `uv lock --resolution lowest-direct`, copying to `uv-lowest.lock`,
-   and restoring `uv.lock` to the upgraded resolve
+5. **Generate floor resolve** by running
+   `uv lock --resolution lowest-direct`, copying the result to
+   `uv-lowest.lock`, and restoring `uv.lock` from `uv.lock.initial`
 6. **Audit floor resolve** with `osv-scanner` against `uv-lowest.lock`
-7. **Sync floor resolve** via `uv sync --resolution lowest-direct
-   --all-packages` (this rewrites `uv.lock` to the floor temporarily)
+7. **Sync floor resolve** by overwriting `uv.lock` with
+   `uv-lowest.lock` and running `uv sync --all-packages --frozen`
+   (frozen sync installs exactly the lockfile we just audited, with
+   no re-resolution)
 8. **Validate floor resolve** by running `bin/dk pr --all`
-9. **Restore upgraded resolve** by re-running `uv lock --upgrade` and
-   `uv sync --all-packages` so the PR is opened against the upgraded
-   `uv.lock`
+9. **Restore upgraded resolve** by moving `uv.lock.initial` back to
+   `uv.lock` and frozen-syncing, so the PR commits the exact lockfile
+   that was audited at the start of the workflow
 10. **Open the PR** with all four results -- two audits + two
     validations -- in the PR body
 
