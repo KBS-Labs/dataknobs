@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`MarkdownChunker._create_chunk` no longer lets caller-supplied
+  node metadata overwrite the chunker-supplied `node_type`** in
+  `ChunkMetadata.custom`. Defense-in-depth: the md_parser callers
+  do not currently set `node_type` in node metadata, so the path
+  is practically unreachable today. The safeguard becomes zero
+  marginal cost once
+  `dataknobs_common.metadata.enforce_immutable_keys` exists, and
+  emits a `WARNING` if a colliding override is ever attempted.
+
+- **`ChunkMetadata.to_dict()` no longer lets `custom` overwrite
+  structured fields.** Pre-fix, `to_dict` ended with
+  `**self.custom`, so a custom entry sharing a key with a
+  structured field (`headings`, `chunk_index`, `chunk_size`,
+  `line_number`, `content_length`, etc.) silently overwrote the
+  structured value in the serialized dict — same vulnerability
+  class as the `_create_chunk` `node_type` defense, but covering
+  the entire system-field surface. Post-fix, `**self.custom` is
+  unpacked FIRST so structured fields win.
+
 ### Security
 - Bumped minimum `nltk` requirement from `>=3.9.1` to `>=3.9.4` to
   exclude versions affected by GHSA-rf74-v2fm-23pw, CVE-2026-33230,

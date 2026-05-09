@@ -536,6 +536,11 @@ print(f"Created {result.chunks_created} chunks")
 if result.errors:
     print(f"Errors: {result.errors}")
 
+# `clear_existing=True` is safe in shared multi-tenant stores: the
+# clear is scoped to the supplied domain via
+# `RAGKnowledgeBase.clear(filter={"domain_id": "my-domain"})`, so
+# re-ingesting one domain leaves chunks from other domains intact.
+
 # Ingest only if changed
 result = await manager.ingest_if_changed("my-domain", last_version="abc123")
 if result is None:

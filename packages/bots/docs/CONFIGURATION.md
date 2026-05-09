@@ -719,9 +719,11 @@ memory:
 
 **Tenant/Domain Scoping:**
 
-VectorMemory supports `default_metadata` and `default_filter` for multi-tenant
-isolation. Default metadata is merged into every stored vector, and default
-filters scope every search to matching vectors:
+VectorMemory supports `default_metadata`, `default_filter`, and
+`immutable_metadata_keys` for multi-tenant isolation. Default metadata is
+merged into every stored vector, default filters scope every search to
+matching vectors, and immutable keys lock specific default-metadata values
+against caller override:
 
 ```yaml
 memory:
@@ -734,11 +736,25 @@ memory:
     user_id: "u123"       # Tagged on every stored message
   default_filter:
     user_id: "u123"       # Only this user's messages are returned
+  immutable_metadata_keys:
+    - user_id             # Caller cannot override user_id via add_message metadata
 ```
 
-Both keys are optional. Caller-supplied metadata in `add_message()` overrides
-defaults for the same keys. These work with any metadata key — the framework
-does not prescribe a specific tenancy model.
+All three keys are optional. By default, caller-supplied metadata in
+`add_message()` overrides defaults for the same keys (backward-compatible
+behavior). Use `immutable_metadata_keys` to lock the keys you treat as
+authoritative — caller attempts to override them are logged as warnings and
+the configured value is preserved. These work with any metadata key — the
+framework does not prescribe a specific tenancy model.
+
+**Tenant-scoped clear:**
+
+`VectorMemory.clear()` honors `default_filter` automatically — calling
+`mem.clear()` with no args on a tenant-scoped instance removes only that
+tenant's slice. Pass `filter_metadata=` explicitly to scope the clear to a
+different subset (e.g. one category/conversation within a tenant). To
+genuinely wipe an entire shared store regardless of tenant scoping, call
+`mem.vector_store.clear()` directly to bypass the wrapper.
 
 ### Composite Memory
 

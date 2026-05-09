@@ -143,8 +143,20 @@ class VectorStore(ABC, VectorStoreBase):
         pass
 
     @abstractmethod
-    async def clear(self) -> None:
-        """Clear all vectors from the store."""
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear vectors from the store.
+
+        Args:
+            filter: Optional metadata filter.  When ``None`` (default),
+                all vectors are removed — preserving the historical
+                unscoped behavior.  When provided, only vectors whose
+                metadata matches the filter are removed; non-matching
+                vectors are preserved.
+
+        The filter shape is the same as for :meth:`search` and
+        :meth:`count` — backend-specific operator support matches
+        each backend's existing filter-translation capabilities.
+        """
         pass
 
     async def metadata_fields(self) -> set[str]:

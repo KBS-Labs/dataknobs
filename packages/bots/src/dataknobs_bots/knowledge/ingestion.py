@@ -174,8 +174,18 @@ class KnowledgeIngestionManager:
             logger.info("Starting ingestion for domain: %s", domain_id)
 
             if clear_existing:
-                await self._destination.clear()
-                logger.debug("Cleared existing vectors for domain: %s", domain_id)
+                # Scope the clear to this domain. Pre-Item-118-Option-B
+                # the underlying ``VectorStore.clear()`` was unscoped
+                # and this call wiped every other domain's chunks in
+                # any multi-tenant shared store.
+                # ``RAGKnowledgeBase.clear(filter=...)`` now passes the
+                # filter through to the backend.
+                await self._destination.clear(
+                    filter={"domain_id": domain_id}
+                )
+                logger.debug(
+                    "Cleared existing vectors for domain: %s", domain_id
+                )
 
             stats = await self._destination.ingest_from_backend(
                 self._source,

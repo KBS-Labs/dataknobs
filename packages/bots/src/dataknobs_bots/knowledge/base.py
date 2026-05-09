@@ -44,6 +44,39 @@ class KnowledgeBase(ABC):
     async def close(self) -> None:
         """Close the knowledge base and release resources."""
 
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Remove records from this knowledge base, optionally filtered.
+
+        Default implementation raises ``NotImplementedError`` so
+        subclasses that don't support deletion (e.g. read-only
+        adapters, scripted test doubles with immutable fixtures)
+        cannot be silently mis-driven by managers like
+        :class:`KnowledgeIngestionManager` whose
+        ``clear_existing=True`` codepath assumes a writable store.
+
+        Subclasses that DO support deletion — including
+        :class:`RAGKnowledgeBase` — should override this method and:
+
+        * Treat ``filter=None`` as "remove everything" (the historical
+          unscoped behavior).
+        * Treat a non-``None`` ``filter`` as a four-quadrant metadata
+          filter (see ``VECTOR_FILTER_SEMANTICS.md``) and remove only
+          matching records.
+
+        Args:
+            filter: Optional metadata filter. ``None`` means "remove
+                all records". A non-``None`` filter restricts the
+                deletion to records whose metadata matches.
+
+        Raises:
+            NotImplementedError: If the subclass does not support
+                deletion at all.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support clear(). "
+            "Subclasses that support deletion must override this method."
+        )
+
     def format_context(
         self,
         results: list[dict[str, Any]],

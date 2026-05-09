@@ -23,6 +23,7 @@ async def _make_vector_memory(
     similarity_threshold: float = 0.0,
     default_metadata: dict | None = None,
     default_filter: dict | None = None,
+    immutable_metadata_keys: set[str] | list[str] | None = None,
 ) -> VectorMemory:
     """Create a VectorMemory backed by an in-memory vector store + EchoProvider."""
     factory = VectorStoreFactory()
@@ -33,14 +34,17 @@ async def _make_vector_memory(
     provider = llm_factory.create({"provider": "echo", "model": "test"})
     await provider.initialize()
 
-    return VectorMemory(
-        vector_store=store,
-        embedding_provider=provider,
-        max_results=10,
-        similarity_threshold=similarity_threshold,
-        default_metadata=default_metadata,
-        default_filter=default_filter,
-    )
+    kwargs: dict = {
+        "vector_store": store,
+        "embedding_provider": provider,
+        "max_results": 10,
+        "similarity_threshold": similarity_threshold,
+        "default_metadata": default_metadata,
+        "default_filter": default_filter,
+    }
+    if immutable_metadata_keys is not None:
+        kwargs["immutable_metadata_keys"] = immutable_metadata_keys
+    return VectorMemory(**kwargs)
 
 
 class _FailingMemory(Memory):
@@ -155,6 +159,101 @@ class TestVectorMemoryScoping:
         assert mem._default_filter == {"tenant": "t1"}
 
     @pytest.mark.asyncio
+    async def test_immutable_metadata_keys_block_caller_override(
+        self, caplog
+    ):
+        """Item 118: ``immutable_metadata_keys`` blocks caller override.
+
+        Reproduces the consumer-reported tenant-scoping bypass: when a
+        caller passes ``metadata={"user_id": "ATTACKER"}`` to
+        ``add_message()``, the construction-time ``default_metadata``
+        value for that key must win, and a warning must be logged so
+        misuse is debuggable.
+        """
+        import logging
+
+        mem = await _make_vector_memory(
+            default_metadata={"user_id": "tenant-A"},
+            default_filter={"user_id": "tenant-A"},
+            immutable_metadata_keys={"user_id"},
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await mem.add_message(
+                content="hello",
+                role="user",
+                metadata={"user_id": "ATTACKER", "category": "support"},
+            )
+
+        context = await mem.get_context("hello")
+        assert len(context) == 1
+        md = context[0]["metadata"]
+        # Immutable key preserved.
+        assert md["user_id"] == "tenant-A"
+        # Non-immutable caller value preserved.
+        assert md["category"] == "support"
+        # Warning emitted naming the key.
+        assert any(
+            "user_id" in record.message
+            and "immutable" in record.message.lower()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_caller_wins_when_immutable_keys_unset(self):
+        """Backward-compat: without immutable_metadata_keys, caller still wins.
+
+        Existing callers must not see a behavior change unless they
+        explicitly opt in via ``immutable_metadata_keys``.
+        """
+        mem = await _make_vector_memory(
+            default_metadata={"user_id": "tenant-A"},
+        )
+        await mem.add_message(
+            "hello", "user", metadata={"user_id": "OVERRIDE"}
+        )
+        context = await mem.get_context("hello")
+        assert len(context) == 1
+        # Same as the existing test_caller_metadata_overrides_default —
+        # caller still wins when the new opt-in is unset.
+        assert context[0]["metadata"]["user_id"] == "OVERRIDE"
+
+    @pytest.mark.asyncio
+    async def test_immutable_key_silent_when_caller_agrees(self, caplog):
+        """No warning when caller-supplied value matches default."""
+        import logging
+
+        mem = await _make_vector_memory(
+            default_metadata={"user_id": "tenant-A"},
+            immutable_metadata_keys={"user_id"},
+        )
+        with caplog.at_level(logging.WARNING):
+            await mem.add_message(
+                "hello", "user", metadata={"user_id": "tenant-A"}
+            )
+        # No warning because caller didn't try to override.
+        assert not any(
+            "immutable" in record.message.lower()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_from_config_plumbs_immutable_metadata_keys(self):
+        """from_config() forwards ``immutable_metadata_keys`` to the constructor."""
+        config = {
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+            "default_metadata": {"user_id": "tenant-A"},
+            "immutable_metadata_keys": ["user_id"],
+        }
+        mem = await VectorMemory.from_config(config)
+        # Internal attribute name is ``_immutable_keys``; verify the
+        # configured set survived round-trip.
+        assert "user_id" in mem._immutable_keys
+
+    @pytest.mark.asyncio
     async def test_default_filter_scopes_get_context(self):
         """default_filter isolates reads so each tenant sees only its own data."""
         # Use a shared store for both tenants, with threshold=-1.0 so
@@ -187,6 +286,120 @@ class TestVectorMemoryScoping:
         contents_u2 = [m["content"] for m in ctx_u2]
         assert "user two message" in contents_u2
         assert "user one message" not in contents_u2
+
+    @pytest.mark.asyncio
+    async def test_clear_auto_applies_default_filter(self):
+        """Item 118 sub-issue 8b: clear() auto-applies default_filter.
+
+        Pre-fix, ``clear()`` was unconditionally unscoped — even on
+        tenant-scoped instances. Post-fix, calling ``clear()`` with no
+        args on a ``VectorMemory(default_filter={"user_id": "u1"})``
+        clears only u1's vectors.
+        """
+        mem_u1 = await _make_vector_memory(
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u1"},
+            default_filter={"user_id": "u1"},
+        )
+        mem_u2 = await _make_vector_memory(
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u2"},
+            default_filter={"user_id": "u2"},
+        )
+        mem_u2.vector_store = mem_u1.vector_store  # shared store
+
+        await mem_u1.add_message("u1 msg", "user")
+        await mem_u2.add_message("u2 msg", "user")
+
+        await mem_u1.clear()  # should clear only u1's slice
+
+        ctx_u1 = await mem_u1.get_context("query")
+        ctx_u2 = await mem_u2.get_context("query")
+        assert len(ctx_u1) == 0
+        assert any(m["content"] == "u2 msg" for m in ctx_u2)
+
+    @pytest.mark.asyncio
+    async def test_clear_explicit_filter_composes_with_default(self):
+        """``filter_metadata`` arg AND-composes with ``default_filter``.
+
+        Explicit filter narrows WITHIN the tenant scope; it does not
+        escape it. So ``clear(filter_metadata={"category": "A"})`` on
+        a memory scoped to ``user_id=u1`` removes records matching
+        BOTH ``user_id=u1`` AND ``category=A`` — never another
+        tenant's records.
+        """
+        mem = await _make_vector_memory(
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u1"},
+            default_filter={"user_id": "u1"},
+        )
+        await mem.add_message("a msg", "user", metadata={"category": "A"})
+        await mem.add_message("b msg", "user", metadata={"category": "B"})
+
+        await mem.clear(filter_metadata={"category": "A"})
+
+        # Only category-A removed within u1; category-B in u1 survives.
+        contents = await mem.get_context("query")
+        assert all(m["metadata"].get("category") != "A" for m in contents)
+        assert any(m["metadata"].get("category") == "B" for m in contents)
+
+    @pytest.mark.asyncio
+    async def test_clear_explicit_filter_cannot_escape_tenant_scope(self):
+        """Explicit filter cannot reach across tenants on a scoped memory.
+
+        A ``VectorMemory`` constructed with ``default_filter={"user_id":
+        "u1"}`` must not be able to clear ``user_id=u2`` records via an
+        explicit ``filter_metadata={"user_id": "u2"}`` argument. Pre-fix
+        the explicit filter REPLACED the default, so a tenant-scoped
+        instance could wipe other tenants' rows in a shared store —
+        violating the abstraction's promise.
+
+        Post-fix the filters AND-compose, so the effective filter
+        becomes ``{"user_id": "u1", "user_id": "u2"}`` (the second
+        ``user_id`` wins lexically since they share a key, but the
+        contract is: composition; if both clauses can't be satisfied,
+        nothing is removed).
+        """
+        # Shared store across two tenant-scoped memories.
+        factory = VectorStoreFactory()
+        store = factory.create(backend="memory", dimensions=384)
+        await store.initialize()
+
+        llm_factory = LLMProviderFactory(is_async=True)
+        provider = llm_factory.create({"provider": "echo", "model": "test"})
+        await provider.initialize()
+
+        mem_u1 = VectorMemory(
+            vector_store=store,
+            embedding_provider=provider,
+            max_results=10,
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u1"},
+            default_filter={"user_id": "u1"},
+        )
+        mem_u2 = VectorMemory(
+            vector_store=store,
+            embedding_provider=provider,
+            max_results=10,
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u2"},
+            default_filter={"user_id": "u2"},
+        )
+
+        await mem_u1.add_message("u1 msg", "user")
+        await mem_u2.add_message("u2 msg", "user")
+
+        # u1's memory tries to clear u2's data via an explicit override.
+        await mem_u1.clear(filter_metadata={"user_id": "u2"})
+
+        # u2's data must survive — composition forbids escape.
+        u2_contents = await mem_u2.get_context("query")
+        assert any(
+            m["metadata"].get("user_id") == "u2" for m in u2_contents
+        ), (
+            "u2 records were wiped by u1's clear — explicit filter "
+            "escaped the tenant scope. Composition must prevent this."
+        )
 
 
 # ===========================================================================
