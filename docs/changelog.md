@@ -5,6 +5,96 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-09
+
+### dataknobs-common [1.3.12]
+
+#### Fixed
+- fixed destructive vector database metadata merge order patterns
+- shared yaml/json loader helper
+
+### dataknobs-config [0.3.12]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Changed
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Fixed
+- shared yaml/json loader helper
+- canonicalized env-var substitution
+- fixed environment config env var substitution
+
+### dataknobs-utils [1.2.10]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-xization [1.3.5]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Fixed
+- fixed destructive vector database metadata merge order patterns
+- shared yaml/json loader helper
+
+### dataknobs-data [0.4.17]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Changed
+- bumped versions, updated release notes
+
+#### Fixed
+- fixed destructive vector database metadata merge order patterns
+- PgVectorStore postgres identifier validation + harmonized validate_database_name exception
+- async postgres row to record id asymmetry
+
+### dataknobs-fsm [0.1.18]
+
+#### Added
+
+- added floor cve sweep to dependency updates, and performed the sweep
+- shared yaml/json loader helper
+
+#### Fixed
+- rewrote fsm history CLI commands against real BaseHistoryStorage API
+- fixed FSM unified storage backend selection and config plumbing
+- migrated FSM env-var resolver
+
+### dataknobs-legacy [0.1.4]
+
+#### Added
+
+- added floor cve sweep to dependency updates, and performed the sweep
+
+#### Fixed
+- bumped versions, updated release notes
+
+### dataknobs-llm [0.5.11]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+- shared yaml/json loader helper
+
+### dataknobs-bots [0.6.18]
+
+#### Added
+- added floor cve sweep to dependency updates, and performed the sweep
+- added peek to registry backend for no-touch access
+- shared yaml/json loader helper
+
+#### Fixed
+- fixed destructive vector database metadata merge order patterns
+- ensured ingestion result completed at on skip
+
+
 ## Release - 2026-05-06
 
 ### dataknobs-config [0.3.11]
