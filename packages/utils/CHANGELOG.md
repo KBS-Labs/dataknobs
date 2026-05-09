@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.2.10 - 2026-05-09
+
 ### Security
 - Bumped minimum `nltk` requirement from `>=3.7` to `>=3.9.4` to
   exclude versions affected by GHSA-rf74-v2fm-23pw, CVE-2026-33230,

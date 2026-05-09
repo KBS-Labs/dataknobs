@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.3.12 - 2026-05-09
+
 ### Added
 - `RequiredEnvVarError`, a `ValueError` subclass raised by
   `substitute_env_vars` (and every loader that calls it) when a required

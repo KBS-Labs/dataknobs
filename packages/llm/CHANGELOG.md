@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.5.11 - 2026-05-09
+
 ### Security
 - Bumped minimum `aiohttp` requirement (extras: `ollama`, `huggingface`)
   from `>=3.8.0` to `>=3.13.4` to exclude 22 known CVEs (highest

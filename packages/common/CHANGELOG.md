@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.3.12 - 2026-05-09
+
 ### Added
 - `dataknobs_common.metadata.enforce_immutable_keys` — primitive for
   "layered-merge with a designated immutable source for some keys."

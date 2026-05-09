@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.4.17 - 2026-05-09
+
 ### Added
 
 - **`VectorStore.clear(filter=...)`** — filter-aware clear, now
