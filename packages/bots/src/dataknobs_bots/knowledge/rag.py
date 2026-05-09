@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
+from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_xization import (
     ContentTransformer,
     create_chunker,
@@ -703,7 +704,51 @@ class RAGKnowledgeBase(KnowledgeBase):
         ids: list[str] = []
         metadatas: list[dict[str, Any]] = []
 
+        # ``KnowledgeBaseConfig.get_metadata`` (xization) and many
+        # direct callers add ``source`` / ``filename`` to caller
+        # metadata as redundant copies of the explicit ``source_file``
+        # argument. They legitimately differ from the precise
+        # display-URI ``source_file`` (e.g. relative path vs full S3
+        # URI) but are redundant — not caller-as-attacker overrides.
+        # Strip them here, ONCE, at the shared layer so every entry
+        # point (including direct ``load_markdown_text`` callers)
+        # benefits without triggering a spurious immutable-key
+        # warning per chunk.
+        if metadata:
+            metadata = {
+                k: v
+                for k, v in metadata.items()
+                if k not in ("source", "filename")
+            }
+            if not metadata:
+                metadata = None
+
         source_stem = Path(source_file).stem if source_file else "doc"
+        # In multi-tenant shared stores the same filename can appear
+        # under multiple ``domain_id`` namespaces (e.g.
+        # ``domain-a/doc.md`` and ``domain-b/doc.md``).  ``Path.stem``
+        # strips both the URI and the extension, so without a
+        # domain-aware prefix the chunk IDs collide and one tenant's
+        # ingest upserts over another's.  Prefer ``domain_id`` from
+        # the caller-supplied metadata (threaded by
+        # ``KnowledgeIngestionManager`` as ``extra_metadata``) when
+        # present.  Single-domain consumers see no change.
+        # Use a record-separator (``\x1f``) between ``domain_id`` and
+        # ``stem`` so snake_case-domain collisions are impossible
+        # (``my`` + ``team_doc`` and ``my_team`` + ``doc`` would both
+        # produce ``my_team_doc`` with an underscore separator).
+        domain_id = (metadata or {}).get("domain_id")
+        chunk_prefix = (
+            f"{domain_id}\x1f{source_stem}" if domain_id else source_stem
+        )
+
+        # Detect caller-attempted system-field overrides ONCE per
+        # call rather than per chunk. The same ``metadata`` dict
+        # would otherwise emit N identical warnings for an N-chunk
+        # document. We pass ``caller=metadata`` to the helper on the
+        # first chunk only (warning emission), then ``caller=None``
+        # on subsequent chunks (silent enforcement).
+        warn_caller: dict[str, Any] | None = metadata
 
         for i, chunk in enumerate(chunks):
             text_for_embedding = chunk.get("embedding_text") or chunk.get(
@@ -717,21 +762,41 @@ class RAGKnowledgeBase(KnowledgeBase):
                 embedding = np.array(embedding, dtype=np.float32)
 
             chunk_index = chunk.get("chunk_index", i)
-            chunk_id = f"{source_stem}_{chunk_index}"
+            chunk_id = f"{chunk_prefix}\x1f{chunk_index}"
 
-            chunk_metadata: dict[str, Any] = {
+            # System-controlled fields — caller-supplied ``metadata``
+            # cannot override these. Tracked separately so the helper
+            # can compare caller against system source.
+            system_fields: dict[str, Any] = {
                 "text": chunk.get("text", ""),
                 "source": source_file,
                 "chunk_index": chunk_index,
                 "document_type": document_type,
             }
             if source_path is not None:
-                chunk_metadata["source_path"] = source_path
+                system_fields["source_path"] = source_path
+
+            chunk_metadata: dict[str, Any] = dict(system_fields)
             inner = chunk.get("metadata") or {}
             if inner:
                 chunk_metadata.update(inner)
             if metadata:
                 chunk_metadata.update(metadata)
+
+            # Restore system-field values if caller-supplied metadata
+            # tried to overwrite them (e.g. ``metadata={"text":
+            # "tampered"}``). On the first chunk pass ``caller=metadata``
+            # so the helper emits a warning; subsequent chunks pass
+            # ``caller=None`` to enforce silently.
+            enforce_immutable_keys(
+                target=chunk_metadata,
+                caller=warn_caller,
+                source=system_fields,
+                keys=system_fields.keys(),
+                logger=logger,
+                context="RAGKnowledgeBase._embed_and_store_chunks",
+            )
+            warn_caller = None
 
             vectors.append(embedding)
             ids.append(chunk_id)
@@ -1173,17 +1238,31 @@ class RAGKnowledgeBase(KnowledgeBase):
         """
         return await self.vector_store.count(filter)
 
-    async def clear(self) -> None:
-        """Clear all documents from the knowledge base.
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear documents from the knowledge base.
 
-        Warning: This removes all stored chunks and embeddings.
+        Warning: When ``filter`` is ``None``, this removes all stored
+        chunks and embeddings.  Pass a metadata filter to scope the
+        clear (e.g. ``filter={"domain_id": "docs"}``) so that only
+        matching chunks are removed.
+
+        Args:
+            filter: Optional metadata filter.  When ``None`` (default),
+                all chunks are removed.  When provided, only chunks
+                whose metadata matches the filter are removed; the
+                filter shape is the same as for :meth:`query`.
+
+        Raises:
+            NotImplementedError: If the backing vector store does
+                not support ``clear()``.
         """
         if hasattr(self.vector_store, "clear"):
-            await self.vector_store.clear()
+            await self.vector_store.clear(filter=filter)
         else:
             raise NotImplementedError(
                 "Vector store does not support clearing. "
-                "Consider creating a new knowledge base with a fresh collection."
+                "Consider creating a new knowledge base with a fresh "
+                "collection."
             )
 
     async def save(self) -> None:

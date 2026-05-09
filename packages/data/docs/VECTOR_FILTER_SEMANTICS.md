@@ -2,9 +2,84 @@
 
 `MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`, and
 `PgVectorStore` all accept a `filter: dict[str, Any] | None` argument
-on `search()` and `count()`. Per-key match semantics are identical
-across backends — consumers can runtime-swap the backing store without
-behavioral surprises.
+on `search()`, `count()`, and `clear()`. Per-key match semantics are
+identical across backends — consumers can runtime-swap the backing
+store without behavioral surprises.
+
+`clear(filter=...)` removes only vectors whose metadata matches the
+filter, leaving non-matching vectors intact. `clear()` (no filter)
+preserves the historical unscoped behavior — every vector in the
+store is removed. Backend-specific note: FAISS has no native
+filtered delete; filtered clear iterates `metadata_store` to collect
+matching IDs and delegates to `delete_vectors(ids)` (O(N) over
+stored vectors). Workloads at scale where filtered clear is hot
+should prefer pgvector or Chroma where filtered delete is native.
+
+### PgVector config-level `domain_id` interacts with `clear()`
+
+`PgVectorStore` accepts a config-level `domain_id` that scopes
+**every** read and write to the configured tenant. This includes
+`clear()`: a `PgVectorStore` constructed with `domain_id="x"`
+treats `clear()` (no filter) as `DELETE WHERE domain_id='x'` —
+not as a full-table wipe. `clear(filter={...})` AND-composes the
+config-level scope with the explicit filter. Memory, FAISS, and
+Chroma have no equivalent config-level scoping, so `clear()` on
+those backends always wipes everything in the collection.
+
+When **runtime-swapping** between backends, this is the one
+asymmetry to account for: a tenant-scoped `PgVectorStore` is
+inherently safer under unscoped `clear()` than a tenant-scoped
+`MemoryVectorStore` / `FaissVectorStore` / `ChromaVectorStore`
+that relies entirely on caller-supplied `filter=` to scope. To
+swap consistently:
+
+* Either always pass an explicit `filter={...}` to `clear()` and
+  do not rely on PgVector's config-level `domain_id` for scoping
+  (treat all backends as unscoped at the config level), or
+* Use `dataknobs_bots.memory.VectorMemory` /
+  `dataknobs_bots.knowledge.RAGKnowledgeBase` as the public
+  surface — both auto-apply their `default_filter` so the
+  asymmetry is hidden by an upper layer.
+
+The `KnowledgeIngestionManager` already takes the second path
+(uses `RAGKnowledgeBase.clear(filter={"domain_id": domain_id})`
+explicitly), so consumers driving multi-tenant ingestion through
+the manager see consistent behavior regardless of vector-store
+backend choice.
+
+### Optional `scalar_metadata_keys` push-down on `ChromaVectorStore`
+
+By default, `ChromaVectorStore` post-filters every scalar filter
+value in Python because Chroma's `$eq` does not match list-valued
+metadata — a real bug for consumers whose metadata stores tags or
+categories as lists. The post-filter is correct but materializes
+matching metadata in process for `count()` and over-fetches for
+`search()`.
+
+Consumers whose metadata for a given key is **always scalar** (the
+common multi-tenant scoping pattern) can declare those keys via
+the `scalar_metadata_keys` config option:
+
+```python
+from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+
+store = ChromaVectorStore({
+    "dimensions": 384,
+    "collection_name": "kb",
+    # Stored values for these keys are guaranteed scalar.
+    "scalar_metadata_keys": ["domain_id", "tenant_id"],
+})
+```
+
+For declared keys with scalar filter values, the partitioner
+pushes a Chroma-native `$eq` predicate, eliminating the
+post-filter. `count(filter={"domain_id": "x"})` then fetches only
+IDs (no metadata) when the entire filter pushes down, regardless
+of collection size.
+
+The declaration is opt-in and additive: keys not declared keep
+the conservative post-filter behavior, so existing consumers see
+no change.
 
 ## Four-quadrant match table
 

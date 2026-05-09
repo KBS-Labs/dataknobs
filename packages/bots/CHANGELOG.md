@@ -7,6 +7,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`VectorMemory(immutable_metadata_keys=...)`** — declares which
+  `default_metadata` keys cannot be overridden by caller-supplied
+  `metadata` on `add_message()`. Use for tenant-scoping identifiers
+  (e.g. `immutable_metadata_keys=["user_id"]` paired with
+  `default_metadata={"user_id": "..."}`). Caller-attempted overrides
+  are logged as warnings and the configured value is preserved.
+  Plumbed through `VectorMemory.from_config()`.
+
+- **`VectorMemory.clear(filter_metadata=...)`** — filter-aware
+  clear. When called with no args on a `VectorMemory` constructed
+  with `default_filter=...`, the default filter is auto-applied,
+  making `mem.clear()` symmetric with `mem.get_context()` for
+  tenant-scoped instances. Pass `filter_metadata=...` explicitly to
+  scope a clear to a different subset (e.g. one
+  category/conversation within a tenant).
+
+- **`RAGKnowledgeBase.clear(filter=...)`** — filter-aware clear,
+  passing through to the underlying `VectorStore.clear(filter=)`.
+
+### Fixed
+
+- **`RAGKnowledgeBase._embed_and_store_chunks` no longer lets
+  caller `metadata` overwrite system-controlled chunk fields**
+  (`text`, `source`, `chunk_index`, `document_type`,
+  `source_path`). Pre-fix, an ingest call passing
+  `metadata={"text": "tampered"}` could silently corrupt stored
+  chunks; the bug was reachable through every public ingest entry
+  point. Caller-supplied values for system fields are now logged
+  as warnings via `dataknobs_common.metadata.enforce_immutable_keys`
+  and the system value is preserved.
+
+- **`KnowledgeIngestionManager.ingest(domain_id, clear_existing=True)`
+  no longer wipes other domains' chunks in a shared vector store.**
+  Pre-fix, the manager called the underlying `VectorStore.clear()`
+  with no filter, so refreshing one domain in a multi-tenant store
+  removed every other domain's chunks silently. Post-fix, the clear
+  is scoped by `domain_id` via
+  `RAGKnowledgeBase.clear(filter={"domain_id": domain_id})`.
+  Consumer-side workarounds (e.g. defaulting `clear_first=False`
+  to dodge the issue) can be reverted on upgrade.
+
+- **`RAGKnowledgeBase._embed_and_store_chunks` chunk IDs are now
+  scoped by `domain_id` when present in the threaded metadata.**
+  Pre-fix, the chunk-id stem was derived purely from
+  `Path(source_file).stem`, so two chunks at the same relative
+  filename across different domains (e.g. `domain-a/doc.md` and
+  `domain-b/doc.md`) collided on a shared store and the second
+  ingest upserted over the first. Post-fix, the chunk-id prefix
+  becomes `f"{domain_id}_{stem}"` whenever `domain_id` is in the
+  caller-supplied metadata (which `KnowledgeIngestionManager`
+  threads automatically). Single-domain consumers see no change.
+
+- **`RAGKnowledgeBase.ingest_from_backend` no longer threads the
+  redundant `source` and `filename` keys** that
+  `KnowledgeBaseConfig.get_metadata` adds, into
+  `_embed_and_store_chunks`. The chunk-build step already receives
+  the more-precise `source_file` (display URI) and `source_path`
+  (relative path) explicitly; dropping the redundant copies stops
+  the new immutable-key enforcer from emitting a spurious warning
+  on every legitimate ingest.
+
+### Changed
+
+- **`VectorMemory.clear()` semantics on tenant-scoped instances.**
+  When `default_filter` is set, `clear()` (no args) now removes
+  only the matching tenant's vectors, not the entire store. The
+  pre-fix unscoped behavior was a documented gap (Brief 118
+  sub-issue 8b); the docs steered consumers away from production
+  `clear()` because it could not respect tenant scoping. This is
+  a behavior change for tenant-scoped instances — consumers who
+  genuinely want to wipe all tenants from a shared store should
+  call `mem.vector_store.clear()` directly (bypassing the
+  `VectorMemory` wrapper).
+
+- **`VectorMemory.clear(filter_metadata=...)` now AND-composes
+  with `default_filter` instead of replacing it.** Pre-fix, an
+  explicit `filter_metadata` argument took full precedence over
+  the memory's `default_filter`, allowing a tenant-scoped instance
+  to wipe other tenants' rows in a shared store via an explicit
+  override (e.g. tenant-A's memory could call
+  `clear(filter_metadata={"user_id": "B"})` and remove tenant B's
+  data). Post-fix the filters AND-compose, so explicit filters
+  narrow WITHIN the tenant scope and never escape it. On key
+  collision (caller passes a key that conflicts with the default)
+  the merged filter contains contradictory clauses and matches
+  nothing — the clear is a no-op rather than a cross-tenant wipe.
+
+- **`KnowledgeBase` ABC now declares `clear(filter=...)`** with a
+  default `NotImplementedError`. `RAGKnowledgeBase` overrides it
+  with the filter-aware delete path. Subclasses that don't support
+  deletion get a clean error rather than being silently
+  mis-driven by managers like `KnowledgeIngestionManager`.
+
+### Fixed
+
+- **`MarkdownChunker.ChunkMetadata.to_dict()` no longer lets
+  `custom` overwrite structured fields.** Pre-fix, `to_dict` ended
+  with `**self.custom`, so a custom entry sharing a key with a
+  structured field (`headings`, `chunk_index`, `chunk_size`,
+  etc.) silently overwrote the structured value in the serialized
+  dict — same vulnerability class as the pre-118 `_create_chunk`
+  `node_type` defense, but covering the entire system-field
+  surface. Post-fix, `**self.custom` is unpacked first so
+  structured fields win.
+
+- **`RAGKnowledgeBase._embed_and_store_chunks` chunk-id separator
+  switched from `_` to `\x1f` (ASCII unit separator)** to
+  eliminate snake-case-domain collisions. Pre-fix, the
+  underscore-joined prefix caused
+  `domain_id="my"`+file `team_doc.md` to collide with
+  `domain_id="my_team"`+file `doc.md` (both produced
+  `my_team_doc_0`). The unit-separator character cannot appear in
+  domain IDs or file stems, so collisions are structurally
+  impossible. Chunk IDs are not part of any documented public
+  surface, so this is a safe internal change.
+
+- **`RAGKnowledgeBase._embed_and_store_chunks` strips redundant
+  `source` / `filename` keys from caller metadata at the shared
+  layer.** Pre-fix, the strip lived only in
+  `ingest_from_backend`, so direct callers of
+  `load_markdown_text(metadata={"source": "..."})` still
+  triggered a spurious immutable-key warning even though the
+  caller's `source` was a redundant copy of the explicit
+  `source_file` argument (different views of the same file). Now
+  every entry point benefits.
+
+- **Immutable-key warnings are emitted once per offense, not once
+  per chunk.** Pre-fix, the per-chunk loop in
+  `_embed_and_store_chunks` invoked `enforce_immutable_keys` on
+  every chunk, so an N-chunk document with one bad metadata blob
+  emitted N identical warnings. Post-fix, the helper is invoked
+  with `caller=metadata` on the first chunk only (warning
+  emission) and `caller=None` on subsequent chunks (silent
+  enforcement) — one warning per offense.
+
+### Migration
+
+- Callers who currently rely on `default_metadata` for tenant
+  scoping should add `immutable_metadata_keys=[...]` matching the
+  scoping keys. Existing callers who do not set
+  `immutable_metadata_keys` see no behavior change for
+  `add_message` — caller metadata still wins on every key (the
+  pre-fix default).
+- Callers who relied on `VectorMemory.clear(filter_metadata=...)`
+  as a "broader" wipe than `default_filter` (e.g. a tenant-A memory
+  passing `filter_metadata={"category": "X"}` expecting to wipe
+  category X across ALL tenants in the shared store) must update
+  their code: the explicit filter now narrows WITHIN the tenant
+  scope. For an all-tenants wipe, drop down to the underlying
+  vector store: `mem.vector_store.clear(filter={"category": "X"})`.
+- Callers of `RAGKnowledgeBase` ingest methods who passed
+  caller-`metadata` containing `text`/`source`/`chunk_index`/
+  `document_type`/`source_path` (a bug-shaped pattern) must update
+  their code: those keys are now system-controlled and caller
+  values are logged as warnings and discarded.
+- **`VectorMemory.clear()` on tenant-scoped instances now
+  auto-applies `default_filter`.** Code that called `clear()` to
+  wipe an entire shared store (regardless of tenant scoping) will
+  now wipe only the calling tenant's slice. Consumers who meant
+  the all-tenants wipe should call `mem.vector_store.clear()`
+  directly.
+- **`KnowledgeIngestionManager.ingest(clear_existing=True)` is now
+  safe in shared stores.** Workarounds that flipped
+  `clear_existing` to `False` to avoid cross-domain wipes can be
+  reverted on upgrade.
+
 ### Security
 - Bumped minimum `jinja2` requirement from `>=3.1.0` to `>=3.1.6`
   to exclude versions affected by GHSA-cpwx-vrp4-4pq7,

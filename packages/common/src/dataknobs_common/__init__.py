@@ -70,6 +70,7 @@ from dataknobs_common.exceptions import (
     TimeoutError,
     ValidationError,
 )
+from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
 )
@@ -163,6 +164,8 @@ __all__ = [
     "find_config_file",
     "load_yaml_or_json",
     "parse_yaml_or_json",
+    # Metadata helpers
+    "enforce_immutable_keys",
     # Postgres config
     "normalize_postgres_connection_config",
     # Rate Limiting

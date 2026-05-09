@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `dataknobs_common.metadata.enforce_immutable_keys` — primitive for
+  "layered-merge with a designated immutable source for some keys."
+  Used by `VectorMemory` (tenant-scope enforcement), `RAGKnowledgeBase`
+  (chunk-text protection), and the markdown chunker (node-classification
+  protection). Mutates and returns the merged target dict; emits a
+  WARNING when a caller-supplied value differed from the source value
+  for an immutable key, naming the key. Re-exported from the top-level
+  `dataknobs_common` namespace. See the `dataknobs-bots` and
+  `dataknobs-xization` 0.x changelog entries for the consumer-side
+  fixes built on this helper. The helper's caller-vs-source equality
+  check is array-safe: numpy arrays, lists, and other non-scalar
+  values do not raise `ValueError` from element-wise comparison's
+  ambiguous truth value.
 - `dataknobs_common.config_loading` module with `find_config_file()`,
   `load_yaml_or_json()`, and `parse_yaml_or_json()` helpers, plus a
   `ConfigLoadError` exception hierarchy

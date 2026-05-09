@@ -49,6 +49,20 @@ class ChromaVectorStore(VectorStore):
         # Chroma-specific configuration
         self.collection_name = self.config.get("collection_name", "vectors")
 
+        # Opt-in declaration of metadata keys whose stored values are
+        # always scalar (never list-valued). For declared scalar keys
+        # the partitioner pushes a Chroma-native ``$eq`` predicate
+        # instead of falling back to the post-filter, eliminating
+        # metadata materialization for the common multi-tenant
+        # scoping pattern (e.g. ``{"domain_id": "x"}``).
+        # Defaults to empty (current post-filter behavior preserved).
+        # See ``VECTOR_FILTER_SEMANTICS.md`` for the partition rules.
+        scalar_keys = self.config.get("scalar_metadata_keys")
+        if scalar_keys is None:
+            self.scalar_metadata_keys: frozenset[str] = frozenset()
+        else:
+            self.scalar_metadata_keys = frozenset(scalar_keys)
+
         # Handle embedding function
         self.embedding_function = None
         if "embedding_function" in self.config:
@@ -232,11 +246,17 @@ class ChromaVectorStore(VectorStore):
         real bug for consumers whose metadata carries tag/category/
         domain lists. This helper partitions the filter so:
 
-        * Scalar filter values: **not** pushed into Chroma ``$eq``
-          (which would mis-match list metadata). Kept for Python-side
-          post-filtering via ``_match_metadata_filter``. Chroma still
-          ranks the top-k by similarity — we only relax the metadata
-          gate.
+        * Scalar filter values for keys NOT declared in
+          ``scalar_metadata_keys``: **not** pushed into Chroma
+          ``$eq`` (which would mis-match list metadata). Kept for
+          Python-side post-filtering via ``_match_metadata_filter``.
+          Chroma still ranks the top-k by similarity — we only relax
+          the metadata gate.
+        * Scalar filter values for keys declared in
+          ``scalar_metadata_keys``: pushed as Chroma-native ``$eq``.
+          The consumer's declaration is the contract: stored values
+          for these keys are always scalar, so ``$eq`` is correct
+          and no post-filter is needed.
         * List filter values: pushed as ``$in`` (correct for both
           scalar and list metadata on Chroma's side — returns a
           superset that post-filter narrows to non-empty-intersection
@@ -258,7 +278,14 @@ class ChromaVectorStore(VectorStore):
                     native[key] = {"$in": value}
                 post[key] = value
             else:
-                post[key] = value
+                # Scalar filter value. Push down ``$eq`` only when
+                # the consumer has declared the key as always-scalar
+                # in metadata. Otherwise post-filter to handle
+                # potential list-valued metadata correctly.
+                if key in self.scalar_metadata_keys:
+                    native[key] = {"$eq": value}
+                else:
+                    post[key] = value
         return (native or None), post
 
     async def search(
@@ -371,14 +398,26 @@ class ChromaVectorStore(VectorStore):
         """Count vectors in the collection.
 
         Uses ``collection.get(where=...)`` to enumerate matching
-        metadata and post-filter through ``_match_metadata_filter``.
+        IDs and post-filter through ``_match_metadata_filter`` only
+        when the partitioned filter has a post-filter remainder.
         Replaces the previous dummy-vector query path which was capped
         at one result and therefore fundamentally wrong as a count.
 
-        Trade-off: for very large collections this materializes all
-        matching metadata in process. A first-class filtered-count API
-        is a Chroma upstream limitation. See
-        ``VECTOR_FILTER_SEMANTICS.md`` for details.
+        Memory profile:
+
+        * No filter: native ``collection.count()`` — O(1).
+        * Filter fully push-down (all values list-typed, or all
+          scalar values for keys declared in
+          ``scalar_metadata_keys``): ``collection.get(where=...,
+          include=[])`` returns IDs only — no metadata
+          materialization.
+        * Filter partially or fully post-filter (scalar values for
+          undeclared keys): ``collection.get(where=...,
+          include=["metadatas"])`` materializes matching metadata
+          for Python-side narrowing. A first-class filtered-count
+          API is a Chroma upstream limitation. See
+          ``VECTOR_FILTER_SEMANTICS.md`` for details and the
+          ``scalar_metadata_keys`` opt-in.
         """
         if not self._initialized:
             await self.initialize()
@@ -391,10 +430,14 @@ class ChromaVectorStore(VectorStore):
 
         where, post_filter = self._partition_filter_for_chroma(filter)
 
+        if not post_filter:
+            # Filter fully pushed down. Skip metadata materialization
+            # — IDs are sufficient for the count.
+            result = self.collection.get(where=where, include=[])
+            return len(result.get("ids") or [])
+
         result = self.collection.get(where=where, include=["metadatas"])
         metadatas = result.get("metadatas") or []
-        if not post_filter:
-            return len(metadatas)
         return sum(
             1
             for m in metadatas
@@ -415,18 +458,50 @@ class ChromaVectorStore(VectorStore):
                     fields.update(meta.keys())
         return fields
 
-    async def clear(self) -> None:
-        """Clear all vectors from the collection."""
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear vectors, optionally filtered by metadata.
+
+        Unfiltered clear keeps the existing
+        ``delete_collection`` + ``create_collection`` shape (cheaper
+        than scanning IDs).  Filtered clear partitions the filter via
+        :meth:`_partition_filter_for_chroma`: a Chroma-native
+        ``where`` narrows the candidate set, then Python-side
+        post-filtering through :meth:`_match_metadata_filter` matches
+        the four-quadrant semantics of every other backend before
+        ``collection.delete(ids=...)``.
+        """
         if not self._initialized:
             await self.initialize()
 
-        # Delete and recreate collection
-        self.client.delete_collection(name=self.collection_name)
-        self.collection = self.client.create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": self.chroma_metric},
-            embedding_function=self.embedding_function
+        if not filter:
+            # Delete and recreate collection
+            self.client.delete_collection(name=self.collection_name)
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": self.chroma_metric},
+                embedding_function=self.embedding_function,
+            )
+            return
+
+        if self._filter_is_unsatisfiable(filter):
+            # An empty-list filter element matches nothing under
+            # four-quadrant semantics — clear is a no-op.
+            return
+
+        where, post_filter = self._partition_filter_for_chroma(filter)
+        result = self.collection.get(
+            where=where if where else None,
+            include=["metadatas"],
         )
+        ids = result.get("ids") or []
+        metadatas = result.get("metadatas") or []
+        ids_to_delete = [
+            cid
+            for cid, meta in zip(ids, metadatas, strict=False)
+            if self._match_metadata_filter(meta or {}, post_filter)
+        ]
+        if ids_to_delete:
+            self.collection.delete(ids=ids_to_delete)
 
     async def add_documents(
         self,

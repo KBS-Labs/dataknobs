@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`VectorStore.clear(filter=...)`** — filter-aware clear, now
+  supported across all four backend implementations
+  (`MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`,
+  `PgVectorStore`). When `filter` is `None` (default), behavior is
+  unchanged — all vectors are removed. When provided, only vectors
+  whose metadata matches the filter are removed; non-matching
+  vectors are preserved. The filter shape matches `search()` and
+  `count()`; each backend reuses its existing filter-translation
+  infrastructure (`_match_metadata_filter` for memory/FAISS,
+  `_partition_filter_for_chroma` for Chroma,
+  `_build_jsonb_filter_sql` for pgvector).
+
+  This closes a long-standing gap where multi-tenant shared stores
+  could not perform per-tenant cleanup without scanning IDs in the
+  consumer. `KnowledgeIngestionManager` (in `dataknobs-bots`) now
+  uses this to scope its automatic clear-before-reingest by
+  `domain_id`.
+
+- **`ChromaVectorStore` accepts `scalar_metadata_keys`** — opt-in
+  declaration of metadata keys whose stored values are guaranteed
+  scalar (never list-valued). For declared keys with scalar filter
+  values, `_partition_filter_for_chroma` pushes a Chroma-native
+  `$eq` predicate instead of post-filtering in Python.
+  `count(filter=...)` then fetches IDs only (no metadata
+  materialization) when the filter pushes down fully — eliminating
+  the memory-bound trade-off documented in
+  `VECTOR_FILTER_SEMANTICS.md` for the common multi-tenant scoping
+  pattern (e.g. `{"domain_id": "x"}`). Backward compat preserved:
+  keys not declared keep the conservative post-filter behavior.
+
+- **`VECTOR_FILTER_SEMANTICS.md` documents the pgvector
+  config-level `domain_id` swap asymmetry** — when runtime-swapping
+  between vector-store backends, `PgVectorStore`'s config-level
+  `domain_id` scopes `clear()` automatically while the other three
+  backends do not. The doc gives explicit guidance for swap-safe
+  consumers.
+
+### Fixed
+
+- **`FaissVectorStore.add_vectors` no longer leaks orphan metadata
+  on upsert.** Pre-fix, re-adding an external ID overwrote
+  `id_map[ext_id]` without removing the prior internal ID's entries
+  from the FAISS index or `metadata_store`, leaving silent residuals
+  that filtered `clear()` could not reach (it walks `id_map`).
+  Post-fix, the prior internal ID is evicted from FAISS and
+  `metadata_store` before the new mapping is assigned.
+
+### Migration
+
+- **No source-compat break.** `await store.clear()` continues to
+  work and continues to remove all vectors.
+- **Backend-specific note (FAISS).** FAISS has no native filtered
+  delete; filtered clear iterates `metadata_store` to collect
+  matching IDs and delegates to `delete_vectors(ids)`. This is O(N)
+  over stored vectors — acceptable for typical KB sizes, but
+  workloads at scale where filtered clear is hot should prefer
+  pgvector or Chroma where filtered delete is native.
+
 ### Security
 - Bumped minimum `duckdb` requirement (extra: `duckdb`) from `>=0.9.0`
   to `>=1.1.0` to exclude versions affected by PYSEC-2024-25 (CVSS

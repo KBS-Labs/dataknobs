@@ -6,16 +6,20 @@ generate chunks suitable for RAG (Retrieval-Augmented Generation) applications.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterator
 
+from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_structures.tree import Tree
 
 from dataknobs_xization.chunking.utils import split_text as _split_text_util
 from dataknobs_xization.markdown.md_parser import MarkdownNode
 from dataknobs_xization.markdown.enrichment import build_enriched_text
 from dataknobs_xization.markdown.filters import ChunkQualityConfig, ChunkQualityFilter
+
+logger = logging.getLogger(__name__)
 
 
 class ChunkFormat(Enum):
@@ -76,8 +80,16 @@ class ChunkMetadata:
     custom: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert metadata to dictionary."""
+        """Convert metadata to dictionary.
+
+        ``self.custom`` is unpacked FIRST so the structured fields
+        below cannot be silently overwritten by a caller-supplied
+        ``custom`` entry that happens to share a key (``headings``,
+        ``chunk_index``, ``chunk_size``, etc.). System fields win;
+        ``custom`` carries everything else through.
+        """
         result = {
+            **self.custom,
             "headings": self.headings,
             "heading_levels": self.heading_levels,
             "line_number": self.line_number,
@@ -87,7 +99,6 @@ class ChunkMetadata:
             "chunk_size": self.chunk_size,
             "content_length": self.content_length,
             "heading_display": self.heading_display,
-            **self.custom,
         }
         # Only include embedding_text if it was generated
         if self.embedding_text:
@@ -413,10 +424,24 @@ class MarkdownChunker:
             if heading_lines:
                 chunk_text = "\n".join(heading_lines) + "\n\n" + text
 
-        # Create custom metadata dict with node type and additional metadata
-        custom_metadata = {"node_type": node_type}
+        # Create custom metadata dict with node type and additional
+        # metadata.  ``node_type`` is chunker-controlled — restore it
+        # from the chunker-supplied value if any caller-passed
+        # ``metadata`` tries to overwrite it (defense-in-depth; the
+        # md_parser callers do not currently set ``node_type`` in
+        # node metadata, but the safeguard is zero marginal cost).
+        node_source = {"node_type": node_type}
+        custom_metadata = dict(node_source)
         if metadata:
             custom_metadata.update(metadata)
+        enforce_immutable_keys(
+            target=custom_metadata,
+            caller=metadata,
+            source=node_source,
+            keys=("node_type",),
+            logger=logger,
+            context="MarkdownChunker._create_chunk",
+        )
 
         # Generate heading display string
         heading_display = " > ".join(headings) if headings else ""

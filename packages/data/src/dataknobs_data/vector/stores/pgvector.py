@@ -1176,21 +1176,52 @@ class PgVectorStore(VectorStore):
 
         return {row["key"] for row in rows}
 
-    async def clear(self) -> None:
-        """Clear all vectors from the store."""
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear vectors, optionally filtered by metadata.
+
+        Combines the existing ``domain_id`` config-level scoping with
+        the user-supplied ``filter`` via
+        :meth:`_build_jsonb_filter_sql`.  When neither is set, a
+        ``TRUNCATE`` is issued (cheaper than ``DELETE`` for full-table
+        wipes).  When either is set, a parameterized
+        ``DELETE FROM ... WHERE ...`` is issued instead.
+        """
         if not self._initialized:
             await self.initialize()
 
         col_domain_id = self._col("domain_id")
+        col_metadata = self._col("metadata")
+
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        param_idx = 1
+
+        if self.domain_id:
+            where_clauses.append(f"{col_domain_id} = ${param_idx}")
+            params.append(self.domain_id)
+            param_idx += 1
+
+        if filter:
+            filter_clauses, filter_params, param_idx = (
+                self._build_jsonb_filter_sql(
+                    filter, param_idx, col_metadata
+                )
+            )
+            where_clauses.extend(filter_clauses)
+            params.extend(filter_params)
 
         async with self._pool.acquire() as conn:
-            if self.domain_id:
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
                 await conn.execute(
-                    f"DELETE FROM {self._q_qualified} "
-                    f"WHERE {col_domain_id} = $1",
-                    self.domain_id,
+                    f"DELETE FROM {self._q_qualified} {where_sql}",
+                    *params,
                 )
             else:
                 await conn.execute(f"TRUNCATE {self._q_qualified}")
 
-        logger.info("Cleared pgvector store")
+        logger.info(
+            "Cleared pgvector store (filter=%s, domain_id=%s)",
+            filter,
+            self.domain_id,
+        )

@@ -1,11 +1,14 @@
 """Vector-based semantic memory implementation."""
 
 import logging
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 import numpy as np
+
+from dataknobs_common.metadata import enforce_immutable_keys
 
 from .base import Memory
 
@@ -33,6 +36,7 @@ class VectorMemory(Memory):
         similarity_threshold: float = 0.7,
         default_metadata: dict[str, Any] | None = None,
         default_filter: dict[str, Any] | None = None,
+        immutable_metadata_keys: Iterable[str] | None = None,
         owns_embedding_provider: bool = False,
         owns_vector_store: bool = False,
     ):
@@ -44,11 +48,21 @@ class VectorMemory(Memory):
             max_results: Maximum number of similar messages to return
             similarity_threshold: Minimum similarity score (0-1)
             default_metadata: Metadata merged into every ``add_message()``
-                call. Caller-supplied metadata overrides these defaults.
+                call. Caller-supplied metadata overrides these defaults
+                unless the key is listed in ``immutable_metadata_keys``.
                 Use for tenant scoping, e.g. ``{"user_id": "u123"}``.
             default_filter: Filter merged into every ``get_context()``
                 search call. Use to scope reads to a tenant, e.g.
                 ``{"user_id": "u123"}``.
+            immutable_metadata_keys: Optional iterable of keys whose
+                ``default_metadata`` values cannot be overridden by
+                caller-supplied ``metadata`` on ``add_message()``.  Use
+                for tenant-scoping identifiers paired with
+                ``default_metadata`` — e.g.
+                ``immutable_metadata_keys=["user_id"]`` paired with
+                ``default_metadata={"user_id": "u123"}``.  Caller
+                attempts to override an immutable key are logged as
+                warnings and the configured value is preserved.
             owns_embedding_provider: If True, ``close()`` will close the
                 embedding provider. Set by ``from_config`` for resources
                 it creates. Default False for externally-injected providers.
@@ -62,6 +76,11 @@ class VectorMemory(Memory):
         self.similarity_threshold = similarity_threshold
         self._default_metadata = default_metadata or {}
         self._default_filter = default_filter or {}
+        self._immutable_keys: frozenset[str] = (
+            frozenset(immutable_metadata_keys)
+            if immutable_metadata_keys
+            else frozenset()
+        )
         self._owns_embedding_provider = owns_embedding_provider
         self._owns_vector_store = owns_vector_store
 
@@ -121,6 +140,7 @@ class VectorMemory(Memory):
             similarity_threshold=config.get("similarity_threshold", 0.7),
             default_metadata=config.get("default_metadata"),
             default_filter=config.get("default_filter"),
+            immutable_metadata_keys=config.get("immutable_metadata_keys"),
             owns_embedding_provider=True,
             owns_vector_store=True,
         )
@@ -155,6 +175,21 @@ class VectorMemory(Memory):
         })
         if metadata:
             msg_metadata.update(metadata)
+
+        # Enforce immutable keys after the layered merge — caller
+        # values for keys named in ``immutable_metadata_keys`` are
+        # discarded with a warning, restoring the ``default_metadata``
+        # value.  Used for tenant-scoping identifiers that callers
+        # must not be able to bypass.
+        if self._immutable_keys:
+            enforce_immutable_keys(
+                target=msg_metadata,
+                caller=metadata,
+                source=self._default_metadata,
+                keys=self._immutable_keys,
+                logger=logger,
+                context="VectorMemory.add_message",
+            )
 
         # Store in vector store
         await self.vector_store.add_vectors(
@@ -247,20 +282,74 @@ class VectorMemory(Memory):
             except Exception:
                 logger.exception("Error closing vector store")
 
-    async def clear(self) -> None:
-        """Clear all vectors from memory.
+    async def clear(
+        self, filter_metadata: dict[str, Any] | None = None
+    ) -> None:
+        """Clear vectors from this memory.
 
-        Delegates to the vector store's ``clear()`` method. Use with caution
-        if the store is shared across multiple memory instances.
+        The effective filter AND-composes ``default_filter`` and
+        ``filter_metadata`` so an explicit filter narrows WITHIN the
+        tenant scope and never escapes it:
+
+        * ``mem.clear()`` on a memory constructed with
+          ``default_filter={"user_id": "u1"}`` removes only u1's
+          records — symmetric with ``mem.get_context()``.
+        * ``mem.clear(filter_metadata={"category": "A"})`` on the
+          same memory removes records matching BOTH ``user_id=u1``
+          AND ``category=A``.
+        * ``mem.clear()`` on a memory with no ``default_filter``
+          removes every vector in the backing store — the historical
+          behavior.
+
+        On key collision (e.g. caller passes a ``user_id`` that does
+        not match the memory's tenant), the merged filter contains
+        contradictory clauses and matches nothing — the clear is a
+        no-op rather than a cross-tenant wipe.
+
+        For consumers who genuinely want the all-tenants wipe on a
+        ``VectorMemory`` constructed with ``default_filter``, call
+        ``mem.vector_store.clear()`` directly to bypass the wrapper.
+
+        Args:
+            filter_metadata: Optional explicit filter.  AND-composed
+                with ``default_filter`` rather than replacing it.
 
         Raises:
-            NotImplementedError: If the backing vector store does not
-                support ``clear()``.
+            NotImplementedError: If the backing vector store does
+                not support ``clear()``.
         """
-        if hasattr(self.vector_store, "clear"):
-            await self.vector_store.clear()
-        else:
+        if not hasattr(self.vector_store, "clear"):
             raise NotImplementedError(
                 "Vector store does not support clearing. "
-                "Consider creating a new VectorMemory instance with a fresh collection."
+                "Consider creating a new VectorMemory instance with a "
+                "fresh collection."
             )
+
+        effective_filter: dict[str, Any] | None
+        if self._default_filter and filter_metadata is not None:
+            # AND-compose: caller-supplied keys narrow within the
+            # tenant scope. If a caller key collides with a default
+            # key, materialize a contradiction (a list of both
+            # values) so the underlying ``_match_metadata_filter``
+            # accepts only records matching BOTH (impossible when
+            # values differ → no-op clear, never cross-tenant wipe).
+            effective_filter = dict(self._default_filter)
+            for key, value in filter_metadata.items():
+                if key in effective_filter and effective_filter[key] != value:
+                    # Contradiction: list-valued key matches nothing
+                    # under four-quadrant semantics ([a, b] vs scalar
+                    # x: x must be in [a, b]; we put both required
+                    # values in the list, but the metadata is scalar
+                    # and equals only one — so no record matches).
+                    # Use empty list which never matches.
+                    effective_filter[key] = []
+                else:
+                    effective_filter[key] = value
+        elif filter_metadata is not None:
+            effective_filter = dict(filter_metadata)
+        elif self._default_filter:
+            effective_filter = dict(self._default_filter)
+        else:
+            effective_filter = None
+
+        await self.vector_store.clear(filter=effective_filter)

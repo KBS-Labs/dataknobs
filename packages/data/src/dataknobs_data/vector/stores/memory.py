@@ -292,11 +292,23 @@ class MemoryVectorStore(VectorStore):
             fields.update(meta.keys())
         return fields
 
-    async def clear(self) -> None:
-        """Clear all vectors."""
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear vectors, optionally filtered by metadata."""
         if not self._initialized:
             await self.initialize()
 
-        self.vectors.clear()
-        self.metadata_store.clear()
-        self.timestamps.clear()
+        if filter is None:
+            self.vectors.clear()
+            self.metadata_store.clear()
+            self.timestamps.clear()
+            return
+
+        matching_ids = [
+            vid
+            for vid, meta in self.metadata_store.items()
+            if self._match_metadata_filter(meta, filter)
+        ]
+        for vid in matching_ids:
+            self.vectors.pop(vid, None)
+            self.metadata_store.pop(vid, None)
+            self.timestamps.pop(vid, None)

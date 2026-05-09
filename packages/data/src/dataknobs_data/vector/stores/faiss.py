@@ -168,6 +168,24 @@ class FaissVectorStore(VectorStore):
                 # Not enough vectors to train, use flat index temporarily
                 pass
 
+        # Upsert support: when an external ID re-appears, evict its
+        # prior internal ID from the FAISS index and metadata_store
+        # BEFORE assigning the new internal ID. Without this,
+        # ``id_map[ext_id] = internal_id`` below overwrites the only
+        # external→internal pointer, leaving the prior internal_id
+        # as an unreachable orphan — silent residual under filtered
+        # ``clear`` and ``get_vectors`` (both walk ``id_map``), but
+        # still scored by FAISS ``search``. ``index.remove_ids``
+        # is the same call used by ``delete_vectors``.
+        orphan_internal_ids = [
+            self.id_map[ext_id] for ext_id in ids if ext_id in self.id_map
+        ]
+        if orphan_internal_ids:
+            orphan_array = np.array(orphan_internal_ids, dtype=np.int64)
+            self.index.remove_ids(orphan_array)
+            for orphan_id in orphan_internal_ids:
+                self.metadata_store.pop(orphan_id, None)
+
         # Map IDs to internal indices
         internal_ids = []
         for i, ext_id in enumerate(ids):
@@ -340,16 +358,38 @@ class FaissVectorStore(VectorStore):
             fields.update(meta.keys())
         return fields
 
-    async def clear(self) -> None:
-        """Clear all vectors from the store."""
+    async def clear(self, filter: dict[str, Any] | None = None) -> None:
+        """Clear vectors, optionally filtered by metadata.
+
+        Filtered clear iterates ``metadata_store`` to find matching
+        IDs, then delegates to :meth:`delete_vectors`.  The walk is
+        O(N) over stored vectors; FAISS has no native filtered
+        delete.  Acceptable for typical knowledge-base sizes;
+        workloads at scale where filtered clear is hot should prefer
+        pgvector or Chroma.
+        """
         if not self._initialized:
             await self.initialize()
 
-        # Reset everything
-        self.index = self._create_index()
-        self.id_map.clear()
-        self.metadata_store.clear()
-        self.next_idx = 0
+        if filter is None:
+            self.index = self._create_index()
+            self.id_map.clear()
+            self.metadata_store.clear()
+            self.next_idx = 0
+            return
+
+        # ``metadata_store`` is keyed by internal id; ``id_map`` maps
+        # external -> internal. Walk external ids and check each
+        # corresponding metadata entry against the filter.
+        matching_ext_ids: list[str] = [
+            ext_id
+            for ext_id, internal_id in self.id_map.items()
+            if self._match_metadata_filter(
+                self.metadata_store.get(internal_id), filter,
+            )
+        ]
+        if matching_ext_ids:
+            await self.delete_vectors(matching_ext_ids)
 
     async def save(self) -> None:
         """Save index and metadata to disk."""
