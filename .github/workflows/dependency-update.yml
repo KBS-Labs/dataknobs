@@ -11,8 +11,20 @@ name: Update Python Dependencies
 # Python dependencies because pushing workflow file changes requires
 # `workflows: write` permission, which we intentionally do not grant.
 #
-# After updating, osv-scanner audits the resolved lock file for known
-# CVEs. Findings are included in the PR body so reviewers see them.
+# After updating, osv-scanner audits BOTH:
+#   1. the upgraded resolve (uv.lock) — what `uv lock --upgrade`
+#      produces, i.e. the highest versions permitted by all
+#      workspace constraints
+#   2. the floor resolve (uv-lowest.lock) — what
+#      `uv lock --resolution lowest-direct` produces, i.e. every
+#      direct dep pinned to its declared lower bound. This is what
+#      a fresh consumer install can land on when no inherited pin
+#      forces a higher version.
+#
+# Both findings are included in the PR body so reviewers see them.
+# Floor-level findings indicate that one or more `pyproject.toml`
+# direct-dep floors should be bumped (matching the inline
+# CVE-rationale-comment style at packages/llm/pyproject.toml:34).
 #
 # Security alerts remain handled by Dependabot at the repo level
 # (Settings > Code security and analysis) — independent of dependabot.yml.
@@ -71,6 +83,12 @@ jobs:
       if: steps.debounce.outputs.skip != 'true'
       run: |
         uv lock --upgrade
+        # Snapshot the upgraded resolve. The PR commits this exact
+        # file at the end so the committed uv.lock is bit-identical
+        # to what was audited and validated — no re-resolution at
+        # the end of the workflow that could pick up a new release
+        # published mid-run.
+        cp uv.lock uv.lock.initial
 
     - name: Verify lock file resolves
       if: steps.debounce.outputs.skip != 'true'
@@ -87,7 +105,7 @@ jobs:
         chmod +x /usr/local/bin/osv-scanner
         osv-scanner --version
 
-    - name: Audit dependencies for known vulnerabilities
+    - name: Audit upgraded resolve for known vulnerabilities
       id: audit
       if: steps.debounce.outputs.skip != 'true'
       run: |
@@ -98,12 +116,12 @@ jobs:
         set -e
 
         if [ "$exit_code" -eq 0 ]; then
-          echo "vuln_summary=No known vulnerabilities found." >> "$GITHUB_OUTPUT"
+          echo "vuln_summary=No known vulnerabilities found in upgraded resolve." >> "$GITHUB_OUTPUT"
         elif [ "$exit_code" -eq 1 ]; then
           # Exit code 1 = vulnerabilities found
           {
             echo "vuln_summary<<AUDIT_EOF"
-            echo "**Known vulnerabilities detected — review before merging.**"
+            echo "**Known vulnerabilities detected in upgraded resolve — review before merging.**"
             echo ""
             echo '```'
             echo "$output"
@@ -123,6 +141,127 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Validate upgraded resolve
+      id: validate_upgraded
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        # uv sync --all-packages already ran above; uv.lock currently
+        # holds the upgraded resolve. Run the same quality checks
+        # reviewers would run locally before merging.
+        set +e
+        bin/dk pr --all 2>&1 | tee validate-upgraded.log
+        exit_code=$?
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
+          echo "upgraded_validate_summary=All checks passed against upgraded resolve." >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "upgraded_validate_summary<<VALIDATE_EOF"
+            echo "**Validation failed against upgraded resolve — see workflow logs for full output.**"
+            echo ""
+            echo '```'
+            tail -100 validate-upgraded.log
+            echo '```'
+            echo "VALIDATE_EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Generate floor resolve (lowest-direct)
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        # Floor-level resolve: every direct dep pinned to its declared
+        # lower bound (transitive deps resolve normally). Catches CVEs
+        # reachable by fresh consumer installs that don't inherit our
+        # uv.lock pins.
+        #
+        # `uv lock` always writes to uv.lock; regenerate as
+        # lowest-direct, save the result as uv-lowest.lock, then
+        # restore the upgraded resolve from the immutable snapshot
+        # taken at workflow start.
+        uv lock --resolution lowest-direct
+        cp uv.lock uv-lowest.lock
+        cp uv.lock.initial uv.lock
+
+    - name: Audit floor resolve for known vulnerabilities
+      id: audit_floor
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        set +e
+        output=$(osv-scanner scan --lockfile uv.lock:uv-lowest.lock --format table 2>&1)
+        exit_code=$?
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
+          echo "floor_vuln_summary=No floor-level vulnerabilities found." >> "$GITHUB_OUTPUT"
+        elif [ "$exit_code" -eq 1 ]; then
+          {
+            echo "floor_vuln_summary<<AUDIT_EOF"
+            echo "**Floor-level vulnerabilities detected — bump direct-dependency floors before merging.**"
+            echo ""
+            echo '```'
+            echo "$output"
+            echo '```'
+            echo "AUDIT_EOF"
+          } >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "floor_vuln_summary<<AUDIT_EOF"
+            echo "**Floor-level vulnerability scan failed (exit code $exit_code) — check workflow logs.**"
+            echo ""
+            echo '```'
+            echo "$output"
+            echo '```'
+            echo "AUDIT_EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Sync to floor resolve
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        # Install the floor resolve so the next step can validate
+        # against it. Overwrite uv.lock with the saved floor
+        # lockfile and frozen-sync, so we install exactly what we
+        # just audited (no fresh re-resolution).
+        cp uv-lowest.lock uv.lock
+        uv sync --all-packages --frozen
+
+    - name: Validate floor resolve
+      id: validate_floor
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        set +e
+        bin/dk pr --all 2>&1 | tee validate-floor.log
+        exit_code=$?
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
+          echo "floor_validate_summary=All checks passed against floor resolve." >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "floor_validate_summary<<VALIDATE_EOF"
+            echo "**Validation failed against floor resolve — see workflow logs for full output.**"
+            echo ""
+            echo '```'
+            tail -100 validate-floor.log
+            echo '```'
+            echo "VALIDATE_EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Restore upgraded resolve
+      if: steps.debounce.outputs.skip != 'true'
+      run: |
+        # Restore the upgraded uv.lock from the immutable snapshot
+        # taken at workflow start. Frozen sync installs exactly what
+        # we'll commit — no fresh re-resolution that could differ
+        # from the audited and validated lockfile.
+        mv uv.lock.initial uv.lock
+        uv sync --all-packages --frozen
+        # uv-lowest.lock is gitignored but tidy up anyway so the PR
+        # checkout doesn't include it as an untracked file.
+        rm -f uv-lowest.lock
+
     - name: Create Pull Request
       if: steps.debounce.outputs.skip != 'true'
       uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
@@ -134,8 +273,30 @@ jobs:
           Automated weekly Python dependency update.
 
           **Python dependencies:** Updated via `uv lock --upgrade`.
-          **Vulnerability audit:** ${{ steps.audit.outputs.vuln_summary }}
 
-          Lock file verified. Run `bin/dk pr --all` locally before merging.
+          ### Vulnerability audits
+
+          - **Upgraded resolve (`uv.lock`):** ${{ steps.audit.outputs.vuln_summary }}
+          - **Floor resolve (`uv-lowest.lock`):** ${{ steps.audit_floor.outputs.floor_vuln_summary }}
+
+          ### Quality validation
+
+          - **Upgraded resolve:** ${{ steps.validate_upgraded.outputs.upgraded_validate_summary }}
+          - **Floor resolve:** ${{ steps.validate_floor.outputs.floor_validate_summary }}
+
+          Floor-level findings indicate that fresh consumer installs
+          without an inherited pin could resolve to a vulnerable
+          version. Bump the affected `pyproject.toml` floors with
+          inline CVE-rationale comments matching the precedent at
+          `packages/llm/pyproject.toml:34` (e.g.,
+          `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
+          `### Security` entry to each affected package's
+          `CHANGELOG.md` under `## Unreleased`.
+
+          Do **not** bump package versions or run
+          `bin/release-helper.sh bump` for floor changes — entries
+          accumulate under `## Unreleased` and ship with the next
+          release. See `docs/development/dependency-updates.md` for
+          the full review and floor-bump procedure.
         branch: update-dependencies
         delete-branch: true

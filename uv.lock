@@ -1125,7 +1125,7 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "dataknobs-xization", editable = "packages/xization" },
-    { name = "flask", specifier = ">=3.0.0" },
+    { name = "flask", specifier = ">=3.1.3" },
 ]
 
 [[package]]
@@ -1171,7 +1171,7 @@ requires-dist = [
     { name = "dataknobs-llm", editable = "packages/llm" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "dataknobs-xization", editable = "packages/xization" },
-    { name = "jinja2", specifier = ">=3.1.0" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
@@ -1249,7 +1249,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", marker = "extra == 'dev'", specifier = ">=22.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
@@ -1349,14 +1349,14 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.19.0" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
     { name = "asyncpg", marker = "extra == 'vector'", specifier = ">=0.29.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
     { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", extras = ["postgres", "sqlite", "duckdb", "s3", "elasticsearch", "parquet", "vector"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
-    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=0.9.0" },
+    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.1.0" },
     { name = "elasticsearch", extras = ["async"], marker = "extra == 'elasticsearch'", specifier = ">=8.0.0,<9.0.0" },
     { name = "faiss-cpu", marker = "extra == 'vector'", specifier = ">=1.7.4" },
     { name = "moto", marker = "extra == 'dev'", specifier = ">=4.2.0" },
@@ -1365,7 +1365,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pgvector", marker = "extra == 'vector'", specifier = ">=0.2.0" },
     { name = "psycopg2", marker = "extra == 'postgres'", specifier = ">=2.9.0" },
-    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=14.0.0" },
+    { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=17.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
@@ -1383,7 +1383,7 @@ dev = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "boto3", specifier = ">=1.26.0" },
-    { name = "duckdb", specifier = ">=0.9.0" },
+    { name = "duckdb", specifier = ">=1.1.0" },
     { name = "elasticsearch", extras = ["async"], specifier = ">=8.11.0,<9.0.0" },
     { name = "moto", specifier = ">=5.1.10" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
@@ -1458,9 +1458,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
-    { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.9.0" },
+    { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.13.4" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.7.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
     { name = "click", specifier = ">=8.1.0" },
     { name = "dataknobs-common", editable = "packages/common" },
@@ -1470,9 +1470,9 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "faiss-cpu", marker = "extra == 'vector'", specifier = ">=1.7.4" },
-    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.25.0" },
+    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27.0" },
     { name = "ijson", specifier = ">=3.2.0" },
-    { name = "langchain", marker = "extra == 'llm'", specifier = ">=0.1.0" },
+    { name = "langchain", marker = "extra == 'llm'", specifier = ">=1.0.0" },
     { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -1552,8 +1552,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'huggingface'", specifier = ">=3.8.0" },
-    { name = "aiohttp", marker = "extra == 'ollama'", specifier = ">=3.8.0" },
+    { name = "aiohttp", marker = "extra == 'huggingface'", specifier = ">=3.13.4" },
+    { name = "aiohttp", marker = "extra == 'ollama'", specifier = ">=3.13.4" },
     { name = "aiosqlite", marker = "extra == 'sqlite-cache'", specifier = ">=0.19.0" },
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.18.0" },
     { name = "dataknobs-common", editable = "packages/common" },
@@ -1561,11 +1561,11 @@ requires-dist = [
     { name = "dataknobs-data", editable = "packages/data" },
     { name = "dataknobs-llm", extras = ["openai", "anthropic", "ollama", "huggingface", "embeddings", "sqlite-cache"], marker = "extra == 'all'", editable = "packages/llm" },
     { name = "dataknobs-utils", editable = "packages/utils" },
-    { name = "jinja2", specifier = ">=3.1.0" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.6.0" },
-    { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=4.30.0" },
+    { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=4.53.0" },
 ]
 provides-extras = ["openai", "anthropic", "ollama", "huggingface", "embeddings", "sqlite-cache", "all"]
 
@@ -1622,13 +1622,13 @@ requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "json-stream", specifier = ">=2.3.0" },
-    { name = "lxml", specifier = ">=4.6.0" },
-    { name = "nltk", specifier = ">=3.7" },
+    { name = "lxml", specifier = ">=6.1.0" },
+    { name = "nltk", specifier = ">=3.9.4" },
     { name = "pandas", specifier = ">=1.3.0" },
     { name = "psycopg2-binary", specifier = ">=2.8.6" },
-    { name = "python-dotenv", specifier = ">=0.19.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python3-nmap", specifier = ">=1.5.0" },
-    { name = "requests", specifier = ">=2.25.0" },
+    { name = "requests", specifier = ">=2.33.0" },
 ]
 
 [[package]]
@@ -1692,7 +1692,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black", specifier = ">=24.0.0" },
+    { name = "black", specifier = ">=26.3.1" },
     { name = "editables", specifier = ">=0.3" },
     { name = "hatchling", specifier = ">=1.21.0" },
     { name = "ipywidgets", specifier = ">=8.1.5" },
@@ -1709,7 +1709,7 @@ dev = [
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas-stubs", specifier = ">=2.0.0" },
     { name = "pylint", specifier = ">=3.3.6" },
-    { name = "pytest", specifier = ">=9.0.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-xdist", specifier = ">=3.5.0" },
@@ -1740,7 +1740,7 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "more-itertools", specifier = ">=8.10.0" },
-    { name = "nltk", specifier = ">=3.9.1" },
+    { name = "nltk", specifier = ">=3.9.4" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
 ]

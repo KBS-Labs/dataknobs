@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `nltk` requirement from `>=3.7` to `>=3.9.4` to
+  exclude versions affected by GHSA-rf74-v2fm-23pw, CVE-2026-33230,
+  and CVE-2026-33231 (one DoS, two in the WordNet browser HTTP
+  component).
+- Bumped minimum `requests` requirement from `>=2.25.0` to
+  `>=2.33.0` to exclude versions affected by PYSEC-2023-74 and
+  GHSA-9hjg-9r4m-mvj7 / GHSA-9wx4-h78v-vm56 / GHSA-gc5v-m9x4-r6x2.
+- Bumped minimum `lxml` requirement from `>=4.6.0` to `>=6.1.0` to
+  exclude versions affected by PYSEC-2020-62, PYSEC-2021-19,
+  PYSEC-2021-852, PYSEC-2022-230, and GHSA-vfmq-68hx-4jfw. This is
+  a major-version bump (4.x → 6.x); the public lxml API used in
+  `dataknobs_utils.xml_utils` is stable across this range.
+- Bumped minimum `python-dotenv` requirement from `>=0.19.0` to
+  `>=1.2.2` to exclude versions affected by GHSA-mf9w-mj56-hr94.
+  This is a major-version bump (0.x → 1.x); `load_dotenv()` and
+  related public APIs are unchanged.
+
 ## v1.2.9 - 2026-04-29
 
 ### Security

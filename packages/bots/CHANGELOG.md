@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `jinja2` requirement from `>=3.1.0` to `>=3.1.6`
+  to exclude versions affected by GHSA-cpwx-vrp4-4pq7,
+  GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, and GHSA-q2x7-8rv6-6q7h.
+
 ### Added
 - `EnsureIngestionResult.duration_seconds` property — counterpart
   to `IngestionResult.duration_seconds`. Computes

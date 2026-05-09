@@ -13,7 +13,7 @@ dependencies = [
     "dataknobs-data>=0.4.16",
     "dataknobs-utils>=1.2.9",
     "pyyaml>=6.0",
-    "jinja2>=3.1.0",
+    "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6
 ]
 
 [project.optional-dependencies]
@@ -24,13 +24,13 @@ anthropic = [
     "anthropic>=0.18.0",
 ]
 ollama = [
-    "aiohttp>=3.8.0",
+    "aiohttp>=3.13.4",  # multiple CVEs (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) fixed by 3.13.4
 ]
 huggingface = [
-    "aiohttp>=3.8.0",
+    "aiohttp>=3.13.4",  # multiple CVEs (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) fixed by 3.13.4
 ]
 embeddings = [
-    "transformers>=4.30.0",
+    "transformers>=4.53.0",  # 16 CVEs (highest CVSS 9.0: PYSEC-2023-300) fixed by 4.53.0
     "torch>=2.6.0",  # CVE-2025-32434 (RCE in torch.load) fixed in 2.6.0
 ]
 sqlite-cache = [

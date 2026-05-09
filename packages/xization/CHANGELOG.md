@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `nltk` requirement from `>=3.9.1` to `>=3.9.4` to
+  exclude versions affected by GHSA-rf74-v2fm-23pw, CVE-2026-33230,
+  and CVE-2026-33231 (one DoS, two in the WordNet browser HTTP
+  component).
+
 ### Changed
 - `KnowledgeBaseConfig._load_file` raises `IngestionConfigError` for
   malformed or unreadable config files. `yaml.YAMLError`,

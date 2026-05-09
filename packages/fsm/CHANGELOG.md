@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `aiohttp` requirement (extra: `http`) from `>=3.9.0`
+  to `>=3.13.4` to exclude 22 known CVEs (highest CVSS 9.1:
+  GHSA-63hf-3vf5-4wqf), including CVE-2024-23334 / GHSA-5m98-qgg9-wh84.
+- Bumped minimum `httpx` requirement (extra: `http`) from `>=0.25.0`
+  to `>=0.27.0` to sweep transitive `h11<0.16` (GHSA-vqfr-h8mv-ghfj,
+  CVSS 9.1) — `httpx>=0.27` requires `httpcore` 1.x, which requires
+  `h11>=0.16`.
+- Bumped minimum `langchain` requirement (extra: `llm`) from `>=0.1.0`
+  to `>=1.0.0` to exclude 17 known CVEs across `langchain`,
+  `langchain-community`, and `langchain-core` (highest CVSS 9.3:
+  GHSA-c67j-w6g6-q2cm — DoS in MathDocumentExtractor; CVSS 10.0:
+  PYSEC-2025-70 in `langchain-community`). The `langchain` extra is
+  declared as a convenience for downstream consumers; `dataknobs_fsm`
+  itself does not import langchain, so the major-version bump
+  (0.x → 1.x) has no impact on `dataknobs-fsm`'s API.
+
 ### Fixed
 
 - **`UnifiedDatabaseStorage._setup_backend` now reads the backend
