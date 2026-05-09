@@ -57,9 +57,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filename across different domains (e.g. `domain-a/doc.md` and
   `domain-b/doc.md`) collided on a shared store and the second
   ingest upserted over the first. Post-fix, the chunk-id prefix
-  becomes `f"{domain_id}_{stem}"` whenever `domain_id` is in the
+  becomes `f"{domain_id}\x1f{stem}"` whenever `domain_id` is in the
   caller-supplied metadata (which `KnowledgeIngestionManager`
-  threads automatically). Single-domain consumers see no change.
+  threads automatically). The record-separator (`\x1f`) between
+  `domain_id` and `stem` rules out snake_case-domain collisions
+  (`my` + `team_doc` vs `my_team` + `doc` would otherwise both
+  produce `my_team_doc` under `_`). Single-domain consumers
+  (no `domain_id` threaded) see **no change** — chunk IDs keep the
+  historical `f"{stem}_{index}"` form, so re-ingest into existing
+  populated stores remains idempotent.
 
 - **`RAGKnowledgeBase.ingest_from_backend` no longer threads the
   redundant `source` and `filename` keys** that

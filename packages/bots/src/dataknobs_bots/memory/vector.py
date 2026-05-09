@@ -156,7 +156,13 @@ class VectorMemory(Memory):
             metadata: Optional caller-supplied metadata. Merged after
                 ``default_metadata`` (from init) and system base fields
                 (``content``, ``role``, ``timestamp``, ``id``).
-                Caller metadata has highest precedence.
+                Caller metadata has highest precedence, **except** for
+                keys listed in ``immutable_metadata_keys`` (passed at
+                construction): for those keys the value from
+                ``default_metadata`` always wins and any caller-supplied
+                value is discarded with a WARNING log naming the key.
+                Used for tenant-scoping identifiers (e.g. ``user_id``,
+                ``domain_id``) that callers must not be able to bypass.
         """
         # Generate embedding
         embedding = await self.embedding_provider.embed(content)

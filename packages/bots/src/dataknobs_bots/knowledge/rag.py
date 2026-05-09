@@ -732,15 +732,29 @@ class RAGKnowledgeBase(KnowledgeBase):
         # ingest upserts over another's.  Prefer ``domain_id`` from
         # the caller-supplied metadata (threaded by
         # ``KnowledgeIngestionManager`` as ``extra_metadata``) when
-        # present.  Single-domain consumers see no change.
-        # Use a record-separator (``\x1f``) between ``domain_id`` and
-        # ``stem`` so snake_case-domain collisions are impossible
-        # (``my`` + ``team_doc`` and ``my_team`` + ``doc`` would both
-        # produce ``my_team_doc`` with an underscore separator).
+        # present.
+        #
+        # Separator selection:
+        # * Multi-domain (``domain_id`` set): use ``\x1f`` (record
+        #   separator) so snake_case-domain collisions are impossible
+        #   (``my`` + ``team_doc`` vs ``my_team`` + ``doc`` would both
+        #   produce ``my_team_doc`` under ``_``).
+        # * Single-domain (``domain_id`` absent): keep the historical
+        #   ``_`` separator so existing populated stores' chunk IDs
+        #   continue to match on re-ingest. Switching to ``\x1f``
+        #   unconditionally would silently double up every old chunk
+        #   on the next ingest (``stem_index`` and ``stem\x1findex``
+        #   are different keys, so upsert inserts instead of
+        #   overwriting). The CHANGELOG for this scope expansion
+        #   states "Single-domain consumers see no change" — that
+        #   contract is enforced here.
         domain_id = (metadata or {}).get("domain_id")
-        chunk_prefix = (
-            f"{domain_id}\x1f{source_stem}" if domain_id else source_stem
-        )
+        if domain_id:
+            chunk_prefix = f"{domain_id}\x1f{source_stem}"
+            chunk_separator = "\x1f"
+        else:
+            chunk_prefix = source_stem
+            chunk_separator = "_"
 
         # Detect caller-attempted system-field overrides ONCE per
         # call rather than per chunk. The same ``metadata`` dict
@@ -762,7 +776,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                 embedding = np.array(embedding, dtype=np.float32)
 
             chunk_index = chunk.get("chunk_index", i)
-            chunk_id = f"{chunk_prefix}\x1f{chunk_index}"
+            chunk_id = f"{chunk_prefix}{chunk_separator}{chunk_index}"
 
             # System-controlled fields — caller-supplied ``metadata``
             # cannot override these. Tracked separately so the helper

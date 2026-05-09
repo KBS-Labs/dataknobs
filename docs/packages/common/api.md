@@ -15,6 +15,7 @@ The `dataknobs-common` package provides these core modules:
 - **`dataknobs_common.exceptions`** - Exception hierarchy with context support
 - **`dataknobs_common.registry`** - Generic registry implementations
 - **`dataknobs_common.serialization`** - Serialization protocols and utilities
+- **`dataknobs_common.metadata`** - Layered-merge primitive with immutable-key enforcement
 - **`dataknobs_common.retry`** - Configurable retry execution with backoff strategies
 - **`dataknobs_common.transitions`** - Stateless transition validation for status graphs
 - **`dataknobs_common.events`** - Event bus for pub/sub messaging
@@ -930,6 +931,77 @@ problems = validate_json_safe({"name": "ok", "fn": some_function})
 if not problems:
     print("Fully JSON-safe")
 ```
+
+## Metadata Module
+
+A primitive for "layered merge with a designated immutable source for some keys." Used wherever caller-supplied metadata needs to coexist with authoritative system metadata that the caller must not be able to overwrite (e.g. `domain_id` for tenant scoping, `chunk_index` for RAG chunk ordering, `node_type` for markdown chunker classification).
+
+### `enforce_immutable_keys`
+
+```python
+from dataknobs_common.metadata import enforce_immutable_keys
+
+# Caller-supplied metadata (may attempt overrides):
+caller = {"category": "support", "domain_id": "tenant-a"}
+
+# System-controlled fields the caller must not be able to overwrite:
+system = {"domain_id": "tenant-b", "chunk_index": 0}
+
+# Layered merge: caller wins on shared keys, EXCEPT for keys
+# enumerated as immutable, where system always wins.
+merged = enforce_immutable_keys(
+    target=dict(caller),                  # mutated and returned
+    caller=caller,                        # source for warning attribution
+    source=system,                        # authoritative for immutable keys
+    immutable_keys={"domain_id", "chunk_index"},
+    component="MyComponent",              # used in WARNING log
+)
+
+# merged == {
+#     "category": "support",      # caller key, unaffected
+#     "domain_id": "tenant-b",    # system wins (immutable)
+#     "chunk_index": 0,           # system wins (immutable)
+# }
+# A WARNING is logged naming "domain_id" since the caller-supplied
+# value differed from the system value for an immutable key.
+```
+
+**Signature:**
+
+```python
+def enforce_immutable_keys(
+    *,
+    target: dict[str, Any],
+    caller: dict[str, Any] | None,
+    source: dict[str, Any],
+    immutable_keys: Iterable[str],
+    component: str = "metadata",
+) -> dict[str, Any]:
+    ...
+```
+
+**Parameters:**
+
+- `target` — The dict to mutate and return. Typically a copy of `caller` (or a fresh layered merge).
+- `caller` — Caller-supplied metadata, used only for warning emission (compares each immutable-key value against `source`). Pass `None` to enforce immutability silently (e.g. on subsequent iterations of a loop after the warning has already been emitted once).
+- `source` — Authoritative source for immutable-key values. For each `key in immutable_keys`, `target[key]` is set to `source[key]` (when the key is present in `source`).
+- `immutable_keys` — Iterable of key names that the caller cannot override.
+- `component` — Component name included in the WARNING log (e.g. `"VectorMemory"`, `"RAGKnowledgeBase"`).
+
+**Behavior notes:**
+
+- **Mutates and returns** the same `target` dict — use `dict(...)` to avoid aliasing if needed.
+- **Warning is emitted at WARNING level** when any immutable key in `caller` has a different value than `source`, naming the key.
+- **Array-safe equality:** `numpy` arrays, lists, and other non-scalar values are compared without raising `ValueError` from element-wise comparison's ambiguous truth value.
+- **`caller=None` is silent:** the helper still enforces immutability but skips the warning. Useful for hoisting the warning out of a per-element loop.
+
+**Used by:**
+
+- `dataknobs_bots.memory.VectorMemory.add_message` — tenant-scope enforcement on caller metadata.
+- `dataknobs_bots.knowledge.RAGKnowledgeBase._embed_and_store_chunks` — chunk-text and document-attribution protection.
+- `dataknobs_xization.markdown.md_chunker.MarkdownChunker._create_chunk` — node-classification protection.
+
+See the auto-generated reference for full type signatures, and the `dataknobs-bots` / `dataknobs-xization` CHANGELOGs for the concrete consumer-side fixes built on this helper.
 
 ## Retry Module
 

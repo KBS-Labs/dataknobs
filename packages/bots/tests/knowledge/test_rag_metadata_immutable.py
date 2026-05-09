@@ -199,6 +199,42 @@ async def test_chunk_id_does_not_collide_for_snake_case_domains():
 
 
 @pytest.mark.asyncio
+async def test_single_domain_chunk_id_uses_underscore_separator():
+    """Single-domain consumers' chunk-id format is unchanged on re-ingest.
+
+    Pre-PR (main): ``chunk_id = f"{stem}_{chunk_index}"``.
+
+    The bots CHANGELOG for this PR explicitly states "Single-domain
+    consumers see no change." Honoring that contract requires keeping
+    the historical ``_`` separator when no ``domain_id`` is threaded
+    through. Otherwise existing populated stores re-ingested under
+    the new code would silently double up: every old chunk_id
+    ``stem_index`` would fail to upsert against the new ``stem\\x1findex``
+    and insert as a new row.
+    """
+    kb = await _make_kb()
+
+    await kb.load_markdown_text(
+        "# Heading\n\nBody.\n",
+        source="my_doc.md",
+        # No domain_id in metadata — the single-domain branch.
+        metadata=None,
+    )
+
+    stored_ids = list(kb.vector_store.metadata_store.keys())
+    assert stored_ids, "expected at least one stored chunk"
+    for chunk_id in stored_ids:
+        assert "\x1f" not in chunk_id, (
+            "single-domain chunk_id must not contain the record-separator "
+            f"(historical format used '_'); got {chunk_id!r}"
+        )
+        assert chunk_id.startswith("my_doc_"), (
+            "single-domain chunk_id must keep the historical "
+            f"'<stem>_<index>' shape; got {chunk_id!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_warning_emitted_once_per_offense_not_per_chunk(caplog):
     """One bad metadata blob → one warning, not N (one per chunk).
 
