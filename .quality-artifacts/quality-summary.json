@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-05-11T18:15:37Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-05-11T18:39:02Z",
+  "overall_status": "FAIL",
   "run_mode": "all",
   "environment": "host",
   "packages": "all",
@@ -31,19 +31,19 @@
       "tool": "docs-update-versions.sh"
     },
     "validation": {
-      "status": "pass",
-      "exit_code": 0,
+      "status": "fail",
+      "exit_code": 1,
       "skipped": false,
       "tool": "validate.sh"
     },
     "unit_tests": {
-      "status": "pass",
-      "exit_code": 0,
+      "status": "fail",
+      "exit_code": 1,
       "skipped": false
     },
     "integration_tests": {
-      "status": "pass",
-      "exit_code": 0,
+      "status": "fail",
+      "exit_code": 1,
       "skipped": false
     }
   }

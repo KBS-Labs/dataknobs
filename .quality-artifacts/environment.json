@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-11T18:15:37Z",
-  "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.13 (Homebrew 2026-05-11 aarch64-apple-darwin)",
-  "os": "Darwin",
-  "os_version": "24.6.0",
-  "git_branch": "sbk/fix-floor-issues",
-  "git_commit": "340a3bb0452bc0bf3485ce6d790f6dbde26d2e93",
+  "timestamp": "2026-05-11T18:39:02Z",
+  "python_version": "Python 3.12.3",
+  "uv_version": "uv 0.11.13 (x86_64-unknown-linux-gnu)",
+  "os": "Linux",
+  "os_version": "6.17.0-1010-azure",
+  "git_branch": "main",
+  "git_commit": "a28fee882504a2a24855e58673431cc5e3206ff2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
