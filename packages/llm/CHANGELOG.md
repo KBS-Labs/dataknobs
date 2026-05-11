@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Bumped minimum `transformers` requirement (extra: `embeddings`) from
+  `>=4.53.0` to `>=5.0.0` to exclude GHSA-69w3-r845-3855 (CVSS 6.5),
+  the first CVE not covered by the prior floor. 5.0.0 is the GA release
+  fixing the new issue. Verified locally via `bin/dk pr --all` — the
+  three transformers usage sites in
+  `fsm_integration/resources.py` (`pipeline`, `AutoTokenizer`,
+  `AutoModel`) are stable across the 4.x → 5.x boundary.
+- Bumped minimum `torch` requirement (extra: `embeddings`) from
+  `>=2.6.0` to `>=2.8.0` to exclude GHSA-887c-mr87-cxwp (CVSS 4.8,
+  fixed in 2.8.0). The bump also sweeps GHSA-3749-ghw9-m3mg (CVSS 3.3,
+  fixed in 2.7.1) and CVE-2025-32434 (RCE in `torch.load`, fixed in
+  2.6.0). 2.8.0 was previously deferred for GA wheel coverage; coverage
+  is now in place across supported platforms.
+
 ### Fixed
 - Bumped minimum `pyyaml` requirement from `>=6.0` to `>=6.0.2` to
   exclude versions that lack cp312/cp313 wheels and fail to build from

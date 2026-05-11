@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+- Added explicit floors `markdown>=3.8.1` (GHSA-5wmx-573v-2qwq, XSS,
+  CVSS 7.5) and `pymdown-extensions>=10.16.1` (GHSA-r6h4-mm7h-8pmq,
+  CVSS 2.7) to the `dev` extra. Both are transitive via
+  `mkdocs-material`, but `mkdocs-material`'s own constraint
+  (`markdown~=3.2`) permits the vulnerable `markdown` version, so an
+  explicit direct-dep floor in `dataknobs-fsm[dev]` is required for
+  fresh consumer installs to land on a non-vulnerable resolve.
+
 ### Fixed
 - Bumped minimum `pyyaml` requirement from `>=6.0.0` to `>=6.0.2` to
   exclude versions that lack cp312/cp313 wheels and fail to build from
