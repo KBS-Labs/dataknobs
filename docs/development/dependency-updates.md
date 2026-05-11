@@ -2,9 +2,17 @@
 
 DataKnobs uses an automated weekly dependency-update workflow that does
 more than refresh `uv.lock` -- it also surfaces CVE findings at *both*
-the upgraded resolve and the floor (lowest-direct) resolve, and runs
-the full quality suite against both. The output is one PR per week
-with everything reviewers need to triage.
+the upgraded resolve and the floor (lowest-direct) resolve, and
+confirms every declared floor is buildable on the supported Python
+range. The output is one PR per week with everything reviewers need
+to triage.
+
+Quality validation (lint, type, unit, integration) is **not** run by
+this workflow. `bin/dk pr --all` depends on local Docker services
+(Postgres, Elasticsearch, etc.) brought up via `bin/dk up`, which the
+GitHub runner intentionally does not provide. The weekly PR goes
+through normal PR CI on push, and reviewers confirm CI is green before
+merging -- same as any other PR.
 
 ## Automated Update Workflow
 
@@ -28,28 +36,28 @@ The workflow audits **two distinct resolves** of the workspace:
 | **Upgraded** (`uv.lock`) | Latest versions permitted by every direct + transitive constraint -- what `uv lock --upgrade` produces | `uv lock --upgrade` |
 | **Floor** (`uv-lowest.lock`) | Every direct dep pinned to its declared lower bound -- what a fresh consumer install can land on without inheriting our `uv.lock` | `uv lock --resolution lowest-direct` |
 
-Each resolve is audited for CVEs and validated for quality:
+Each resolve is audited for CVEs; the floor resolve is additionally
+sync-tested to confirm it builds:
 
 1. **Refresh** `uv.lock` via `uv lock --upgrade`, then snapshot it as
    `uv.lock.initial` -- the bit-identical file that will be committed
-   to the PR after both audits and validations finish
-2. **Sync** the upgraded resolve via `uv sync --all-packages`
+   to the PR after both audits finish
+2. **Sync** the upgraded resolve via `uv sync --all-packages` -- this
+   also verifies the lock file resolves cleanly
 3. **Audit upgraded resolve** with `osv-scanner` against `uv.lock`
-4. **Validate upgraded resolve** by running `bin/dk pr --all`
-5. **Generate floor resolve** by running
+4. **Generate floor resolve** by running
    `uv lock --resolution lowest-direct`, copying the result to
    `uv-lowest.lock`, and restoring `uv.lock` from `uv.lock.initial`
-6. **Audit floor resolve** with `osv-scanner` against `uv-lowest.lock`
-7. **Sync floor resolve** by overwriting `uv.lock` with
-   `uv-lowest.lock` and running `uv sync --all-packages --frozen`
-   (frozen sync installs exactly the lockfile we just audited, with
-   no re-resolution)
-8. **Validate floor resolve** by running `bin/dk pr --all`
-9. **Restore upgraded resolve** by moving `uv.lock.initial` back to
+5. **Audit floor resolve** with `osv-scanner` against `uv-lowest.lock`
+6. **Sync floor resolve** by overwriting `uv.lock` with
+   `uv-lowest.lock` and running `uv sync --all-packages --frozen`.
+   This is a **build-compat check**: every declared floor must
+   install on the supported Python range. Failure here aborts the
+   workflow before any PR is opened.
+7. **Restore upgraded resolve** by moving `uv.lock.initial` back to
    `uv.lock` and frozen-syncing, so the PR commits the exact lockfile
    that was audited at the start of the workflow
-10. **Open the PR** with all four results -- two audits + two
-    validations -- in the PR body
+8. **Open the PR** with both audit results in the PR body
 
 ### Why Two Resolves?
 
@@ -66,8 +74,11 @@ should be bumped.
 
 ## Reviewing the Weekly PR
 
-The weekly PR body contains four results from the four steps above.
-Treat each as its own decision.
+The weekly PR body contains the two audit results plus a pointer to
+the floor-bump procedure. The build-compat sync check runs earlier
+in the workflow; if it fails, the workflow aborts before this PR is
+opened, so a green PR implies a buildable floor (see "When the
+Workflow Fails Before Opening a PR" below).
 
 ### Upgraded-Resolve Vulnerabilities
 
@@ -80,26 +91,12 @@ without a fix. Either:
 - The CVE is in a dep that's optional and unused in our test path,
   in which case it can ship merged with a follow-up triage item
 
-### Upgraded-Resolve Validation
-
-This is `bin/dk pr --all` against the upgraded resolve. If it fails,
-some new dep version broke our code. The PR body shows the last
-~100 lines of the failure log; check the workflow logs for the full
-output. Common patterns:
-
-- A library deprecated an API we still call -- fix our code to use
-  the new API, or pin the dep below the deprecation version with a
-  comment explaining why
-- A library tightened type signatures and we now fail mypy -- update
-  our annotations
-- A test fixture broke because of a behavior change in an underlying
-  library -- update the test
-
 ### Floor-Resolve Vulnerabilities
 
 CVEs flagged here apply to versions a fresh consumer install could
 pull in. **The fix is to bump the affected `pyproject.toml` floor**
-with an inline CVE-rationale comment (see "Bumping a Floor" below).
+with an inline CVE-rationale comment (see "Bumping a Security Floor"
+below).
 
 If a finding is *deferrable* -- e.g., the fix version is a release
 candidate, the affected dep is dev-only with no production impact,
@@ -108,14 +105,33 @@ with a security PR -- note it in the merge commit and leave it for
 a follow-up. The workflow will keep flagging it weekly until the
 floor is bumped.
 
-### Floor-Resolve Sync
+### Code-Quality Validation
 
-Before validation runs, the workflow's `Sync to floor resolve` step
-overwrites `uv.lock` with `uv-lowest.lock` and runs
-`uv sync --all-packages --frozen`. Failures here are **build-compat**
-failures: one of the floor versions either lacks wheels for the
-supported Python range (`requires-python = ">=3.12"`) or fails to
-build from source against the current toolchain. Typical signatures:
+Not run by this workflow. The auto-generated PR goes through normal
+PR CI when it's pushed; that's where lint, type checks, docs build,
+and unit tests run. Integration tests requiring Docker services
+(Postgres, Elasticsearch, etc.) are run locally by developers via
+`bin/dk pr --all` after `bin/dk up`, not in CI. Confirm CI is green
+before merging.
+
+## When the Workflow Fails Before Opening a PR
+
+The workflow can fail before the PR-creation step. Two failure
+modes matter:
+
+### `Verify lock file resolves` Fails
+
+`uv sync --all-packages` couldn't install the upgraded resolve.
+Usually means a transitive constraint conflict landed upstream. Try
+`uv lock --upgrade` locally and resolve any conflicts in
+`pyproject.toml`.
+
+### `Sync to floor resolve` Fails
+
+A declared floor is unbuildable on the supported Python range. The
+workflow's `Sync to floor resolve` step overwrites `uv.lock` with
+`uv-lowest.lock` and runs `uv sync --all-packages --frozen`. Typical
+signatures:
 
 - `Failed to build pyyaml==6.0` with
   `AttributeError: 'build_ext' object has no attribute 'cython_sources'`
@@ -126,24 +142,9 @@ build from source against the current toolchain. Typical signatures:
 
 The fix is to bump the affected `pyproject.toml` floor to the lowest
 version that ships wheels for the supported Python range. See
-"Bumping a Build-Compat Floor" below.
-
-### Floor-Resolve Validation
-
-This is `bin/dk pr --all` against the floor resolve, run only after
-the floor resolve syncs successfully. Failures here mean our code
-has drifted past what our minimum declared dependencies actually
-support -- e.g., we use a method that didn't exist in the floor
-version of a library. The fix is either:
-
-- **Use a more conservative API** that works at the floor, **or**
-- **Bump the floor** so the API we use is guaranteed available
-
-Floor-validation failures are usually a signal that the floor on
-the offending dep was set too permissive when the dep was first
-added, and time has eroded compatibility. Bump it with a comment
-referencing the API requirement, e.g., `pandas>=2.1.0 # uses
-DataFrame.assign(... ignore_index=True) added in 2.1.0`.
+"Bumping a Build-Compat Floor" below. Once the bump merges, re-run
+the workflow manually via the Actions UI or
+`gh workflow run dependency-update.yml`.
 
 ## Bumping a Floor
 
@@ -153,12 +154,23 @@ and CHANGELOG sections:
 | Category | Driver | Inline comment style | CHANGELOG section |
 |---|---|---|---|
 | **Security** | CVE flagged by the floor-resolve OSV audit, or any other CVE source | OSV/CVE ID + fix version | `### Security` |
-| **Build compatibility** | `Sync to floor resolve` fails because the floor lacks wheels / can't build from source, or `bin/dk pr --all` fails at the floor because of an API we use | Build/API requirement | `### Fixed` |
+| **Build compatibility** | `Sync to floor resolve` fails because a floor lacks wheels / can't build from source, *or* a developer-side run of `bin/dk pr --all` against the floor fails because of an API we use that doesn't exist at the floor | Build/API requirement | `### Fixed` |
 
 Pick whichever category drove the bump. If a single bump is driven
 by both (e.g., the bump excludes a CVE *and* fixes a build issue),
 record it as `### Security` with a note about the build-compat
 side-effect.
+
+!!! note "API-drift at the floor"
+    The weekly workflow does **not** run `bin/dk pr --all` against
+    the floor resolve. So API-drift bugs (where our code uses a
+    symbol introduced after the declared floor) only surface when a
+    developer runs `bin/dk pr --all` locally against
+    `uv-lowest.lock`, or when a consumer reports an
+    `ImportError` / `AttributeError` against our minimum
+    dependencies. If you want to spot-check the floor's behavioral
+    compatibility, run `bin/audit-floor.sh` and then
+    `bin/dk pr --all` from a worktree pinned to `uv-lowest.lock`.
 
 ### Bumping a Security Floor
 
@@ -204,9 +216,10 @@ automatically.
 
 ### Bumping a Build-Compat Floor
 
-When `Sync to floor resolve` fails (or `bin/dk pr --all` fails at the
-floor because of an API drift), the bump isn't excluding a CVE -- it's
-fixing a broken floor. Use the build-compat conventions.
+When the weekly workflow's `Sync to floor resolve` step fails -- or
+when a developer-side `bin/dk pr --all` against the floor surfaces an
+API-drift error -- the bump isn't excluding a CVE. It's fixing a
+broken floor. Use the build-compat conventions.
 
 #### 1. Edit the `pyproject.toml` Floor With an Inline Build/API Comment
 
@@ -391,39 +404,44 @@ Pay attention to:
   shifted (often because an upstream changed its own constraints)
 - **Large minor-version jumps** -- may include behavioral changes
 
-### 4. Re-Run Full Quality Checks Locally
+### 4. Run Full Quality Checks Locally
 
-The workflow already ran `bin/dk pr --all` against both resolves, so
-this step is mainly for catching anything specific to your local
-environment (e.g., integration tests with services the workflow
-runner doesn't have):
+The weekly workflow does **not** run `bin/dk pr --all` -- those
+checks depend on Docker services (Postgres, Elasticsearch, etc.)
+the GitHub runner intentionally doesn't provide. Normal PR CI runs
+the service-free subset (lint, type, docs, non-Docker unit tests)
+on push. Confirm CI is green, and run the full suite locally before
+approving any non-trivial dep update:
 
 ```bash
-bin/dk up      # start Docker services if needed
+bin/dk up      # start Docker services
 bin/dk pr      # full PR validation
 ```
 
 ### 5. Approve and Merge
 
-The CI pipeline validates against the upgraded resolve. Once green,
-approve and merge.
+The CI pipeline validates the upgraded resolve against the
+service-free subset. Combined with a clean local
+`bin/dk pr --all` and the workflow's CVE audits, that's the merge
+gate. Approve once everything is green.
 
 ## Troubleshooting
 
-### Floor-Resolve Validation Fails But Upgraded-Resolve Passes
+### `bin/dk pr --all` Against the Floor Fails Locally
 
-Our code uses an API that doesn't exist at the floor of some
-dependency. Identify the failing call (test or import error
-points at it) and either:
+(Only relevant if you're spot-checking floor compatibility -- the
+workflow doesn't do this.) Our code uses an API that doesn't exist
+at the floor of some dependency. Identify the failing call (test
+or import error points at it) and either:
 
 - Bump the floor of that dep to a version where the API exists, or
 - Use an older API that works at the floor
 
-### Floor-Resolve Validation Hangs or OOMs
+### `Sync to Floor Resolve` Hangs or OOMs
 
-`uv sync --resolution lowest-direct --all-packages` can pull in
-substantially older versions of heavy deps. If the floor resolve
-exhausts memory or timeouts, the immediate fix is to bump floors
+`uv sync --frozen` against the floor lockfile can pull in
+substantially older versions of heavy deps. If the floor sync
+exhausts memory or times out, the immediate fix is to bump floors
 on the heaviest contributors (typically `transformers`, `torch`,
 `pyarrow`) to known-working versions. The workflow's failure log
 should point at where it stalled.
