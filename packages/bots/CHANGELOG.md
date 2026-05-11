@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+- Bumped minimum `pyyaml` requirement from `>=6.0` to `>=6.0.2` to
+  exclude versions that lack cp312/cp313 wheels and fail to build from
+  source against modern Cython (`'build_ext' object has no attribute
+  'cython_sources'`). Surfaced by the floor resolve step in the
+  `dependency-update` workflow.
+
 ## v0.6.19 - 2026-05-09
 
 ### Added
