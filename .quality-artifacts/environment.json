@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-11T18:15:37Z",
+  "timestamp": "2026-05-11T19:22:09Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.13 (Homebrew 2026-05-11 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-floor-issues",
-  "git_commit": "340a3bb0452bc0bf3485ce6d790f6dbde26d2e93",
+  "git_branch": "update-dependencies",
+  "git_commit": "13f25cb1deb188a9a48e6b9a831058c68c8d98a3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
