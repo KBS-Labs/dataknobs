@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+- Bumped minimum `psycopg2-binary` requirement from `>=2.8.6` to
+  `>=2.9.10` to exclude versions that lack cp312/cp313 wheels.
+  2.8.6 has no wheels past cp39, and 2.9.9 lacks cp313; falling
+  back to a source build requires `pg_config`/`libpq-dev` and is
+  not portable. Surfaced by the floor resolve step in the
+  `dependency-update` workflow.
+
 ## v1.2.10 - 2026-05-09
 
 ### Security

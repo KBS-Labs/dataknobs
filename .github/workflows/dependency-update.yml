@@ -284,19 +284,29 @@ jobs:
           - **Upgraded resolve:** ${{ steps.validate_upgraded.outputs.upgraded_validate_summary }}
           - **Floor resolve:** ${{ steps.validate_floor.outputs.floor_validate_summary }}
 
-          Floor-level findings indicate that fresh consumer installs
-          without an inherited pin could resolve to a vulnerable
-          version. Bump the affected `pyproject.toml` floors with
-          inline CVE-rationale comments matching the precedent at
-          `packages/llm/pyproject.toml:34` (e.g.,
-          `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
-          `### Security` entry to each affected package's
-          `CHANGELOG.md` under `## Unreleased`.
+          Floor-level findings come in two flavors:
+
+          - **CVE findings** (from the floor-resolve OSV audit): a
+            fresh consumer install without an inherited pin could
+            resolve to a vulnerable version. Bump the affected
+            `pyproject.toml` floor with an inline CVE-rationale
+            comment matching `packages/llm/pyproject.toml:34` (e.g.,
+            `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
+            `### Security` entry to the affected package's
+            `CHANGELOG.md` under `## Unreleased`.
+          - **Build-compat findings** (from `Sync to floor resolve`
+            or `Validate floor resolve`): a declared floor is
+            unbuildable on the supported Python range, or our code
+            uses an API the floor version doesn't ship. Bump the
+            floor with an inline build/API-rationale comment, and
+            add a `### Fixed` entry to the affected package's
+            `CHANGELOG.md` under `## Unreleased`.
 
           Do **not** bump package versions or run
           `bin/release-helper.sh bump` for floor changes — entries
           accumulate under `## Unreleased` and ship with the next
           release. See `docs/development/dependency-updates.md` for
-          the full review and floor-bump procedure.
+          the full review and floor-bump procedure, including the
+          decision table for picking `### Security` vs `### Fixed`.
         branch: update-dependencies
         delete-branch: true

@@ -12,7 +12,7 @@ dependencies = [
     "dataknobs-config>=0.3.12",
     "dataknobs-data>=0.4.17",
     "dataknobs-utils>=1.2.10",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
     "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6
 ]
 
