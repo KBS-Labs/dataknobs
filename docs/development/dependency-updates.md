@@ -108,12 +108,33 @@ with a security PR -- note it in the merge commit and leave it for
 a follow-up. The workflow will keep flagging it weekly until the
 floor is bumped.
 
+### Floor-Resolve Sync
+
+Before validation runs, the workflow's `Sync to floor resolve` step
+overwrites `uv.lock` with `uv-lowest.lock` and runs
+`uv sync --all-packages --frozen`. Failures here are **build-compat**
+failures: one of the floor versions either lacks wheels for the
+supported Python range (`requires-python = ">=3.12"`) or fails to
+build from source against the current toolchain. Typical signatures:
+
+- `Failed to build pyyaml==6.0` with
+  `AttributeError: 'build_ext' object has no attribute 'cython_sources'`
+  (the canonical Cython 3 incompatibility with PyYAML <6.0.1)
+- `Failed to build psycopg2-binary==2.8.6` with
+  `Error: pg_config executable not found` (the floor lacks wheels for
+  the runner's Python and source build needs system libs)
+
+The fix is to bump the affected `pyproject.toml` floor to the lowest
+version that ships wheels for the supported Python range. See
+"Bumping a Build-Compat Floor" below.
+
 ### Floor-Resolve Validation
 
-This is `bin/dk pr --all` against the floor resolve. Failures here
-mean our code has drifted past what our minimum declared
-dependencies actually support -- e.g., we use a method that didn't
-exist in the floor version of a library. The fix is either:
+This is `bin/dk pr --all` against the floor resolve, run only after
+the floor resolve syncs successfully. Failures here mean our code
+has drifted past what our minimum declared dependencies actually
+support -- e.g., we use a method that didn't exist in the floor
+version of a library. The fix is either:
 
 - **Use a more conservative API** that works at the floor, **or**
 - **Bump the floor** so the API we use is guaranteed available
@@ -126,10 +147,22 @@ DataFrame.assign(... ignore_index=True) added in 2.1.0`.
 
 ## Bumping a Floor
 
-When a floor-resolve audit (or any other CVE source) calls for a
-floor bump:
+Floor bumps fall into two categories with distinct comment styles
+and CHANGELOG sections:
 
-### 1. Edit the `pyproject.toml` Floor With an Inline Comment
+| Category | Driver | Inline comment style | CHANGELOG section |
+|---|---|---|---|
+| **Security** | CVE flagged by the floor-resolve OSV audit, or any other CVE source | OSV/CVE ID + fix version | `### Security` |
+| **Build compatibility** | `Sync to floor resolve` fails because the floor lacks wheels / can't build from source, or `bin/dk pr --all` fails at the floor because of an API we use | Build/API requirement | `### Fixed` |
+
+Pick whichever category drove the bump. If a single bump is driven
+by both (e.g., the bump excludes a CVE *and* fixes a build issue),
+record it as `### Security` with a note about the build-compat
+side-effect.
+
+### Bumping a Security Floor
+
+#### 1. Edit the `pyproject.toml` Floor With an Inline CVE Comment
 
 Match the precedent at `packages/llm/pyproject.toml:34`:
 
@@ -151,12 +184,13 @@ upstream constraint, name the transitive and the chain:
 "httpx>=0.27.0",  # GHSA-vqfr-h8mv-ghfj in transitive h11<0.16 (CVSS 9.1) swept by httpcore 1.x (required by httpx>=0.27)
 ```
 
-### 2. Add a Security Entry to the Package's CHANGELOG `## Unreleased`
+#### 2. Add a `### Security` Entry to the Package's CHANGELOG
 
-Each affected package gets a `### Security` block explaining the
-bump. The entry stays under `## Unreleased` until the next release;
-when you run `bin/release-helper.sh bump`, it becomes the release
-section automatically.
+Each affected package gets a `### Security` block under
+`## Unreleased` explaining the bump. The entry stays under
+`## Unreleased` until the next release; when you run
+`bin/release-helper.sh bump`, it becomes the release section
+automatically.
 
 ```markdown
 ## Unreleased
@@ -168,7 +202,53 @@ section automatically.
   component).
 ```
 
-### 3. Regenerate `uv.lock`
+### Bumping a Build-Compat Floor
+
+When `Sync to floor resolve` fails (or `bin/dk pr --all` fails at the
+floor because of an API drift), the bump isn't excluding a CVE -- it's
+fixing a broken floor. Use the build-compat conventions.
+
+#### 1. Edit the `pyproject.toml` Floor With an Inline Build/API Comment
+
+Name the *reason*, not a CVE. Wheel/build-tool issues:
+
+```toml
+"pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
+"psycopg2-binary>=2.9.10",  # 2.8.6/2.9.9 lack cp312/cp313 wheels; source build needs pg_config
+```
+
+API-drift issues (we use a symbol introduced in a newer release):
+
+```toml
+"pandas>=2.1.0",  # uses DataFrame.assign(... ignore_index=True) added in 2.1.0
+```
+
+Pick the **lowest** version that resolves the breakage across the
+full supported Python range. For wheel-availability bumps,
+cross-check PyPI's release page for each `cp3X` tag named in
+`requires-python` -- a version that has `cp312` wheels but not
+`cp313` wheels will still fail for consumers on 3.13.
+
+#### 2. Add a `### Fixed` Entry to the Package's CHANGELOG
+
+Build-compat bumps don't go in `### Security` -- they aren't CVEs,
+and security reviewers reading the release notes shouldn't have to
+filter them out. Use `### Fixed`:
+
+```markdown
+## Unreleased
+
+### Fixed
+- Bumped minimum `pyyaml` requirement from `>=6.0` to `>=6.0.2` to
+  exclude versions that lack cp312/cp313 wheels and fail to build from
+  source against modern Cython (`'build_ext' object has no attribute
+  'cython_sources'`). Surfaced by the floor resolve step in the
+  `dependency-update` workflow.
+```
+
+### Shared Wrap-Up Steps (Both Categories)
+
+#### 3. Regenerate `uv.lock`
 
 ```bash
 uv lock
@@ -176,9 +256,9 @@ uv lock
 
 This propagates the new floor through the workspace lockfile.
 
-### 4. Verify the Bump Closed the Finding
+#### 4. Verify the Bump Closed the Finding
 
-Re-run the floor audit locally:
+For a **security** bump, re-run the floor audit locally:
 
 ```bash
 bin/audit-floor.sh
@@ -188,7 +268,20 @@ The CVE you bumped for should no longer appear. If it does, the
 floor isn't high enough -- check the OSV `FIXED VERSION` column and
 bump higher.
 
-### 5. Skip Version Bumps Until Release
+For a **build-compat** bump, regenerate the floor lockfile and
+frozen-sync it -- the same two commands the workflow's `Sync to
+floor resolve` step runs:
+
+```bash
+uv lock --resolution lowest-direct   # writes uv-lowest.lock contents into uv.lock
+uv sync --all-packages --frozen      # must exit 0
+uv lock                              # restore upgrade resolve
+```
+
+The sync should exit 0. If it still fails on a *different* dep, that
+dep also needs a build-compat bump -- repeat the process.
+
+#### 5. Skip Version Bumps Until Release
 
 **Do not bump package versions or run `bin/release-helper.sh bump`
 just because a floor moved.** Floor bumps accumulate under
