@@ -141,32 +141,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Validate upgraded resolve
-      id: validate_upgraded
-      if: steps.debounce.outputs.skip != 'true'
-      run: |
-        # uv sync --all-packages already ran above; uv.lock currently
-        # holds the upgraded resolve. Run the same quality checks
-        # reviewers would run locally before merging.
-        set +e
-        bin/dk pr --all 2>&1 | tee validate-upgraded.log
-        exit_code=$?
-        set -e
-
-        if [ "$exit_code" -eq 0 ]; then
-          echo "upgraded_validate_summary=All checks passed against upgraded resolve." >> "$GITHUB_OUTPUT"
-        else
-          {
-            echo "upgraded_validate_summary<<VALIDATE_EOF"
-            echo "**Validation failed against upgraded resolve — see workflow logs for full output.**"
-            echo ""
-            echo '```'
-            tail -100 validate-upgraded.log
-            echo '```'
-            echo "VALIDATE_EOF"
-          } >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Generate floor resolve (lowest-direct)
       if: steps.debounce.outputs.skip != 'true'
       run: |
@@ -219,35 +193,17 @@ jobs:
     - name: Sync to floor resolve
       if: steps.debounce.outputs.skip != 'true'
       run: |
-        # Install the floor resolve so the next step can validate
-        # against it. Overwrite uv.lock with the saved floor
-        # lockfile and frozen-sync, so we install exactly what we
-        # just audited (no fresh re-resolution).
+        # Build-compat check: install the floor resolve to confirm
+        # every declared floor actually installs on the supported
+        # Python range (catches unbuildable floors, e.g. versions
+        # without wheels and source builds that fail). Overwrite
+        # uv.lock with the saved floor lockfile and frozen-sync, so
+        # we install exactly what we just audited (no fresh
+        # re-resolution). Failure here aborts the workflow — a
+        # floor that doesn't install must be bumped before opening
+        # the weekly PR.
         cp uv-lowest.lock uv.lock
         uv sync --all-packages --frozen
-
-    - name: Validate floor resolve
-      id: validate_floor
-      if: steps.debounce.outputs.skip != 'true'
-      run: |
-        set +e
-        bin/dk pr --all 2>&1 | tee validate-floor.log
-        exit_code=$?
-        set -e
-
-        if [ "$exit_code" -eq 0 ]; then
-          echo "floor_validate_summary=All checks passed against floor resolve." >> "$GITHUB_OUTPUT"
-        else
-          {
-            echo "floor_validate_summary<<VALIDATE_EOF"
-            echo "**Validation failed against floor resolve — see workflow logs for full output.**"
-            echo ""
-            echo '```'
-            tail -100 validate-floor.log
-            echo '```'
-            echo "VALIDATE_EOF"
-          } >> "$GITHUB_OUTPUT"
-        fi
 
     - name: Restore upgraded resolve
       if: steps.debounce.outputs.skip != 'true'
@@ -279,34 +235,32 @@ jobs:
           - **Upgraded resolve (`uv.lock`):** ${{ steps.audit.outputs.vuln_summary }}
           - **Floor resolve (`uv-lowest.lock`):** ${{ steps.audit_floor.outputs.floor_vuln_summary }}
 
-          ### Quality validation
+          Code-quality validation is **not** run by this workflow.
+          Quality checks (lint, type, unit, integration) run as part
+          of normal PR CI on this branch and locally via
+          `bin/dk pr --all`. Reviewer is responsible for confirming
+          CI is green before merging.
 
-          - **Upgraded resolve:** ${{ steps.validate_upgraded.outputs.upgraded_validate_summary }}
-          - **Floor resolve:** ${{ steps.validate_floor.outputs.floor_validate_summary }}
+          Floor-level CVE findings indicate that a fresh consumer
+          install without an inherited pin could resolve to a
+          vulnerable version. Bump the affected `pyproject.toml`
+          floor with an inline CVE-rationale comment matching
+          `packages/llm/pyproject.toml:34` (e.g.,
+          `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
+          `### Security` entry to the affected package's
+          `CHANGELOG.md` under `## Unreleased`.
 
-          Floor-level findings come in two flavors:
-
-          - **CVE findings** (from the floor-resolve OSV audit): a
-            fresh consumer install without an inherited pin could
-            resolve to a vulnerable version. Bump the affected
-            `pyproject.toml` floor with an inline CVE-rationale
-            comment matching `packages/llm/pyproject.toml:34` (e.g.,
-            `"foo>=1.2.3",  # GHSA-xxxx fixed in 1.2.3`), and add a
-            `### Security` entry to the affected package's
-            `CHANGELOG.md` under `## Unreleased`.
-          - **Build-compat findings** (from `Sync to floor resolve`
-            or `Validate floor resolve`): a declared floor is
-            unbuildable on the supported Python range, or our code
-            uses an API the floor version doesn't ship. Bump the
-            floor with an inline build/API-rationale comment, and
-            add a `### Fixed` entry to the affected package's
-            `CHANGELOG.md` under `## Unreleased`.
+          Build-compatibility issues at the floor (missing wheels,
+          source-build failures) are caught earlier by the
+          `Sync to floor resolve` step and abort the workflow before
+          this PR is opened — they never appear here. See
+          `docs/development/dependency-updates.md` for the
+          procedure for fixing those.
 
           Do **not** bump package versions or run
           `bin/release-helper.sh bump` for floor changes — entries
           accumulate under `## Unreleased` and ship with the next
           release. See `docs/development/dependency-updates.md` for
-          the full review and floor-bump procedure, including the
-          decision table for picking `### Security` vs `### Fixed`.
+          the full review and floor-bump procedure.
         branch: update-dependencies
         delete-branch: true
