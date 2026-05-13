@@ -4,6 +4,7 @@ This module provides:
 - GeneratorContext: Dependencies available during generation (db, llm, etc.)
 - GeneratorOutput: Result of generation with content, provenance, and validation
 - Generator: Abstract base class defining the generator interface
+- GeneratorDefinition: Serializable shape of a registered generator
 
 Generators produce structured content deterministically from parameters.
 Output is validated against JSON Schema and tracked via provenance.
@@ -22,9 +23,12 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.artifacts.provenance import ProvenanceRecord
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,50 @@ class GeneratorOutput:
         )
 
 
+@dataclass
+class GeneratorDefinition:
+    """Serializable snapshot of a registered generator.
+
+    Generator instances themselves carry code/templates that cannot be
+    persisted, so the registry stores a ``GeneratorDefinition`` summary
+    of each registration in its backing database while keeping the live
+    ``Generator`` instance in memory.
+
+    Attributes:
+        generator_id: The generator's id (matches :attr:`Generator.id`).
+        version: Semantic version string at registration time.
+        parameter_schema: JSON Schema for input parameters.
+        output_schema: JSON Schema for output content.
+        metadata: Cross-cutting context (``tenant_id``, ``correlation_id``,
+            audit info, feature flags).  Routed to the underlying record's
+            ``metadata`` column when persisted via :class:`GeneratorRegistry`
+            so it is independently filterable via ``filter_metadata``
+            without scanning every row.
+    """
+
+    generator_id: str
+    version: str
+    parameter_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_generator(
+        cls,
+        generator: Generator,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> GeneratorDefinition:
+        """Build a definition snapshot from a live :class:`Generator`."""
+        return cls(
+            generator_id=generator.id,
+            version=generator.version,
+            parameter_schema=dict(generator.parameter_schema),
+            output_schema=dict(generator.output_schema),
+            metadata=dict(metadata or {}),
+        )
+
+
 class Generator(ABC):
     """Abstract base class for content generators.
 
@@ -138,9 +186,7 @@ class Generator(ABC):
             GeneratorOutput with content, provenance, and validation results.
         """
 
-    async def validate_parameters(
-        self, parameters: dict[str, Any]
-    ) -> list[str]:
+    async def validate_parameters(self, parameters: dict[str, Any]) -> list[str]:
         """Validate parameters against the parameter schema.
 
         Args:
@@ -160,9 +206,7 @@ class Generator(ABC):
             errors.append(f"Invalid parameter schema: {e.message}")
         return errors
 
-    async def validate_output(
-        self, output: dict[str, Any]
-    ) -> list[str]:
+    async def validate_output(self, output: dict[str, Any]) -> list[str]:
         """Validate output content against the output schema.
 
         Args:

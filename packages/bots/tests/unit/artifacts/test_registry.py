@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from dataknobs_common.transitions import InvalidTransitionError
+from dataknobs_data import SortOrder, SortSpec
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
 from dataknobs_bots.artifacts.models import (
@@ -244,6 +247,55 @@ class TestArtifactRegistryVersioning:
             )
 
     @pytest.mark.asyncio
+    async def test_revise_concurrent_serialized_in_process(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Concurrent revise() calls on the same artifact must serialize.
+
+        Before the per-id lock, two concurrent ``revise`` callers could
+        each read ``v1.0.0`` and both compute ``v1.0.1`` — last-write
+        wins on both the pointer and the snapshot, silently dropping
+        one revision.  With the lock, the second caller observes the
+        first caller's bumped version and computes ``v1.0.2``.
+        """
+        original = await registry.create(
+            artifact_type="content",
+            name="Concurrent",
+            content={"v": 1},
+        )
+
+        results = await asyncio.gather(
+            registry.revise(
+                artifact_id=original.id,
+                new_content={"v": 2},
+                reason="A",
+                triggered_by="A",
+            ),
+            registry.revise(
+                artifact_id=original.id,
+                new_content={"v": 3},
+                reason="B",
+                triggered_by="B",
+            ),
+        )
+        versions = sorted(r.version for r in results)
+        # Without serialization both calls produce v1.0.1; with
+        # serialization the second observes the first and produces
+        # v1.0.2.
+        assert versions == ["1.0.1", "1.0.2"]
+        # Both snapshots persisted distinctly.
+        v_old = await registry.get_version(original.id, "1.0.0")
+        v_one = await registry.get_version(original.id, "1.0.1")
+        v_two = await registry.get_version(original.id, "1.0.2")
+        assert v_old is not None
+        assert v_one is not None
+        assert v_two is not None
+        # The pointer reflects whichever revise won the second slot.
+        latest = await registry.get(original.id)
+        assert latest is not None
+        assert latest.version == "1.0.2"
+
+    @pytest.mark.asyncio
     async def test_get_version(self, registry: ArtifactRegistry) -> None:
         """Test retrieving a specific version."""
         original = await registry.create(
@@ -461,6 +513,185 @@ class TestArtifactRegistryHooks:
         assert status_changes[0].status == ArtifactStatus.PENDING_REVIEW
 
 
+class TestArtifactRegistryMetadata:
+    """Tests for the metadata channel routed through AsyncKeyedRecordStore.
+
+    These pin the metadata-preservation contract that the structural
+    Record.data/metadata split enforces.  Together with the existing
+    test_models.test_metadata_round_trip, they verify that metadata
+    flows from caller → serializer → backend → deserializer → caller
+    without leakage into the data channel.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_with_metadata_preserved(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Metadata passed to create() round-trips through get()."""
+        artifact = await registry.create(
+            artifact_type="content",
+            name="Metadata Test",
+            content={"v": 1},
+            metadata={"tenant_id": "acme", "correlation_id": "req-1"},
+        )
+        assert artifact.metadata == {"tenant_id": "acme", "correlation_id": "req-1"}
+
+        retrieved = await registry.get(artifact.id)
+        assert retrieved is not None
+        assert retrieved.metadata == {"tenant_id": "acme", "correlation_id": "req-1"}
+
+    @pytest.mark.asyncio
+    async def test_create_without_metadata_defaults_empty(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Omitting metadata stores an empty dict, not None — matches model default."""
+        artifact = await registry.create(
+            artifact_type="content",
+            name="No Metadata",
+            content={"v": 1},
+        )
+        retrieved = await registry.get(artifact.id)
+        assert retrieved is not None
+        assert retrieved.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_get_version_returns_metadata(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Versioned snapshots preserve metadata too (both writes go through the store)."""
+        artifact = await registry.create(
+            artifact_type="content",
+            name="Versioned",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        snapshot = await registry.get_version(artifact.id, artifact.version)
+        assert snapshot is not None
+        assert snapshot.metadata == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_query_filter_metadata_matches(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``filter_metadata`` routes through the metadata column and matches AND-style."""
+        await registry.create(
+            artifact_type="content",
+            name="Acme One",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="Globex One",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        acme = await registry.query(filter_metadata={"tenant_id": "acme"})
+        names = sorted(a.name for a in acme)
+        assert names == ["Acme One"]
+
+    @pytest.mark.asyncio
+    async def test_query_empty_filter_metadata_is_no_filter(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``filter_metadata={}`` is equivalent to ``None`` — no filter applied."""
+        await registry.create(
+            artifact_type="content",
+            name="A",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="B",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        all_with_empty_filter = await registry.query(filter_metadata={})
+        all_unfiltered = await registry.query()
+        assert len(all_with_empty_filter) == len(all_unfiltered) == 2
+
+    @pytest.mark.asyncio
+    async def test_query_filter_metadata_combined_with_type(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``filter_metadata`` AND-combines with structural filters like artifact_type."""
+        await registry.create(
+            artifact_type="content",
+            name="Acme Content",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="config",
+            name="Acme Config",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="Globex Content",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        results = await registry.query(
+            artifact_type="content",
+            filter_metadata={"tenant_id": "acme"},
+        )
+        assert [a.name for a in results] == ["Acme Content"]
+
+    @pytest.mark.asyncio
+    async def test_revise_inherits_metadata_by_default(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``revise()`` without explicit metadata carries the current version's metadata."""
+        original = await registry.create(
+            artifact_type="content",
+            name="Inherited",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+
+        revised = await registry.revise(
+            artifact_id=original.id,
+            new_content={"v": 2},
+            reason="Update",
+            triggered_by="test",
+        )
+        assert revised.metadata == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_revise_with_explicit_metadata_overrides(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``revise(metadata=...)`` overrides the inherited metadata for the new version."""
+        original = await registry.create(
+            artifact_type="content",
+            name="Override",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+
+        revised = await registry.revise(
+            artifact_id=original.id,
+            new_content={"v": 2},
+            reason="Tenant migration",
+            triggered_by="test",
+            metadata={"tenant_id": "acme", "audit": {"migrated_from": "acme"}},
+        )
+        assert revised.metadata == {
+            "tenant_id": "acme",
+            "audit": {"migrated_from": "acme"},
+        }
+        # And the old version's metadata is unchanged in its snapshot.
+        v1 = await registry.get_version(original.id, "1.0.0")
+        assert v1 is not None
+        assert v1.metadata == {"tenant_id": "acme"}
+
+
 class TestArtifactRegistryConfig:
     """Tests for configuration-driven creation."""
 
@@ -491,3 +722,425 @@ class TestArtifactRegistryConfig:
 
         assert "assessment" in artifact.tags
         assert "quality" in artifact.rubric_ids
+
+
+class TestArtifactRegistryQueryPagination:
+    """Tests for ``query()`` sort/limit/offset and ``count()``.
+
+    Pins the post-dedup pagination contract: ``sort`` pushes to the
+    database but ``limit``/``offset`` apply to the deduplicated
+    artifact list — never to the pre-dedup row stream — because the
+    dual-write storage shape (latest pointer + versioned snapshots)
+    means N rows in the database can collapse to anywhere between
+    ``ceil(N/2)`` and ``1`` artifact.
+    """
+
+    @pytest.mark.asyncio
+    async def test_query_sort_by_name_asc(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Sort by name ascending returns artifacts in name order."""
+        await registry.create(
+            artifact_type="content", name="Charlie", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="Alice", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="Bob", content={"v": 1}
+        )
+
+        results = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+        )
+        assert [a.name for a in results] == ["Alice", "Bob", "Charlie"]
+
+    @pytest.mark.asyncio
+    async def test_query_sort_by_name_desc(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Sort by name descending returns artifacts in reverse name order."""
+        await registry.create(
+            artifact_type="content", name="Charlie", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="Alice", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="Bob", content={"v": 1}
+        )
+
+        results = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.DESC)],
+        )
+        assert [a.name for a in results] == ["Charlie", "Bob", "Alice"]
+
+    @pytest.mark.asyncio
+    async def test_query_limit_applies_after_dedup(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``limit`` returns N deduplicated artifacts, not N database rows.
+
+        Each create writes both a latest pointer and a versioned
+        snapshot, so 3 artifacts produce 6 records.  ``limit=2`` must
+        return 2 artifacts (not, for example, 2 records that may all
+        be snapshots).
+        """
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="C", content={"v": 1}
+        )
+
+        results = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+            limit=2,
+        )
+        assert len(results) == 2
+        assert [a.name for a in results] == ["A", "B"]
+
+    @pytest.mark.asyncio
+    async def test_query_offset_applies_after_dedup(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``offset`` skips deduplicated artifacts, not raw rows."""
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="C", content={"v": 1}
+        )
+
+        results = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+            offset=1,
+        )
+        assert [a.name for a in results] == ["B", "C"]
+
+    @pytest.mark.asyncio
+    async def test_query_limit_and_offset_combine(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``offset`` first, then ``limit`` — standard pagination semantics."""
+        for name in ["A", "B", "C", "D", "E"]:
+            await registry.create(
+                artifact_type="content", name=name, content={"v": 1}
+            )
+
+        page = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+            offset=1,
+            limit=2,
+        )
+        assert [a.name for a in page] == ["B", "C"]
+
+    @pytest.mark.asyncio
+    async def test_query_limit_with_versioned_artifacts(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Pre-existing versions don't leak through ``limit``.
+
+        Revising an artifact creates additional snapshot rows.  After
+        2 revisions on artifact A, the database has 4 rows for A
+        (pointer + 3 snapshots).  A query with ``limit=2`` must still
+        deduplicate first, then take 2 artifacts — not 2 rows.
+
+        DRAFT → SUPERSEDED is a direct allowed transition, so
+        ``revise()`` runs from DRAFT without manual state shepherding.
+        """
+        a = await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.revise(
+            artifact_id=a.id,
+            new_content={"v": 2},
+            reason="r2",
+            triggered_by="t",
+        )
+        await registry.revise(
+            artifact_id=a.id,
+            new_content={"v": 3},
+            reason="r3",
+            triggered_by="t",
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+
+        results = await registry.query(
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+            limit=2,
+        )
+        # Must be 2 distinct artifacts, not 2 raw rows
+        assert len(results) == 2
+        assert {r.name for r in results} == {"A", "B"}
+        # And A should be the latest-pointer version (v=3)
+        latest_a = next(r for r in results if r.name == "A")
+        assert latest_a.content == {"v": 3}
+
+    @pytest.mark.asyncio
+    async def test_query_sort_combines_with_filters(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Sort works alongside ``artifact_type`` and ``filter_metadata``."""
+        await registry.create(
+            artifact_type="content",
+            name="Charlie",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="Alice",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="config",
+            name="Bob",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="Dan",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        results = await registry.query(
+            artifact_type="content",
+            filter_metadata={"tenant_id": "acme"},
+            sort=[SortSpec(field="name", order=SortOrder.ASC)],
+        )
+        assert [a.name for a in results] == ["Alice", "Charlie"]
+
+    @pytest.mark.asyncio
+    async def test_query_limit_zero_returns_empty(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``limit=0`` returns no artifacts (consistent with Python slice)."""
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+
+        results = await registry.query(limit=0)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_query_offset_beyond_count_returns_empty(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """``offset`` past the end returns empty list, not error."""
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+
+        results = await registry.query(offset=10)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_count_empty_registry_returns_zero(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count over an empty registry is zero."""
+        assert await registry.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_count_returns_distinct_artifact_count(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count returns the number of distinct artifacts, not raw rows."""
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="config", name="C", content={"v": 1}
+        )
+
+        assert await registry.count() == 3
+
+    @pytest.mark.asyncio
+    async def test_count_with_versioned_artifacts_dedups(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Versioned snapshots are deduplicated in the count.
+
+        After one revision, artifact A has 3 raw rows (pointer + 2
+        snapshots).  ``count()`` must return 1 for the single distinct
+        artifact, not 3.
+        """
+        a = await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.revise(
+            artifact_id=a.id,
+            new_content={"v": 2},
+            reason="r2",
+            triggered_by="t",
+        )
+
+        assert await registry.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_count_by_type(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count respects ``artifact_type`` filter."""
+        await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="config", name="C", content={"v": 1}
+        )
+
+        assert await registry.count(artifact_type="content") == 2
+        assert await registry.count(artifact_type="config") == 1
+        assert await registry.count(artifact_type="nonexistent") == 0
+
+    @pytest.mark.asyncio
+    async def test_count_by_status(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count respects ``status`` filter."""
+        a = await registry.create(
+            artifact_type="content", name="A", content={"v": 1}
+        )
+        await registry.create(
+            artifact_type="content", name="B", content={"v": 1}
+        )
+        await registry.set_status(a.id, ArtifactStatus.PENDING_REVIEW)
+
+        assert await registry.count(status=ArtifactStatus.DRAFT) == 1
+        assert await registry.count(status=ArtifactStatus.PENDING_REVIEW) == 1
+        assert await registry.count(status=ArtifactStatus.ARCHIVED) == 0
+
+    @pytest.mark.asyncio
+    async def test_count_by_tags(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count respects ``tags`` filter (AND-style match)."""
+        await registry.create(
+            artifact_type="content",
+            name="A",
+            content={"v": 1},
+            tags=["math", "assessment"],
+        )
+        await registry.create(
+            artifact_type="content",
+            name="B",
+            content={"v": 1},
+            tags=["math"],
+        )
+        await registry.create(
+            artifact_type="content",
+            name="C",
+            content={"v": 1},
+            tags=["science"],
+        )
+
+        assert await registry.count(tags=["math"]) == 2
+        assert await registry.count(tags=["math", "assessment"]) == 1
+        assert await registry.count(tags=["science"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_count_with_filter_metadata(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count routes through the metadata channel."""
+        await registry.create(
+            artifact_type="content",
+            name="A",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="B",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="C",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        assert await registry.count(filter_metadata={"tenant_id": "acme"}) == 2
+        assert (
+            await registry.count(filter_metadata={"tenant_id": "globex"}) == 1
+        )
+        assert await registry.count(filter_metadata={"tenant_id": "none"}) == 0
+
+    @pytest.mark.asyncio
+    async def test_count_combines_filters(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """Count AND-combines ``artifact_type`` and ``filter_metadata``."""
+        await registry.create(
+            artifact_type="content",
+            name="A",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="config",
+            name="B",
+            content={"v": 1},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.create(
+            artifact_type="content",
+            name="C",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        assert (
+            await registry.count(
+                artifact_type="content",
+                filter_metadata={"tenant_id": "acme"},
+            )
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_count_matches_query_length(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """count(...) and len(query(...)) agree for the same filter shape."""
+        for name in ["A", "B", "C", "D"]:
+            await registry.create(
+                artifact_type="content",
+                name=name,
+                content={"v": 1},
+                metadata={"tenant_id": "acme"},
+            )
+        await registry.create(
+            artifact_type="content",
+            name="E",
+            content={"v": 1},
+            metadata={"tenant_id": "globex"},
+        )
+
+        kwargs: dict[str, object] = {
+            "artifact_type": "content",
+            "filter_metadata": {"tenant_id": "acme"},
+        }
+        results = await registry.query(**kwargs)  # type: ignore[arg-type]
+        count = await registry.count(**kwargs)  # type: ignore[arg-type]
+        assert count == len(results) == 4

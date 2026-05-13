@@ -362,10 +362,11 @@ class SQLQueryBuilder:
                 order_parts.append(f"{sort_expr} {direction}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
 
-        # Add LIMIT and OFFSET
-        if query.limit_value:
+        # Add LIMIT and OFFSET.  ``is not None`` so ``limit=0`` becomes
+        # ``LIMIT 0`` (zero rows) rather than being silently dropped.
+        if query.limit_value is not None:
             sql_parts.append(f"LIMIT {query.limit_value}")
-        if query.offset_value:
+        if query.offset_value is not None:
             sql_parts.append(f"OFFSET {query.offset_value}")
 
         return " ".join(sql_parts), params
@@ -486,10 +487,11 @@ class SQLQueryBuilder:
                 order_parts.append(f"{sort_expr} {direction}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
 
-        # Add LIMIT and OFFSET
-        if query.limit_value:
+        # Add LIMIT and OFFSET.  ``is not None`` so ``limit=0`` becomes
+        # ``LIMIT 0`` (zero rows) rather than being silently dropped.
+        if query.limit_value is not None:
             sql_parts.append(f"LIMIT {query.limit_value}")
-        if query.offset_value:
+        if query.offset_value is not None:
             sql_parts.append(f"OFFSET {query.offset_value}")
 
         return " ".join(sql_parts), params

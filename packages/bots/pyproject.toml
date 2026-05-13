@@ -18,11 +18,24 @@ dependencies = [
     "pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
     "numpy>=1.24.0",
     "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6
+    # jsonschema is lazy-imported by generators/base.py,
+    # rubrics/executor.py and review/executor.py for parameter and
+    # output schema validation.  Declaring it here keeps the runtime
+    # import from raising ModuleNotFoundError in consumer envs.
+    "jsonschema>=4.0.0",
 ]
 
 [project.optional-dependencies]
 s3 = [
     "boto3>=1.26.0",
+]
+# `dataknobs-bots[server]` brings in FastAPI for the reference
+# `create_registry_router` HTTP server in `registry.server`.  The
+# module lazy-imports FastAPI so the package still imports cleanly
+# when the extra is not installed; callers that actually invoke
+# `create_registry_router` must install this extra.
+server = [
+    "fastapi>=0.110.0",
 ]
 
 [tool.uv.sources]
@@ -47,6 +60,18 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "aioresponses>=0.7.8",
+    # FastAPI + httpx power the reference registry-router tests
+    # (test_registry_server.py).  FastAPI is an optional runtime
+    # dependency — dataknobs_bots.registry.server lazy-imports it so
+    # the package still imports cleanly when FastAPI is absent.
+    "fastapi>=0.110.0",
+    "httpx>=0.27.0",
+    # moto powers the S3 knowledge-backend region-fallback tests.
+    # Declared in dataknobs-data's dev deps too, but the bots package
+    # has its own S3 tests so it needs its own declaration to make
+    # ``pytest packages/bots/tests`` work without depending on the
+    # data package's dev group being installed.
+    "moto>=5.1.10",
 ]
 
 [tool.hatch.build.targets.wheel]

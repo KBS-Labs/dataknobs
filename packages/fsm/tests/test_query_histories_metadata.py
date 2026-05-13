@@ -588,3 +588,85 @@ class TestPostgresMetadataFilterIntegration:
             assert results[0]["metadata"]["tenant_id"] == "T-1"
         finally:
             await db.close()
+
+
+class TestQueryHistoriesFilterSymmetry:
+    """Phase 7b — ``query_histories`` filter/sort kwargs mirror the registry layer."""
+
+    @pytest.mark.asyncio
+    async def test_filter_metadata_kwarg_equivalent_to_prefix(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """``filter_metadata={"K": V}`` equals ``{"metadata.K": V}`` in filters."""
+        await storage.initialize()
+        await storage.save_history(
+            _make_history("exec_1"), metadata={"tenant_id": "A"}
+        )
+        await storage.save_history(
+            _make_history("exec_2"), metadata={"tenant_id": "B"}
+        )
+
+        via_kwarg = await storage.query_histories(
+            filter_metadata={"tenant_id": "A"}
+        )
+        via_prefix = await storage.query_histories(
+            {"metadata.tenant_id": "A"}
+        )
+
+        assert [r["id"] for r in via_kwarg] == ["exec_1"]
+        assert [r["id"] for r in via_kwarg] == [r["id"] for r in via_prefix]
+
+    @pytest.mark.asyncio
+    async def test_filter_metadata_ands_with_prefix_entries(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """Prefix-style and kwarg-style metadata filters AND-combine."""
+        await storage.initialize()
+        await storage.save_history(
+            _make_history("exec_1"),
+            metadata={"tenant_id": "A", "scope_id": "S-1"},
+        )
+        await storage.save_history(
+            _make_history("exec_2"),
+            metadata={"tenant_id": "A", "scope_id": "S-2"},
+        )
+
+        results = await storage.query_histories(
+            {"metadata.tenant_id": "A"},
+            filter_metadata={"scope_id": "S-1"},
+        )
+        assert [r["id"] for r in results] == ["exec_1"]
+
+    @pytest.mark.asyncio
+    async def test_filters_none_is_back_compat_with_empty_dict(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """``filters=None`` (or omitted) behaves like the legacy ``{}`` call."""
+        await storage.initialize()
+        await storage.save_history(_make_history("exec_1"), metadata={"t": "A"})
+
+        results = await storage.query_histories()
+        assert len(results) == 1
+        assert results[0]["id"] == "exec_1"
+
+    @pytest.mark.asyncio
+    async def test_sort_kwarg_overrides_default_ordering(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """A caller-supplied ``sort=`` replaces the default ``start_time DESC``."""
+        from dataknobs_data import SortOrder, SortSpec
+
+        await storage.initialize()
+        for i, ts in enumerate([3.0, 1.0, 2.0]):
+            h = _make_history(f"exec_{i}")
+            h.start_time = ts
+            await storage.save_history(h)
+
+        ascending = await storage.query_histories(
+            sort=[SortSpec(field="start_time", order=SortOrder.ASC)]
+        )
+        assert [r["start_time"] for r in ascending] == [1.0, 2.0, 3.0]
+
+        # Default (no sort kwarg) is start_time DESC for back-compat.
+        default = await storage.query_histories()
+        assert [r["start_time"] for r in default] == [3.0, 2.0, 1.0]

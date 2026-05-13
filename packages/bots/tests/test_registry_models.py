@@ -2,8 +2,6 @@
 
 from datetime import datetime, timezone
 
-import pytest
-
 from dataknobs_bots.registry import Registration
 
 
@@ -128,3 +126,38 @@ class TestRegistration:
         assert "Registration" in repr_str
         assert "repr-bot" in repr_str
         assert "active" in repr_str
+
+    def test_metadata_default_is_empty_dict(self):
+        reg = Registration(bot_id="b", config={})
+        assert reg.metadata == {}
+
+    def test_metadata_roundtrip(self):
+        original = Registration(
+            bot_id="b",
+            config={"llm": {}},
+            metadata={"tenant_id": "acme", "audit": {"by": "alice"}},
+        )
+        data = original.to_dict()
+        assert data["metadata"] == {
+            "tenant_id": "acme",
+            "audit": {"by": "alice"},
+        }
+        restored = Registration.from_dict(data)
+        assert restored.metadata == original.metadata
+
+    def test_from_dict_missing_metadata_defaults_to_empty(self):
+        data = {"bot_id": "b", "config": {}}
+        reg = Registration.from_dict(data)
+        assert reg.metadata == {}
+
+    def test_from_dict_null_metadata_defaults_to_empty(self):
+        data = {"bot_id": "b", "config": {}, "metadata": None}
+        reg = Registration.from_dict(data)
+        assert reg.metadata == {}
+
+    def test_to_dict_metadata_is_copy_not_alias(self):
+        """Mutating dict returned from to_dict must not affect the original."""
+        reg = Registration(bot_id="b", config={}, metadata={"k": "v"})
+        d = reg.to_dict()
+        d["metadata"]["k"] = "mutated"
+        assert reg.metadata == {"k": "v"}

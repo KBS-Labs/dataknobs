@@ -7,8 +7,10 @@ that don't support push notifications (like memory or file backends).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.events import Event, EventBus, EventType
 
@@ -168,10 +170,8 @@ class RegistryPoller:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
         logger.info("Stopped registry poller")

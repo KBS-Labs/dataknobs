@@ -418,6 +418,26 @@ Get all rubrics applicable to a target type:
 content_rubrics = await registry.get_for_target("content")
 ```
 
+Optional kw-only parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `filter_metadata` | `Mapping[str, Any] \| None` | `None` | Equality filter over the `metadata` column.  Routes via `metadata.X` for SQL/JSONB pushdown. |
+| `sort` | `list[SortSpec] \| None` | `None` | Multi-key sort spec, pushed down to the database query. |
+| `limit` | `int \| None` | `None` | Row limit, applied **after** the latest-pointer dedup pass (same dual-write semantics as `ArtifactRegistry.query`). |
+| `offset` | `int \| None` | `None` | Row offset, same semantics as `limit`. |
+
+```python
+from dataknobs_data import SortSpec, SortOrder
+
+acme_content_rubrics = await registry.get_for_target(
+    "content",
+    filter_metadata={"tenant_id": "acme"},
+    sort=[SortSpec(field="created_at", order=SortOrder.DESC)],
+    limit=10,
+)
+```
+
 #### update()
 
 Store a new version (rubric should have its version already bumped):
@@ -442,6 +462,31 @@ List the latest version of all rubrics:
 ```python
 all_rubrics = await registry.list_all()
 ```
+
+Accepts the same kw-only filter / sort / pagination surface as
+`get_for_target` (`filter_metadata=`, `sort=`, `limit=`, `offset=`).
+Pagination is post-dedup; sort is pushed down to the database query.
+
+#### count_for_target() / count_all()
+
+```python
+n_acme_content = await registry.count_for_target(
+    "content", filter_metadata={"tenant_id": "acme"},
+)
+n_acme_total = await registry.count_all(
+    filter_metadata={"tenant_id": "acme"},
+)
+```
+
+Mirror `get_for_target` / `list_all` parameter-for-parameter (minus
+`sort` / `limit` / `offset`, which don't change the count) and are
+equivalent to `len(await registry.get_for_target(...))` and
+`len(await registry.list_all(...))` after dedup.
+
+Same caveat as `ArtifactRegistry.count`: pushdown `SELECT COUNT(*)`
+isn't safe under the dual-write storage shape (snapshot rows would
+inflate the count), so this implementation runs the same search,
+applies dedup, and counts.
 
 ### from_config()
 

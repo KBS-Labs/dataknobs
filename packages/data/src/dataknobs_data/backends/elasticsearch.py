@@ -797,9 +797,12 @@ upper}}}}}
         search_body = {"query": es_query}
         if sort:
             search_body["sort"] = sort
-        if query.limit_value:
+        # ``is not None`` so ``limit=0`` is sent as ``size=0`` (ES
+        # interprets that as a count-only request returning zero hits)
+        # rather than being silently dropped.
+        if query.limit_value is not None:
             search_body["size"] = query.limit_value
-        if query.offset_value:
+        if query.offset_value is not None:
             search_body["from"] = query.offset_value
 
         # Execute search

@@ -171,6 +171,92 @@ PUT  /bots/{bot_id}     → Update registration
 DELETE /bots/{bot_id}   → Delete registration
 ```
 
+#### Filter, sort, and pagination over the wire
+
+`HTTPRegistryBackend.list_all` pushes the same filter / pagination
+surface as the other backends to the server as optional query
+parameters on `GET /configs` (all omitted when `None`):
+
+| Parameter | Wire form | Notes |
+|-----------|-----------|-------|
+| `filter_metadata` | `?filter_metadata=<JSON object>` | Serialized with `sort_keys=True` so the query string is deterministic (server cache lines, request logs). |
+| `status` | `?status=<value>` | Equality filter on the `status` column. |
+| `sort` | `?sort=<field>[:asc|desc]` (repeatable) | Wire order of repeated values is preserved as the tie-break order. |
+| `limit` | `?limit=<int>` | Server-side row limit. |
+| `offset` | `?offset=<int>` | Server-side offset. |
+
+The wire schema is **additive optional**: servers that recognize a
+parameter SHOULD honor it; servers that don't ignore it and return
+the broader, unfiltered list.  For correctness on legacy servers, the
+client defensively re-applies idempotent filters (`filter_metadata`,
+`status`, `sort`) after parsing the response.  `limit`/`offset` are
+**not** re-applied — that would corrupt server-side pagination by
+re-offsetting an already-offset window.  Servers that don't honor
+pagination return the full list and the caller iterates more rows
+than requested; this is the documented degradation mode for
+non-conforming servers.
+
+### Reference server: `create_registry_router`
+
+`create_registry_router(backend)` is a one-line glue that mounts the
+same wire protocol `HTTPRegistryBackend` speaks, backed by any
+`RegistryBackend` (`InMemoryBackend`, `DataKnobsRegistryAdapter` over
+Postgres/SQLite/S3, …).  Useful when you want a config service whose
+storage you can swap without rewriting route handlers, and when you
+want to keep client and server in lockstep on protocol changes
+(client tests and server tests pin the wire shape from both ends).
+
+```python
+from fastapi import FastAPI
+from dataknobs_bots.registry import (
+    DataKnobsRegistryAdapter,
+    create_registry_router,
+)
+
+app = FastAPI()
+adapter = DataKnobsRegistryAdapter(
+    backend_type="postgres",
+    backend_config={
+        "host": "localhost",
+        "database": "myapp",
+        "table": "bot_configs",
+    },
+)
+
+@app.on_event("startup")
+async def startup() -> None:
+    await adapter.initialize()
+    app.include_router(
+        create_registry_router(adapter),
+        prefix="/api/v1",
+    )
+```
+
+**Efficiency note.** When the underlying backend is
+`DataKnobsRegistryAdapter` over Postgres, `filter_metadata` is pushed
+down to a `metadata->>'<key>' = $1` predicate (text extraction +
+equality) — server-side filtering rather than client-side scanning,
+but **not** an indexed lookup by default.  Postgres's
+`auto_create_table=True` path creates a GIN index over the `metadata`
+JSONB column using the default `jsonb_ops` opclass, which optimizes
+containment / existence operators (`@>`, `?`, `?&`, `?|`) and **does
+not** accelerate `->>`-style text extractions.  Consumers who need
+O(index lookup) on a hot `filter_metadata` key (e.g. `tenant_id`)
+should add an expression index in their own migrations, for example:
+
+```sql
+CREATE INDEX idx_bot_configs_tenant_id
+  ON bot_configs ((metadata->>'tenant_id'));
+```
+
+Backends without a JSONB column fall back to per-row matching via the
+`metadata.X` field-path translation in their respective query
+translators; this is also correct but unindexed.
+
+**Optional dependency.** FastAPI is optional: importing the module
+without FastAPI installed succeeds, but calling
+`create_registry_router` raises `ImportError` with an install hint.
+
 ### Reading configs: `get_config` vs `peek_config`
 
 Every `RegistryBackend` exposes two read APIs that differ only in
@@ -193,6 +279,116 @@ impose one on the wire.
 `BotRegistry.get_config()` routes through `peek_config` for inspection
 paths; use `BotRegistry.get_bot()` for user-facing bot resolution
 (which always registers an access).
+
+### Filter, Sort, and Pagination
+
+Every `RegistryBackend` exposes a uniform kw-only filter / sort /
+pagination surface on `list_all`, `list_active`, and `list_inactive`,
+plus matching `count_all` / `count` / `count_inactive` for cheap-count
+paths.  This is symmetric with the surfaces on `ArtifactRegistry`,
+`RubricRegistry`, `GeneratorRegistry`, and FSM's
+`load_steps`/`query_histories`, so a consumer composing multiple
+registries sees one shape:
+
+```python
+from dataknobs_data import SortSpec, SortOrder
+
+# Filter on the metadata channel (routes to `metadata.X`):
+acme_bots = await backend.list_active(
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Sort + paginate.  Sort pushes down to the database query so SQL
+# backends can use indexes.
+recent = await backend.list_active(
+    sort=[SortSpec(field="created_at", order=SortOrder.DESC)],
+    limit=20,
+    offset=0,
+)
+
+# Count for cheap-count / pagination footers — routes through
+# `AsyncDatabase.count(query)` so backends with pushdown counts
+# (`SELECT COUNT(*) WHERE ...`) benefit transparently.
+n = await backend.count(filter_metadata={"tenant_id": "acme"})
+
+# Stream large tenant populations one Registration at a time.
+async for reg in backend.stream(filter_metadata={"tenant_id": "acme"}):
+    process(reg)
+```
+
+#### Soft-delete symmetry: active vs inactive
+
+| Method | Returns |
+|--------|---------|
+| `list_active(...)` / `count(...)` | Registrations with `status="active"` |
+| `list_inactive(...)` / `count_inactive(...)` | Registrations with `status="inactive"` (soft-deleted) |
+| `list_all(status=None, ...)` / `count_all(status=None, ...)` | Both (or pass `status="active"` / `status="inactive"` to filter) |
+
+Soft-deleted records are retained for audit / reactivation.  Use
+`unregister(bot_id)` for hard delete.
+
+### Cross-cutting metadata on `Registration`
+
+`Registration.metadata` is a `dict[str, Any]` (default empty) that
+backends route to their `metadata` column rather than mixing into
+`config`.  Use it for cross-cutting context — `tenant_id`, audit info,
+feature flags — that should be independently filterable without
+disturbing the bot's portable configuration:
+
+```python
+await backend.register(
+    "support-bot",
+    {"llm": {"provider": "ollama", "model": "llama3.2"}},
+    metadata={"tenant_id": "acme", "env": "prod"},
+)
+
+# Now filterable independently of `config`:
+prod_acme = await backend.list_active(
+    filter_metadata={"tenant_id": "acme", "env": "prod"},
+)
+```
+
+The `Registration.to_dict` / `from_dict` JSON shape preserves
+`metadata` so it round-trips through the HTTP wire and any
+caller-side dump.
+
+#### Same surface on `BotRegistry`
+
+The same metadata channel, filter, and pagination kwargs are exposed
+on the higher-level `BotRegistry` wrapper — consumers don't have to
+drop to `registry._backend` to use them:
+
+```python
+from dataknobs_bots.bot import BotRegistry
+
+registry = BotRegistry(backend=backend)
+await registry.initialize()
+
+# Register with metadata
+await registry.register(
+    "support-bot",
+    config,
+    metadata={"tenant_id": "acme"},
+)
+
+# List active bot IDs filtered by tenant
+ids = await registry.list_bots(filter_metadata={"tenant_id": "acme"})
+
+# Or get full Registrations (timestamps, status, metadata)
+regs = await registry.list_registrations(
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Count by tenant
+n = await registry.count(filter_metadata={"tenant_id": "acme"})
+```
+
+> **Migration note (DataKnobsRegistryAdapter).** Existing deployments
+> on Postgres / SQLite / S3 / file backends must rewrite stored rows
+> once to populate the new `metadata` column — pre-migration rows
+> have an empty metadata column and won't match `filter_metadata`
+> until re-registered.  See `packages/bots/CHANGELOG.md`'s Unreleased
+> entry for the full migration note.
 
 ### Factory Function
 

@@ -6,13 +6,12 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.artifacts.provenance import ProvenanceRecord, create_provenance
+from dataknobs_bots.artifacts.provenance import create_provenance
 from dataknobs_bots.generators.base import (
     Generator,
     GeneratorContext,
     GeneratorOutput,
 )
-
 
 # --- Concrete test implementation ---
 

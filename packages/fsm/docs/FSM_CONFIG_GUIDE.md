@@ -1203,6 +1203,91 @@ to matched results, not to pre-filtered results.
 > in the query layer, while memory and file backends use `Record.get_value()`
 > dot-notation traversal.
 
+#### Symmetry kwargs: `filter_metadata=` and `sort=`
+
+For callers composing FSM history with the `dataknobs-bots` registry layer
+(`ArtifactRegistry.query`, `GeneratorRegistry.list_definitions`, etc.),
+`query_histories` also accepts the same kw-only filter / sort surface so
+the consumer sees one consistent shape:
+
+```python
+from dataknobs_data import SortSpec, SortOrder
+
+# Symmetry form — equivalent to `filters={"metadata.tenant_id": "acme"}`.
+results = await storage.query_histories(
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Both routes AND-combine — additive over `metadata.X` entries in `filters`.
+results = await storage.query_histories(
+    filters={"metadata.work_order_id": "WO-001"},
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# `sort=` overrides the default `start_time DESC` ordering.
+results = await storage.query_histories(
+    filter_metadata={"tenant_id": "acme"},
+    sort=[
+        SortSpec(field="fsm_name", order=SortOrder.ASC),
+        SortSpec(field="start_time", order=SortOrder.DESC),
+    ],
+)
+
+# `filters=` is now optional (`None` ≡ `{}`).
+all_histories = await storage.query_histories(limit=50)
+```
+
+`limit` / `offset` remain positional with defaults `100`/`0` for back-compat.
+
+### Saving Steps with Metadata
+
+`save_step` accepts a `metadata=` kwarg that lands in the underlying record's
+`metadata` column.  Combined with `load_steps`'s symmetry kwargs, this makes
+per-step cross-cutting context (tenant, correlation, audit) filterable
+without mixing it into the structural step payload:
+
+```python
+# Save with metadata
+await storage.save_step(
+    "exec-1",
+    step,
+    metadata={"tenant_id": "acme", "correlation_id": "corr-42"},
+)
+
+# Filter on the metadata channel
+acme_steps = await storage.load_steps(
+    "exec-1", filter_metadata={"tenant_id": "acme"},
+)
+
+# AND-combines with data-column `filters=`
+state_a_acme = await storage.load_steps(
+    "exec-1",
+    filters={"state_name": "state_a"},
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Sort + pagination push down to the database query.
+from dataknobs_data import SortSpec, SortOrder
+asc = await storage.load_steps(
+    "exec-1",
+    sort=[SortSpec(field="timestamp", order=SortOrder.ASC)],
+    limit=10,
+    offset=0,
+)
+```
+
+`limit=0` honors Python-slice semantics (empty result), aligning with the
+post-fix pagination behavior in the underlying `dataknobs-data` layer.
+
+> **Note:** `metadata=` on `save_step` and `save_history` is
+> **consumer-supplied**.  The FSM engine itself does not populate it
+> during execution — the engine has no opinion on which cross-cutting
+> fields (`tenant_id`, `correlation_id`, audit, feature flags) the
+> caller wants persisted, and forcing a default risks leaking
+> caller-private context into history.  Wrap the storage call from
+> your own execution path (or extend `UnifiedDatabaseStorage` in a
+> subclass) to inject these fields uniformly.
+
 #### Return Value
 
 Each result dict contains:

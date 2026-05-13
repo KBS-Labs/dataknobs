@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from dataknobs_data import SortSpec, StreamConfig
+
     from .models import Registration
 
 
@@ -57,6 +60,8 @@ class RegistryBackend(Protocol):
         bot_id: str,
         config: dict[str, Any],
         status: str = "active",
+        *,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Registration:
         """Register a bot or update existing registration.
 
@@ -67,6 +72,10 @@ class RegistryBackend(Protocol):
             bot_id: Unique bot identifier
             config: Bot configuration dictionary (should be portable)
             status: Registration status (default: active)
+            metadata: Cross-cutting context (tenant_id, audit, feature flags).
+                Backends should route these fields to their ``metadata``
+                column so they are independently filterable via
+                ``filter_metadata`` on list/count.
 
         Returns:
             Registration object with metadata
@@ -172,19 +181,81 @@ class RegistryBackend(Protocol):
         """
         ...
 
-    async def list_active(self) -> list[Registration]:
+    async def list_all(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
+        """List registrations, optionally filtered by status and metadata.
+
+        Args:
+            status: Optional equality filter on the ``status`` data
+                column.  ``None`` returns all statuses.
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel.  ``None`` / empty mapping is
+                no-filter.
+            sort: Optional sort specification; backends should honor
+                this when possible.
+            limit: Optional row limit.
+            offset: Optional row offset for pagination.
+
+        Returns:
+            List of matching Registration objects.
+        """
+        ...
+
+    async def list_active(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
         """List all active registrations.
+
+        Convenience for :meth:`list_all` with ``status="active"``.
+
+        Args:
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel. Each key/value pair must match for a
+                registration to be included. ``None`` / empty mapping is
+                no-filter.
+            sort: Optional sort specification.
+            limit: Optional row limit.
+            offset: Optional row offset for pagination.
 
         Returns:
             List of active Registration objects
         """
         ...
 
-    async def list_all(self) -> list[Registration]:
-        """List all registrations including inactive.
+    async def list_inactive(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
+        """List all inactive (soft-deleted) registrations.
+
+        Symmetric counterpart to :meth:`list_active`.  Convenience for
+        :meth:`list_all` with ``status="inactive"``.
+
+        Args:
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel.
+            sort: Optional sort specification.
+            limit: Optional row limit.
+            offset: Optional row offset for pagination.
 
         Returns:
-            List of all Registration objects
+            List of inactive Registration objects
         """
         ...
 
@@ -198,11 +269,85 @@ class RegistryBackend(Protocol):
         """
         ...
 
-    async def count(self) -> int:
+    async def count_all(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Count registrations, optionally filtered by status and metadata.
+
+        Args:
+            status: Optional equality filter on the ``status`` data
+                column.  ``None`` counts all statuses.
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel.
+
+        Returns:
+            Number of matching registrations.
+        """
+        ...
+
+    async def count(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
         """Count active registrations.
+
+        Convenience for :meth:`count_all` with ``status="active"``.
+
+        Args:
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel. ``None`` / empty mapping is
+                no-filter.
 
         Returns:
             Number of active registrations
+        """
+        ...
+
+    async def count_inactive(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Count inactive (soft-deleted) registrations.
+
+        Symmetric counterpart to :meth:`count`.
+
+        Args:
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel.
+
+        Returns:
+            Number of inactive registrations.
+        """
+        ...
+
+    def stream(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+        config: StreamConfig | None = None,
+    ) -> AsyncIterator[Registration]:
+        """Stream registrations matching the supplied filters.
+
+        Yields :class:`Registration` instances one at a time so backends
+        with large tenant populations can be iterated without loading
+        everything into memory.
+
+        Note this method is an async generator (declared as ``def``
+        returning ``AsyncIterator``) — call it with ``async for``, not
+        ``await``.
+
+        Args:
+            status: Optional equality filter on the ``status`` data
+                column.  ``None`` streams all statuses.
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel.
+            config: Optional :class:`StreamConfig` (batch size, etc.).
         """
         ...
 

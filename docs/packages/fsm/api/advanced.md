@@ -432,6 +432,48 @@ to matched results, not to pre-filtered results.
     query layer, while memory and file backends use `Record.get_value()`
     dot-notation traversal.
 
+#### Symmetry kwargs: `filter_metadata=` and `sort=`
+
+For callers composing FSM history with the `dataknobs-bots` registry
+layer (which exposes ``filter_metadata=`` / ``sort=`` /
+``limit=``/``offset=`` on `ArtifactRegistry.query`,
+`GeneratorRegistry.list_definitions`, etc.), `query_histories`
+accepts the same kw-only surface so the consumer sees one shape:
+
+```python
+from dataknobs_data import SortSpec, SortOrder
+
+# Symmetry form (equivalent to filters={"metadata.tenant_id": "acme"}).
+results = await storage.query_histories(
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Both forms AND-combine — `filter_metadata` is purely additive over
+# any `metadata.X` entries already in `filters`:
+results = await storage.query_histories(
+    filters={"metadata.work_order_id": "WO-001"},
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# `sort=` overrides the default `start_time DESC` ordering with a
+# multi-key spec pushed down to the database query.  The default
+# is preserved when `sort=` is `None`.
+results = await storage.query_histories(
+    filter_metadata={"tenant_id": "acme"},
+    sort=[
+        SortSpec(field="fsm_name", order=SortOrder.ASC),
+        SortSpec(field="start_time", order=SortOrder.DESC),
+    ],
+)
+
+# `filters=` is now optional — `None` is equivalent to `{}`.
+all_histories = await storage.query_histories(limit=50)
+```
+
+`limit`/`offset` are positional with defaults `100`/`0` for
+back-compat; existing CLI / tooling call sites that pass them
+positionally are unchanged.
+
 #### Return Value
 
 Each result dict contains:
@@ -447,6 +489,48 @@ Each result dict contains:
 | `total_steps` | `int` | Total steps executed |
 | `failed_steps` | `int` | Number of failed steps |
 | `metadata` | `dict` | Metadata dict passed to `save_history()` |
+
+### Saving Steps with Metadata
+
+`save_step` accepts a `metadata=` kwarg that lands in the underlying
+record's metadata column.  Combined with `load_steps`'s symmetry
+kwargs (`filter_metadata=`, `sort=`, `limit=`, `offset=`), this makes
+per-step cross-cutting context (tenant, correlation, audit) filterable
+end-to-end without mixing it into the structural step payload:
+
+```python
+# Save with metadata
+await storage.save_step(
+    "exec-1",
+    step,
+    metadata={"tenant_id": "acme", "correlation_id": "corr-42"},
+)
+
+# Filter on the metadata channel via the symmetry kwarg
+acme_steps = await storage.load_steps(
+    "exec-1", filter_metadata={"tenant_id": "acme"},
+)
+
+# AND-combines with the positional `filters=` (data-column equality)
+state_a_acme = await storage.load_steps(
+    "exec-1",
+    filters={"state_name": "state_a"},
+    filter_metadata={"tenant_id": "acme"},
+)
+
+# Sort + pagination push down to the database query
+from dataknobs_data import SortSpec, SortOrder
+asc = await storage.load_steps(
+    "exec-1",
+    sort=[SortSpec(field="timestamp", order=SortOrder.ASC)],
+    limit=10,
+    offset=0,
+)
+
+# `limit=0` honors Python-slice semantics (empty result)
+empty = await storage.load_steps("exec-1", limit=0)
+assert empty == []
+```
 
 ## Resource Management
 

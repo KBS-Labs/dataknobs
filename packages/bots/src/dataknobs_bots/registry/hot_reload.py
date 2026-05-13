@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from dataknobs_common.events import EventBus, EventType
 
@@ -307,15 +308,16 @@ class HotReloadManager(Generic[T]):
             logger.debug("New registration detected: %s", instance_id)
             return
 
-        if event_type in (EventType.UPDATED, EventType.DELETED):
-            # Invalidate cache for updated/deleted instances
-            if self._caching_manager.is_cached(instance_id):
-                await self._caching_manager.invalidate(instance_id)
-                logger.debug(
-                    "Cache invalidated for %s (event=%s)",
-                    instance_id,
-                    event_type.value,
-                )
+        if event_type in (
+            EventType.UPDATED,
+            EventType.DELETED,
+        ) and self._caching_manager.is_cached(instance_id):
+            await self._caching_manager.invalidate(instance_id)
+            logger.debug(
+                "Cache invalidated for %s (event=%s)",
+                instance_id,
+                event_type.value,
+            )
 
         if event_type == EventType.UPDATED:
             # Optionally pre-warm cache for updated instances

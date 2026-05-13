@@ -7,18 +7,31 @@ from external services, enabling centralized configuration management.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .backend import RegistryBackend
+from .memory import _apply_sort_limit_offset
 from .models import Registration
+
+if TYPE_CHECKING:
+    from dataknobs_data import SortSpec, StreamConfig
 
 logger = logging.getLogger(__name__)
 
 # Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
 # callbacks can drain before event loop shutdown.  See dk-29 for full context.
 _AIOHTTP_DRAIN_SECS = 0.25
+
+
+def _matches_metadata(
+    reg: Registration, filter_metadata: Mapping[str, Any]
+) -> bool:
+    """Return True if every key/value in ``filter_metadata`` matches ``reg.metadata``."""
+    return all(reg.metadata.get(k) == v for k, v in filter_metadata.items())
 
 
 class HTTPRegistryBackend(RegistryBackend):
@@ -218,13 +231,26 @@ class HTTPRegistryBackend(RegistryBackend):
         bot_id: str,
         config: dict[str, Any],
         status: str = "active",
+        *,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Registration:
         """Register or update a bot configuration.
+
+        Issues a single ``PUT /configs/{bot_id}`` — the server's PUT
+        handler routes to ``RegistryBackend.register`` which is
+        upsert-style on every implementation (it creates a new
+        registration if one doesn't exist, updates it if it does).
+        This avoids the prior touching GET that probed for existence
+        and corrupted ``last_accessed_at`` on every re-register.
 
         Args:
             bot_id: Unique bot identifier
             config: Bot configuration dict
             status: Registration status
+            metadata: Cross-cutting context (tenant_id, audit, feature
+                flags). Included in the PUT JSON body as an optional
+                ``metadata`` field; servers that don't honor it
+                ignore it (additive contract).
 
         Returns:
             Registration object
@@ -236,27 +262,17 @@ class HTTPRegistryBackend(RegistryBackend):
         self._ensure_initialized()
         self._check_write_permission()
 
-        # Check if exists
-        existing = await self.get(bot_id)
-
-        payload = {
+        payload: dict[str, Any] = {
             "bot_id": bot_id,
             "config": config,
             "status": status,
+            "metadata": dict(metadata or {}),
         }
 
-        if existing:
-            # Update
-            url = f"{self._base_url}/configs/{bot_id}"
-            async with self._session.put(url, json=payload) as response:
-                await self._check_response(response)
-                data = await response.json()
-        else:
-            # Create
-            url = f"{self._base_url}/configs"
-            async with self._session.post(url, json=payload) as response:
-                await self._check_response(response)
-                data = await response.json()
+        url = f"{self._base_url}/configs/{bot_id}"
+        async with self._session.put(url, json=payload) as response:
+            await self._check_response(response)
+            data = await response.json()
 
         return self._parse_registration(data)
 
@@ -358,6 +374,13 @@ class HTTPRegistryBackend(RegistryBackend):
     async def deactivate(self, bot_id: str) -> bool:
         """Deactivate a registration (soft delete).
 
+        Issues ``POST /configs/{bot_id}/deactivate`` — a dedicated
+        endpoint that routes to ``RegistryBackend.deactivate`` on the
+        server.  Avoids the prior touching read (``self.get`` + then
+        ``self.register(..., status="inactive")``) that bumped
+        ``last_accessed_at`` on every soft-delete, which contradicted
+        the user-activity signal that timestamp is supposed to carry.
+
         Args:
             bot_id: Bot identifier
 
@@ -370,32 +393,137 @@ class HTTPRegistryBackend(RegistryBackend):
         self._ensure_initialized()
         self._check_write_permission()
 
-        reg = await self.get(bot_id)
-        if not reg:
-            return False
+        url = f"{self._base_url}/configs/{bot_id}/deactivate"
+        async with self._session.post(url) as response:
+            if response.status == 404:
+                return False
+            await self._check_response(response)
+            return True
 
-        await self.register(bot_id, reg.config, status="inactive")
-        return True
-
-    async def list_active(self) -> list[Registration]:
+    async def list_active(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
         """List all active registrations.
 
-        Returns:
-            List of active Registration objects
+        Convenience wrapper for :meth:`list_all` with ``status="active"``.
+        All filter parameters are pushed to the server via the
+        ``GET /configs`` query string (see :meth:`list_all` for the
+        wire-protocol contract).
         """
-        all_regs = await self.list_all()
-        return [r for r in all_regs if r.status == "active"]
+        return await self.list_all(
+            status="active",
+            filter_metadata=filter_metadata,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
 
-    async def list_all(self) -> list[Registration]:
-        """List all registrations.
+    async def list_inactive(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
+        """List all inactive registrations.
+
+        Symmetric counterpart to :meth:`list_active`.
+        """
+        return await self.list_all(
+            status="inactive",
+            filter_metadata=filter_metadata,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def list_all(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
+        """List registrations matching the supplied filters.
+
+        Wire protocol:
+            Filter parameters are pushed to the server on
+            ``GET /configs`` as the following query parameters
+            (all optional, omitted when ``None``):
+
+            - ``?filter_metadata=<URL-encoded JSON object>`` —
+              ``filter_metadata`` is serialized with
+              ``sort_keys=True`` so the query string is deterministic
+              (server cache keys / request logs).
+            - ``?status=<value>`` — equality filter on the ``status``
+              column.
+            - ``?sort=<field>[:asc|desc]`` (repeatable) — multi-key
+              sort spec, encoded as ``field:order`` with the
+              lowercase :class:`SortOrder` value. Wire order of
+              repeated values is preserved as the tie-break order.
+            - ``?limit=<int>`` — row limit.
+            - ``?offset=<int>`` — row offset for pagination.
+
+            The server-side schema is **additive optional**: servers
+            that recognize a parameter SHOULD honor it; servers that
+            don't ignore it and return the broader, unfiltered list.
+            To keep correctness on legacy servers, the client
+            defensively re-applies idempotent filters
+            (``filter_metadata``, ``status``, ``sort``) after parsing
+            the response.
+
+            ``limit`` and ``offset`` are **not** re-applied
+            client-side — that would corrupt server-side pagination
+            (re-offsetting an already-offset window drops live rows).
+            Servers that don't honor pagination return the full
+            list, and the caller iterates more rows than requested.
+            This is the documented degradation mode for
+            non-conforming servers.
+
+        Args:
+            status: Optional equality filter on the ``status`` field.
+                ``None`` returns all statuses.
+            filter_metadata: Optional equality filter over the
+                ``metadata`` channel. ``None`` / empty mapping sends
+                no query parameter.
+            sort: Optional sort specification.
+            limit: Optional row limit.
+            offset: Optional row offset for pagination.
 
         Returns:
-            List of all Registration objects
+            List of matching Registration objects.
         """
         self._ensure_initialized()
 
         url = f"{self._base_url}/configs"
-        async with self._session.get(url) as response:
+        params: dict[str, Any] = {}
+        if filter_metadata:
+            params["filter_metadata"] = json.dumps(
+                dict(filter_metadata), sort_keys=True
+            )
+        if status is not None:
+            params["status"] = status
+        if sort:
+            # Repeated query param — aiohttp handles list values by
+            # serializing one ``?sort=`` per entry, preserving order.
+            params["sort"] = [
+                f"{spec.field}:{spec.order.value}" for spec in sort
+            ]
+        if limit is not None:
+            params["limit"] = str(limit)
+        if offset is not None:
+            params["offset"] = str(offset)
+        actual_params = params if params else None
+
+        async with self._session.get(url, params=actual_params) as response:
             await self._check_response(response)
             data = await response.json()
 
@@ -409,7 +537,21 @@ class HTTPRegistryBackend(RegistryBackend):
             else:
                 items = []
 
-            return [self._parse_registration(item) for item in items]
+            regs = [self._parse_registration(item) for item in items]
+            # Defensive client-side reapply of idempotent filters
+            # for additive-optional legacy servers.  See class docstring
+            # for the policy split — limit/offset are intentionally
+            # NOT reapplied (corruption risk on server-paginated
+            # responses).
+            if filter_metadata:
+                regs = [r for r in regs if _matches_metadata(r, filter_metadata)]
+            if status is not None:
+                regs = [r for r in regs if r.status == status]
+            if sort:
+                regs = _apply_sort_limit_offset(
+                    regs, sort, limit=None, offset=None
+                )
+            return regs
 
     async def list_ids(self) -> list[str]:
         """List active bot IDs.
@@ -420,13 +562,78 @@ class HTTPRegistryBackend(RegistryBackend):
         active = await self.list_active()
         return [r.bot_id for r in active]
 
-    async def count(self) -> int:
+    async def count_all(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Count registrations, optionally filtered by status and metadata.
+
+        Pushes ``filter_metadata`` to the server via :meth:`list_all`;
+        ``status`` is applied client-side after the response is parsed.
+
+        ``limit`` and ``offset`` are intentionally NOT passed to
+        :meth:`list_all` here — the count must reflect the full
+        matching set, not a paginated window.  The correctness of
+        ``len(list_all(...))`` relies on :meth:`list_all` defensively
+        reapplying ``filter_metadata`` and ``status`` client-side, so
+        a non-conforming server that returned the unfiltered list
+        still produces the correct count.  If the defensive-reapply
+        policy on :meth:`list_all` ever changes to skip
+        ``filter_metadata`` / ``status``, this method must be updated
+        to issue a server-side count instead.
+        """
+        return len(
+            await self.list_all(
+                status=status, filter_metadata=filter_metadata
+            )
+        )
+
+    async def count(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
         """Count active registrations.
 
-        Returns:
-            Number of active registrations
+        Convenience for :meth:`count_all` with ``status="active"``.
         """
-        return len(await self.list_active())
+        return await self.count_all(
+            status="active", filter_metadata=filter_metadata
+        )
+
+    async def count_inactive(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Count inactive registrations.
+
+        Convenience for :meth:`count_all` with ``status="inactive"``.
+        """
+        return await self.count_all(
+            status="inactive", filter_metadata=filter_metadata
+        )
+
+    async def stream(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+        config: StreamConfig | None = None,
+    ) -> AsyncIterator[Registration]:
+        """Stream registrations matching the supplied filters.
+
+        The HTTP wire today does not support streaming responses, so
+        this method fetches all matching registrations via
+        :meth:`list_all` and yields them sequentially.  ``config`` is
+        accepted for protocol compatibility and ignored.
+        """
+        del config  # No batching needed for the HTTP backend today.
+        regs = await self.list_all(status=status, filter_metadata=filter_metadata)
+        for reg in regs:
+            yield reg
 
     async def clear(self) -> None:
         """Clear all registrations.
@@ -497,6 +704,7 @@ class HTTPRegistryBackend(RegistryBackend):
             bot_id=data.get("bot_id", data.get("id", "")),
             config=data.get("config", {}),
             status=data.get("status", "active"),
+            metadata=dict(data.get("metadata") or {}),
             created_at=parse_datetime(data.get("created_at")),
             updated_at=parse_datetime(data.get("updated_at")),
             last_accessed_at=parse_datetime(data.get("last_accessed_at")),

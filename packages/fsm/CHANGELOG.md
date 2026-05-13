@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`UnifiedDatabaseStorage.save_step(metadata=...)`** — new kw-arg
+  routes caller-supplied cross-cutting context (tenant_id,
+  correlation_id, audit info) to the underlying record's
+  ``metadata`` column.  The kwarg is **consumer-supplied**: the
+  FSM engine does not populate it during execution, so consumers
+  wrap the storage call from their own execution path or extend
+  ``UnifiedDatabaseStorage`` in a subclass to inject these fields
+  uniformly.  Composes
+  ``AsyncKeyedRecordStore[_StepRecord]`` from `dataknobs-data` as
+  the single Record-construction site, so the metadata channel is
+  part of the serializer signature.  Persisted metadata is
+  filterable end-to-end via the ``metadata.X`` dot-notation
+  field-path convention (JSONB pushdown on Postgres; JSON-extract
+  pushdown on SQLite and DuckDB; ``Record.get_value`` traversal on
+  memory / file).  See ``packages/fsm/docs/FSM_CONFIG_GUIDE.md``
+  for usage examples.
+
+- **``load_steps`` filter / pagination kwargs** —
+  ``filter_metadata=`` (kw-only `Mapping[str, Any] | None`),
+  ``sort=`` (kw-only `list[SortSpec] | None`), ``limit=`` (kw-only
+  `int | None`; ``limit=0`` honors Python-slice semantics → empty
+  result), and ``offset=`` (kw-only `int | None`) are now
+  first-class on `IHistoryStorage.load_steps`.  Surface mirrors
+  the bots-registry layer (`ArtifactRegistry.query(...)`,
+  `GeneratorRegistry.list_definitions(...)`,
+  `RubricRegistry.list_all(...)`) so consumers composing FSM
+  history with bot registries see one consistent pagination /
+  filter shape.  Positional ``filters=`` (data-column equality)
+  remains for back-compat; the two channels AND-combine.
+
+- **``query_histories`` filter / sort kwargs** — ``filter_metadata=``
+  (kw-only) is a symmetry kwarg for callers who'd otherwise write
+  ``filters={"metadata.X": V}``; both routes AND-combine when
+  supplied together.  ``sort=`` (kw-only) overrides the default
+  ``start_time DESC`` ordering when the caller needs a different
+  multi-key sort, pushed down to the database query.  ``filters=``
+  is now optional (`None` default, previously required); positional
+  ``limit=100``/``offset=0`` defaults are preserved.
+
 ### Security
 - Added explicit floors `markdown>=3.8.1` (GHSA-5wmx-573v-2qwq, XSS,
   CVSS 7.5) and `pymdown-extensions>=10.16.1` (GHSA-r6h4-mm7h-8pmq,

@@ -110,9 +110,7 @@ class TemplateGenerator(Generator):
         """
         param_errors = await self.validate_parameters(parameters)
         if param_errors:
-            raise ValueError(
-                f"Parameter validation failed: {'; '.join(param_errors)}"
-            )
+            raise ValueError(f"Parameter validation failed: {'; '.join(param_errors)}")
 
         rendered = self._render_template(parameters)
         content = self._parse_output(rendered)
@@ -185,9 +183,7 @@ class TemplateGenerator(Generator):
             raise ValueError(f"Failed to parse template output as YAML: {e}") from e
 
         if not isinstance(result, dict):
-            raise ValueError(
-                f"Template output must be a YAML mapping, got {type(result).__name__}"
-            )
+            raise ValueError(f"Template output must be a YAML mapping, got {type(result).__name__}")
         return result
 
     def _parse_json(self, text: str) -> dict[str, Any]:
@@ -200,9 +196,7 @@ class TemplateGenerator(Generator):
             raise ValueError(f"Failed to parse template output as JSON: {e}") from e
 
         if not isinstance(result, dict):
-            raise ValueError(
-                f"Template output must be a JSON object, got {type(result).__name__}"
-            )
+            raise ValueError(f"Template output must be a JSON object, got {type(result).__name__}")
         return result
 
     @classmethod
@@ -229,9 +223,7 @@ class TemplateGenerator(Generator):
         required_keys = ["id", "version", "template", "parameter_schema", "output_schema"]
         missing = [k for k in required_keys if k not in config]
         if missing:
-            raise ValueError(
-                f"TemplateGenerator config missing required keys: {missing}"
-            )
+            raise ValueError(f"TemplateGenerator config missing required keys: {missing}")
 
         return cls(
             generator_id=config["id"],

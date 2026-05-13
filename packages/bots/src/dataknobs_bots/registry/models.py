@@ -19,6 +19,10 @@ class Registration:
         bot_id: Unique bot identifier
         config: Bot configuration dictionary (should be portable)
         status: Registration status (active, inactive, error)
+        metadata: Cross-cutting context (tenant, audit, feature flags) that
+            should land in the storage backend's ``metadata`` column rather
+            than be mixed into ``config``. Round-trips through
+            ``to_dict``/``from_dict`` and the HTTP wire protocol.
         created_at: When the registration was created
         updated_at: When the registration was last updated
         last_accessed_at: When the bot was last accessed
@@ -28,6 +32,7 @@ class Registration:
         reg = Registration(
             bot_id="my-bot",
             config={"bot": {"llm": {"$resource": "default", "type": "llm_providers"}}},
+            metadata={"tenant_id": "acme"},
         )
         print(f"Bot {reg.bot_id} created at {reg.created_at}")
 
@@ -42,6 +47,7 @@ class Registration:
     bot_id: str
     config: dict[str, Any]
     status: str = "active"
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_accessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -56,6 +62,7 @@ class Registration:
             "bot_id": self.bot_id,
             "config": self.config,
             "status": self.status,
+            "metadata": dict(self.metadata),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "last_accessed_at": (
@@ -77,6 +84,7 @@ class Registration:
             bot_id=data["bot_id"],
             config=data["config"],
             status=data.get("status", "active"),
+            metadata=dict(data.get("metadata") or {}),
             created_at=(
                 datetime.fromisoformat(data["created_at"])
                 if data.get("created_at")
