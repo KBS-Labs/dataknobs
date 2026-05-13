@@ -308,10 +308,12 @@ class TestFactoryVectorIntegration:
             # Clean up the index
             try:
                 from elasticsearch import Elasticsearch
-                es = Elasticsearch(hosts)
+                es = Elasticsearch(
+                    [{"host": elasticsearch_host, "port": port, "scheme": "http"}]
+                )
                 if es.indices.exists(index=index_name):
                     es.indices.delete(index=index_name)
             except Exception:
                 pass  # Ignore cleanup errors
-            
+
             db.close()
