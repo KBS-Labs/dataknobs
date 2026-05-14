@@ -545,15 +545,14 @@ class TestDataKnobsRegistryAdapterEdgeCases:
 
 
 class TestDataKnobsRegistryAdapterMetadata:
-    """Phase 4 — metadata channel routes through AsyncKeyedRecordStore.
+    """Metadata channel routes through AsyncKeyedRecordStore.
 
-    These tests pin the registry-adapter metadata-preservation contract.
-    The adapter is the canonical EduBot-driver site for Item 122: caller-
-    supplied ``metadata`` must reach the underlying record's metadata
-    column so SQL/JSONB backends can route ``metadata.X`` filters into
-    the indexable channel (rather than scanning every row).
+    These tests pin the registry-adapter metadata-preservation contract:
+    caller-supplied ``metadata`` must reach the underlying record's
+    metadata column so SQL/JSONB backends can route ``metadata.X`` filters
+    into the indexable channel (rather than scanning every row).
 
-    Coverage axes (per the §Phase 4 plan):
+    Coverage axes:
 
     - Round-trip: ``register(..., metadata=...)`` → ``list``/``get`` returns metadata
     - Structural separation: metadata column is populated, no leakage into ``data``

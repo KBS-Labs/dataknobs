@@ -131,9 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata to the `Record.metadata` column.**  Previously the
   metadata column was always empty (there was no
   `Registration.metadata` field), rendering `metadata.X` filters
-  and the Postgres `bot_configs_metadata_idx` GIN index
-  unreachable.  Closes the EduBot I-9 Cut D multi-tenant
-  `filter_metadata={"tenant_id": ...}` requirement.
+  and the Postgres metadata GIN index unreachable.  Multi-tenant
+  consumers can now use `filter_metadata={"tenant_id": ...}` to
+  scope `list_active` / `list_all` queries.
 
 - **`ArtifactRegistry` and `RubricRegistry` now persist artifact /
   rubric `metadata` to the `Record.metadata` column** (latent

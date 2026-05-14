@@ -245,8 +245,10 @@ class RubricRegistry:
         Returns:
             True if the rubric was found and deleted, False otherwise.
         """
-        if not await self._store.exists(rubric_id):
-            return False
+        # ``AsyncKeyedRecordStore.delete`` returns ``True`` when a record
+        # was deleted and ``False`` when no record matched the key, so a
+        # separate ``exists`` probe would only add a round-trip and a
+        # TOCTOU window for no benefit.
         return await self._store.delete(rubric_id)
 
     async def list_all(

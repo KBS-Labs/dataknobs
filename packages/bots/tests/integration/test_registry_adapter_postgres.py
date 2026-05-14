@@ -1,17 +1,16 @@
 """Postgres integration tests for :class:`DataKnobsRegistryAdapter`.
 
-Phase 4 of Item 122 — pin the metadata-column routing contract against
-a real PostgreSQL backend.  The ``metadata.X`` field-path convention
-must be pushed into the JSONB ``metadata`` column by the SQL backend
-(rather than scanning every row in Python), so the canonical multi-
-tenant filter used by downstream consumers works at scale.
+Pin the metadata-column routing contract against a real PostgreSQL
+backend.  The ``metadata.X`` field-path convention must be pushed into
+the JSONB ``metadata`` column by the SQL backend (rather than scanning
+every row in Python), so the canonical multi-tenant filter used by
+downstream consumers works at scale.
 
-These tests would have **failed** against pre-migration ``main`` because
-the adapter built ``Record(data=...)`` inline and never populated the
-metadata column.  Post-migration, the
-``AsyncKeyedRecordStore[Registration]`` composition forces the metadata
-channel through the serializer signature, so the JSONB column is
-populated by construction.
+These tests would have **failed** against earlier adapter implementations
+that built ``Record(data=...)`` inline and never populated the metadata
+column.  With the keyed-store composition, the
+``AsyncKeyedRecordStore[Registration]`` serializer signature forces the
+metadata channel into the JSONB column by construction.
 
 Skipped automatically when PostgreSQL is unavailable via
 ``@requires_postgres`` (from the shared ``dataknobs_common.testing``
@@ -71,15 +70,13 @@ class TestDataKnobsRegistryAdapterPostgres:
     ) -> None:
         """Reproducer for the canonical multi-tenant filter case.
 
-        This is the §Test Plan headline case from the Item 122
-        implementation plan: three bots, two tenants, ``list_active``
-        with ``filter_metadata`` returns exactly the matching tenant's
-        bots — and the filter is pushed into the JSONB column, not
-        evaluated in Python.
+        Three bots, two tenants: ``list_active`` with ``filter_metadata``
+        returns exactly the matching tenant's bots — and the filter is
+        pushed into the JSONB column, not evaluated in Python.
 
-        Pre-migration this test would have returned an empty list for
-        any ``filter_metadata`` query because every row's metadata
-        column was empty.
+        Against earlier adapter implementations this test would have
+        returned an empty list for any ``filter_metadata`` query
+        because every row's metadata column was empty.
         """
         await postgres_registry_adapter.register(
             "bot-a", {"llm": "echo"}, metadata={"tenant_id": "t1"}

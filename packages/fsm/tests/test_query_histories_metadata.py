@@ -670,3 +670,39 @@ class TestQueryHistoriesFilterSymmetry:
         # Default (no sort kwarg) is start_time DESC for back-compat.
         default = await storage.query_histories()
         assert [r["start_time"] for r in default] == [3.0, 2.0, 1.0]
+
+
+class TestSaveHistoryUpsertIdempotency:
+    """Re-saving the same execution_id overwrites in place (one row, latest content).
+
+    Pins the structural fix from migrating ``save_history`` to
+    ``AsyncKeyedRecordStore[_HistoryRecord]`` keyed on ``execution_id``.
+    The prior inline-``Record({"id": uuid4(), ...})`` shape appended a
+    fresh row on every save, leaving ``load_history`` to return whichever
+    row the backend's result ordering happened to surface first.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resaving_overwrites_in_place(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """Second save with same execution_id overwrites, does not append."""
+        await storage.initialize()
+        history = _make_history("exec_repeat", fsm_name="v1")
+        await storage.save_history(history, metadata={"version": 1})
+
+        # Re-save the same execution_id with updated content and metadata.
+        history_v2 = _make_history("exec_repeat", fsm_name="v2")
+        await storage.save_history(history_v2, metadata={"version": 2})
+
+        # Exactly one row survives, carrying the latest content.
+        results = await storage.query_histories({})
+        matching = [r for r in results if r["id"] == "exec_repeat"]
+        assert len(matching) == 1
+        assert matching[0]["fsm_name"] == "v2"
+        assert matching[0]["metadata"]["version"] == 2
+
+        # ``load_history`` agrees — no ambiguity from duplicate rows.
+        loaded = await storage.load_history("exec_repeat")
+        assert loaded is not None
+        assert loaded.fsm_name == "v2"

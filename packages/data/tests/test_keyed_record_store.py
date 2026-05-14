@@ -220,7 +220,7 @@ class TestAsyncKeyedRecordStoreListAndCount:
 
     @pytest.mark.asyncio
     async def test_list_filter_metadata_only(self, async_store):
-        """Reproduces the EduBot multi-tenant requirement: metadata-only filter."""
+        """Multi-tenant filter using metadata only (no data-column predicate)."""
         await self._seed(async_store)
         result = await async_store.list(filter_metadata={"tenant_id": "t1"})
         assert {b.bot_id for b in result} == {"a", "c", "d"}

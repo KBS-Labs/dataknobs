@@ -1,15 +1,15 @@
 """Postgres integration tests for ``UnifiedDatabaseStorage.save_step``.
 
-Phase 4 of Item 122 — pin the metadata-column routing contract on
-PostgreSQL for the step-save path.  ``save_step(..., metadata=...)``
-must populate the JSONB metadata column so downstream consumers can
-filter via ``metadata.X`` dot-notation against the indexable column.
+Pin the metadata-column routing contract on PostgreSQL for the step-save
+path.  ``save_step(..., metadata=...)`` must populate the JSONB metadata
+column so consumers can filter via ``metadata.X`` dot-notation against
+the indexable column.
 
-Pre-migration, ``save_step`` built ``Record({...})`` inline with no
-metadata channel; every saved step had an empty metadata column.  The
-:class:`AsyncKeyedRecordStore[_StepRecord]` composition forces the
-metadata channel through the serializer signature, so the JSONB
-column is populated by construction.
+Against earlier ``save_step`` implementations that built ``Record({...})``
+inline with no metadata channel, every saved step had an empty metadata
+column.  With the keyed-store composition, the
+:class:`AsyncKeyedRecordStore[_StepRecord]` serializer signature forces
+the metadata channel into the JSONB column by construction.
 
 This file is the sibling of ``test_save_step_metadata.py`` (memory
 backend).  Skipped automatically when PostgreSQL is unavailable.

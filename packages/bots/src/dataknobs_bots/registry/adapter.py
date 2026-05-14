@@ -146,6 +146,14 @@ class DataKnobsRegistryAdapter:
         self._owns_database = database is None
         self._store: AsyncKeyedRecordStore[Registration] | None = None
 
+    def _require_store(self) -> AsyncKeyedRecordStore[Registration]:
+        # Runtime guard that survives `python -O` (unlike `assert`).
+        if self._store is None:
+            raise RuntimeError(
+                "Adapter not initialized; call initialize() first"
+            )
+        return self._store
+
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> DataKnobsRegistryAdapter:
         """Create adapter from configuration dictionary.
@@ -239,9 +247,9 @@ class DataKnobsRegistryAdapter:
         Returns:
             Registration object with metadata
         """
-        assert self._store is not None, "Adapter not initialized"
+        store = self._require_store()
         now = datetime.now(timezone.utc)
-        existing = await self._store.get(bot_id)
+        existing = await store.get(bot_id)
         created_at = existing.created_at if existing else now
 
         reg = Registration(
@@ -253,7 +261,7 @@ class DataKnobsRegistryAdapter:
             updated_at=now,
             last_accessed_at=now,
         )
-        await self._store.put(bot_id, reg)
+        await store.put(bot_id, reg)
         logger.debug(
             "%s registration for bot %s",
             "Updated" if existing else "Created",
@@ -270,13 +278,13 @@ class DataKnobsRegistryAdapter:
         Returns:
             Registration if found, None otherwise
         """
-        assert self._store is not None, "Adapter not initialized"
-        reg = await self._store.get(bot_id)
+        store = self._require_store()
+        reg = await store.get(bot_id)
         if reg is None:
             return None
 
         reg.last_accessed_at = datetime.now(timezone.utc)
-        await self._store.put(bot_id, reg)
+        await store.put(bot_id, reg)
         return reg
 
     async def get_config(self, bot_id: str) -> dict[str, Any] | None:
@@ -306,8 +314,8 @@ class DataKnobsRegistryAdapter:
         Returns:
             Config dict if found, None otherwise
         """
-        assert self._store is not None, "Adapter not initialized"
-        reg = await self._store.get(bot_id)
+        store = self._require_store()
+        reg = await store.get(bot_id)
         return reg.config if reg else None
 
     async def exists(self, bot_id: str) -> bool:
@@ -319,8 +327,12 @@ class DataKnobsRegistryAdapter:
         Returns:
             True if registration exists and is active
         """
-        assert self._store is not None, "Adapter not initialized"
-        reg = await self._store.get(bot_id)
+        store = self._require_store()
+        # Cheap key-only existence probe first; fall back to a full fetch
+        # only when we need to inspect ``status``.
+        if not await store.exists(bot_id):
+            return False
+        reg = await store.get(bot_id)
         return reg is not None and reg.status == "active"
 
     async def unregister(self, bot_id: str) -> bool:
@@ -332,8 +344,8 @@ class DataKnobsRegistryAdapter:
         Returns:
             True if deleted, False if not found
         """
-        assert self._store is not None, "Adapter not initialized"
-        result = await self._store.delete(bot_id)
+        store = self._require_store()
+        result = await store.delete(bot_id)
         if result:
             logger.debug("Unregistered bot %s", bot_id)
         return result
@@ -347,14 +359,14 @@ class DataKnobsRegistryAdapter:
         Returns:
             True if deactivated, False if not found
         """
-        assert self._store is not None, "Adapter not initialized"
-        reg = await self._store.get(bot_id)
+        store = self._require_store()
+        reg = await store.get(bot_id)
         if reg is None:
             return False
 
         reg.status = "inactive"
         reg.updated_at = datetime.now(timezone.utc)
-        await self._store.put(bot_id, reg)
+        await store.put(bot_id, reg)
         logger.debug("Deactivated bot %s", bot_id)
         return True
 
@@ -385,9 +397,9 @@ class DataKnobsRegistryAdapter:
         Returns:
             List of matching Registration objects.
         """
-        assert self._store is not None, "Adapter not initialized"
+        store = self._require_store()
         filter_data = {"status": status} if status is not None else None
-        return await self._store.list(
+        return await store.list(
             filter_data=filter_data,
             filter_metadata=filter_metadata,
             sort=sort,
@@ -468,9 +480,9 @@ class DataKnobsRegistryAdapter:
         Returns:
             Number of matching registrations.
         """
-        assert self._store is not None, "Adapter not initialized"
+        store = self._require_store()
         filter_data = {"status": status} if status is not None else None
-        return await self._store.count(
+        return await store.count(
             filter_data=filter_data,
             filter_metadata=filter_metadata,
         )
@@ -524,9 +536,9 @@ class DataKnobsRegistryAdapter:
                 ``metadata`` column.
             config: Optional :class:`StreamConfig` (batch size, etc.).
         """
-        assert self._store is not None, "Adapter not initialized"
+        store = self._require_store()
         filter_data = {"status": status} if status is not None else None
-        async for reg in self._store.stream(
+        async for reg in store.stream(
             filter_data=filter_data,
             filter_metadata=filter_metadata,
             config=config,
@@ -540,6 +552,6 @@ class DataKnobsRegistryAdapter:
         :meth:`AsyncKeyedRecordStore.clear` so the adapter never reaches
         into the underlying database directly for CRUD/bulk operations.
         """
-        assert self._store is not None, "Adapter not initialized"
-        await self._store.clear()
+        store = self._require_store()
+        await store.clear()
         logger.debug("Cleared all registrations")

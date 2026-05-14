@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from .backend import RegistryBackend
-from .memory import _apply_sort_limit_offset
+from .memory import _apply_sort_limit_offset, _matches_metadata
 from .models import Registration
 
 if TYPE_CHECKING:
@@ -25,13 +25,6 @@ logger = logging.getLogger(__name__)
 # Seconds to sleep after aiohttp ClientSession.close() so that SSL transport
 # callbacks can drain before event loop shutdown.  See dk-29 for full context.
 _AIOHTTP_DRAIN_SECS = 0.25
-
-
-def _matches_metadata(
-    reg: Registration, filter_metadata: Mapping[str, Any]
-) -> bool:
-    """Return True if every key/value in ``filter_metadata`` matches ``reg.metadata``."""
-    return all(reg.metadata.get(k) == v for k, v in filter_metadata.items())
 
 
 class HTTPRegistryBackend(RegistryBackend):

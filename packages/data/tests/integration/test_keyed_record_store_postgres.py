@@ -3,8 +3,8 @@
 These exercise the ``metadata.X`` field-path routing that the SQL
 backends implement via the JSONB ``metadata`` column.  Without this
 test, a regression that broke metadata-column routing on the Postgres
-backend would only surface in a downstream consumer (e.g. EduBot's
-multi-tenant filter).
+backend would only surface downstream (e.g. in a consumer that uses
+``filter_metadata={"tenant_id": ...}`` for multi-tenant scoping).
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ class TestKeyedRecordStorePostgres:
 
     @pytest.mark.asyncio
     async def test_filter_metadata_routes_to_jsonb_column(self, async_postgres_store):
-        """Reproduces EduBot I-9 Cut D: tenant-scoped multi-tenant list.
+        """Tenant-scoped multi-tenant list pushes ``filter_metadata`` to JSONB.
 
         Before ``KeyedRecordStore`` existed, registries built
         ``Record(data={...})`` without ``metadata=`` and this filter

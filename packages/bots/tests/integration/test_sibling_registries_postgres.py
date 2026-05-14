@@ -1,12 +1,10 @@
 """Postgres integration tests for the three sibling registries.
 
-Phase 4 of Item 122 — pin the metadata-column routing contract on
-PostgreSQL for the registries that, while not currently exercised by a
-downstream consumer, are now reachable through the
-``filter_metadata`` channel.  Closing the defect class means a future
-consumer that needs tenant/audit/feature-flag filtering on any of
-these registries does not need to file a follow-on consumer-gap brief
-to unlock it — these tests prove it works end-to-end.
+Pin the metadata-column routing contract on PostgreSQL for the
+registries that are now reachable through the ``filter_metadata``
+channel.  A consumer that needs tenant / audit / feature-flag
+filtering on any of these registries gets end-to-end JSONB pushdown
+without further changes.
 
 Three sibling registries covered here:
 
@@ -14,9 +12,9 @@ Three sibling registries covered here:
 * :class:`RubricRegistry`   — ``get_for_target`` and ``list_all``
 * :class:`GeneratorRegistry` — ``list_definitions(filter_metadata=...)``
 
-Each test would have **failed** against pre-migration ``main`` because
-the registries built ``Record(data=...)`` inline and never populated
-the metadata column; queries on ``metadata.X`` returned an empty list.
+Each test would have **failed** against earlier registry implementations
+that built ``Record(data=...)`` inline and never populated the metadata
+column; queries on ``metadata.X`` returned an empty list.
 
 Skipped automatically when PostgreSQL is unavailable via
 ``@requires_postgres``.

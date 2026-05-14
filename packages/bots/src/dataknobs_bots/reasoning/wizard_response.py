@@ -843,9 +843,9 @@ class WizardResponder:
 
         Note: DynaBot.chat() only returns response content (a string),
         so this metadata is only visible to code that accesses the raw
-        response object (e.g. middleware, tests).  For downstream
-        consumers like EduBot, wizard metadata flows through
-        ``_save_wizard_state`` → ``get_wizard_state()``.
+        response object (e.g. middleware, tests).  Downstream consumers
+        access wizard metadata through ``_save_wizard_state`` →
+        ``get_wizard_state()``.
 
         Args:
             response: LLM response object to modify
