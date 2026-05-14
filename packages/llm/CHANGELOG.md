@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.5.12 - 2026-05-13
+
 ### Security
 - Bumped minimum `transformers` requirement (extra: `embeddings`) from
   `>=4.53.0` to `>=5.0.0` to exclude GHSA-69w3-r845-3855 (CVSS 6.5),
