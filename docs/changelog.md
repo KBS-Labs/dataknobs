@@ -5,6 +5,47 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-13
+
+### dataknobs-config [0.3.13]
+
+#### Changed
+- bumped pyyaml and psycopg2-binary floors to installable versions
+
+### dataknobs-structures [1.0.9]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-utils [1.2.11]
+
+#### Changed
+- bumped pyyaml and psycopg2-binary floors to installable versions
+
+### dataknobs-data [0.4.18]
+
+#### Added
+- added and wired in the key record store abstraction for consistent (and corrected) handling across all sites
+
+#### Fixed
+- fixed elasticsearch testing table leaks
+
+### dataknobs-fsm [0.1.19]
+
+#### Added
+- added and wired in the key record store abstraction for consistent (and corrected) handling across all sites
+
+#### Changed
+- bumped floors to clear CVE findings on update-dependencies branch
+- bumped pyyaml and psycopg2-binary floors to installable versions
+
+### dataknobs-llm [0.5.12]
+
+#### Changed
+- bumped floors to clear CVE findings on update-dependencies branch
+- bumped pyyaml and psycopg2-binary floors to installable versions
+
+
 ## Release - 2026-05-09
 
 ### dataknobs-common [1.3.12]

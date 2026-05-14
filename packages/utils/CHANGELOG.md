@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.2.11 - 2026-05-13
+
 ### Fixed
 - Bumped minimum `psycopg2-binary` requirement from `>=2.8.6` to
   `>=2.9.10` to exclude versions that lack cp312/cp313 wheels.

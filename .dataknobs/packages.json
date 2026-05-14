@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.6.19",
+      "version": "0.6.20",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -23,7 +23,7 @@
       "name": "config",
       "pypi_name": "dataknobs-config",
       "description": "Modular configuration system with environment variable overrides and factories",
-      "version": "0.3.12",
+      "version": "0.3.13",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Unified data abstraction layer with multiple backends",
-      "version": "0.4.17",
+      "version": "0.4.18",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -41,7 +41,7 @@
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
       "description": "Finite State Machine framework for workflows with data modes and resource management",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "Unified LLM abstraction with prompt management and conversations",
-      "version": "0.5.11",
+      "version": "0.5.12",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -59,7 +59,7 @@
       "name": "structures",
       "pypi_name": "dataknobs-structures",
       "description": "Core data structures for AI knowledge bases and document processing",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utilities for file I/O, JSON processing, HTTP requests, and integrations",
-      "version": "1.2.10",
+      "version": "1.2.11",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.3.13 - 2026-05-13
+
 ### Fixed
 - Bumped minimum `pyyaml` requirement from `>=6.0` to `>=6.0.2` to
   exclude versions that lack cp312/cp313 wheels and fail to build from
