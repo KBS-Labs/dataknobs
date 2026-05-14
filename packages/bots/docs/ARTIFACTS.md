@@ -422,6 +422,56 @@ pending_content = await registry.query(
 | `artifact_type` | `str \| None` | `None` | Filter by type |
 | `status` | `ArtifactStatus \| None` | `None` | Filter by status |
 | `tags` | `list[str] \| None` | `None` | Filter by tags (must have all) |
+| `filters` | `list[Filter] \| None` | `None` | Additional filters on any field, including nested content fields via dot notation |
+| `filter_metadata` | `Mapping[str, Any] \| None` | `None` | Equality filter over the `metadata` column (kw-only).  Pushes down via `metadata.X` so SQL/JSONB backends use the indexable column. |
+| `sort` | `list[SortSpec] \| None` | `None` | Multi-key sort spec (kw-only), pushed down to the database query. |
+| `limit` | `int \| None` | `None` | Row limit (kw-only).  Applied **after** the latest-pointer dedup pass — see "Pagination Semantics" below. |
+| `offset` | `int \| None` | `None` | Row offset (kw-only).  Same semantics as `limit`. |
+
+Cross-cutting context (tenant, audit, feature flags) lives on the
+artifact's `metadata` column rather than its content:
+
+```python
+from dataknobs_data import SortSpec, SortOrder
+
+acme_drafts = await registry.query(
+    status=ArtifactStatus.DRAFT,
+    filter_metadata={"tenant_id": "acme"},
+    sort=[SortSpec(field="created_at", order=SortOrder.DESC)],
+    limit=10,
+)
+```
+
+**Pagination Semantics.** `ArtifactRegistry` uses a dual-write storage
+shape (latest-pointer + versioned snapshot per version).  The
+database's row count is not the artifact count — pre-dedup it
+includes snapshots, post-dedup it doesn't.  So `limit` / `offset` are
+applied **client-side after dedup**, not pushed to the database: a
+database-level `LIMIT 5` could return 5 snapshot rows that all dedup
+away, leaving an empty result when artifacts exist further down.
+`sort` is still pushed down — pointer and snapshot rows for the same
+artifact carry identical sort-relevant fields, so whichever pointer
+comes first wins and the overall order is the database's order.
+
+#### count()
+
+```python
+n_acme_drafts = await registry.count(
+    status=ArtifactStatus.DRAFT,
+    filter_metadata={"tenant_id": "acme"},
+)
+```
+
+Mirrors `query` parameter-for-parameter (minus `sort` / `limit` /
+`offset`, which don't change the count) and is equivalent to
+`len(await registry.query(...))` after dedup.  Performance scales
+with matching row count, not the count value itself.
+
+Pushdown `SELECT COUNT(*) WHERE ...` is intentionally **not safe**
+under the dual-write storage shape (snapshot rows would inflate the
+count) and is out of scope for `count`.  Backends with native count
+pushdown will only benefit once the storage shape changes to mark
+"is latest" on the row itself.
 
 #### revise()
 

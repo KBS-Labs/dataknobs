@@ -8,7 +8,6 @@ import pytest
 
 from dataknobs_bots.generators.template_generator import TemplateGenerator
 
-
 # --- Fixtures ---
 
 SIMPLE_TEMPLATE = """\

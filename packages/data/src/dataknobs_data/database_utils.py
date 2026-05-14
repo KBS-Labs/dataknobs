@@ -70,10 +70,12 @@ def process_search_results(
             processed_record = processed_record.copy(deep=True)
         records.append(processed_record)
 
-    # Apply offset and limit
-    if query.offset_value:
+    # Apply offset and limit.  Use ``is not None`` so the caller-facing
+    # boundary value ``limit=0`` (Python-slice semantics: empty result)
+    # is respected instead of being silently treated as "no limit".
+    if query.offset_value is not None:
         records = records[query.offset_value:]
-    if query.limit_value:
+    if query.limit_value is not None:
         records = records[:query.limit_value]
 
     # Apply field projection

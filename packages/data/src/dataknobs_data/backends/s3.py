@@ -384,10 +384,12 @@ class SyncS3Database(  # type: ignore[misc]
                         reverse=reverse
                     )
 
-        # Apply offset and limit
-        if query.offset_value:
+        # Apply offset and limit.  ``is not None`` so ``limit=0`` is
+        # honored as Python-slice semantics (empty result) and not
+        # silently dropped.
+        if query.offset_value is not None:
             records = records[query.offset_value:]
-        if query.limit_value:
+        if query.limit_value is not None:
             records = records[:query.limit_value]
 
         # Apply field projection

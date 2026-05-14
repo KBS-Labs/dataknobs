@@ -242,6 +242,50 @@ class TestDatabaseStorageFactory:
     # the method and its test had no semantic content to preserve.
 
     @pytest.mark.asyncio
+    async def test_resaving_history_preserves_created_at(
+        self, memory_config, sample_history
+    ):
+        """``created_at`` is stable across resaves; ``updated_at`` advances.
+
+        ``save_history`` is an idempotent upsert on ``execution_id``.
+        Without read-before-write, every resave would reset
+        ``created_at`` to the latest save's wall-clock — breaking any
+        consumer that treats ``created_at`` as the original creation
+        timestamp.  ``updated_at`` is expected to advance on each resave.
+        """
+        storage = UnifiedDatabaseStorage(memory_config)
+        await storage.initialize()
+
+        try:
+            await storage.save_history(sample_history)
+            first = await storage._db.read(sample_history.execution_id)
+            assert first is not None
+            first_created = first.get_value("created_at")
+            first_updated = first.get_value("updated_at")
+            assert first_created is not None
+            assert first_updated is not None
+
+            # Sleep so wall-clock can advance distinguishably; the
+            # ``time.time()`` resolution on most platforms is sub-ms but
+            # CI clocks can be coarse — 10ms is conservative.
+            await asyncio.sleep(0.01)
+
+            await storage.save_history(sample_history)
+            second = await storage._db.read(sample_history.execution_id)
+            assert second is not None
+            second_created = second.get_value("created_at")
+            second_updated = second.get_value("updated_at")
+
+            assert second_created == first_created, (
+                "created_at must be preserved across resaves"
+            )
+            assert second_updated > first_updated, (
+                "updated_at must advance on each resave"
+            )
+        finally:
+            await storage.cleanup()
+
+    @pytest.mark.asyncio
     async def test_error_recovery(self, memory_config):
         """Test error recovery in database operations."""
         storage = UnifiedDatabaseStorage(memory_config)

@@ -118,6 +118,30 @@ class TestRegistryPoller:
         assert changes["test-1"] == EventType.UPDATED
 
     @pytest.mark.asyncio
+    async def test_detect_deactivated_registration_surfaces_as_updated(
+        self, poller, backend
+    ):
+        """A soft-delete (``deactivate``) surfaces as an ``UPDATED`` event.
+
+        The poller snapshots all registrations regardless of status (see
+        ``RegistryPoller._update_snapshot``), so a deactivation advances
+        ``updated_at`` and the row stays in the snapshot — yielding
+        ``UPDATED``, not ``DELETED``.  ``DELETED`` is reserved for hard
+        removals (``unregister``) where the row disappears from
+        ``list_all()``.
+        """
+        await backend.register("test-1", {"key": "value"})
+        await poller.start()
+        await asyncio.sleep(0.05)
+
+        await backend.deactivate("test-1")
+
+        changes = await poller.poll_once()
+
+        assert "test-1" in changes
+        assert changes["test-1"] == EventType.UPDATED
+
+    @pytest.mark.asyncio
     async def test_no_changes_detected(self, poller, backend):
         """Test that no changes are reported when nothing changed."""
         await backend.register("test-1", {"key": "value"})

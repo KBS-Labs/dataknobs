@@ -436,9 +436,13 @@ class AsyncElasticsearchDatabase(
         if sort:
             body["sort"] = sort
 
-        # Add size and from for pagination
-        size = query.limit_value if query.limit_value else 10000
-        from_param = query.offset_value if query.offset_value else 0
+        # Add size and from for pagination.  ``is not None`` so the
+        # caller-facing ``limit=0`` becomes ES ``size=0`` (count-only,
+        # zero hits) rather than being silently coerced to the default.
+        size = query.limit_value if query.limit_value is not None else 10000
+        from_param = (
+            query.offset_value if query.offset_value is not None else 0
+        )
 
         # Execute search
         response = await self._client.search(

@@ -118,6 +118,7 @@ from .query_logic import (
 )
 from .records import Record
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
+from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import StreamConfig, StreamProcessor, StreamResult
 
 __version__ = "0.4.17"
@@ -147,6 +148,9 @@ __all__ = [
     "DedupConfig",
     "DedupResult",
     "SimilarItem",
+    # Keyed record store
+    "AsyncKeyedRecordStore",
+    "SyncKeyedRecordStore",
     # Streaming
     "StreamConfig",
     "StreamResult",

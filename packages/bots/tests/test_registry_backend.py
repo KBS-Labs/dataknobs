@@ -1,11 +1,11 @@
 """Tests for registry backends."""
 
 import asyncio
-from datetime import datetime, timezone
 
 import pytest
 
-from dataknobs_bots.registry import InMemoryBackend, Registration
+from dataknobs_bots.registry import InMemoryBackend
+from dataknobs_data import SortOrder, SortSpec
 
 
 class TestInMemoryBackend:
@@ -394,3 +394,358 @@ class TestInMemoryBackendConcurrency:
 
         # Should have original 10 + 50 new = 60
         assert await backend.count() == 60
+
+
+class TestInMemoryBackendMetadata:
+    """Metadata channel + filter_metadata coverage (item 122 Phase 2)."""
+
+    @pytest.fixture
+    def backend(self):
+        return InMemoryBackend()
+
+    @pytest.mark.asyncio
+    async def test_register_persists_metadata(self, backend):
+        await backend.initialize()
+
+        reg = await backend.register(
+            "alpha", {"llm": {}}, metadata={"tenant_id": "acme"}
+        )
+
+        assert reg.metadata == {"tenant_id": "acme"}
+        fetched = await backend.get("alpha")
+        assert fetched is not None
+        assert fetched.metadata == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_register_default_metadata_is_empty_dict(self, backend):
+        await backend.initialize()
+        reg = await backend.register("alpha", {"llm": {}})
+        assert reg.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_register_metadata_is_copied(self, backend):
+        """Mutating the caller's dict after register must not leak into stored state."""
+        await backend.initialize()
+        meta = {"tenant_id": "acme"}
+        await backend.register("alpha", {}, metadata=meta)
+        meta["tenant_id"] = "mutated"
+        fetched = await backend.get("alpha")
+        assert fetched is not None
+        assert fetched.metadata == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_re_register_replaces_metadata(self, backend):
+        """register() updates metadata wholesale, like config and status."""
+        await backend.initialize()
+        await backend.register("alpha", {}, metadata={"tenant_id": "t1"})
+        await backend.register("alpha", {}, metadata={"tenant_id": "t2", "k": "v"})
+        fetched = await backend.get("alpha")
+        assert fetched is not None
+        assert fetched.metadata == {"tenant_id": "t2", "k": "v"}
+
+    @pytest.mark.asyncio
+    async def test_deactivate_preserves_metadata(self, backend):
+        await backend.initialize()
+        await backend.register("alpha", {}, metadata={"tenant_id": "t1"})
+        await backend.deactivate("alpha")
+        # list_all (no filter) still returns the deactivated reg
+        all_regs = await backend.list_all()
+        assert len(all_regs) == 1
+        assert all_regs[0].metadata == {"tenant_id": "t1"}
+
+    @pytest.mark.asyncio
+    async def test_list_active_filter_metadata(self, backend):
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, metadata={"tenant_id": "t2"})
+        await backend.register("c", {}, metadata={"tenant_id": "t1"})
+
+        t1 = await backend.list_active(filter_metadata={"tenant_id": "t1"})
+        assert {r.bot_id for r in t1} == {"a", "c"}
+
+        t2 = await backend.list_active(filter_metadata={"tenant_id": "t2"})
+        assert {r.bot_id for r in t2} == {"b"}
+
+    @pytest.mark.asyncio
+    async def test_list_all_filter_metadata_includes_inactive(self, backend):
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, metadata={"tenant_id": "t1"})
+        await backend.deactivate("b")
+
+        all_t1 = await backend.list_all(filter_metadata={"tenant_id": "t1"})
+        assert {r.bot_id for r in all_t1} == {"a", "b"}
+
+    @pytest.mark.asyncio
+    async def test_count_filter_metadata(self, backend):
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, metadata={"tenant_id": "t2"})
+        await backend.register("c", {}, metadata={"tenant_id": "t1"})
+
+        assert await backend.count(filter_metadata={"tenant_id": "t1"}) == 2
+        assert await backend.count(filter_metadata={"tenant_id": "t2"}) == 1
+        assert await backend.count() == 3
+
+    @pytest.mark.asyncio
+    async def test_empty_filter_metadata_is_no_filter(self, backend):
+        """Empty mapping must be treated identically to None (no-filter)."""
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, metadata={"tenant_id": "t2"})
+
+        assert await backend.count(filter_metadata={}) == 2
+        assert await backend.count(filter_metadata=None) == 2
+
+    @pytest.mark.asyncio
+    async def test_filter_metadata_multi_key_is_and(self, backend):
+        await backend.initialize()
+        await backend.register(
+            "a", {}, metadata={"tenant_id": "t1", "tier": "gold"}
+        )
+        await backend.register(
+            "b", {}, metadata={"tenant_id": "t1", "tier": "silver"}
+        )
+        await backend.register(
+            "c", {}, metadata={"tenant_id": "t2", "tier": "gold"}
+        )
+
+        result = await backend.list_active(
+            filter_metadata={"tenant_id": "t1", "tier": "gold"}
+        )
+        assert {r.bot_id for r in result} == {"a"}
+
+
+class TestInMemoryBackendSurfaceCompletion:
+    """Phase 6a surface — status kwarg, list_inactive, sort/limit/offset, stream."""
+
+    @pytest.fixture
+    def backend(self):
+        return InMemoryBackend()
+
+    @pytest.mark.asyncio
+    async def test_list_all_no_status_returns_active_and_inactive(self, backend):
+        """No ``status`` kwarg ⇒ all statuses returned."""
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+        await backend.register("c", {})
+
+        regs = await backend.list_all()
+        assert {r.bot_id for r in regs} == {"a", "b", "c"}
+
+    @pytest.mark.asyncio
+    async def test_list_all_status_kwarg_filters_active(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+        await backend.register("c", {})
+
+        regs = await backend.list_all(status="active")
+        assert {r.bot_id for r in regs} == {"a", "c"}
+
+    @pytest.mark.asyncio
+    async def test_list_all_status_kwarg_filters_inactive(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+
+        regs = await backend.list_all(status="inactive")
+        assert {r.bot_id for r in regs} == {"b"}
+
+    @pytest.mark.asyncio
+    async def test_list_inactive_returns_only_inactive(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+        await backend.register("c", {}, status="inactive")
+
+        regs = await backend.list_inactive()
+        assert {r.bot_id for r in regs} == {"b", "c"}
+
+    @pytest.mark.asyncio
+    async def test_list_inactive_filter_metadata(self, backend):
+        await backend.initialize()
+        await backend.register(
+            "a", {}, status="inactive", metadata={"tenant_id": "t1"}
+        )
+        await backend.register(
+            "b", {}, status="inactive", metadata={"tenant_id": "t2"}
+        )
+        await backend.register(
+            "c", {}, metadata={"tenant_id": "t1"}  # active — excluded
+        )
+
+        regs = await backend.list_inactive(filter_metadata={"tenant_id": "t1"})
+        assert {r.bot_id for r in regs} == {"a"}
+
+    @pytest.mark.asyncio
+    async def test_list_active_sort_by_bot_id_asc(self, backend):
+        await backend.initialize()
+        await backend.register("c", {})
+        await backend.register("a", {})
+        await backend.register("b", {})
+
+        regs = await backend.list_active(sort=[SortSpec("bot_id", SortOrder.ASC)])
+        assert [r.bot_id for r in regs] == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_list_all_sort_desc(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {})
+        await backend.register("c", {})
+
+        regs = await backend.list_all(sort=[SortSpec("bot_id", SortOrder.DESC)])
+        assert [r.bot_id for r in regs] == ["c", "b", "a"]
+
+    @pytest.mark.asyncio
+    async def test_list_all_sort_by_metadata_field(self, backend):
+        """Sort by ``metadata.X`` resolves through the metadata channel."""
+        await backend.initialize()
+        await backend.register("c", {}, metadata={"priority": 3})
+        await backend.register("a", {}, metadata={"priority": 1})
+        await backend.register("b", {}, metadata={"priority": 2})
+
+        regs = await backend.list_all(
+            sort=[SortSpec("metadata.priority", SortOrder.ASC)]
+        )
+        assert [r.bot_id for r in regs] == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_list_active_limit(self, backend):
+        await backend.initialize()
+        for i in range(5):
+            await backend.register(f"bot-{i}", {})
+
+        regs = await backend.list_active(
+            sort=[SortSpec("bot_id", SortOrder.ASC)], limit=2
+        )
+        assert [r.bot_id for r in regs] == ["bot-0", "bot-1"]
+
+    @pytest.mark.asyncio
+    async def test_list_active_offset(self, backend):
+        await backend.initialize()
+        for i in range(5):
+            await backend.register(f"bot-{i}", {})
+
+        regs = await backend.list_active(
+            sort=[SortSpec("bot_id", SortOrder.ASC)], offset=2
+        )
+        assert [r.bot_id for r in regs] == ["bot-2", "bot-3", "bot-4"]
+
+    @pytest.mark.asyncio
+    async def test_list_active_limit_and_offset(self, backend):
+        """Offset is applied before limit (standard SQL semantics)."""
+        await backend.initialize()
+        for i in range(5):
+            await backend.register(f"bot-{i}", {})
+
+        regs = await backend.list_active(
+            sort=[SortSpec("bot_id", SortOrder.ASC)], offset=1, limit=2
+        )
+        assert [r.bot_id for r in regs] == ["bot-1", "bot-2"]
+
+    @pytest.mark.asyncio
+    async def test_pagination_combines_with_filter_metadata(self, backend):
+        await backend.initialize()
+        for i in range(6):
+            await backend.register(
+                f"bot-{i}", {}, metadata={"tenant_id": "t1" if i < 3 else "t2"}
+            )
+
+        regs = await backend.list_active(
+            filter_metadata={"tenant_id": "t1"},
+            sort=[SortSpec("bot_id", SortOrder.ASC)],
+            limit=2,
+        )
+        assert [r.bot_id for r in regs] == ["bot-0", "bot-1"]
+
+    @pytest.mark.asyncio
+    async def test_count_all_counts_all_statuses(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+
+        assert await backend.count_all() == 2
+
+    @pytest.mark.asyncio
+    async def test_count_all_status_filter(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+        await backend.register("c", {}, status="inactive")
+
+        assert await backend.count_all(status="active") == 1
+        assert await backend.count_all(status="inactive") == 2
+
+    @pytest.mark.asyncio
+    async def test_count_active_preserves_back_compat(self, backend):
+        """Plain ``count()`` still counts active only."""
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+
+        assert await backend.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_count_inactive(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+        await backend.register("c", {}, status="inactive")
+
+        assert await backend.count_inactive() == 2
+
+    @pytest.mark.asyncio
+    async def test_count_all_combines_status_and_filter_metadata(self, backend):
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register(
+            "b", {}, status="inactive", metadata={"tenant_id": "t1"}
+        )
+        await backend.register("c", {}, metadata={"tenant_id": "t2"})
+
+        assert (
+            await backend.count_all(
+                status="active", filter_metadata={"tenant_id": "t1"}
+            )
+            == 1
+        )
+        assert (
+            await backend.count_all(
+                status="inactive", filter_metadata={"tenant_id": "t1"}
+            )
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_yields_all_matching(self, backend):
+        await backend.initialize()
+        await backend.register("a", {}, metadata={"tenant_id": "t1"})
+        await backend.register("b", {}, metadata={"tenant_id": "t1"})
+        await backend.register("c", {}, metadata={"tenant_id": "t2"})
+
+        seen = [reg async for reg in backend.stream(filter_metadata={"tenant_id": "t1"})]
+        assert {r.bot_id for r in seen} == {"a", "b"}
+
+    @pytest.mark.asyncio
+    async def test_stream_status_filter(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+
+        active = [reg async for reg in backend.stream(status="active")]
+        assert {r.bot_id for r in active} == {"a"}
+
+        inactive = [reg async for reg in backend.stream(status="inactive")]
+        assert {r.bot_id for r in inactive} == {"b"}
+
+    @pytest.mark.asyncio
+    async def test_stream_no_filters_yields_everything(self, backend):
+        await backend.initialize()
+        await backend.register("a", {})
+        await backend.register("b", {}, status="inactive")
+
+        seen = [reg async for reg in backend.stream()]
+        assert {r.bot_id for r in seen} == {"a", "b"}

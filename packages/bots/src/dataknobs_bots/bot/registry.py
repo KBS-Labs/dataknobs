@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,7 @@ from .base import DynaBot
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentConfig
+    from dataknobs_data import SortSpec
 
     from ..registry import Registration
 
@@ -215,6 +217,8 @@ class BotRegistry:
         config: dict[str, Any],
         status: str = "active",
         skip_validation: bool = False,
+        *,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Registration:
         """Register or update a bot configuration.
 
@@ -226,6 +230,11 @@ class BotRegistry:
             config: Bot configuration dictionary (should be portable)
             status: Registration status (default: active)
             skip_validation: If True, skip portability validation
+            metadata: Cross-cutting context (``tenant_id``, audit info,
+                feature flags) routed to the backend's metadata channel.
+                Independently filterable via ``filter_metadata=`` on
+                :meth:`list_bots` / :meth:`list_registrations` /
+                :meth:`count` without scanning the config payload.
 
         Returns:
             Registration object with metadata
@@ -246,6 +255,11 @@ class BotRegistry:
             # Update existing registration
             reg = await registry.register("support-bot", new_config)
             print(f"Updated at: {reg.updated_at}")
+
+            # Register with tenant metadata
+            reg = await registry.register(
+                "support-bot", config, metadata={"tenant_id": "acme"},
+            )
             ```
         """
         # Validate portability if enabled
@@ -263,7 +277,9 @@ class BotRegistry:
                 logger.warning("Bot %s: %s", bot_id, warning)
 
         # Store in backend
-        registration = await self._backend.register(bot_id, config, status)
+        registration = await self._backend.register(
+            bot_id, config, status, metadata=metadata
+        )
 
         # Invalidate cache for this bot
         async with self._lock:
@@ -447,21 +463,96 @@ class BotRegistry:
         """
         return await self._backend.exists(bot_id)
 
-    async def list_bots(self) -> list[str]:
-        """List all active bot IDs.
+    async def list_bots(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[str]:
+        """List active bot IDs, optionally filtered, sorted, and paginated.
+
+        With no kwargs, returns the active bot ID list (the default
+        delegates to :meth:`RegistryBackend.list_ids` for efficiency
+        on backends that can return IDs without materializing full
+        registrations).  When any kwarg is supplied, the call routes
+        through :meth:`RegistryBackend.list_active` so the filter and
+        pagination push down to the backend's query.
+
+        Args:
+            filter_metadata: Equality filter over the metadata channel
+                (e.g. ``{"tenant_id": "acme"}``).  Routed via the
+                ``metadata.X`` field-path convention.
+            sort: Optional sort spec, pushed down to the backend.
+            limit: Optional row limit.
+            offset: Optional row offset.
 
         Returns:
-            List of active bot identifiers
+            List of active bot identifiers.
         """
-        return await self._backend.list_ids()
+        if filter_metadata is None and sort is None and limit is None and offset is None:
+            return await self._backend.list_ids()
+        registrations = await self._backend.list_active(
+            filter_metadata=filter_metadata,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+        return [r.bot_id for r in registrations]
 
-    async def count(self) -> int:
+    async def list_registrations(
+        self,
+        *,
+        status: str | None = None,
+        filter_metadata: Mapping[str, Any] | None = None,
+        sort: list[SortSpec] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Registration]:
+        """List full :class:`Registration` objects matching the supplied filters.
+
+        Surface mirrors :meth:`RegistryBackend.list_all` — use this
+        when callers need the registration metadata (timestamps,
+        backend-supplied ``metadata`` channel, status) rather than
+        just IDs.
+
+        Args:
+            status: Optional equality filter on the ``status`` column.
+                ``None`` returns all statuses (including inactive).
+                Pass ``"active"`` for the same scope as
+                :meth:`list_bots`.
+            filter_metadata: Equality filter over the metadata channel.
+            sort: Optional sort spec.
+            limit: Optional row limit.
+            offset: Optional row offset.
+
+        Returns:
+            List of matching ``Registration`` objects.
+        """
+        return await self._backend.list_all(
+            status=status,
+            filter_metadata=filter_metadata,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count(
+        self,
+        *,
+        filter_metadata: Mapping[str, Any] | None = None,
+    ) -> int:
         """Count active bot registrations.
 
+        Args:
+            filter_metadata: Optional equality filter over the metadata
+                channel.  ``None`` counts all active registrations.
+
         Returns:
-            Number of active registrations
+            Number of active registrations matching the filter.
         """
-        return await self._backend.count()
+        return await self._backend.count(filter_metadata=filter_metadata)
 
     def get_cached_bots(self) -> list[str]:
         """Get list of currently cached bot IDs.

@@ -7,8 +7,10 @@ that don't support push notifications (like memory or file backends).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.events import Event, EventBus, EventType
 
@@ -168,10 +170,8 @@ class RegistryPoller:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
         logger.info("Stopped registry poller")
@@ -215,7 +215,16 @@ class RegistryPoller:
                 # Continue polling despite errors
 
     async def _update_snapshot(self) -> None:
-        """Update the internal snapshot of registry state."""
+        """Update the internal snapshot of registry state.
+
+        Snapshots all registrations regardless of status so that a
+        soft-delete (``deactivate``) surfaces as ``UPDATED`` (its
+        ``updated_at`` advances) rather than ``DELETED``.  Subscribers
+        that previously distinguished active from inactive via
+        ``UPDATED`` events continue to do so unchanged; explicit
+        deactivation semantics, if needed, are the registry's concern,
+        not the poller's.
+        """
         registrations = await self._backend.list_all()
         self._snapshot = {}
 
@@ -238,7 +247,7 @@ class RegistryPoller:
         """
         changes: dict[str, EventType] = {}
 
-        # Get current state
+        # Get current state — all statuses (see ``_update_snapshot``).
         registrations = await self._backend.list_all()
         current_ids = set()
 

@@ -181,6 +181,66 @@ class TestBotRegistry:
         assert reg.created_at is not None
 
     @pytest.mark.asyncio
+    async def test_register_threads_metadata_to_backend(self, registry):
+        """``BotRegistry.register(..., metadata=...)`` lands in backend metadata channel."""
+        reg = await registry.register(
+            "tenant-aware",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+            },
+            metadata={"tenant_id": "acme"},
+        )
+        assert reg.metadata == {"tenant_id": "acme"}
+        # filter_metadata pushes through to backend
+        listed = await registry.list_registrations(
+            filter_metadata={"tenant_id": "acme"},
+        )
+        assert {r.bot_id for r in listed} == {"tenant-aware"}
+
+    @pytest.mark.asyncio
+    async def test_list_bots_filter_metadata(self, registry):
+        """``list_bots(filter_metadata=...)`` filters by metadata channel."""
+        await registry.register(
+            "bot-acme",
+            {"llm": {"provider": "echo"}, "conversation_storage": {"backend": "memory"}},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.register(
+            "bot-globex",
+            {"llm": {"provider": "echo"}, "conversation_storage": {"backend": "memory"}},
+            metadata={"tenant_id": "globex"},
+        )
+        acme = await registry.list_bots(filter_metadata={"tenant_id": "acme"})
+        assert acme == ["bot-acme"]
+        globex = await registry.list_bots(filter_metadata={"tenant_id": "globex"})
+        assert globex == ["bot-globex"]
+        # no kwargs falls back to list_ids
+        assert sorted(await registry.list_bots()) == ["bot-acme", "bot-globex"]
+
+    @pytest.mark.asyncio
+    async def test_count_filter_metadata(self, registry):
+        """``count(filter_metadata=...)`` counts only matching registrations."""
+        await registry.register(
+            "a",
+            {"llm": {"provider": "echo"}, "conversation_storage": {"backend": "memory"}},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.register(
+            "b",
+            {"llm": {"provider": "echo"}, "conversation_storage": {"backend": "memory"}},
+            metadata={"tenant_id": "acme"},
+        )
+        await registry.register(
+            "c",
+            {"llm": {"provider": "echo"}, "conversation_storage": {"backend": "memory"}},
+            metadata={"tenant_id": "globex"},
+        )
+        assert await registry.count() == 3
+        assert await registry.count(filter_metadata={"tenant_id": "acme"}) == 2
+        assert await registry.count(filter_metadata={"tenant_id": "globex"}) == 1
+
+    @pytest.mark.asyncio
     async def test_register_invalidates_cache(self, registry):
         """Test that registering updates invalidate cache."""
         await registry.register(

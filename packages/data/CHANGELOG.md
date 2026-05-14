@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`AsyncKeyedRecordStore[T]` / `SyncKeyedRecordStore[T]`** — generic
+  id-keyed persistence over `AsyncDatabase` / `SyncDatabase` for
+  registry / pointer-table use cases.  Encapsulates the `Record`
+  two-column (`data`, `metadata`) shape *by construction*: the
+  serializer signature is ``(T) -> tuple[dict, dict]`` rather than
+  ``(T) -> Record``, so the metadata channel is part of the function's
+  type and cannot be silently dropped.  Surface: `put`, `get`,
+  `exists`, `delete`, `put_batch`, `get_batch`, `delete_batch`,
+  `list`, `count`, `stream`, `search`.  Filter channels —
+  `filter_data` and `filter_metadata` — both routed through the
+  existing `metadata.X` field-path convention so JSONB pushdown
+  works on Postgres / SQLite / DuckDB and `Record.get_value`
+  traversal works on memory / file backends.  Exported from
+  `dataknobs_data` package root.  Composed by
+  `DataKnobsRegistryAdapter`, `ArtifactRegistry`, `RubricRegistry`,
+  and `GeneratorRegistry` in `dataknobs-bots`, and by
+  `UnifiedDatabaseStorage.save_step` in `dataknobs-fsm`, as the
+  single Record-construction site for those registries.
+
+### Changed
+
+- **`limit=0` now produces an empty result across every backend**,
+  consistent with Python slice semantics (``limit=None`` →
+  unlimited, ``limit=0`` → empty).  Previously the pagination paths
+  used truthy-checks (``if query.limit:`` / ``if query.offset:``),
+  so ``limit=0`` was silently treated as "no limit".  ``offset=0``
+  is now also documented as a no-op rather than a slice that copies
+  the full list.
+
+  **Migration:** Audit consumers that pass ``limit=0`` explicitly.
+  Any caller that relied on the truthy-check to silently mean
+  "unlimited" will now receive an empty result; pass
+  ``limit=None`` (or omit the argument) for unlimited semantics.
+
 ## v0.4.17 - 2026-05-09
 
 ### Added

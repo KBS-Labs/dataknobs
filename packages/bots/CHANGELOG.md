@@ -7,12 +7,205 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`Registration.metadata`** — `dict[str, Any]` field on
+  `dataknobs_bots.registry.Registration` for cross-cutting context
+  (`tenant_id`, audit info, feature flags) that lands in the storage
+  backend's ``metadata`` column rather than mixed into the config
+  payload.  Round-trips through `to_dict` / `from_dict` and the HTTP
+  wire protocol.
+
+- **`RegistryBackend.register(..., metadata=...)`** — kw-only
+  parameter routes caller-supplied metadata to the backend's
+  metadata channel.  Implemented by `InMemoryBackend`,
+  `DataKnobsRegistryAdapter`, and `HTTPRegistryBackend`.
+
+- **Registry filter / pagination surface** on `RegistryBackend`:
+  - `list_all(*, status=None, filter_metadata=None, sort=None,
+    limit=None, offset=None)` — list with optional status equality,
+    equality filter over the metadata column, sort spec, and
+    limit/offset pagination.
+  - `list_active(...)` / `list_inactive(...)` — symmetric
+    convenience wrappers over `list_all` with the status pinned.
+  - `count_all(*, status=None, filter_metadata=None)` — routed
+    through `AsyncDatabase.count(query)` so backends with pushdown
+    counts (`SELECT COUNT(*) WHERE ...`) benefit transparently.
+  - `count(*, filter_metadata=None)` / `count_inactive(...)` —
+    pinned-status counterparts.
+  - `stream(*, status=None, filter_metadata=None, config=None)` —
+    async-iterator surface for large tenant populations, yields
+    `Registration` instances one at a time.
+
+- **`BotRegistry` surfaces the new metadata / filter / pagination
+  surface** so consumers don't drop to ``registry._backend``:
+  - ``register(..., metadata=...)`` threads ``metadata`` to the
+    backend's metadata channel.
+  - ``list_bots(*, filter_metadata=None, sort=None, limit=None,
+    offset=None)`` — no-kwarg form returns active bot IDs as
+    before; any kwarg routes through ``list_active`` for pushdown
+    filtering.
+  - ``list_registrations(*, status=None, filter_metadata=None,
+    sort=None, limit=None, offset=None)`` — new method surfacing
+    full `Registration` objects (timestamps / status / metadata).
+  - ``count(*, filter_metadata=None)`` — tenant-scoped counts.
+
+- **`HTTPRegistryBackend` wire-protocol extensions** — optional
+  query parameters on `GET /configs`:
+  `?filter_metadata=<URL-encoded JSON object>` (sorted keys for
+  deterministic cache lines), `?status=<value>`,
+  `?sort=<field>[:asc|desc]` (repeatable; wire order is tie-break
+  order), `?limit=<int>`, `?offset=<int>`.  Schema is **additive
+  optional**: servers that recognize a parameter honor it; servers
+  that don't ignore it and return the broader list.  The client
+  defensively re-applies idempotent filters (`filter_metadata`,
+  `status`, `sort`) after parsing the response; `limit`/`offset`
+  are intentionally NOT re-applied client-side (re-offsetting a
+  server-paginated window would drop live rows).
+
+- **`POST /configs/{bot_id}/deactivate`** — new server-side
+  endpoint that routes directly to ``RegistryBackend.deactivate``.
+  Lets HTTP clients soft-delete without first issuing
+  ``GET /configs/{bot_id}`` (which bumps ``last_accessed_at``).
+  Returns ``204 No Content`` on success or ``404 Not Found``.
+
+- **`create_registry_router(backend)`** — reference FastAPI router
+  in `dataknobs_bots.registry.server` exposing `RegistryBackend` as
+  the wire protocol that `HTTPRegistryBackend` speaks.  Consumers
+  can stand up a config service backed by any `RegistryBackend`
+  (`InMemoryBackend`, `DataKnobsRegistryAdapter` over
+  Postgres/SQLite/S3, …) with one line of glue.  FastAPI is an
+  optional dependency: importing the module without it installed
+  succeeds; calling `create_registry_router` raises `ImportError`
+  with an install hint (`pip install 'dataknobs-bots[server]'`).
+  Protocol is pinned on both sides by client and server test
+  suites — drift breaks both.
+
+- **`ArtifactRegistry.query`** — kw-only `filter_metadata=`,
+  `sort=`, `limit=`, `offset=` parameters.  Filter / sort push down
+  to the database query so SQL backends can use indexes.  Pagination
+  is applied **after** the latest-pointer dedup pass (dual-write
+  storage shape — pre-dedup row count diverges from post-dedup
+  artifact count, so a pushdown ``LIMIT`` is unsafe).  Existing
+  positional parameters (`artifact_type`, `status`, `tags`,
+  `filters`) unchanged.
+
+- **`ArtifactRegistry.count`** — new method mirroring `query`
+  parameter-for-parameter (minus sort/limit/offset).  Equivalent
+  to ``len(await registry.query(...))`` after dedup.
+
+- **`RubricRegistry.list_all` / `RubricRegistry.get_for_target`** —
+  kw-only `filter_metadata=`, `sort=`, `limit=`, `offset=`.  Same
+  post-dedup pagination policy as `ArtifactRegistry.query` (same
+  dual-write storage shape).
+
+- **`RubricRegistry.count_for_target` / `RubricRegistry.count_all`**
+  — new count methods mirroring the corresponding list/get methods.
+
+- **`GeneratorRegistry.list_definitions`** — kw-only
+  `filter_metadata=`, `sort=`, `limit=`, `offset=`.  Unlike the
+  dual-write registries, `GeneratorRegistry` writes a single row
+  per generator id — no pointer/snapshot divergence — so
+  limit/offset push down to the database directly.
+
+- **`GeneratorRegistry.count_definitions`** — new method that routes
+  through `AsyncKeyedRecordStore.count`, letting backends with
+  pushdown counts skip row materialization.
+
+### Changed
+
+- **`DataKnobsRegistryAdapter`, `ArtifactRegistry`, `RubricRegistry`,
+  and `GeneratorRegistry` now compose `AsyncKeyedRecordStore`** (from
+  `dataknobs-data`) instead of building `Record(...)` instances
+  inline.  The store's
+  ``(T) -> (data, metadata)`` serializer signature makes the
+  metadata channel part of the function's type, so a future change
+  to a model can't accidentally drop the metadata channel without a
+  type-visible diff at the serializer site.  Public surface
+  preserved; the `DataKnobsRegistryAdapter` stored shape differs —
+  see Migration below.
+
 ### Fixed
+
+- **`DataKnobsRegistryAdapter` now persists caller-provided
+  metadata to the `Record.metadata` column.**  Previously the
+  metadata column was always empty (there was no
+  `Registration.metadata` field), rendering `metadata.X` filters
+  and the Postgres metadata GIN index unreachable.  Multi-tenant
+  consumers can now use `filter_metadata={"tenant_id": ...}` to
+  scope `list_active` / `list_all` queries.
+
+- **`ArtifactRegistry` and `RubricRegistry` now persist artifact /
+  rubric `metadata` to the `Record.metadata` column** (latent
+  defect — no consumer had hit it yet).
+
+- **`GeneratorRegistry` no longer silently routes definition
+  fields into the `data` column under a `metadata` variable
+  name.**  The pre-fix code passed a local variable named
+  ``metadata`` positionally to ``Record(...)``, but ``Record(...)``'s
+  first positional is ``data`` — so the schema/version/id fields
+  landed in the data column and the record's metadata column was
+  never populated.  Migrating to `AsyncKeyedRecordStore` removes
+  the inline `Record(...)` call, so the variable-name shadow
+  cannot recur and `GeneratorDefinition.metadata` lands in the
+  correct column.
+
+- **`DataKnobsRegistryAdapter.count()` no longer materializes
+  every active row** to compute its result.  It now routes through
+  `_db.count(query)`, so backends with `SELECT COUNT(*)` pushdown
+  return without row materialization.
+
+- **`HTTPRegistryBackend.register` and `.deactivate` no longer
+  issue touching reads.**  Previously both methods called
+  ``await self.get(bot_id)`` first — the corresponding
+  ``GET /configs/{bot_id}`` route bumps ``last_accessed_at`` per
+  the `get` protocol contract, so every re-register and every
+  soft-delete contaminated the user-activity signal that timestamp
+  is supposed to carry.  `register` now issues a single
+  ``PUT /configs/{bot_id}`` (upsert); `deactivate` calls the new
+  ``POST /configs/{bot_id}/deactivate`` endpoint.
+
+- **`ArtifactRegistry.revise` / `set_status` / `submit_for_review`
+  are now serialized per artifact id**, closing an in-process
+  read-modify-write race.  Two concurrent ``revise(id, …)`` callers
+  could both read ``v1.0.0``, both compute ``v1.0.1``, and both
+  write the same snapshot key — last-write wins and the losing
+  revision silently disappeared.  A per-id ``asyncio.Lock`` now
+  wraps each read-modify-write flow.  **Scope:** in-process only.
+  Two processes writing to the same backing database still race;
+  the multi-process fix (optimistic-version / row-lock check at
+  the database layer) is tracked as a separate work item.
+
 - Bumped minimum `pyyaml` requirement from `>=6.0` to `>=6.0.2` to
-  exclude versions that lack cp312/cp313 wheels and fail to build from
-  source against modern Cython (`'build_ext' object has no attribute
-  'cython_sources'`). Surfaced by the floor resolve step in the
-  `dependency-update` workflow.
+  exclude versions that lack cp312/cp313 wheels and fail to build
+  from source against modern Cython.  Surfaced by the floor
+  resolve step in the `dependency-update` workflow.
+
+### Migration
+
+- **Stored record shape for `DataKnobsRegistryAdapter` changed.**
+  Pre-migration, every field of the `Registration` was written into
+  the ``data`` column and the record's metadata column was always
+  empty (there was no ``Registration.metadata`` field).
+  Post-migration, `Registration.metadata` is written to the
+  record's ``metadata`` column.  Existing deployments must rewrite
+  stored rows once before the new `filter_metadata=` / metadata
+  pushdown will see anything (the column is empty on pre-migration
+  rows).
+
+- **Wire-protocol change is additive.** `Registration.to_dict()`
+  / `from_dict()` gained a ``metadata`` key.  Old clients that
+  ignore unknown keys keep working against new servers; old
+  servers that omit the key produce ``metadata={}`` on the new
+  client via ``data.get("metadata") or {}``.  No coordinated
+  upgrade is required, but until both sides understand the key,
+  the metadata channel is effectively absent on that consumer.
+
+- **New `ArtifactRegistry.query` parameters (`filter_metadata=`,
+  `sort=`, `limit=`, `offset=`) are kw-only.**  This is the
+  contract for the new surface; positional usage of the
+  established parameters (`artifact_type`, `status`, `tags`,
+  `filters`) is unchanged.
 
 ## v0.6.19 - 2026-05-09
 

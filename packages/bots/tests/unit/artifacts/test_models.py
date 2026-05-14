@@ -127,6 +127,49 @@ class TestArtifact:
         assert restored.rubric_ids == original.rubric_ids
         assert restored.evaluation_ids == original.evaluation_ids
 
+    def test_metadata_default_empty(self) -> None:
+        """Metadata defaults to an empty dict, not None."""
+        artifact = Artifact()
+        assert artifact.metadata == {}
+
+    def test_metadata_round_trip(self) -> None:
+        """Metadata survives to_dict/from_dict so it can route through the keyed store."""
+        original = Artifact(
+            id="art_meta",
+            type="content",
+            name="With Metadata",
+            content={"v": 1},
+            metadata={
+                "tenant_id": "acme",
+                "correlation_id": "req-123",
+                "audit": {"by": "alice"},
+            },
+        )
+        restored = Artifact.from_dict(original.to_dict())
+        assert restored.metadata == {
+            "tenant_id": "acme",
+            "correlation_id": "req-123",
+            "audit": {"by": "alice"},
+        }
+
+    def test_metadata_from_dict_missing_defaults_to_empty(self) -> None:
+        """from_dict tolerates legacy dicts that lack a ``metadata`` key."""
+        # Mimics a record persisted before the metadata field was added.
+        legacy = {
+            "id": "art_legacy",
+            "type": "content",
+            "name": "Legacy",
+            "version": "1.0.0",
+            "status": "draft",
+            "content": {},
+            "provenance": {},
+            "tags": [],
+            "rubric_ids": [],
+            "evaluation_ids": [],
+        }
+        restored = Artifact.from_dict(legacy)
+        assert restored.metadata == {}
+
     def test_unique_ids_generated(self) -> None:
         a1 = Artifact()
         a2 = Artifact()

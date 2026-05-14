@@ -1,8 +1,45 @@
 """Tests for HTTPRegistryBackend."""
 
+import json
+import re
+
 import pytest
 
 from dataknobs_bots.registry import HTTPRegistryBackend, create_registry_backend
+
+# Matches ``GET /configs`` with or without a query string.  Used by the
+# Phase 3b wire-protocol tests because ``aioresponses`` 0.7.8 matches
+# URLs by strict equality — a bare-URL registration would not match a
+# request carrying ``?filter_metadata=...``.
+_CONFIGS_URL_PATTERN = re.compile(
+    r"^https://config-service\.test/api/v1/configs(\?.*)?$"
+)
+
+
+def _captured_params(mock_responses, *, method: str = "GET") -> list[dict | None]:
+    """Return the ``params`` kwarg of every captured request for ``method``.
+
+    aioresponses stores each request's original kwargs (deep-copied) on
+    ``RequestCall.kwargs``.  Inspecting ``params`` directly is more
+    robust than parsing the on-wire URL because it bypasses the yarl
+    encode / ``urllib.parse`` decode round-trip — and it asserts on
+    exactly what we handed to aiohttp, not on a representation of it.
+    """
+    result: list[dict | None] = []
+    for (m, _url), calls in mock_responses.requests.items():
+        if m.upper() != method.upper():
+            continue
+        for call in calls:
+            result.append(call.kwargs.get("params"))
+    return result
+
+
+def _filter_metadata_param(mock_responses) -> dict | None:
+    """Return the decoded ``filter_metadata`` from the first matching call."""
+    for params in _captured_params(mock_responses):
+        if params and "filter_metadata" in params:
+            return json.loads(params["filter_metadata"])
+    return None
 
 
 class TestHTTPRegistryBackendConfiguration:
@@ -241,9 +278,15 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_list_active_filters(self, backend, mock_responses):
-        """Test that list_active filters inactive registrations."""
+        """Test that list_active filters inactive registrations.
+
+        The wire call now carries ``?status=active``, so the mock is
+        registered with the bare-or-querystring URL pattern.  The
+        defensive client-side ``status`` reapply still applies if a
+        legacy server returns the unfiltered list.
+        """
         mock_responses.get(
-            "https://config-service.test/api/v1/configs",
+            _CONFIGS_URL_PATTERN,
             payload=[
                 {"bot_id": "bot-1", "config": {}, "status": "active"},
                 {"bot_id": "bot-2", "config": {}, "status": "inactive"},
@@ -260,7 +303,7 @@ class TestHTTPRegistryBackendWithMockServer:
     async def test_list_ids(self, backend, mock_responses):
         """Test listing active bot IDs."""
         mock_responses.get(
-            "https://config-service.test/api/v1/configs",
+            _CONFIGS_URL_PATTERN,
             payload=[
                 {"bot_id": "bot-1", "config": {}, "status": "active"},
                 {"bot_id": "bot-2", "config": {}, "status": "inactive"},
@@ -275,7 +318,7 @@ class TestHTTPRegistryBackendWithMockServer:
     async def test_count(self, backend, mock_responses):
         """Test counting active registrations."""
         mock_responses.get(
-            "https://config-service.test/api/v1/configs",
+            _CONFIGS_URL_PATTERN,
             payload=[
                 {"bot_id": "bot-1", "config": {}, "status": "active"},
                 {"bot_id": "bot-2", "config": {}, "status": "active"},
@@ -289,15 +332,9 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_register_new(self, backend, mock_responses):
-        """Test creating a new registration."""
-        # First check if exists
-        mock_responses.get(
+        """``register`` issues a single PUT (upsert) — no probing GET."""
+        mock_responses.put(
             "https://config-service.test/api/v1/configs/new-bot",
-            status=404,
-        )
-        # Then create
-        mock_responses.post(
-            "https://config-service.test/api/v1/configs",
             payload={
                 "bot_id": "new-bot",
                 "config": {"key": "value"},
@@ -314,17 +351,7 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_register_update(self, backend, mock_responses):
-        """Test updating an existing registration."""
-        # First check if exists
-        mock_responses.get(
-            "https://config-service.test/api/v1/configs/existing-bot",
-            payload={
-                "bot_id": "existing-bot",
-                "config": {"old": "value"},
-                "status": "active",
-            },
-        )
-        # Then update
+        """Updating uses the same single PUT — server treats register as upsert."""
         mock_responses.put(
             "https://config-service.test/api/v1/configs/existing-bot",
             payload={
@@ -366,33 +393,10 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_deactivate(self, backend, mock_responses):
-        """Test deactivating a registration."""
-        # First get the registration
-        mock_responses.get(
-            "https://config-service.test/api/v1/configs/test-bot",
-            payload={
-                "bot_id": "test-bot",
-                "config": {"key": "value"},
-                "status": "active",
-            },
-        )
-        # Check if exists for register
-        mock_responses.get(
-            "https://config-service.test/api/v1/configs/test-bot",
-            payload={
-                "bot_id": "test-bot",
-                "config": {"key": "value"},
-                "status": "active",
-            },
-        )
-        # Then update status
-        mock_responses.put(
-            "https://config-service.test/api/v1/configs/test-bot",
-            payload={
-                "bot_id": "test-bot",
-                "config": {"key": "value"},
-                "status": "inactive",
-            },
+        """``deactivate`` hits the dedicated endpoint — no touching GET."""
+        mock_responses.post(
+            "https://config-service.test/api/v1/configs/test-bot/deactivate",
+            status=204,
         )
 
         result = await backend.deactivate("test-bot")
@@ -401,9 +405,9 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_deactivate_not_found(self, backend, mock_responses):
-        """Test deactivating non-existent registration."""
-        mock_responses.get(
-            "https://config-service.test/api/v1/configs/missing",
+        """Server 404 from the dedicated endpoint surfaces as ``False``."""
+        mock_responses.post(
+            "https://config-service.test/api/v1/configs/missing/deactivate",
             status=404,
         )
 
@@ -520,6 +524,384 @@ class TestHTTPRegistryBackendWithMockServer:
             assert config == {"k": "v"}
         finally:
             await backend.close()
+
+    @pytest.mark.asyncio
+    async def test_list_all_no_filter_sends_no_query_param(
+        self, backend, mock_responses
+    ):
+        """``list_all()`` with no filter must not pass ``params`` to aiohttp."""
+        mock_responses.get(
+            "https://config-service.test/api/v1/configs",
+            payload=[
+                {"bot_id": "bot-1", "config": {}, "status": "active"},
+            ],
+        )
+
+        await backend.list_all()
+
+        captured = _captured_params(mock_responses)
+        assert captured, "expected a GET /configs request"
+        # The client must pass ``params=None`` (or omit it) when no
+        # filter is set, so the request goes on the wire without a
+        # query string.
+        for params in captured:
+            assert not params, (
+                f"list_all() without filter must not send params, got {params!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_list_all_pushes_filter_metadata_to_server(
+        self, backend, mock_responses
+    ):
+        """list_all sends filter_metadata as a URL-encoded JSON query param."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {
+                    "bot_id": "bot-1",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "acme"},
+                },
+            ],
+        )
+
+        regs = await backend.list_all(filter_metadata={"tenant_id": "acme"})
+
+        assert len(regs) == 1
+        assert _filter_metadata_param(mock_responses) == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_list_active_pushes_filter_metadata_to_server(
+        self, backend, mock_responses
+    ):
+        """list_active routes filter_metadata down to the same GET /configs call."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {
+                    "bot_id": "bot-1",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "acme"},
+                },
+            ],
+        )
+
+        regs = await backend.list_active(filter_metadata={"tenant_id": "acme"})
+
+        assert len(regs) == 1
+        assert _filter_metadata_param(mock_responses) == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_count_pushes_filter_metadata_to_server(
+        self, backend, mock_responses
+    ):
+        """count() routes filter_metadata down to the underlying list call."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {
+                    "bot_id": "bot-1",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "acme"},
+                },
+                {
+                    "bot_id": "bot-2",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "acme"},
+                },
+            ],
+        )
+
+        n = await backend.count(filter_metadata={"tenant_id": "acme"})
+
+        assert n == 2
+        assert _filter_metadata_param(mock_responses) == {"tenant_id": "acme"}
+
+    @pytest.mark.asyncio
+    async def test_filter_metadata_query_param_is_deterministic(
+        self, backend, mock_responses
+    ):
+        """``filter_metadata`` JSON is serialized with ``sort_keys=True``.
+
+        Determinism matters for server-side cache keys and request logs:
+        the same logical filter must produce the same wire-level query
+        string regardless of input dict order.
+        """
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[],
+        )
+
+        await backend.list_all(filter_metadata={"z_last": 1, "a_first": 2})
+
+        captured = _captured_params(mock_responses)
+        raw = next(
+            (p["filter_metadata"] for p in captured if p and "filter_metadata" in p),
+            None,
+        )
+        assert raw is not None
+        # sort_keys=True puts "a_first" before "z_last" in the JSON
+        # string handed to aiohttp.
+        assert raw.index('"a_first"') < raw.index('"z_last"')
+
+    @pytest.mark.asyncio
+    async def test_client_side_filter_applied_when_server_ignores_query_param(
+        self, backend, mock_responses
+    ):
+        """If the server returns unfiltered rows, the client must still filter.
+
+        The wire protocol is additive-optional — servers that don't honor
+        ``filter_metadata`` return the unfiltered list. The client's
+        defensive post-filter guarantees correctness.
+        """
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {
+                    "bot_id": "bot-1",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "acme"},
+                },
+                {
+                    "bot_id": "bot-2",
+                    "config": {},
+                    "status": "active",
+                    "metadata": {"tenant_id": "other"},
+                },
+            ],
+        )
+
+        regs = await backend.list_all(filter_metadata={"tenant_id": "acme"})
+
+        # Server returned both, but the client must filter on tenant_id.
+        assert [r.bot_id for r in regs] == ["bot-1"]
+
+    # --- Phase 6b: status/sort/limit/offset push-down -----------------
+
+    @pytest.mark.asyncio
+    async def test_status_pushed_to_server(self, backend, mock_responses):
+        """``list_all(status=...)`` sends ``?status=<value>``."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-1", "config": {}, "status": "active"},
+            ],
+        )
+
+        await backend.list_all(status="active")
+
+        captured = _captured_params(mock_responses)
+        assert captured, "expected a GET /configs request"
+        statuses = [p.get("status") for p in captured if p]
+        assert "active" in statuses
+
+    @pytest.mark.asyncio
+    async def test_list_inactive_pushes_status_to_server(
+        self, backend, mock_responses
+    ):
+        """``list_inactive()`` routes through the same ``?status=`` push-down."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-1", "config": {}, "status": "inactive"},
+            ],
+        )
+
+        await backend.list_inactive()
+
+        captured = _captured_params(mock_responses)
+        statuses = [p.get("status") for p in captured if p]
+        assert "inactive" in statuses
+
+    @pytest.mark.asyncio
+    async def test_sort_encoded_as_field_colon_order(
+        self, backend, mock_responses
+    ):
+        """``sort=[SortSpec("bot_id", DESC)]`` serializes to ``?sort=bot_id:desc``."""
+        from dataknobs_data import SortOrder, SortSpec
+
+        mock_responses.get(_CONFIGS_URL_PATTERN, payload=[])
+
+        await backend.list_all(
+            sort=[SortSpec(field="bot_id", order=SortOrder.DESC)]
+        )
+
+        captured = _captured_params(mock_responses)
+        sort_params = [p.get("sort") for p in captured if p]
+        assert sort_params == [["bot_id:desc"]]
+
+    @pytest.mark.asyncio
+    async def test_sort_multi_key_preserves_list_order(
+        self, backend, mock_responses
+    ):
+        """Multi-key sort serializes as a list (repeated query param)."""
+        from dataknobs_data import SortOrder, SortSpec
+
+        mock_responses.get(_CONFIGS_URL_PATTERN, payload=[])
+
+        await backend.list_all(
+            sort=[
+                SortSpec(field="metadata.team", order=SortOrder.ASC),
+                SortSpec(field="bot_id", order=SortOrder.DESC),
+            ]
+        )
+
+        captured = _captured_params(mock_responses)
+        sort_params = [p.get("sort") for p in captured if p]
+        # Wire order matches caller's list order (tie-break semantics
+        # are positional).
+        assert sort_params == [["metadata.team:asc", "bot_id:desc"]]
+
+    @pytest.mark.asyncio
+    async def test_limit_pushed_to_server(self, backend, mock_responses):
+        mock_responses.get(_CONFIGS_URL_PATTERN, payload=[])
+
+        await backend.list_all(limit=10)
+
+        captured = _captured_params(mock_responses)
+        limits = [p.get("limit") for p in captured if p]
+        assert "10" in limits
+
+    @pytest.mark.asyncio
+    async def test_offset_pushed_to_server(self, backend, mock_responses):
+        mock_responses.get(_CONFIGS_URL_PATTERN, payload=[])
+
+        await backend.list_all(offset=5)
+
+        captured = _captured_params(mock_responses)
+        offsets = [p.get("offset") for p in captured if p]
+        assert "5" in offsets
+
+    @pytest.mark.asyncio
+    async def test_limit_offset_not_reapplied_client_side(
+        self, backend, mock_responses
+    ):
+        """Server is trusted on pagination — client must not re-truncate.
+
+        Re-applying ``offset`` on an already-offset window would drop
+        live rows.  Verified by having the server return exactly the
+        page the client requested; the client must surface all 3 rows
+        even though offset=5 would skip past everything if reapplied.
+        """
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-5", "config": {}, "status": "active"},
+                {"bot_id": "bot-6", "config": {}, "status": "active"},
+                {"bot_id": "bot-7", "config": {}, "status": "active"},
+            ],
+        )
+
+        regs = await backend.list_all(offset=5)
+
+        assert [r.bot_id for r in regs] == ["bot-5", "bot-6", "bot-7"]
+
+    @pytest.mark.asyncio
+    async def test_limit_not_reapplied_client_side(
+        self, backend, mock_responses
+    ):
+        """The server is trusted on limit; client does not re-truncate."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-0", "config": {}, "status": "active"},
+                {"bot_id": "bot-1", "config": {}, "status": "active"},
+            ],
+        )
+
+        # Caller asked for 5; server delivered 2. Client returns 2,
+        # not 0 or 5.
+        regs = await backend.list_all(limit=5)
+        assert len(regs) == 2
+
+    @pytest.mark.asyncio
+    async def test_status_reapplied_client_side_for_legacy_servers(
+        self, backend, mock_responses
+    ):
+        """Legacy server returning mixed-status rows is still filtered client-side.
+
+        ``status`` is an additive-optional parameter; the defensive
+        client-side reapply guarantees correctness when the server
+        ignores ``?status=``.
+        """
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-1", "config": {}, "status": "active"},
+                {"bot_id": "bot-2", "config": {}, "status": "inactive"},
+            ],
+        )
+
+        regs = await backend.list_all(status="active")
+
+        # Server returned both; client filters down to active.
+        assert [r.bot_id for r in regs] == ["bot-1"]
+
+    @pytest.mark.asyncio
+    async def test_sort_reapplied_client_side_for_legacy_servers(
+        self, backend, mock_responses
+    ):
+        """Legacy server returns unsorted rows; the client must sort them.
+
+        Re-sorting is idempotent, so the defensive reapply is always
+        safe (a server that already sorted will see no change).
+        """
+        from dataknobs_data import SortOrder, SortSpec
+
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "charlie", "config": {}, "status": "active"},
+                {"bot_id": "alice", "config": {}, "status": "active"},
+                {"bot_id": "bob", "config": {}, "status": "active"},
+            ],
+        )
+
+        regs = await backend.list_all(
+            sort=[SortSpec(field="bot_id", order=SortOrder.ASC)]
+        )
+        assert [r.bot_id for r in regs] == ["alice", "bob", "charlie"]
+
+    @pytest.mark.asyncio
+    async def test_count_pushes_status_to_server(self, backend, mock_responses):
+        """``count(filter_metadata=...)`` already sends ``filter_metadata``;
+        this confirms ``count_all(status=...)`` adds ``?status=``."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[
+                {"bot_id": "bot-1", "config": {}, "status": "inactive"},
+                {"bot_id": "bot-2", "config": {}, "status": "inactive"},
+            ],
+        )
+
+        n = await backend.count_inactive()
+
+        assert n == 2
+        captured = _captured_params(mock_responses)
+        statuses = [p.get("status") for p in captured if p]
+        assert "inactive" in statuses
+
+    @pytest.mark.asyncio
+    async def test_no_params_sends_no_query_string(self, backend, mock_responses):
+        """Confirm Phase 6a invariant: bare ``list_all()`` adds no query string."""
+        mock_responses.get(
+            _CONFIGS_URL_PATTERN,
+            payload=[],
+        )
+
+        await backend.list_all()
+
+        captured = _captured_params(mock_responses)
+        assert captured, "expected a request"
+        for params in captured:
+            assert not params, (
+                f"bare list_all() must not send params, got {params!r}"
+            )
 
     @pytest.mark.asyncio
     async def test_auth_header_sent(self, mock_responses):

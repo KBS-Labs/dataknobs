@@ -74,6 +74,11 @@ class Artifact:
         tags: Searchable tags for categorization.
         rubric_ids: IDs of rubrics applicable to this artifact type.
         evaluation_ids: IDs of completed RubricEvaluation results.
+        metadata: Cross-cutting context (``tenant_id``, ``correlation_id``,
+            audit info, feature flags). Routed to the underlying record's
+            ``metadata`` column when persisted via :class:`ArtifactRegistry`
+            so it is independently filterable via ``filter_metadata``
+            without scanning every row.
         created_at: ISO 8601 timestamp of creation.
         updated_at: ISO 8601 timestamp of last update.
     """
@@ -89,6 +94,7 @@ class Artifact:
     tags: list[str] = field(default_factory=list)
     rubric_ids: list[str] = field(default_factory=list)
     evaluation_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
 
@@ -120,6 +126,7 @@ class Artifact:
             "tags": self.tags,
             "rubric_ids": self.rubric_ids,
             "evaluation_ids": self.evaluation_ids,
+            "metadata": dict(self.metadata),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -141,6 +148,7 @@ class Artifact:
             tags=data.get("tags", []),
             rubric_ids=data.get("rubric_ids", []),
             evaluation_ids=data.get("evaluation_ids", []),
+            metadata=dict(data.get("metadata") or {}),
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
         )

@@ -11,6 +11,8 @@ This module provides:
 - RegistryPoller: Polling-based change detection
 - HotReloadManager: Coordinator for hot-reloading configurations
 - create_registry_backend: Factory function for creating backends
+- create_registry_router: FastAPI router exposing RegistryBackend as the wire
+  protocol HTTPRegistryBackend speaks (reference server)
 - Portability validation utilities
 
 Example:
@@ -107,6 +109,7 @@ from .portability import (
     is_portable,
     validate_portability,
 )
+from .server import create_registry_router
 
 
 def create_registry_backend(
@@ -172,20 +175,21 @@ def create_registry_backend(
 
 
 __all__ = [
-    "Registration",
-    "RegistryBackend",
-    "InMemoryBackend",
-    "DataKnobsRegistryAdapter",
-    "HTTPRegistryBackend",
     "CachingRegistryManager",
     "ConfigCachingManager",
-    "ResolvedConfig",
-    "RegistryPoller",
+    "DataKnobsRegistryAdapter",
+    "HTTPRegistryBackend",
     "HotReloadManager",
-    "ReloadMode",
-    "create_registry_backend",
+    "InMemoryBackend",
     "PortabilityError",
-    "validate_portability",
+    "Registration",
+    "RegistryBackend",
+    "RegistryPoller",
+    "ReloadMode",
+    "ResolvedConfig",
+    "create_registry_backend",
+    "create_registry_router",
     "has_resource_references",
     "is_portable",
+    "validate_portability",
 ]
