@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DataKnobs. Exported from `dataknobs_common.events` along with the
   `EventBusFactory` type alias. The built-in `memory`/`postgres`/`redis`
   backends and the `create_event_bus()` signature are unchanged.
+- `dataknobs_common.locks` — distributed lock abstraction; the third
+  member of the concurrency-primitive set alongside `RateLimiter` and
+  `EventBus`. A `@runtime_checkable` `DistributedLock` protocol
+  (`acquire`/`release`/`hold`/`close`; `acquire` returns `bool` and
+  does not raise on timeout — lock contention is routine, not
+  exceptional), an `InProcessLock` default (single-process, zero
+  dependency, reference-count evicted key map so it cannot leak; also
+  the testing construct — use instead of mocking a lock), and a
+  registry-extensible `create_lock()` factory backed by the
+  `lock_backends` registry. Out-of-tree consumers register a custom
+  cross-replica backend (`lock_backends.register("name", factory)`,
+  factory `Callable[[dict], DistributedLock]`) and select it via
+  `create_lock({"backend": "name", ...})` without forking DataKnobs —
+  the exact structural mirror of `event_bus_backends`. Exported from
+  `dataknobs_common.locks` and re-exported at the top-level
+  `dataknobs_common` namespace along with the `LockFactory` type alias.
+  Only the `memory` backend is registered; an unknown backend raises
+  `ValueError` listing the registered backends.
 
 ### Changed
 - `create_event_bus()` now resolves backends through

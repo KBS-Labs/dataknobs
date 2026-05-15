@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`IngestOrchestrator(__init__)`** accepts a new optional
+  `lock: DistributedLock | None = None` parameter. Per-domain
+  serialization of ingest triggers is now backed by an injected
+  `dataknobs_common.locks.DistributedLock` (keyed
+  `ingest:<domain_id>`) instead of an internal `asyncio.Lock`. The
+  default is `InProcessLock()` — process-local and
+  behaviour-identical to prior releases for single-replica
+  deployments. Multi-replica deployments must inject a cross-replica
+  lock; a process-local lock cannot serialize across replicas. A
+  built-in Postgres advisory-lock backend ships in a follow-up phase;
+  until then register a cross-replica backend via
+  `dataknobs_common.locks.lock_backends`.
+
+### Fixed
+
+- **`IngestOrchestrator` multi-replica race made honest.** The
+  previous `asyncio.Lock`-per-domain provided no protection across
+  processes, yet the class docstring implied per-domain
+  serialization unconditionally. The docstring now states the
+  serialization scope is exactly the scope of the injected lock and
+  that multi-replica deployments must inject a cross-replica lock.
+- **`IngestOrchestrator` per-domain lock-map leak.** The internal
+  `dict[str, asyncio.Lock]` was never evicted, so every distinct
+  `domain_id` grew it unbounded for the lifetime of the
+  orchestrator. The injected `InProcessLock` reference-count evicts
+  its key map, closing the leak.
+
 ## v0.6.20 - 2026-05-13
 
 ### Added
