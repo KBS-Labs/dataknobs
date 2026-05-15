@@ -113,7 +113,17 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
     """Create an event bus from configuration.
 
     Factory function that creates the appropriate EventBus implementation
-    based on the 'backend' key in the config.
+    based on the 'backend' key in the config. Backends are resolved through
+    the :data:`~dataknobs_common.events.registry.event_bus_backends`
+    registry, so out-of-tree consumers can register and select a custom
+    ``EventBus`` backend without forking DataKnobs:
+
+        ```python
+        from dataknobs_common.events import event_bus_backends, create_event_bus
+
+        event_bus_backends.register("kafka", my_kafka_factory)
+        bus = create_event_bus({"backend": "kafka", "brokers": "..."})
+        ```
 
     Args:
         config: Configuration dict with 'backend' key and backend-specific options
@@ -122,7 +132,8 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
         EventBus instance
 
     Raises:
-        ValueError: If backend type is not recognized
+        ValueError: If the backend is not registered. The message lists all
+            registered backends (including consumer-registered ones).
 
     Example:
         ```python
@@ -143,36 +154,16 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
         })
         ```
     """
-    # Import here to avoid circular imports
-    from .memory import InMemoryEventBus
+    # Imported here (not at module load) so registry.py can safely
+    # ``from .bus import EventBus`` without a module-load cycle.
+    from .registry import event_bus_backends
 
     backend = config.get("backend", "memory")
-
-    if backend == "memory":
-        return InMemoryEventBus()
-    elif backend == "postgres":
-        from .postgres import PostgresEventBus
-
-        # Pass the full config through so the bus can accept any input
-        # shape supported by ``normalize_postgres_connection_config``
-        # (connection_string, individual host/port/... keys, DATABASE_URL
-        # env var, or POSTGRES_* env vars).
-        return PostgresEventBus(
-            config=config,
-            channel_prefix=config.get("channel_prefix", "events"),
-        )
-    elif backend == "redis":
-        from .redis import RedisEventBus
-
-        return RedisEventBus(
-            host=config.get("host", "localhost"),
-            port=config.get("port", 6379),
-            password=config.get("password"),
-            ssl=config.get("ssl", False),
-            channel_prefix=config.get("channel_prefix", "events"),
-        )
-    else:
+    factory = event_bus_backends.get_optional(backend)
+    if factory is None:
+        available = ", ".join(sorted(event_bus_backends.list_keys()))
         raise ValueError(
             f"Unknown event bus backend: {backend}. "
-            f"Available backends: memory, postgres, redis"
+            f"Available backends: {available}"
         )
+    return factory(config)

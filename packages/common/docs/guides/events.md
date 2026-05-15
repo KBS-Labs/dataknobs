@@ -212,6 +212,41 @@ bus = create_event_bus({
 from dataknobs_common.events.redis import RedisEventBus
 ```
 
+### Custom Backends (Plugin Registry)
+
+`create_event_bus()` resolves the `backend` key through the
+`event_bus_backends` registry. You can register your own `EventBus`
+implementation and select it by name — no fork of DataKnobs required:
+
+```python
+from dataknobs_common.events import (
+    event_bus_backends,
+    create_event_bus,
+)
+
+
+def _make_kafka_bus(config: dict) -> "EventBus":
+    from my_pkg.kafka_bus import KafkaEventBus
+    return KafkaEventBus(brokers=config["brokers"])
+
+
+# Register once at startup (e.g. in your package __init__).
+event_bus_backends.register("kafka", _make_kafka_bus)
+
+# Now selectable like any built-in backend.
+bus = create_event_bus({"backend": "kafka", "brokers": "broker:9092"})
+```
+
+A backend factory is any `Callable[[dict], EventBus]`. Registering a key
+that already exists raises `OperationError` unless you pass
+`allow_overwrite=True`. The built-in `memory`, `postgres`, and `redis`
+backends are registered automatically and are unchanged. Passing
+`allow_overwrite=True` for one of those built-in names *will* replace
+the built-in backend process-wide — this is supported but strongly
+discouraged; prefer a distinct backend name. Selecting an unregistered
+backend raises `ValueError` listing every registered backend (including
+consumer-registered ones).
+
 ## Usage Patterns
 
 ### Multiple Subscribers
@@ -345,15 +380,35 @@ class EventBus(Protocol):
 def create_event_bus(config: dict) -> EventBus:
     """Create an event bus from configuration.
 
+    Backends are resolved through the ``event_bus_backends`` registry,
+    so custom backends registered by consumers are selectable too.
+
     Args:
         config: Configuration dict with:
-            - backend: "memory", "postgres", or "redis"
+            - backend: a registered backend name ("memory", "postgres",
+              "redis", or any consumer-registered key)
             - Additional backend-specific options
 
     Returns:
         EventBus implementation
+
+    Raises:
+        ValueError: If the backend is not registered (message lists all
+            registered backends).
     """
 ```
+
+### Plugin Registry
+
+```python
+event_bus_backends: Registry[EventBusFactory]
+# EventBusFactory = Callable[[dict[str, Any]], EventBus]
+
+event_bus_backends.register("name", factory)   # add a backend
+event_bus_backends.list_keys()                  # registered backend names
+```
+
+See [Custom Backends](#custom-backends-plugin-registry) for usage.
 
 ## Configuration Reference
 

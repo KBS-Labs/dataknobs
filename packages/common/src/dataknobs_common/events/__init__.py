@@ -60,6 +60,7 @@ from __future__ import annotations
 
 from .bus import EventBus, create_event_bus
 from .memory import InMemoryEventBus
+from .registry import EventBusFactory, event_bus_backends
 from .types import Event, EventType, Subscription
 
 __all__ = [
@@ -67,6 +68,9 @@ __all__ = [
     "EventBus",
     # Factory
     "create_event_bus",
+    # Plugin registry
+    "event_bus_backends",
+    "EventBusFactory",
     # Types
     "Event",
     "EventType",
