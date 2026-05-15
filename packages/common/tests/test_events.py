@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -469,3 +470,149 @@ class TestEventBusIntegration:
         assert len(events_by_correlation[correlation_id]) == 3
 
         await bus.close()
+
+
+class TestEventBusRegistry:
+    """Tests for the registry-extensible event-bus factory.
+
+    These exercise the real registry and real built-in backends (no
+    mocks/fakes) per the optional-dependency-backend testing mandate.
+    """
+
+    def test_builtin_backends_registered(self):
+        """memory/postgres/redis are registered by default."""
+        from dataknobs_common.events import event_bus_backends
+
+        keys = set(event_bus_backends.list_keys())
+        assert {"memory", "postgres", "redis"} <= keys
+
+    @pytest.mark.asyncio
+    async def test_memory_factory_round_trip(self):
+        """The memory factory yields a working bus, not just the type."""
+        bus = create_event_bus({"backend": "memory"})
+        assert isinstance(bus, InMemoryEventBus)
+
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        await bus.connect()
+        await bus.subscribe("t", handler)
+        await bus.publish(
+            "t", Event(type=EventType.CREATED, topic="t", payload={"k": 1})
+        )
+        await asyncio.sleep(0.05)
+        await bus.close()
+
+        assert len(received) == 1
+        assert received[0].payload == {"k": 1}
+
+    def test_postgres_factory_wires_config(self):
+        """The postgres wrapper constructs PostgresEventBus from config.
+
+        Construction is side-effect-free (no connect); a dummy connection
+        string is enough to verify the wrapper passes config through.
+        """
+        from dataknobs_common.events.postgres import PostgresEventBus
+
+        bus = create_event_bus(
+            {
+                "backend": "postgres",
+                "connection_string": "postgresql://u:p@localhost:5432/db",
+                "channel_prefix": "custom_prefix",
+            }
+        )
+        assert isinstance(bus, PostgresEventBus)
+
+    def test_redis_factory_wires_config(self):
+        """The redis wrapper constructs RedisEventBus from config."""
+        from dataknobs_common.events.redis import RedisEventBus
+
+        bus = create_event_bus(
+            {
+                "backend": "redis",
+                "host": "redis.example.com",
+                "port": 6380,
+                "ssl": True,
+            }
+        )
+        assert isinstance(bus, RedisEventBus)
+
+    @pytest.mark.asyncio
+    async def test_default_backend_is_memory(self):
+        """An empty config still resolves to the memory backend."""
+        bus = create_event_bus({})
+        assert isinstance(bus, InMemoryEventBus)
+
+    def test_unknown_backend_lists_registered(self):
+        """Unknown backend → ValueError listing the sorted backends.
+
+        Locks the G1-corrected resolution path (get_optional → None →
+        ValueError) and the preserved error-message contract.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            create_event_bus({"backend": "nope"})
+
+        msg = str(excinfo.value)
+        assert "Unknown event bus backend: nope" in msg
+        # Lists every registered backend, sorted.
+        assert "memory" in msg
+        assert "postgres" in msg
+        assert "redis" in msg
+
+    @pytest.mark.asyncio
+    async def test_custom_backend_plugin(self):
+        """A consumer-registered backend resolves and works end to end.
+
+        Uses a real InMemoryEventBus subclass (not a mock) to prove the
+        out-of-tree extension promise: a custom backend without forking.
+        """
+        from dataknobs_common.events import event_bus_backends
+
+        class TaggingEventBus(InMemoryEventBus):
+            """Minimal real custom backend for the plugin test."""
+
+            def __init__(self, tag: str) -> None:
+                super().__init__()
+                self.tag = tag
+
+        def _factory(config: dict[str, Any]) -> EventBus:
+            return TaggingEventBus(tag=config["tag"])
+
+        event_bus_backends.register("custom_test", _factory)
+        try:
+            bus = create_event_bus(
+                {"backend": "custom_test", "tag": "consumer-x"}
+            )
+            assert isinstance(bus, TaggingEventBus)
+            assert bus.tag == "consumer-x"
+
+            received: list[Event] = []
+
+            async def handler(event: Event) -> None:
+                received.append(event)
+
+            await bus.connect()
+            await bus.subscribe("c", handler)
+            await bus.publish(
+                "c", Event(type=EventType.CUSTOM, topic="c", payload={})
+            )
+            await asyncio.sleep(0.05)
+            await bus.close()
+
+            assert len(received) == 1
+            # Custom backend now shows up in the unknown-backend message.
+            with pytest.raises(ValueError) as excinfo:
+                create_event_bus({"backend": "still-unknown"})
+            assert "custom_test" in str(excinfo.value)
+        finally:
+            event_bus_backends.unregister("custom_test")
+
+    def test_reregister_without_overwrite_raises(self):
+        """Registry contract: duplicate register raises OperationError."""
+        from dataknobs_common.events import event_bus_backends
+        from dataknobs_common.exceptions import OperationError
+
+        with pytest.raises(OperationError):
+            event_bus_backends.register("memory", lambda c: InMemoryEventBus())

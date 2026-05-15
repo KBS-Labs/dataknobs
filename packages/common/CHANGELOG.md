@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `dataknobs_common.events.event_bus_backends` — a registry-extensible
+  plugin point for `create_event_bus()`. Out-of-tree consumers register
+  a custom `EventBus` backend
+  (`event_bus_backends.register("name", factory)`, where a factory is
+  `Callable[[dict], EventBus]`) and select it via
+  `create_event_bus({"backend": "name", ...})` without forking
+  DataKnobs. Exported from `dataknobs_common.events` along with the
+  `EventBusFactory` type alias. The built-in `memory`/`postgres`/`redis`
+  backends and the `create_event_bus()` signature are unchanged.
+
+### Changed
+- `create_event_bus()` now resolves backends through
+  `event_bus_backends` instead of a sealed `if/elif` chain. Behaviour is
+  identical for the three built-in backends; the unknown-backend
+  `ValueError` now lists all registered backends (including
+  consumer-registered ones) instead of a hard-coded
+  `memory, postgres, redis`.
+
 ## v1.3.12 - 2026-05-09
 
 ### Added
