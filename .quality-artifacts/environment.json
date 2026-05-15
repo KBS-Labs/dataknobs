@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-14T00:03:08Z",
+  "timestamp": "2026-05-15T17:02:30Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.14 (Homebrew 2026-05-12 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/keyed-record-store",
-  "git_commit": "a4af05b50931e3ed717b1b47faeb9f403b6d450c",
+  "git_branch": "sbk/dk-125-128-PR-1",
+  "git_commit": "0b6d57c7376bb69ad64e9b97110f91cd79405ad7",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
