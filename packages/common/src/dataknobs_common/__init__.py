@@ -70,6 +70,13 @@ from dataknobs_common.exceptions import (
     TimeoutError,
     ValidationError,
 )
+from dataknobs_common.locks import (
+    DistributedLock,
+    InProcessLock,
+    LockFactory,
+    create_lock,
+    lock_backends,
+)
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
@@ -164,6 +171,12 @@ __all__ = [
     "find_config_file",
     "load_yaml_or_json",
     "parse_yaml_or_json",
+    # Distributed locks
+    "DistributedLock",
+    "create_lock",
+    "lock_backends",
+    "LockFactory",
+    "InProcessLock",
     # Metadata helpers
     "enforce_immutable_keys",
     # Postgres config

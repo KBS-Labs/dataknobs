@@ -12,12 +12,14 @@ receive side.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.locks import InProcessLock
+
 if TYPE_CHECKING:
     from dataknobs_common.events import Event, EventBus, Subscription
+    from dataknobs_common.locks import DistributedLock
 
     from .ingestion import KnowledgeIngestionManager
 
@@ -43,12 +45,22 @@ class IngestOrchestrator:
        :class:`KnowledgeIngestionManager` so the current version is
        sourced from there.
 
-    Within a single orchestrator instance, ingests are serialized
-    **per domain** via an :class:`asyncio.Lock`. Concurrent triggers
-    for the same ``domain_id`` (common under at-least-once delivery
-    from SQS/S3/cron) are queued one-at-a-time so they don't race on
-    ``clear_existing`` + ``add_vectors``. Different domains still
+    Ingests are serialized **per domain** through the injected
+    :class:`~dataknobs_common.locks.DistributedLock` (keyed
+    ``f"ingest:{domain_id}"``). Concurrent triggers for the same
+    ``domain_id`` (common under at-least-once delivery from
+    SQS/S3/cron) are queued one-at-a-time so they don't race on
+    ``clear_existing`` + ``add_vectors``; different domains still
     ingest in parallel.
+
+    The *scope* of that serialization is exactly the scope of the
+    injected lock. With the default :class:`InProcessLock` it is
+    **process-local** — sufficient for single-replica deployments and
+    behaviour-identical to prior releases. **Multi-replica deployments
+    MUST inject a cross-replica lock** (e.g.
+    ``create_lock({"backend": "postgres", ...})``); otherwise two
+    replicas can ingest the same domain concurrently and race on the
+    vector store, which a process-local lock cannot prevent.
 
     Example:
         ```python
@@ -83,6 +95,7 @@ class IngestOrchestrator:
         ingestion_manager: KnowledgeIngestionManager,
         event_bus: EventBus,
         trigger_topic: str = "knowledge:trigger",
+        lock: DistributedLock | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -92,12 +105,17 @@ class IngestOrchestrator:
             event_bus: Bus to subscribe on
             trigger_topic: Topic name to subscribe to (default
                 ``"knowledge:trigger"``)
+            lock: Lock backing per-domain serialization. Defaults to
+                :class:`~dataknobs_common.locks.InProcessLock` —
+                process-local, behaviour-identical to prior releases.
+                Multi-replica deployments must pass a cross-replica
+                lock (e.g. ``create_lock({"backend": "postgres", ...})``).
         """
         self._manager = ingestion_manager
         self._event_bus = event_bus
         self._topic = trigger_topic
         self._subscription: Subscription | None = None
-        self._domain_locks: dict[str, asyncio.Lock] = {}
+        self._lock: DistributedLock = lock or InProcessLock()
 
     @property
     def trigger_topic(self) -> str:
@@ -126,21 +144,14 @@ class IngestOrchestrator:
         self._subscription = None
         logger.info("IngestOrchestrator unsubscribed from %s", self._topic)
 
-    def _lock_for(self, domain_id: str) -> asyncio.Lock:
-        """Return (creating if needed) the lock for a domain."""
-        lock = self._domain_locks.get(domain_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._domain_locks[domain_id] = lock
-        return lock
-
     async def _handle_trigger(self, event: Event) -> None:
         """Dispatch a trigger event to ``ingest_if_changed``.
 
         Concurrent triggers for the same ``domain_id`` are serialized
-        via a per-domain lock; different domains proceed in parallel.
-        Errors are logged but not re-raised — the EventBus dispatcher
-        continues serving subsequent events to other handlers.
+        through the injected lock (keyed ``f"ingest:{domain_id}"``);
+        different domains proceed in parallel. Errors are logged but
+        not re-raised — the EventBus dispatcher continues serving
+        subsequent events to other handlers.
         """
         payload: dict[str, Any] = event.payload or {}
         domain_id = payload.get("domain_id")
@@ -152,8 +163,19 @@ class IngestOrchestrator:
             )
             return
         last_version = payload.get("last_version")
-        lock = self._lock_for(domain_id)
-        async with lock:
+        # No timeout: queue-and-wait, preserving the prior
+        # ``async with asyncio.Lock()`` semantics exactly. timeout=None
+        # always acquires per the DistributedLock contract, but the
+        # body is guarded on ``acquired`` so a future timed/best-effort
+        # lock can never run the critical section unheld.
+        async with self._lock.hold(f"ingest:{domain_id}") as acquired:
+            if not acquired:
+                logger.warning(
+                    "IngestOrchestrator could not acquire lock for "
+                    "domain=%s; skipping trigger",
+                    domain_id,
+                )
+                return
             try:
                 result = await self._manager.ingest_if_changed(
                     domain_id, last_version=last_version

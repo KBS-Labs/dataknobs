@@ -452,6 +452,46 @@ async def test_concurrent_triggers_different_domains_run_in_parallel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
+    """A passed-in ``DistributedLock`` is used, keyed ``ingest:<domain>``.
+
+    Verifies the Phase 1 injection seam: the orchestrator delegates
+    serialization to the injected lock rather than an internal
+    ``asyncio.Lock``. Uses a real :class:`InProcessLock` subclass (not
+    a mock) that records the keys it is asked to hold.
+    """
+    from dataknobs_common.locks import InProcessLock
+
+    class RecordingLock(InProcessLock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.held_keys: list[str] = []
+
+        def hold(self, key: str, *, timeout: float | None = None):  # type: ignore[override]
+            self.held_keys.append(key)
+            return super().hold(key, timeout=timeout)
+
+    bus = await _make_bus()
+    manager = _StubManager()
+    lock = RecordingLock()
+    orch = IngestOrchestrator(manager, bus, lock=lock)  # type: ignore[arg-type]
+    await orch.start()
+
+    await bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
+    await _wait_for(lambda: len(manager.calls) >= 1)
+
+    assert manager.calls == [("d1", None)]
+    assert lock.held_keys == ["ingest:d1"]
+    # Default construction must NOT reuse the injected instance.
+    default_orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+    assert isinstance(default_orch._lock, InProcessLock)
+    assert default_orch._lock is not lock
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_custom_trigger_topic() -> None:
     """Orchestrator honors a non-default ``trigger_topic``."""
     bus = await _make_bus()
