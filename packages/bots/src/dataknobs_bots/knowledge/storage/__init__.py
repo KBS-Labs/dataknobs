@@ -40,7 +40,14 @@ from __future__ import annotations
 from .backend import KnowledgeResourceBackend
 from .file import FileKnowledgeBackend
 from .memory import InMemoryKnowledgeBackend
-from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+from .mixin import KnowledgeResourceBackendMixin
+from .models import (
+    ChangeSet,
+    IngestionStatus,
+    InvalidVersionError,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+)
 
 
 def _get_s3_backend_class() -> type:
@@ -118,10 +125,13 @@ def __getattr__(name: str) -> type:
 __all__ = [
     # Protocol
     "KnowledgeResourceBackend",
+    "KnowledgeResourceBackendMixin",
     # Models
     "KnowledgeFile",
     "KnowledgeBaseInfo",
     "IngestionStatus",
+    "ChangeSet",
+    "InvalidVersionError",
     # Factory
     "create_knowledge_backend",
     # Backends

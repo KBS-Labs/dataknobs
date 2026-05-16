@@ -13,10 +13,16 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import BinaryIO
 
-from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+from .mixin import KnowledgeResourceBackendMixin
+from .models import (
+    IngestionStatus,
+    InvalidVersionError,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+)
 
 
-class InMemoryKnowledgeBackend:
+class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     """In-memory implementation of KnowledgeResourceBackend.
 
     Stores all files and metadata in dictionaries. Ideal for:
@@ -51,6 +57,11 @@ class InMemoryKnowledgeBackend:
 
         # domain_id -> path -> KnowledgeFile
         self._file_metadata: dict[str, dict[str, KnowledgeFile]] = {}
+
+        # domain_id -> canonical version (get_checksum) -> {path: checksum}.
+        # In-process per-version store backing _load_snapshot so memory
+        # produces minimal diffs (file/S3 get this natively in Phase 3).
+        self._snapshots: dict[str, dict[str, dict[str, str]]] = {}
 
         self._initialized = False
 
@@ -131,6 +142,7 @@ class InMemoryKnowledgeBackend:
         if is_new:
             kb_info.file_count += 1
         kb_info.total_size_bytes = sum(len(f) for f in self._files[domain_id].values())
+        await self._record_snapshot(domain_id)
 
         return file_info
 
@@ -177,6 +189,7 @@ class InMemoryKnowledgeBackend:
         kb_info.increment_version()
         kb_info.file_count = len(self._files[domain_id])
         kb_info.total_size_bytes = sum(len(f) for f in self._files[domain_id].values())
+        await self._record_snapshot(domain_id)
 
         return True
 
@@ -221,6 +234,7 @@ class InMemoryKnowledgeBackend:
         self._kb_info[domain_id] = kb_info
         self._files[domain_id] = {}
         self._file_metadata[domain_id] = {}
+        await self._record_snapshot(domain_id)  # baseline: "" -> {}
 
         return kb_info
 
@@ -238,6 +252,7 @@ class InMemoryKnowledgeBackend:
             del self._files[domain_id]
         if domain_id in self._file_metadata:
             del self._file_metadata[domain_id]
+        self._snapshots.pop(domain_id, None)
 
         return True
 
@@ -262,25 +277,34 @@ class InMemoryKnowledgeBackend:
         kb_info.ingestion_error = error
 
     # --- Change Detection ---
+    #
+    # get_checksum / has_changes_since / list_changes_since come from
+    # KnowledgeResourceBackendMixin (one canonical algorithm). Memory
+    # additionally retains a per-version snapshot so it produces minimal
+    # diffs rather than the mixin's full-set default.
 
-    async def get_checksum(self, domain_id: str) -> str:
-        """Get combined checksum of all files."""
-        if domain_id not in self._kb_info:
-            raise ValueError(f"Knowledge base '{domain_id}' does not exist")
+    async def _record_snapshot(self, domain_id: str) -> None:
+        """Snapshot the current file→checksum map under its version.
 
-        if domain_id not in self._file_metadata or not self._file_metadata[domain_id]:
-            return ""
+        Called after every mutation so a later
+        ``list_changes_since(domain_id, that_version)`` can diff against
+        the exact state. The version key is the canonical
+        :meth:`get_checksum` value (computed once, here, by the mixin).
+        """
+        version = await self.get_checksum(domain_id)
+        meta = self._file_metadata.get(domain_id, {})
+        self._snapshots.setdefault(domain_id, {})[version] = {
+            path: f.checksum for path, f in meta.items()
+        }
 
-        # Combine all file checksums sorted by path
-        checksums = sorted(
-            f"{f.path}:{f.checksum}" for f in self._file_metadata[domain_id].values()
-        )
-        combined = ":".join(checksums)
-        return hashlib.md5(combined.encode()).hexdigest()
-
-    async def has_changes_since(self, domain_id: str, version: str) -> bool:
-        """Check if KB has changed since given version."""
-        if domain_id not in self._kb_info:
-            raise ValueError(f"Knowledge base '{domain_id}' does not exist")
-
-        return self._kb_info[domain_id].version != version
+    async def _load_snapshot(
+        self, domain_id: str, version: str
+    ) -> dict[str, str]:
+        """Return the retained ``{path: checksum}`` map for ``version``."""
+        snaps = self._snapshots.get(domain_id, {})
+        if version not in snaps:
+            raise InvalidVersionError(
+                f"Version {version!r} is not retained for domain "
+                f"{domain_id!r}"
+            )
+        return snaps[version]

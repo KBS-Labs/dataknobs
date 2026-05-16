@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, BinaryIO, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from .models import KnowledgeBaseInfo, KnowledgeFile
+    from .models import ChangeSet, KnowledgeBaseInfo, KnowledgeFile
 
 
 @runtime_checkable
@@ -259,16 +259,23 @@ class KnowledgeResourceBackend(Protocol):
     # --- Change Detection ---
 
     async def get_checksum(self, domain_id: str) -> str:
-        """Get combined checksum of all files for change detection.
+        """Canonical content-snapshot identity of the whole KB.
 
-        The checksum changes whenever any file is added, modified, or deleted.
-        Useful for determining if re-ingestion is needed.
+        A stable hash over every file's ``path:checksum``, so it changes
+        whenever any file is added, modified, or deleted. **This value is
+        the version**: capture it and pass it back to
+        :meth:`has_changes_since` / :meth:`list_changes_since`. The empty
+        KB has identity ``""``.
+
+        Note: this is *not* the monotonic ``KnowledgeBaseInfo.version``
+        counter, which is retained for cache-invalidation/display only
+        and must not be passed to change-detection methods.
 
         Args:
             domain_id: Knowledge base identifier
 
         Returns:
-            Combined checksum string (e.g., MD5 of all file checksums)
+            Canonical snapshot identity string (MD5 of file checksums)
 
         Raises:
             ValueError: If domain_id doesn't exist
@@ -276,16 +283,50 @@ class KnowledgeResourceBackend(Protocol):
         ...
 
     async def has_changes_since(self, domain_id: str, version: str) -> bool:
-        """Check if KB has changed since given version.
+        """Check if the KB changed since the given snapshot version.
+
+        The degenerate case of :meth:`list_changes_since`:
+        ``not (await list_changes_since(domain_id, version)).is_empty``.
+        An unresolvable version is treated as "assume changed" so callers
+        safely re-ingest (no exception for that case).
 
         Args:
             domain_id: Knowledge base identifier
-            version: Previous version string to compare against
+            version: A value previously returned by :meth:`get_checksum`
 
         Returns:
-            True if current version differs from given version
+            True if the current snapshot differs from ``version``
 
         Raises:
             ValueError: If domain_id doesn't exist
+        """
+        ...
+
+    async def list_changes_since(
+        self, domain_id: str, version: str
+    ) -> ChangeSet:
+        """File-level diff of the KB since the given snapshot version.
+
+        ``version`` is a value previously returned by
+        :meth:`get_checksum`. When it equals the current identity the
+        result is empty. Otherwise the current files are diffed against
+        the snapshot at ``version``; backends without a retained snapshot
+        for that version either report every current file as ``added``
+        (correct, non-minimal) or raise :class:`InvalidVersionError`.
+
+        Args:
+            domain_id: Knowledge base identifier
+            version: A value previously returned by :meth:`get_checksum`
+
+        Returns:
+            A :class:`ChangeSet` (added / modified / deleted + the
+            current canonical version)
+
+        Raises:
+            ValueError: If domain_id doesn't exist
+            InvalidVersionError: If ``version`` differs from the current
+                identity and the backend cannot resolve it to a snapshot
+                (predates retention / unknown). Consumers fall back to a
+                full re-ingest.
         """
         ...

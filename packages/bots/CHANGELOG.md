@@ -7,8 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`KnowledgeResourceBackend.list_changes_since(domain_id, version)
+  -> ChangeSet`** — file-level diff (added / modified / deleted +
+  the current canonical version) between the current knowledge base
+  and the snapshot identified by `version` (a `get_checksum()`
+  value). `has_changes_since` is now its degenerate case
+  (`not (await list_changes_since(...)).is_empty`) rather than a
+  separately-implemented sibling.
+- **`ChangeSet`** (frozen dataclass: `added` / `modified` /
+  `deleted` / `version`, with `is_empty`) and
+  **`InvalidVersionError`** (raised when a version predates a
+  backend's snapshot retention; consumers fall back to a full
+  re-ingest) — exported from `dataknobs_bots.knowledge` and
+  `dataknobs_bots.knowledge.storage`.
+- **`KnowledgeResourceBackendMixin`** — the shared canonical
+  change-detection algorithm (`get_checksum` / `has_changes_since`
+  / `list_changes_since` over `list_files()` plus a `_load_snapshot`
+  seam). All in-tree backends inherit it; out-of-tree backends mix
+  it in for correct behaviour for free. `InMemoryKnowledgeBackend`
+  retains per-version snapshots so it produces minimal diffs;
+  `FileKnowledgeBackend` / `S3KnowledgeBackend` produce correct
+  (full, non-minimal) diffs until native snapshot support lands in
+  a later phase.
+- **`IngestionStatus.SWAPPING`** — enum member reserved for the
+  zero-downtime re-ingest swap path.
+
 ### Changed
 
+- **`KnowledgeBaseInfo.version`** is now documented as a
+  cache-invalidation / display counter only and is **no longer the
+  change-detection key** (it is still incremented on every change).
+  Change detection uses the canonical content snapshot
+  (`get_checksum`). **`KnowledgeIngestionManager.get_current_version()`**
+  consequently returns the canonical snapshot identity (a
+  `get_checksum` value), not the monotonic counter — so capturing
+  it and passing it back to `ingest_if_changed(last_version=...)`
+  is now a correct round-trip.
 - **`IngestOrchestrator(__init__)`** accepts a new optional
   `lock: DistributedLock | None = None` parameter. Per-domain
   serialization of ingest triggers is now backed by an injected
@@ -24,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`get_checksum()` → `has_changes_since()` round-trip no longer
+  spuriously re-ingests.** `has_changes_since` (and so
+  `KnowledgeIngestionManager.ingest_if_changed`) previously compared
+  the monotonic `KnowledgeBaseInfo.version` counter while
+  `get_checksum()` returned a content-snapshot hash — different
+  value spaces, so a consumer pairing the two (the intuitive,
+  documented usage) always saw "changed" and re-ingested the entire
+  domain on every check. Both now derive from the canonical content
+  snapshot, so an unchanged knowledge base correctly reports no
+  changes across all in-tree backends (memory / file / S3).
 - **`IngestOrchestrator` multi-replica race made honest.** The
   previous `asyncio.Lock`-per-domain provided no protection across
   processes, yet the class docstring implied per-domain

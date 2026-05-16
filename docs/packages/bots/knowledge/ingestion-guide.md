@@ -170,17 +170,39 @@ checks the backend's `has_changes_since()` before re-ingesting. When
 `last_version` is provided and the backend reports no changes, it
 returns `None` and skips the ingest.
 
+`last_version` must be a **canonical snapshot id** — the value returned
+by `manager.get_current_version(domain_id)` (equivalently
+`backend.get_checksum(domain_id)`). It is *not* the monotonic
+`KnowledgeBaseInfo.version` counter; that counter is retained for
+cache-invalidation/display only and must not be passed here. Capture
+the snapshot id, persist it, and pass it back on the next trigger:
+
+```python
+version = await manager.get_current_version("my-domain")
+# ... persist `version` somewhere durable, then later:
+result = await manager.ingest_if_changed("my-domain", last_version=version)
+if result is None:
+    print("No changes — skipped")
+else:
+    print(f"Ingested {result.chunks_created} chunks")
+```
+
 This is the method `IngestOrchestrator` calls on each trigger. Trigger
 payloads may include `last_version` for per-domain version tracking;
 orchestrators remain stateless across restarts.
 
-```python
-result = await manager.ingest_if_changed("my-domain", last_version="v42")
-if result is None:
-    print("No changes since v42 — skipped")
-else:
-    print(f"Ingested {result.chunks_created} chunks")
-```
+For a **file-level delta** (which files were added / modified /
+deleted, not just "something changed"), use
+`backend.list_changes_since(domain_id, version)`, which returns a
+frozen `ChangeSet` (`added` / `modified` / `deleted` / `version`, with
+`is_empty`). `has_changes_since` is its degenerate case. If `version`
+predates the backend's snapshot retention the backend raises
+`InvalidVersionError`; catch it and fall back to a full re-ingest.
+`InMemoryKnowledgeBackend` retains per-version snapshots so it returns
+a minimal diff; `FileKnowledgeBackend` / `S3KnowledgeBackend` currently
+report every current file as `added` when the version differs (correct
+detection, non-minimal) until native snapshot support lands in a later
+phase.
 
 ## Status Tracking
 

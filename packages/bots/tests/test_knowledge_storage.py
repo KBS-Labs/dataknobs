@@ -292,7 +292,13 @@ class TestInMemoryKnowledgeBackend:
     async def test_checksum_and_change_detection(
         self, memory_backend: InMemoryKnowledgeBackend
     ):
-        """Test checksum calculation and change detection."""
+        """Checksum + change detection use one canonical version space.
+
+        The version passed to ``has_changes_since`` is a ``get_checksum``
+        value (the canonical content snapshot), not the monotonic
+        ``info.version`` counter — those lived in different spaces, which
+        was RC1 (a checksum-keyed check always reported "changed").
+        """
         await memory_backend.create_kb("test-domain")
 
         # Empty KB has empty checksum
@@ -304,18 +310,17 @@ class TestInMemoryKnowledgeBackend:
         checksum1 = await memory_backend.get_checksum("test-domain")
         assert checksum1 != ""
 
-        # Get version
-        info = await memory_backend.get_info("test-domain")
-        version = info.version
+        # Capture the canonical version (NOT info.version counter)
+        version = await memory_backend.get_checksum("test-domain")
 
-        # No changes since current version
+        # No changes since current canonical version
         has_changes = await memory_backend.has_changes_since("test-domain", version)
         assert has_changes is False
 
         # Add another file
         await memory_backend.put_file("test-domain", "test2.md", b"content2")
 
-        # Changes since previous version
+        # Changes since previously-captured version
         has_changes = await memory_backend.has_changes_since("test-domain", version)
         assert has_changes is True
 

@@ -299,16 +299,22 @@ class KnowledgeIngestionManager:
     async def get_current_version(self, domain_id: str) -> str | None:
         """Get the current version of a knowledge base.
 
-        Useful for caching the version to use with
-        :meth:`ingest_if_changed`.
+        Returns the canonical content-snapshot identity
+        (``backend.get_checksum``) — the value
+        :meth:`ingest_if_changed` compares via
+        ``has_changes_since``. Capturing this and passing it back as
+        ``last_version`` is now a correct round-trip (previously it
+        returned the monotonic ``info.version`` counter, which lived in
+        a different space than ``has_changes_since`` compared against,
+        causing every checksum-keyed check to spuriously re-ingest).
 
         Args:
             domain_id: Domain to get version for
 
         Returns:
-            Current version string, or ``None`` if domain doesn't exist
+            Canonical snapshot identity, or ``None`` if domain doesn't
+            exist
         """
-        info = await self._source.get_info(domain_id)
-        if info is None:
+        if await self._source.get_info(domain_id) is None:
             return None
-        return info.version
+        return await self._source.get_checksum(domain_id)
