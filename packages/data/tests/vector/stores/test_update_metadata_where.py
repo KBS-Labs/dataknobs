@@ -532,12 +532,12 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Metadata-aliasing conformance (Item 131)
+# Metadata-aliasing conformance
 #
 # Regression guard: the caller's ``add_vectors`` metadata dict and the
 # store's internal copy must be fully isolated in *both* directions on
-# *every* in-tree backend. The store-side root cause was fixed in PR5
-# via ``VectorStoreBase._apply_domain_default`` (copy-on-ingest,
+# *every* in-tree backend. The store-side isolation is owned by
+# ``VectorStoreBase._apply_domain_default`` (copy-on-ingest,
 # unconditional); PgVector/Chroma already serialized on write. These
 # tests therefore must pass on all four backends today — a failure on
 # memory/FAISS means that copy routing has regressed.
@@ -618,14 +618,14 @@ async def test_store_writes_do_not_leak_onto_caller_dict(
 
 
 # ---------------------------------------------------------------------------
-# FAISS IVF reconstruct (Item 130)
+# FAISS IVF reconstruct
 #
 # ``get_vectors`` reconstructs by internal id. For the IVF index types
 # (``ivfflat``/``ivfpq``, auto-selected for ``dimensions >= 100`` — the
 # production 384/768/1024 case) ``IndexIDMap2.reconstruct`` delegates to
 # the wrapped IVF index, which needs ``make_direct_map()`` after
-# train+populate and again after ``read_index`` on ``load()``. Pre-fix
-# every id returned ``(None, None)`` and the broad ``except`` masked it.
+# train+populate and again after ``read_index`` on ``load()``. Without
+# it every id returns ``(None, None)`` and a broad ``except`` masks it.
 # ---------------------------------------------------------------------------
 
 
@@ -643,8 +643,8 @@ def _ivf_vectors(n: int, dim: int) -> np.ndarray:
 async def test_faiss_ivfflat_get_vectors_reconstructs() -> None:
     """IVF index types reconstruct stored vectors + metadata + timestamps.
 
-    Reproduce-first: fails pre-fix ((None, None) for every id) because
-    the IVF direct map is never built.
+    Without the IVF direct map every id reconstructs as ``(None, None)``
+    — this is the regression this guards against.
     """
     dim = 128
     n = 8  # >= nlist so the IVF index trains on first add
@@ -727,7 +727,14 @@ async def test_faiss_get_vectors_unexpected_reconstruct_error_is_logged(
 ) -> None:
     """An unexpected reconstruct failure is logged at WARNING and
     surfaced as ``(None, None)`` — not silently indistinguishable from
-    an absent id."""
+    an absent id.
+
+    The failure is forced through the *real* index: the external id
+    still resolves (so the absent-id short-circuit is skipped) but is
+    repointed at an internal id that was never added, so the real
+    ``IndexIDMap2.reconstruct`` raises — exactly the shape of the
+    post-delete internal-id reuse race the code comment describes.
+    """
     store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
     await store.initialize()
     try:
@@ -735,11 +742,9 @@ async def test_faiss_get_vectors_unexpected_reconstruct_error_is_logged(
             _seed_vectors()[:1], ids=["a"], metadata=[{"k": 1}]
         )
 
-        class _BoomIndex:
-            def reconstruct(self, _internal_id: int) -> Any:
-                raise RuntimeError("forced reconstruct failure")
-
-        store.index = _BoomIndex()  # type: ignore[assignment]
+        # ``"a"`` stays in ``id_map`` (passes the absent-id guard) but
+        # now maps to an internal id the real index never received.
+        store.id_map["a"] = 10_000_000
 
         with caplog.at_level(
             logging.WARNING, logger="dataknobs_data.vector.stores.faiss"
@@ -752,4 +757,4 @@ async def test_faiss_get_vectors_unexpected_reconstruct_error_is_logged(
             for rec in caplog.records
         ), "expected a WARNING for the unexpected reconstruct failure"
     finally:
-        store._initialized = False  # _BoomIndex has no real close path
+        await store.close()

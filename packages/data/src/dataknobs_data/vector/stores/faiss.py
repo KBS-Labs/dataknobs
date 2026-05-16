@@ -575,7 +575,10 @@ class FaissVectorStore(VectorStore):
     async def load(self) -> None:
         """Load index and metadata from disk."""
         if not self.persist_path or not os.path.exists(self.persist_path):
-            logger.debug(f"FAISS: No persist path or file not found: {self.persist_path}")
+            logger.debug(
+                "FAISS: No persist path or file not found: %s",
+                self.persist_path,
+            )
             return
 
         # Convert Path to string for FAISS
@@ -583,7 +586,11 @@ class FaissVectorStore(VectorStore):
 
         # Load index
         self.index = faiss.read_index(persist_path_str)
-        logger.info(f"FAISS: Loaded index from {persist_path_str} with {self.index.ntotal} vectors")
+        logger.info(
+            "FAISS: Loaded index from %s with %d vectors",
+            persist_path_str,
+            self.index.ntotal,
+        )
 
         # ``faiss.read_index`` restores the index but not the IVF
         # direct map, so reconstruct-by-id would fail after a reload.
@@ -604,4 +611,6 @@ class FaissVectorStore(VectorStore):
                 # with memory.py and pgvector pre-migration NULL rows).
                 self.timestamps = data.get("timestamps", {})
                 self.next_idx = data["next_idx"]
-            logger.info(f"FAISS: Loaded metadata with {len(self.id_map)} entries")
+            logger.info(
+                "FAISS: Loaded metadata with %d entries", len(self.id_map)
+            )
