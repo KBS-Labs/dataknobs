@@ -1,4 +1,4 @@
-"""Version-model unification (Items 125+126 Phase 0).
+"""Version-model behavior: KnowledgeBaseInfo / IngestionStatus / ChangeSet.
 
 Real constructs only — `InMemoryKnowledgeBackend` / `FileKnowledgeBackend`
 are the documented testing backends; no mocks.
@@ -143,7 +143,7 @@ class TestChangeSetInvariants:
 
 
 class TestNaiveBackendChangeSet:
-    """File/S3 (Phase 0) have no per-version store: a differing version
+    """File/S3 backends have no per-version store: a differing version
     reports every current file as ``added`` — correct, non-minimal."""
 
     async def test_file_backend_differing_version_all_added(
@@ -232,7 +232,7 @@ class TestIngestIfChangedRoundTrip:
 
 
 def test_normalize_ingestion_status_rejects_unknown_with_validation_error() -> None:
-    """Finding #13: an invalid status raises ``ValidationError``.
+    """An invalid status string raises ``ValidationError``.
 
     ``normalize_ingestion_status`` previously surfaced the bare
     ``ValueError`` from ``IngestionStatus(<bad>)`` — an opaque

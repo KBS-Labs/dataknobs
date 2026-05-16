@@ -1,4 +1,4 @@
-"""TOMBSTONE swap mode (Items 125+126 Phase 2 / PR5).
+"""TOMBSTONE swap mode — crash-safe generation re-ingest, end-to-end.
 
 Real constructs only — ``InMemoryKnowledgeBackend`` is the documented
 testing backend; ``RAGKnowledgeBase`` uses a real vector store
@@ -375,6 +375,65 @@ async def test_ingest_changes_tombstone_per_file_scope(wired) -> None:
     assert all(h["metadata"].get("_stale") is not True for h in hits)
 
 
+async def test_ingest_changes_tombstone_purely_additive_keeps_existing(
+    wired,
+) -> None:
+    """A purely-additive delta + TOMBSTONE must not retire existing files.
+
+    When ``ingest_changes`` sees only added files (no modified, no
+    deleted), the upsert is scoped to the new paths. The swap scope
+    must follow the upsert scope: the new files have no prior
+    generation, so there is nothing to tombstone or retire, and every
+    pre-existing file's chunks must survive untouched. The scope
+    selector must distinguish a delta (a subset is re-embedded) from a
+    full re-ingest (every file is re-embedded), not key off whether
+    any file was deleted/modified.
+    """
+    backend, rag, manager = wired
+    await manager.ingest("d", swap_mode=IngestSwapMode.CLEAR_FIRST)
+    version = await manager.get_current_version("d")
+    assert version
+    a_before = await rag.count(
+        filter={"domain_id": "d", "source_path": "docs/a.md"}
+    )
+    b_before = await rag.count(
+        filter={"domain_id": "d", "source_path": "docs/b.md"}
+    )
+    assert a_before > 0
+    assert b_before > 0
+
+    # Brand-new path — neither modified nor deleted: change.added only.
+    await backend.put_file(
+        "d", "docs/c.md", b"# C\n\nAlpha cherry ADDEDtoken.\n"
+    )
+
+    result = await manager.ingest_changes(
+        "d", version, swap_mode=IngestSwapMode.TOMBSTONE
+    )
+
+    assert result.success
+    assert result.files_processed == 1  # only the added file is embedded
+    # Pre-existing files' chunks are NOT retired by an additive delta.
+    assert (
+        await rag.count(
+            filter={"domain_id": "d", "source_path": "docs/a.md"}
+        )
+        == a_before
+    )
+    assert (
+        await rag.count(
+            filter={"domain_id": "d", "source_path": "docs/b.md"}
+        )
+        == b_before
+    )
+    # No tombstone residue, and the added file is live.
+    assert await rag.vector_store.count(filter={"_stale": True}) == 0
+    hits = await rag.query("Alpha", k=10, min_similarity=_ALL)
+    paths = {h["metadata"].get("source_path") for h in hits}
+    assert {"docs/a.md", "docs/b.md", "docs/c.md"} <= paths
+    assert all(h["metadata"].get("_stale") is not True for h in hits)
+
+
 class _RetireProbeRAG:
     """Real destination; snapshots store state at the post-commit retire.
 
@@ -644,7 +703,7 @@ class _CrashAfterOrphanWriteRAG:
 async def test_interrupted_swap_reconciled_on_next_ingest_changes(
     wired,
 ) -> None:
-    """Finding #7: a crash mid-swap is reconciled by the next ingest.
+    """A crash mid-swap is reconciled by the next ingest.
 
     A SIGKILL between ``_upsert`` and the commit (a full-domain
     TOMBSTONE) leaves the *whole domain's* old generation tombstoned,
@@ -798,7 +857,7 @@ class _NativeHybridMemoryStore(MemoryVectorStore):
 
 
 async def test_native_hybrid_overfetches_past_stale() -> None:
-    """Finding #4: native hybrid fusion must not under-return mid-swap.
+    """Native hybrid fusion must not under-return mid-swap.
 
     The native path requested exactly ``k`` from ``hybrid_search``
     then post-filtered ``_stale`` — so when tombstoned chunks rank in
@@ -854,7 +913,7 @@ async def test_native_hybrid_overfetches_past_stale() -> None:
 
 
 async def test_count_excludes_stale_by_default(wired) -> None:
-    """Finding #5: ``count()`` must exclude tombstoned chunks.
+    """``count()`` must exclude tombstoned chunks by default.
 
     Mid-swap, ``count(filter)`` delegated straight to the store and so
     reported old+new (double). It now excludes ``_stale`` by default

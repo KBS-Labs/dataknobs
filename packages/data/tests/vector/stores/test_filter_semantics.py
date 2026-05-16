@@ -371,7 +371,7 @@ async def test_numeric_no_implicit_string_coercion(
 
 
 # ---------------------------------------------------------------------------
-# Config-level ``domain_id`` scoping (Item #8, direction b).
+# Config-level ``domain_id`` scoping.
 #
 # ``PgVectorStore`` honors a config-level ``domain_id``: every
 # read/count/clear/update_metadata_where is implicitly scoped to that

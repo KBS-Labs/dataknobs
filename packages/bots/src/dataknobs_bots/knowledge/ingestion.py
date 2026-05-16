@@ -64,10 +64,14 @@ class IngestSwapMode(Enum):
       This is the documented production default for multi-replica
       re-ingest.
 
-      A transient in-swap window remains: between marking the old
-      generation stale and the new one being committed, a concurrent
-      reader sees the new generation only (and, briefly, nothing while
-      the new one is still embedding). Closing *that* window requires
+      A transient in-swap window remains. Once the old generation is
+      marked stale it is hidden from reads; the new generation is then
+      written incrementally with no transaction boundary, so a
+      concurrent reader first sees nothing, then sees the growing new
+      generation as chunks land, and finally the complete new
+      generation once embedding finishes — the old generation is never
+      visible again from the moment it is marked stale. Closing *that*
+      window (so a reader always sees one complete generation) requires
       a generation pointer-flip (``SHADOW_GENERATION``); ``TOMBSTONE``
       deliberately trades it for a far simpler, crash-safe mechanism.
 
@@ -214,12 +218,16 @@ class KnowledgeIngestionManager:
     ) -> IngestSwapMode:
         """Resolve the effective swap mode from the two knobs.
 
-        ``swap_mode`` is authoritative when set. The legacy
-        ``clear_existing`` is honored (with a ``DeprecationWarning``)
-        only when ``swap_mode`` is not given. With neither set the
-        default is ``CLEAR_FIRST`` — identical to the pre-deprecation
-        ``clear_existing=True`` default, so existing callers are
-        unaffected.
+        Passing the legacy ``clear_existing`` at all (i.e. not
+        ``None``) always emits a ``DeprecationWarning`` — even when
+        ``swap_mode`` is also given and overrides it — because the
+        caller is still using a deprecated parameter. ``swap_mode`` is
+        authoritative when set; ``clear_existing`` only *determines*
+        the mode when ``swap_mode`` is not given
+        (``True`` → ``CLEAR_FIRST``, ``False`` → ``APPEND``). With
+        neither set the default is ``CLEAR_FIRST`` — identical to the
+        pre-deprecation ``clear_existing=True`` default, so existing
+        callers are unaffected.
         """
         if clear_existing is not None:
             warnings.warn(
@@ -303,7 +311,9 @@ class KnowledgeIngestionManager:
 
         except Exception as e:
             logger.error("Ingestion failed for %s: %s", domain_id, e)
-            await self._source.set_ingestion_status(domain_id, "error", str(e))
+            await self._source.set_ingestion_status(
+                domain_id, IngestionStatus.ERROR, str(e)
+            )
             raise
         finally:
             result.finish()
@@ -485,13 +495,20 @@ class KnowledgeIngestionManager:
         Sequence:
 
         1. ``update_metadata_where(tombstone_scope, {"_stale": True})``
-           — mark the existing generation. The read chokepoint
-           (:meth:`RAGKnowledgeBase._resolve_read_filter`) hides
-           ``_stale``-true chunks, so reads stop seeing the old
-           generation *without anything being deleted*.
+           — mark the existing generation. ``_stale`` exclusion is not
+           expressible as an equality filter, so it is enforced as a
+           post-filter on the read path:
+           :meth:`RAGKnowledgeBase._fetch_drop_stale_truncate`
+           over-fetches and drops ``_stale``-true rows via
+           :meth:`RAGKnowledgeBase._is_stale`. Reads stop seeing the
+           old generation *without anything being deleted*.
         2. Status → :attr:`IngestionStatus.SWAPPING`.
         3. Ingest the new generation (distinct ids, no ``_stale`` key,
-           stamped ``_generation``; immediately read-visible).
+           stamped ``_generation``). There is no transaction boundary:
+           each new chunk is read-visible the moment its
+           ``add_vectors`` write lands, so the new generation becomes
+           visible incrementally as step 3 progresses (not atomically
+           at the end).
         4. On a clean commit, physically delete the tombstoned old
            generation. On a raised failure **or** a partial-error
            ingest, :meth:`_rollback_swap` drops the (possibly partial)
@@ -504,18 +521,25 @@ class KnowledgeIngestionManager:
         committed cleanly. A crash mid-swap leaves status=SWAPPING with
         the old generation tombstoned-but-restorable (recovered by the
         next ingest's reconciliation). A transient in-swap read window
-        remains (old hidden from step 1, new not visible until step 3
-        completes); closing it needs a generation pointer-flip
-        (``SHADOW_GENERATION``), which ``TOMBSTONE`` deliberately trades
-        away for this simpler crash-safe mechanism.
+        remains: from step 1 the old generation is hidden, and the new
+        generation is only partially visible until step 3 finishes
+        writing it (a reader during step 3 sees whatever subset has
+        been embedded so far). Closing that window needs a generation
+        pointer-flip (``SHADOW_GENERATION``), which ``TOMBSTONE``
+        deliberately trades away for this simpler crash-safe mechanism.
 
-        Scopes (only the per-file delta distinguishes them):
+        Scopes (selected by whether this is a full re-ingest or a
+        delta — see the scope-selection block below):
 
-        - ``tombstone_scope`` — every old chunk to hide then retire
-          (``{"domain_id": ...}`` for a full re-ingest; the
-          changed+deleted ``source_path`` list for a delta).
+        - ``tombstone_scope`` — every old chunk to hide then retire:
+          ``{"domain_id": ...}`` for a full re-ingest; the
+          changed+deleted ``source_path`` list for a per-file delta;
+          ``None`` for a purely additive delta (new files only — no
+          prior generation exists, so nothing is tombstoned or
+          retired).
         - ``modified_scope`` — old chunks of files being re-embedded;
-          restored to visibility on rollback.
+          restored to visibility on rollback (``None`` when no existing
+          file is re-embedded).
         - ``deleted_scope`` — old chunks of files *deleted at the
           source*; purged unconditionally, never resurrected.
         """
@@ -523,8 +547,28 @@ class KnowledgeIngestionManager:
         base: dict[str, Any] = {"domain_id": domain_id}
         deleted_set = set(purely_deleted_paths or ())
 
-        if delete_paths:
-            tombstone_scope: dict[str, Any] = {
+        # The swap scope must match the *upsert* scope, not whether any
+        # file was deleted/modified. ``upsert_filter is None`` is the
+        # one true discriminator: only :meth:`ingest` (full re-ingest)
+        # passes it, and only then is every file re-embedded — so the
+        # whole old generation is being replaced. Any non-None filter
+        # is a delta (:meth:`ingest_changes`): a *subset* is re-embedded,
+        # so only the changed/deleted files' old chunks may be swapped.
+        # Keying off ``delete_paths`` truthiness conflated a purely
+        # additive delta (new files only) with a full re-ingest and
+        # retired every untouched file's chunks.
+        tombstone_scope: dict[str, Any] | None
+        if upsert_filter is None:
+            # Full re-ingest: the whole domain is re-embedded, so the
+            # entire old generation is the modified scope; nothing is
+            # purely deleted.
+            tombstone_scope = dict(base)
+            modified_scope = dict(base)
+            deleted_scope = None
+        elif delete_paths:
+            # Per-file delta touching existing chunks (modified and/or
+            # deleted files).
+            tombstone_scope = {
                 **base,
                 "source_path": list(delete_paths),
             }
@@ -540,16 +584,20 @@ class KnowledgeIngestionManager:
                 else None
             )
         else:
-            # Full-domain swap: the whole domain is re-embedded, so the
-            # entire old generation is the modified scope; nothing is
-            # purely deleted.
-            tombstone_scope = dict(base)
-            modified_scope = dict(base)
+            # Purely additive delta: only brand-new files are embedded.
+            # They have no prior generation, so there is nothing to
+            # tombstone or retire — the generation token is still
+            # threaded so a failed/crashed add is cleaned up precisely
+            # by token (rollback step 1 / reconcile), but no existing
+            # chunk is touched.
+            tombstone_scope = None
+            modified_scope = None
             deleted_scope = None
 
-        await self._destination.update_metadata_where(
-            tombstone_scope, {"_stale": True}
-        )
+        if tombstone_scope is not None:
+            await self._destination.update_metadata_where(
+                tombstone_scope, {"_stale": True}
+            )
         await self._source.set_ingestion_status(
             domain_id, IngestionStatus.SWAPPING, generation=generation
         )
@@ -584,10 +632,13 @@ class KnowledgeIngestionManager:
         if result.success:
             # Clean commit — physically retire the tombstoned old
             # generation. The new generation has distinct ids and no
-            # ``_stale`` key, so it is untouched.
-            await self._destination.clear(
-                filter={**tombstone_scope, "_stale": True}
-            )
+            # ``_stale`` key, so it is untouched. ``None`` scope is a
+            # purely additive delta: nothing was tombstoned, so there
+            # is nothing to retire.
+            if tombstone_scope is not None:
+                await self._destination.clear(
+                    filter={**tombstone_scope, "_stale": True}
+                )
             logger.debug(
                 "Retired tombstoned chunks for domain %s (gen=%s)",
                 domain_id,
@@ -734,7 +785,11 @@ class KnowledgeIngestionManager:
         status = "ready" if result.success else "error"
         error_msg = str(result.errors) if result.errors else None
         await self._source.set_ingestion_status(
-            domain_id, status, error_msg
+            domain_id,
+            IngestionStatus.READY
+            if result.success
+            else IngestionStatus.ERROR,
+            error_msg,
         )
 
         logger.info(
@@ -901,7 +956,7 @@ class KnowledgeIngestionManager:
                 "Incremental ingestion failed for %s: %s", domain_id, e
             )
             await self._source.set_ingestion_status(
-                domain_id, "error", str(e)
+                domain_id, IngestionStatus.ERROR, str(e)
             )
             raise
 
@@ -911,7 +966,9 @@ class KnowledgeIngestionManager:
             # swap *before* the INGESTING status write clears the
             # persisted token. No-op when not interrupted.
             await self._reconcile_interrupted_swap(domain_id)
-            await self._source.set_ingestion_status(domain_id, "ingesting")
+            await self._source.set_ingestion_status(
+                domain_id, IngestionStatus.INGESTING
+            )
 
             changed_paths = {f.path for f in change.added} | {
                 f.path for f in change.modified
@@ -963,7 +1020,7 @@ class KnowledgeIngestionManager:
                 "Incremental ingestion failed for %s: %s", domain_id, e
             )
             await self._source.set_ingestion_status(
-                domain_id, "error", str(e)
+                domain_id, IngestionStatus.ERROR, str(e)
             )
             raise
         finally:

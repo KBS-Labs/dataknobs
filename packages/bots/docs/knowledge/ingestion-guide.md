@@ -335,8 +335,10 @@ neither argument the default is unchanged (`CLEAR_FIRST`).
 
 `set_ingestion_status` accepts an `IngestionStatus` member (the
 typed, preferred form) or its string value; an unrecognized string
-raises `ValueError`. Backends expose `get_info(domain_id)` to read
-the current status.
+raises `ValidationError` (a `dataknobs_common.exceptions`
+`DataknobsError`, not a `ValueError` subclass), carrying the list of
+accepted values. Backends expose `get_info(domain_id)` to read the
+current status.
 
 ## Completion Events
 

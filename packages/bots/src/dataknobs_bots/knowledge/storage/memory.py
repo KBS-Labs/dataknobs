@@ -61,7 +61,8 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # domain_id -> canonical version (get_checksum) -> {path: checksum}.
         # In-process per-version store backing _load_snapshot so memory
-        # produces minimal diffs (file/S3 get this natively in Phase 3).
+        # produces minimal diffs (a native per-version diff for the
+        # file/S3 backends is a possible future enhancement).
         self._snapshots: dict[str, dict[str, dict[str, str]]] = {}
 
         self._initialized = False

@@ -409,4 +409,4 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     # list_files()). The mixin's default _load_snapshot (empty snapshot)
     # is correct but non-minimal here: a differing version reports every
     # current file as added (full re-ingest). A native per-version
-    # snapshot diff arrives in Phase 3.
+    # snapshot diff is a possible future enhancement.

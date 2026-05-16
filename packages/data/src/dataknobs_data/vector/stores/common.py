@@ -311,7 +311,7 @@ class VectorStoreBase(ConfigurableBase):
         ``domain_id`` is set, any row whose metadata omits
         ``domain_id`` is tagged with the configured scope so the
         read-side ``_effective_filter`` can find it. Returns fresh
-        dicts (never mutates the caller's) — see Item 131. A no-op
+        per-row dicts (never mutates or aliases the caller's). A no-op
         passthrough (still copied) when no scope is configured.
         """
         rows = (

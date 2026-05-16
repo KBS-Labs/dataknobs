@@ -520,4 +520,4 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     # list_files()). The mixin's default _load_snapshot (empty snapshot)
     # is correct but non-minimal here: a differing version reports every
     # current file as added (full re-ingest). A native S3-versioning
-    # snapshot diff (fast path) arrives in Phase 3.
+    # snapshot diff (fast path) is a possible future enhancement.
