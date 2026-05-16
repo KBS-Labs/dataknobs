@@ -169,9 +169,9 @@ class PgVectorStore(VectorStore):
         # Validate identifier shape early so misconfiguration surfaces
         # as ``ConfigurationError`` at construction rather than as a
         # ``PostgresSyntaxError`` at first DDL.  Same defense-in-depth
-        # the records backends apply via ``_parse_postgres_config``
-        # (Item 117); the third Postgres consumer goes through this
-        # path independently.
+        # the records backends apply via ``_parse_postgres_config``;
+        # this Postgres consumer applies the same identifier
+        # validation independently.
         self.table_name = validate_pg_identifier(
             self.config.get("table_name", "knowledge_embeddings"),
             "table_name",

@@ -1,4 +1,4 @@
-"""Item 118 Option B: KnowledgeIngestionManager cross-domain isolation.
+"""KnowledgeIngestionManager cross-domain isolation.
 
 Pre-fix, ``KnowledgeIngestionManager.ingest()`` with
 ``clear_existing=True`` called ``self._destination.clear()`` (unscoped),
