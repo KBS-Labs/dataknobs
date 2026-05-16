@@ -368,3 +368,150 @@ async def test_numeric_no_implicit_string_coercion(
     """
     n = await type_safety_store.count(filter={"count": "5"})
     assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# Config-level ``domain_id`` scoping.
+#
+# ``PgVectorStore`` honors a config-level ``domain_id``: every
+# read/count/clear/update_metadata_where is implicitly scoped to that
+# domain, and ``add_vectors`` defaults a row's ``domain_id`` to it.
+# Memory/FAISS/Chroma historically ignored config ``domain_id``
+# entirely — the multi-tenant isolation a consumer configures was a
+# silent no-op on those backends, and a runtime backend swap changed
+# isolation semantics. These reproduce-first tests pin the fixed
+# symmetric contract; they fail on memory/faiss/chroma pre-fix and
+# pass on pgvector (the expected asymmetry split).
+# ---------------------------------------------------------------------------
+
+_DOMAIN_SCOPED_IDS = ["s1", "s2", "o1"]
+
+
+def _domain_scoped_metadata() -> list[dict[str, Any]]:
+    """s1/s2 carry NO ``domain_id`` (must default to config ``t1``);
+    o1 explicitly belongs to ``t2`` (must be scoped out)."""
+    return [
+        {"k": "v"},
+        {"k": "v"},
+        {"domain_id": "t2", "k": "v"},
+    ]
+
+
+@pytest_asyncio.fixture(
+    params=[
+        pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(
+                not is_faiss_available(), reason="faiss not installed"
+            ),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(
+                not is_chromadb_available(), reason="chromadb not installed"
+            ),
+        ),
+        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
+    ]
+)
+async def domain_scoped_store(
+    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+) -> AsyncIterator[Any]:
+    """Store configured with ``domain_id="t1"``, seeded across t1/t2."""
+    backend = request.param
+    store: Any
+    if backend == "memory":
+        store = MemoryVectorStore({"dimensions": 4, "domain_id": "t1"})
+    elif backend == "faiss":
+        store = FaissVectorStore(
+            {"dimensions": 4, "metric": "cosine", "domain_id": "t1"}
+        )
+    elif backend == "chroma":
+        store = ChromaVectorStore(
+            {
+                "dimensions": 4,
+                "domain_id": "t1",
+                "collection_name": f"test_domain_{uuid.uuid4().hex[:8]}",
+            }
+        )
+    elif backend == "pgvector":
+        store = PgVectorStore({**pgvector_config, "domain_id": "t1"})
+    else:
+        pytest.fail(f"Unknown backend param: {backend}")
+
+    await store.initialize()
+    try:
+        await store.add_vectors(
+            _seed_vectors()[:3],
+            ids=list(_DOMAIN_SCOPED_IDS),
+            metadata=_domain_scoped_metadata(),
+        )
+        yield store
+    finally:
+        await _teardown_backend(backend, store)
+        await store.close()
+
+
+# NOTE on the asserted contract. #8 delivers *isolation* symmetry: a
+# configured ``domain_id`` confines every read/count/clear/update to
+# that domain on every backend, and a cross-domain request is empty.
+# The behavior of a caller *explicitly* passing ``domain_id`` in the
+# filter is intentionally NOT asserted as uniform: pgvector scopes via
+# a dedicated ``domain_id`` column and stores caller metadata JSONB
+# verbatim, so an explicit ``{"domain_id": "t1"}`` filter is a
+# JSONB-containment probe there, orthogonal to the column scope —
+# whereas memory/faiss/chroma carry ``domain_id`` in metadata. That
+# divergence is inherent to pgvector's richer schema and is documented
+# in VECTOR_FILTER_SEMANTICS.md, not pinned here.
+
+
+@pytest.mark.asyncio
+async def test_config_domain_id_scopes_count(
+    domain_scoped_store: Any,
+) -> None:
+    """count() is implicitly scoped to the configured domain; a
+    cross-domain probe intersects to empty on every backend."""
+    # s1/s2 defaulted to t1; o1 is t2 and scoped out.
+    assert await domain_scoped_store.count() == 2
+    # Caller asking for a different domain than the configured scope
+    # intersects to empty (pgvector: column='t1' AND JSONB-probe 't2';
+    # memory/faiss/chroma: AND-merged unsatisfiable filter).
+    assert await domain_scoped_store.count(filter={"domain_id": "t2"}) == 0
+
+
+@pytest.mark.asyncio
+async def test_config_domain_id_scopes_search(
+    domain_scoped_store: Any,
+) -> None:
+    """search() never returns rows outside the configured domain."""
+    results = await domain_scoped_store.search(_query_vector(), k=10)
+    assert {r[0] for r in results} == {"s1", "s2"}
+    # Cross-domain request → empty on every backend.
+    cross = await domain_scoped_store.search(
+        _query_vector(), k=10, filter={"domain_id": "t2"}
+    )
+    assert cross == []
+
+
+@pytest.mark.asyncio
+async def test_config_domain_id_scopes_update_metadata_where(
+    domain_scoped_store: Any,
+) -> None:
+    """update_metadata_where(None, ...) only touches the configured
+    domain — the count of affected rows is exactly the in-domain set,
+    and a cross-domain request is a no-op."""
+    affected = await domain_scoped_store.update_metadata_where(
+        None, {"_stale": True}
+    )
+    assert affected == 2
+    # An explicit cross-domain update never escapes the configured
+    # scope (intersects to empty on every backend).
+    cross = await domain_scoped_store.update_metadata_where(
+        {"domain_id": "t2"}, {"_stale": True}
+    )
+    assert cross == 0
+    # The scoped store still sees exactly its two in-domain rows.
+    assert await domain_scoped_store.count() == 2

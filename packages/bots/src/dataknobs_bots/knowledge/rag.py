@@ -2,9 +2,9 @@
 
 import logging
 import types
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_xization import (
@@ -30,6 +30,10 @@ if TYPE_CHECKING:
     from dataknobs_bots.knowledge.storage.models import KnowledgeFile
 
 logger = logging.getLogger(__name__)
+
+# Raw search-result row type for the shared stale-gate helper
+# (a vector ``(id, score, meta)`` tuple or a ``HybridSearchResult``).
+_R = TypeVar("_R")
 
 
 class RAGKnowledgeBase(KnowledgeBase):
@@ -762,9 +766,22 @@ class RAGKnowledgeBase(KnowledgeBase):
         #   overwriting). The CHANGELOG for this scope expansion
         #   states "Single-domain consumers see no change" — that
         #   contract is enforced here.
+        #
+        # Generation token (TOMBSTONE swaps only): when
+        # ``KnowledgeIngestionManager`` threads a ``_generation`` token
+        # via ``extra_metadata``, fold it into the prefix so the new
+        # generation gets *distinct* chunk ids instead of upserting
+        # (overwriting) the tombstoned old rows in place. Opt-in by
+        # presence — absent (APPEND / CLEAR_FIRST, single-domain), id
+        # derivation is byte-for-byte unchanged, so existing populated
+        # stores keep matching on re-ingest.
         domain_id = (metadata or {}).get("domain_id")
+        generation = (metadata or {}).get("_generation")
         if domain_id:
-            chunk_prefix = f"{domain_id}\x1f{source_stem}"
+            if generation:
+                chunk_prefix = f"{domain_id}\x1f{generation}\x1f{source_stem}"
+            else:
+                chunk_prefix = f"{domain_id}\x1f{source_stem}"
             chunk_separator = "\x1f"
         else:
             chunk_prefix = source_stem
@@ -893,6 +910,104 @@ class RAGKnowledgeBase(KnowledgeBase):
         )
         return len(chunks)
 
+    # Over-fetch factor applied when stale chunks must be hidden: the
+    # vector-store filter dict is equality/containment only and cannot
+    # express ``_stale IS NULL OR _stale = false``, so the not-stale
+    # gate is a post-filter. Tombstoned chunks exist only transiently
+    # (during a TOMBSTONE swap), so a 4x over-fetch comfortably absorbs
+    # them while keeping the post-filter store-agnostic.
+    _STALE_OVERFETCH = 4
+
+    def _resolve_read_filter(
+        self, filter_metadata: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """The single place a read filter is formed for the store.
+
+        Both :meth:`query` and :meth:`hybrid_query` (every
+        ``vector_store.search`` / ``hybrid_search`` call) route their
+        ``filter_metadata`` through here, so any future read-filter
+        shaping has exactly one home. The store filter is returned
+        unchanged: stale (tombstoned) exclusion is *not* expressible
+        as an equality filter (it needs ``_stale IS NULL OR = false``)
+        and is applied as a post-filter via :meth:`_is_stale`.
+        """
+        return filter_metadata
+
+    @staticmethod
+    def _is_stale(metadata: dict[str, Any] | None) -> bool:
+        """True only for an explicitly tombstoned chunk.
+
+        Missing / ``None`` / ``False`` ``_stale`` is visible — this is
+        the ``_stale IS NULL OR _stale = false`` read semantics that an
+        equality filter cannot express.
+
+        The guard is a ``None``-guard, not a truthiness gate: callers
+        legitimately pass ``dict | None`` (a metadata-less row), and
+        ``None.get`` would raise. ``metadata is not None`` keeps an
+        empty ``{}`` flowing into ``.get`` (correctly not stale) rather
+        than short-circuiting on falsy-but-present metadata.
+        """
+        return metadata is not None and metadata.get("_stale") is True
+
+    async def _fetch_drop_stale_truncate(
+        self,
+        *,
+        search: Callable[[int], Awaitable[list[_R]]],
+        k: int,
+        include_stale: bool,
+        extract_meta: Callable[[_R], dict[str, Any] | None],
+    ) -> list[_R]:
+        """Fetch, drop tombstoned rows, truncate to ``k``.
+
+        The vector-store filter is equality/containment only and
+        cannot express ``_stale IS NULL OR _stale = false``, so the
+        not-stale gate is a post-filter. When stale rows must be
+        hidden this over-fetches ``k * _STALE_OVERFETCH`` so the
+        post-filter still yields a full ``k`` mid-swap; with
+        ``include_stale`` it is a thin pass-through (fetch exactly
+        ``k``, no gate).
+
+        Shared by the plain vector path **and** the native-hybrid
+        path so the zero-downtime read guarantee — and specifically
+        the over-fetch that stops it under-returning mid-swap — is
+        identical on both. ``search`` is invoked with the effective
+        fetch size; ``extract_meta`` adapts a raw row to its metadata
+        dict (a ``(id, score, meta)`` tuple, or a record-bearing
+        ``HybridSearchResult``).
+        """
+        if include_stale:
+            return await search(k)
+        raw = await search(k * self._STALE_OVERFETCH)
+        visible = [r for r in raw if not self._is_stale(extract_meta(r))]
+        return visible[:k]
+
+    async def _vector_search(
+        self,
+        query_vector: Any,
+        *,
+        k: int,
+        filter_metadata: dict[str, Any] | None,
+        include_stale: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Shared vector-search chokepoint feeding query + hybrid.
+
+        Hides tombstoned chunks unless ``include_stale`` via the
+        shared :meth:`_fetch_drop_stale_truncate` (over-fetch, drop
+        ``_stale``-true rows, return at most ``k``).
+        """
+        store_filter = self._resolve_read_filter(filter_metadata)
+        return await self._fetch_drop_stale_truncate(
+            search=lambda eff_k: self.vector_store.search(
+                query_vector=query_vector,
+                k=eff_k,
+                filter=store_filter,
+                include_metadata=True,
+            ),
+            k=k,
+            include_stale=include_stale,
+            extract_meta=lambda r: r[2],
+        )
+
     async def query(
         self,
         query: str,
@@ -901,6 +1016,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         min_similarity: float = 0.0,
         merge_adjacent: bool = False,
         max_chunk_size: int | None = None,
+        *,
+        include_stale: bool = False,
     ) -> list[dict[str, Any]]:
         """Query knowledge base for relevant chunks.
 
@@ -911,6 +1028,11 @@ class RAGKnowledgeBase(KnowledgeBase):
             min_similarity: Minimum similarity score (0-1)
             merge_adjacent: Whether to merge adjacent chunks with same heading
             max_chunk_size: Maximum size for merged chunks (uses merger config default if not specified)
+            include_stale: When ``False`` (default), chunks tombstoned
+                by an in-progress :attr:`IngestSwapMode.TOMBSTONE`
+                re-ingest are hidden, so a concurrent reader never sees
+                the superseded generation. ``True`` returns them
+                (introspection / debugging).
 
         Returns:
             List of result dictionaries with:
@@ -941,12 +1063,13 @@ class RAGKnowledgeBase(KnowledgeBase):
         if not isinstance(query_embedding, np.ndarray):
             query_embedding = np.array(query_embedding, dtype=np.float32)
 
-        # Search vector store
-        search_results = await self.vector_store.search(
-            query_vector=query_embedding,
+        # Search vector store (stale chunks hidden via the shared
+        # read chokepoint unless include_stale).
+        search_results = await self._vector_search(
+            query_embedding,
             k=k,
-            filter=filter_metadata,
-            include_metadata=True,
+            filter_metadata=filter_metadata,
+            include_stale=include_stale,
         )
 
         # Format results
@@ -988,6 +1111,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         min_similarity: float = 0.0,
         merge_adjacent: bool = False,
         max_chunk_size: int | None = None,
+        *,
+        include_stale: bool = False,
     ) -> list[dict[str, Any]]:
         """Query knowledge base using hybrid search (text + vector).
 
@@ -1006,6 +1131,10 @@ class RAGKnowledgeBase(KnowledgeBase):
             min_similarity: Minimum combined score (0-1)
             merge_adjacent: Whether to merge adjacent chunks with same heading
             max_chunk_size: Maximum size for merged chunks
+            include_stale: When ``False`` (default), chunks tombstoned
+                by an in-progress :attr:`IngestSwapMode.TOMBSTONE`
+                re-ingest are hidden on both the native and
+                client-side fusion paths. ``True`` returns them.
 
         Returns:
             List of result dictionaries with:
@@ -1084,25 +1213,37 @@ class RAGKnowledgeBase(KnowledgeBase):
                 fusion_strategy=strategy,
                 text_fields=search_text_fields,
             )
-            hybrid_results = await self.vector_store.hybrid_search(
-                query_text=query,
-                query_vector=query_embedding,
-                text_fields=search_text_fields,
+            store_filter = self._resolve_read_filter(filter_metadata)
+
+            def _hr_meta(hr: Any) -> dict[str, Any] | None:
+                if hasattr(hr.record, "data"):
+                    return hr.record.data or {}
+                if hasattr(hr.record, "metadata"):
+                    return hr.record.metadata or {}
+                return {}
+
+            # Over-fetch before the stale gate (shared with the vector
+            # path) so a tombstoned top-k chunk never makes native
+            # fusion under-return mid-swap.
+            hybrid_results = await self._fetch_drop_stale_truncate(
+                search=lambda eff_k: self.vector_store.hybrid_search(
+                    query_text=query,
+                    query_vector=query_embedding,
+                    text_fields=search_text_fields,
+                    k=eff_k,
+                    config=config,
+                    filter=store_filter,
+                ),
                 k=k,
-                config=config,
-                filter=filter_metadata,
+                include_stale=include_stale,
+                extract_meta=_hr_meta,
             )
 
             # Convert HybridSearchResult to our result format
             results = []
             for hr in hybrid_results:
                 if hr.combined_score >= min_similarity:
-                    # Extract metadata from record
-                    record_metadata = {}
-                    if hasattr(hr.record, "data"):
-                        record_metadata = hr.record.data or {}
-                    elif hasattr(hr.record, "metadata"):
-                        record_metadata = hr.record.metadata or {}
+                    record_metadata = _hr_meta(hr) or {}
 
                     results.append({
                         "text": record_metadata.get("text", ""),
@@ -1115,12 +1256,13 @@ class RAGKnowledgeBase(KnowledgeBase):
                     })
         else:
             # Client-side hybrid search implementation
-            # Step 1: Vector search
-            vector_results = await self.vector_store.search(
-                query_vector=query_embedding,
+            # Step 1: Vector search (stale chunks hidden via the
+            # shared read chokepoint unless include_stale).
+            vector_results = await self._vector_search(
+                query_embedding,
                 k=k * 2,  # Get more for fusion
-                filter=filter_metadata,
-                include_metadata=True,
+                filter_metadata=filter_metadata,
+                include_stale=include_stale,
             )
 
             # Step 2: Text search (simple keyword matching on stored chunks)
@@ -1247,24 +1389,48 @@ class RAGKnowledgeBase(KnowledgeBase):
             context = self.formatter.wrap_for_prompt(context)
         return context
 
-    async def count(self, filter: dict[str, Any] | None = None) -> int:
+    async def count(
+        self,
+        filter: dict[str, Any] | None = None,
+        *,
+        include_stale: bool = False,
+    ) -> int:
         """Get the number of chunks in the knowledge base.
 
-        Delegates to the underlying vector store's count method.
+        Excludes tombstoned (``_stale``) chunks by default, matching
+        what :meth:`query` / :meth:`hybrid_query` actually return: a
+        mid-``TOMBSTONE``-swap ``count`` would otherwise report
+        old+new (roughly double) while reads only see the new
+        generation. The store filter cannot express
+        ``_stale IS NULL OR _stale = false``, so the visible count is
+        ``count(filter) - count(filter ∧ _stale=True)`` (two cheap
+        store counts, store-agnostic). ``include_stale=True`` restores
+        the prior single delegated count (every stored chunk).
 
         Args:
-            filter: Optional metadata filter to count only matching chunks
+            filter: Optional metadata filter to count only matching
+                chunks
+            include_stale: When ``True``, also count tombstoned chunks
+                (the raw stored total). Default ``False`` counts only
+                read-visible chunks.
 
         Returns:
             Number of chunks stored (optionally filtered)
 
         Example:
             ```python
-            total = await kb.count()
-            domain_count = await kb.count(filter={"domain_id": "my-domain"})
+            visible = await kb.count(filter={"domain_id": "my-domain"})
+            raw = await kb.count(
+                filter={"domain_id": "my-domain"}, include_stale=True
+            )
             ```
         """
-        return await self.vector_store.count(filter)
+        total = await self.vector_store.count(filter)
+        if include_stale:
+            return total
+        stale_filter = {**(filter or {}), "_stale": True}
+        stale = await self.vector_store.count(stale_filter)
+        return total - stale
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:
         """Clear documents from the knowledge base.
@@ -1292,6 +1458,34 @@ class RAGKnowledgeBase(KnowledgeBase):
                 "Consider creating a new knowledge base with a fresh "
                 "collection."
             )
+
+    async def update_metadata_where(
+        self,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Bulk-merge ``set_`` into the metadata of matching chunks.
+
+        Delegates to the backing vector store's
+        :meth:`~dataknobs_data.vector.stores.base.VectorStore.update_metadata_where`.
+        This is the destination-side primitive the
+        :attr:`~dataknobs_bots.knowledge.IngestSwapMode.TOMBSTONE`
+        swap uses to mark (or, on rollback, un-mark) a generation
+        ``_stale`` without enumerating ids. Every in-tree store
+        implements it; an out-of-tree store that does not raises
+        ``NotImplementedError`` (the ABC contract) rather than
+        silently mis-swapping.
+
+        Args:
+            filter: Metadata filter selecting chunks to update
+                (same shape as :meth:`query` / :meth:`clear`).
+            set_: Key/value pairs merged into each matched chunk's
+                metadata.
+
+        Returns:
+            Number of chunks whose metadata was updated.
+        """
+        return await self.vector_store.update_metadata_where(filter, set_)
 
     async def save(self) -> None:
         """Save the knowledge base to persistent storage.

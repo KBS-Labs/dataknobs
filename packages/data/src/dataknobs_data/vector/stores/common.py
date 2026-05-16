@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,6 +13,8 @@ from dataknobs_config import ConfigurableBase
 from ..types import DistanceMetric
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     import numpy as np
 
 
@@ -84,6 +86,16 @@ class VectorStoreBase(ConfigurableBase):
 
         # Store any additional metadata
         self.metadata = self.config.get("metadata", {})
+
+        # Config-level multi-tenant scoping. When set, every
+        # read/count/clear/update_metadata_where is implicitly scoped
+        # to this domain (via _effective_filter) and add_vectors
+        # defaults a row's "domain_id" to it. This mirrors
+        # PgVectorStore's long-standing config-level domain_id
+        # behavior; Memory/FAISS/Chroma honor it through the shared
+        # helpers so a runtime backend swap preserves isolation
+        # semantics. None ⇒ no implicit scoping (prior behavior).
+        self.domain_id = self.config.get("domain_id")
 
         # Timestamp exposure config (Item 36). All vector stores expose
         # created_at / updated_at metadata via include_timestamps=True
@@ -243,6 +255,75 @@ class VectorStoreBase(ConfigurableBase):
 
         return cast("np.ndarray", vector)
 
+    def _effective_filter(
+        self, filter: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """AND-merge the config-level ``domain_id`` scope into ``filter``.
+
+        When no config ``domain_id`` is set this is the identity
+        function (prior behavior — ``None`` stays ``None``). When set,
+        the returned filter additionally constrains ``domain_id`` to
+        the intersection of the configured scope and any caller-supplied
+        ``domain_id`` constraint:
+
+        * caller did not constrain ``domain_id`` → require
+          ``domain_id == self.domain_id``;
+        * caller asked for the same scalar (or a list containing it) →
+          require ``domain_id == self.domain_id`` (no widening);
+        * caller asked for a *different* domain (scalar or a list not
+          containing the configured scope) → an **empty-list** filter
+          value, which ``_match_metadata_filter`` can never satisfy, so
+          the result set is empty. This matches ``PgVectorStore``,
+          where the column predicate ``domain_id = $scope`` is ANDed
+          with the caller filter and a cross-domain request yields no
+          rows.
+
+        Callers pass the result straight to ``_match_metadata_filter`` /
+        the filtered count/clear/update paths; a returned dict is never
+        ``None`` when scoping is active, so ``filter is None`` fast
+        paths must consult this first.
+        """
+        if self.domain_id is None:
+            return filter
+
+        eff: dict[str, Any] = dict(filter) if filter else {}
+        if "domain_id" not in eff:
+            eff["domain_id"] = self.domain_id
+            return eff
+
+        caller = eff["domain_id"]
+        if isinstance(caller, list):
+            in_scope = self.domain_id in caller
+        else:
+            in_scope = caller == self.domain_id
+        # In scope ⇒ collapse to the configured scope (no widening).
+        # Out of scope ⇒ unsatisfiable empty-list value.
+        eff["domain_id"] = self.domain_id if in_scope else []
+        return eff
+
+    def _apply_domain_default(
+        self, metadata: list[dict[str, Any]] | None, count: int
+    ) -> list[dict[str, Any]]:
+        """Return per-row metadata with ``domain_id`` defaulted.
+
+        Mirrors ``PgVectorStore``'s ``meta.get("domain_id",
+        self.domain_id)`` write-path default: when a config-level
+        ``domain_id`` is set, any row whose metadata omits
+        ``domain_id`` is tagged with the configured scope so the
+        read-side ``_effective_filter`` can find it. Returns fresh
+        per-row dicts (never mutates or aliases the caller's). A no-op
+        passthrough (still copied) when no scope is configured.
+        """
+        rows = (
+            [dict(metadata[i]) if i < len(metadata) else {} for i in range(count)]
+            if metadata is not None
+            else [{} for _ in range(count)]
+        )
+        if self.domain_id is not None:
+            for row in rows:
+                row.setdefault("domain_id", self.domain_id)
+        return rows
+
     def _match_metadata_filter(
         self,
         metadata: dict[str, Any] | None,
@@ -310,6 +391,44 @@ class VectorStoreBase(ConfigurableBase):
             for item_id, metadata in candidates
             if self._match_metadata_filter(metadata, filter)
         ]
+
+    def _update_metadata_where_filtered(
+        self,
+        metadata_items: Iterable[tuple[Any, dict[str, Any]]],
+        timestamps: dict[Any, tuple[datetime, datetime]] | None,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Shared post-filter + in-place merge for in-process backends.
+
+        The byte-identical loop that Memory and FAISS
+        ``update_metadata_where`` previously duplicated. Each
+        ``(key, meta)`` pair is matched against ``filter`` (``None``
+        matches all, parity with :meth:`_match_metadata_filter`); on a
+        match ``set_`` is merged into ``meta`` in place (existing keys
+        overwritten, others preserved). When ``timestamps`` is provided
+        and contains ``key``, that row's ``updated_at`` is refreshed
+        while ``created_at`` is preserved — the same upsert-timestamp
+        semantics as ``add_vectors``/``update_metadata``. ``key`` must
+        index ``timestamps`` the same way the backend keys it (Memory:
+        external id; FAISS: internal id) — the caller passes matching
+        ``metadata_items`` and ``timestamps``.
+
+        Returns the number of rows whose metadata was merged.
+        """
+        now = datetime.now(timezone.utc)
+        updated = 0
+        for key, meta in metadata_items:
+            if filter is not None and not self._match_metadata_filter(
+                meta, filter
+            ):
+                continue
+            meta.update(set_)
+            if timestamps is not None and key in timestamps:
+                created, _ = timestamps[key]
+                timestamps[key] = (created, now)
+            updated += 1
+        return updated
 
     def _format_timestamp(self, dt: datetime | None) -> Any:
         """Format a timestamp per the configured ``timestamps.format``.

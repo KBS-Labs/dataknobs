@@ -1,15 +1,15 @@
 # Vector Store Timestamp Exposure
 
-`MemoryVectorStore` and `PgVectorStore` track `created_at` and
-`updated_at` timestamps per vector and expose them on demand via
-`include_timestamps=True` on `get_vectors()` and `search()`.
+`MemoryVectorStore`, `FaissVectorStore`, and `PgVectorStore` track
+`created_at` and `updated_at` timestamps per vector and expose them on
+demand via `include_timestamps=True` on `get_vectors()` and
+`search()`.
 
-**Deferred backends:** `FaissVectorStore` and `ChromaVectorStore` do
-**not** yet accept the `include_timestamps` kwarg — calling it on
-those backends raises `TypeError`. The `VectorStoreBase` helpers
-(`_format_timestamp`, `_inject_timestamps`) are in place so adding
-support is purely additive; the work is tracked under Item 36's
-deferred follow-ups and will ship when a consumer needs it.
+**Deferred backend:** `ChromaVectorStore` does **not** yet accept the
+`include_timestamps` kwarg — calling it on that backend raises
+`TypeError`. The `VectorStoreBase` helpers (`_format_timestamp`,
+`_inject_timestamps`) are in place so adding support is purely
+additive; it will ship when a consumer needs it.
 
 ## Configuration
 
@@ -18,7 +18,7 @@ any `VectorStoreBase` subclass:
 
 ```yaml
 vector_store:
-  provider: memory  # or pgvector
+  provider: memory  # or faiss, pgvector
   dimensions: 768
   timestamps:
     format: iso        # "iso" | "epoch" | "datetime" (default: "iso")
@@ -80,13 +80,14 @@ Timestamps are **backend-local** — compare within a store, not across:
 | Backend | Clock source |
 |---------|--------------|
 | `MemoryVectorStore` | Python `datetime.now(timezone.utc)` (aware UTC) |
+| `FaissVectorStore` | Python `datetime.now(timezone.utc)` (aware UTC) |
 | `PgVectorStore` | Postgres server `NOW()` (naive `TIMESTAMP`) |
 
 In the `epoch` format, naive datetimes (pgvector) are converted using
 the system's local-time interpretation, while aware datetimes
-(MemoryVectorStore) use their embedded timezone. Cross-backend epoch
-comparisons are therefore not meaningful — this is by design, since
-the two clocks are already unsynchronised.
+(`MemoryVectorStore`, `FaissVectorStore`) use their embedded timezone.
+Cross-backend epoch comparisons are therefore not meaningful — this is
+by design, since the two clocks are already unsynchronised.
 
 ## Null timestamps
 
@@ -97,9 +98,20 @@ the two clocks are already unsynchronised.
   "current" via `meta["_updated_at"] is None`. The column is backfilled
   to `NOW()` on the next upsert or `update_metadata`.
 - **MemoryVectorStore legacy pickles.** Pickle files saved before
-  Item 36 have no tracked timestamps; existing rows return `None` for
-  both `_created_at` and `_updated_at` on injection until the next
-  `add_vectors` refresh populates the tracking dict.
+  timestamp tracking was added have no tracked timestamps; existing
+  rows return `None` for both `_created_at` and `_updated_at` on
+  injection until the next `add_vectors` refresh populates the
+  tracking dict.
+- **FaissVectorStore legacy persisted indexes.** The same applies to
+  FAISS sidecar pickles persisted before timestamp tracking was added:
+  the timestamp side-car loads empty (`data.get("timestamps", {})`),
+  so existing rows return `None` for both keys until the next
+  `add_vectors` or `update_metadata` refresh repopulates them. An
+  index *persisted before the `IndexIDMap2` change* additionally
+  reloads as the original `IndexIDMap` (the serialized type is
+  restored by `faiss.read_index`) and still cannot reconstruct
+  vectors at all; re-adding the vectors once rebuilds it as
+  `IndexIDMap2` and restores both `get_vectors()` and timestamps.
 
 ## Consumer metadata key collision
 

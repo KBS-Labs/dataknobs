@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`FaissVectorStore` timestamp exposure** — `FaissVectorStore` now
+  tracks `created_at`/`updated_at` per vector and accepts
+  `include_timestamps=True` on `get_vectors()` and `search()`, at
+  parity with `MemoryVectorStore` and `PgVectorStore`. Timestamps are
+  carried across upserts (created preserved, updated refreshed),
+  evicted with the row on delete/`clear`, and persisted in the FAISS
+  sidecar pickle (legacy indexes without the side-car load empty and
+  surface `None` until the next write — same pre-migration semantics
+  as the other backends). Only `ChromaVectorStore` remains deferred.
+
+- **`VectorStore.update_metadata_where(filter, set_) -> int`** — the
+  filter-keyed sibling of the id-keyed `update_metadata`. Bulk-*merges*
+  `set_` into the metadata of every vector matching `filter` (same
+  four-quadrant filter shape as `clear` / `count` / `search`; `None`
+  matches all), preserving unrelated metadata keys, and returns the
+  number of rows affected. Implemented on **all four in-tree stores**:
+  `MemoryVectorStore`, `FaissVectorStore` (side-car merge — FAISS
+  filtering is post-retrieval, there is no index to invalidate),
+  `PgVectorStore` (`metadata = metadata || $::jsonb`), and
+  `ChromaVectorStore` (fetch-merge-`update`). The ABC default raises
+  `NotImplementedError` — the contract for **out-of-tree**
+  implementers only, so an unported backend fails loudly rather than
+  silently mis-applying a zero-downtime swap; it is never reached by
+  a backend DataKnobs ships. This is the store-layer primitive behind
+  `dataknobs-bots`' `IngestSwapMode.TOMBSTONE` re-ingest.
+
+### Fixed
+
+- **`FaissVectorStore.get_vectors()` returned `(None, None)` for every
+  id.** The index was wrapped in `faiss.IndexIDMap`, which does not
+  implement reconstruct-by-id; `get_vectors` reconstructs the stored
+  vector by internal id, so the underlying `RuntimeError` was caught
+  by a broad `except` and every lookup returned `(None, None)`. The
+  store now wraps with `faiss.IndexIDMap2` — a strict superset that
+  maintains the reverse map required for reconstruct, with identical
+  add/search/remove behavior and unchanged on-disk format. `flat` and
+  `hnsw` indexes (auto-selected for typical and small-dimension
+  configs) now reconstruct correctly; the `ivfflat`/`ivfpq` paths
+  additionally require `make_direct_map()` and remain a separately
+  tracked limitation. **Migration note:** an index *persisted before
+  this change* was serialized as `IndexIDMap` and `faiss.read_index`
+  restores it as that type, so a reloaded legacy index still cannot
+  reconstruct (and surfaces empty timestamps) until it is rebuilt —
+  re-add the vectors (or re-ingest) once to upgrade an on-disk index
+  in place; new indexes are unaffected.
+
+### Changed
+
+- **`MemoryVectorStore`, `FaissVectorStore`, and `ChromaVectorStore`
+  now honor a config-level `domain_id`** (matching `PgVectorStore`).
+  A store constructed with `{"domain_id": "x", ...}` defaults
+  `domain_id="x"` into the metadata of vectors added without one and
+  AND-composes `domain_id="x"` into the effective filter for
+  `search()`, `count()`, `clear()`, and `update_metadata_where()`.
+  `clear()` (no filter) on a tenant-scoped store now deletes only
+  that tenant's rows rather than wiping the whole collection, and an
+  out-of-scope explicit `domain_id` filter resolves to a no-match.
+  `PgVectorStore` behavior is unchanged (its SQL predicate already
+  enforced this). **Review before upgrade:** consumers that
+  previously set `domain_id` in the store config on Memory/FAISS/
+  Chroma (where it was silently a no-op) now get real tenant
+  isolation — `count()`/`search()`/`clear()` will scope to that
+  tenant. One residual cross-backend divergence remains and is
+  documented in `VECTOR_FILTER_SEMANTICS.md`: an *explicit*
+  `filter={"domain_id": "x"}` is a metadata-key match on Memory/
+  FAISS/Chroma but a JSONB-containment probe on PgVector (which
+  stores the configured tenant in a column, not in JSONB) — rely on
+  config-level scoping, not explicit `domain_id` filters, for
+  backend-portable isolation.
+
 ## v0.4.18 - 2026-05-13
 
 ### Added

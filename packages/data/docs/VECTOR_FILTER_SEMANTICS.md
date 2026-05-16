@@ -2,9 +2,21 @@
 
 `MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`, and
 `PgVectorStore` all accept a `filter: dict[str, Any] | None` argument
-on `search()`, `count()`, and `clear()`. Per-key match semantics are
-identical across backends — consumers can runtime-swap the backing
-store without behavioral surprises.
+on `search()`, `count()`, `clear()`, and `update_metadata_where()`.
+Per-key match semantics are identical across backends — consumers can
+runtime-swap the backing store without behavioral surprises.
+
+`update_metadata_where(filter, set_)` is the filter-keyed mutator
+sibling of the id-keyed `update_metadata(ids, metadata)`. It selects
+rows with the **same** four-quadrant `filter` shape as `clear` /
+`count` / `search`, then *merges* `set_` into each matched row's
+metadata (keys in `set_` overwrite, unrelated keys are preserved),
+returning the affected row count. `filter=None` matches every vector
+(parity with `clear()`). The ABC default raises `NotImplementedError`
+— the contract for out-of-tree stores only; all four in-tree stores
+implement it. It is the primitive behind `dataknobs-bots`'
+`IngestSwapMode.TOMBSTONE` zero-downtime re-ingest (mark a generation
+`_stale`, then un-mark on rollback).
 
 `clear(filter=...)` removes only vectors whose metadata matches the
 filter, leaving non-matching vectors intact. `clear()` (no filter)
@@ -15,37 +27,56 @@ matching IDs and delegates to `delete_vectors(ids)` (O(N) over
 stored vectors). Workloads at scale where filtered clear is hot
 should prefer pgvector or Chroma where filtered delete is native.
 
-### PgVector config-level `domain_id` interacts with `clear()`
+### Config-level `domain_id` scoping (all four backends)
 
-`PgVectorStore` accepts a config-level `domain_id` that scopes
-**every** read and write to the configured tenant. This includes
-`clear()`: a `PgVectorStore` constructed with `domain_id="x"`
-treats `clear()` (no filter) as `DELETE WHERE domain_id='x'` —
-not as a full-table wipe. `clear(filter={...})` AND-composes the
-config-level scope with the explicit filter. Memory, FAISS, and
-Chroma have no equivalent config-level scoping, so `clear()` on
-those backends always wipes everything in the collection.
+All four backends accept a config-level `domain_id` that scopes
+**every** read and write to the configured tenant. A store
+constructed with `domain_id="x"`:
 
-When **runtime-swapping** between backends, this is the one
-asymmetry to account for: a tenant-scoped `PgVectorStore` is
-inherently safer under unscoped `clear()` than a tenant-scoped
-`MemoryVectorStore` / `FaissVectorStore` / `ChromaVectorStore`
-that relies entirely on caller-supplied `filter=` to scope. To
-swap consistently:
+* defaults `domain_id="x"` into the metadata of vectors added
+  without an explicit `domain_id` (Memory/FAISS/Chroma write it
+  into the per-row metadata; PgVector writes it to its dedicated
+  `domain_id` column and leaves the caller's JSONB metadata
+  verbatim), and
+* AND-composes `domain_id="x"` into the effective filter for
+  `search()`, `count()`, `clear()`, and `update_metadata_where()`.
+  So `clear()` (no filter) deletes only the configured tenant's
+  rows — not a full-collection wipe — and `clear(filter={...})`
+  AND-composes the explicit filter on top of the tenant scope.
+  An explicit caller `domain_id` that is out of scope (e.g.
+  `filter={"domain_id": "y"}` on a store scoped to `"x"`)
+  resolves to an unsatisfiable filter and matches zero rows.
 
-* Either always pass an explicit `filter={...}` to `clear()` and
-  do not rely on PgVector's config-level `domain_id` for scoping
-  (treat all backends as unscoped at the config level), or
-* Use `dataknobs_bots.memory.VectorMemory` /
-  `dataknobs_bots.knowledge.RAGKnowledgeBase` as the public
-  surface — both auto-apply their `default_filter` so the
-  asymmetry is hidden by an upper layer.
+This makes the **runtime-swap promise hold for config-level
+scoping**: a tenant-scoped store behaves identically under
+unscoped `count()` / `search()` / `clear()` /
+`update_metadata_where()` regardless of backend — each touches
+only the configured tenant's rows.
 
-The `KnowledgeIngestionManager` already takes the second path
-(uses `RAGKnowledgeBase.clear(filter={"domain_id": domain_id})`
-explicitly), so consumers driving multi-tenant ingestion through
-the manager see consistent behavior regardless of vector-store
-backend choice.
+#### One residual divergence: explicit `domain_id` filters on PgVector
+
+Memory/FAISS/Chroma store the configured `domain_id` *inside*
+each row's metadata, so an explicit in-scope `filter={"domain_id":
+"x"}` is an ordinary metadata-key match and selects those rows.
+PgVector stores the configured `domain_id` in a dedicated
+**column**, not in the JSONB metadata, and an explicit
+`filter={"domain_id": "x"}` is translated to a JSONB-containment
+probe (`metadata @> {"domain_id": "x"}`). Rows whose tenant was
+assigned only via config carry no `domain_id` *in JSONB*, so that
+explicit filter selects zero rows on PgVector while selecting the
+tenant's rows on the other three backends.
+
+Practical guidance: rely on **config-level** scoping (omit
+`domain_id` from the caller filter and let the store apply it) for
+backend-portable multi-tenant isolation. Only pass an explicit
+`{"domain_id": ...}` filter when every backend in play stores
+`domain_id` in caller metadata (i.e. not PgVector, or PgVector
+where the consumer also writes `domain_id` into the metadata
+dict). The `KnowledgeIngestionManager` /
+`RAGKnowledgeBase` / `VectorMemory` upper layers apply tenant
+scope through this config-level path, so consumers driving
+multi-tenant ingestion through them see consistent behavior across
+all four backends.
 
 ### Optional `scalar_metadata_keys` push-down on `ChromaVectorStore`
 
@@ -131,9 +162,9 @@ await store.search(q, k=10, filter={"missing_key": "value"})
 
 | Backend | Implementation |
 |---|---|
-| `MemoryVectorStore` / `FaissVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter`. Applied after similarity ranking. |
-| `ChromaVectorStore` | Native Chroma `$in` predicate for list filter values (pushed down for prefiltering); scalar filter values are post-filtered in Python because Chroma's `$eq` does not match list-valued metadata. Scalar/list-metadata fix is the gap this was designed to close. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. |
-| `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. |
+| `MemoryVectorStore` / `FaissVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter`. Applied after similarity ranking. `update_metadata_where` walks the in-process `metadata_store` (FAISS: the same side-car `search`/`clear` already post-filter — no FAISS index involvement) and `dict.update`s `set_` into each match. |
+| `ChromaVectorStore` | Native Chroma `$in` predicate for list filter values (pushed down for prefiltering); scalar filter values are post-filtered in Python because Chroma's `$eq` does not match list-valued metadata. Scalar/list-metadata fix is the gap this was designed to close. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. |
+| `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. `update_metadata_where` reuses this translation in a single `UPDATE ... SET metadata = metadata || $::jsonb` (JSONB merge, `updated_at` refreshed). |
 
 ## Type safety (PgVector)
 

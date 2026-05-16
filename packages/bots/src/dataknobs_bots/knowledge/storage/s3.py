@@ -19,7 +19,12 @@ from botocore.exceptions import ClientError
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 
 from .mixin import KnowledgeResourceBackendMixin
-from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+from .models import (
+    IngestionStatus,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+    normalize_ingestion_status,
+)
 
 if TYPE_CHECKING:
     import boto3
@@ -484,8 +489,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     async def set_ingestion_status(
         self,
         domain_id: str,
-        status: str,
+        status: IngestionStatus | str,
         error: str | None = None,
+        *,
+        generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base."""
         if not self._kb_exists(domain_id):
@@ -493,8 +500,15 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         kb_metadata = self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
-        info_dict["ingestion_status"] = status
+        # Persist the string value so the JSON round-trips and
+        # KnowledgeBaseInfo.from_dict rehydrates the enum.
+        info_dict["ingestion_status"] = normalize_ingestion_status(
+            status
+        ).value
         info_dict["ingestion_error"] = error
+        # Always written through: a non-SWAPPING transition passes the
+        # default None and so clears any stale in-flight swap token.
+        info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
         self._save_metadata(domain_id, kb_metadata)
@@ -506,4 +520,4 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     # list_files()). The mixin's default _load_snapshot (empty snapshot)
     # is correct but non-minimal here: a differing version reports every
     # current file as added (full re-ingest). A native S3-versioning
-    # snapshot diff (fast path) arrives in Phase 3.
+    # snapshot diff (fast path) is a possible future enhancement.

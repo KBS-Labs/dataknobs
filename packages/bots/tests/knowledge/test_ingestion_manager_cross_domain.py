@@ -18,6 +18,7 @@ import pytest
 
 from dataknobs_bots.knowledge import (
     InMemoryKnowledgeBackend,
+    IngestSwapMode,
     KnowledgeIngestionManager,
     RAGKnowledgeBase,
 )
@@ -53,9 +54,9 @@ async def test_reingest_one_domain_preserves_others():
 
     mgr = KnowledgeIngestionManager(source=backend, destination=kb)
 
-    # Ingest domain-a first (the store is empty so clear_existing
+    # Ingest domain-a first (the store is empty so the clear
     # is a no-op). Pin its chunk count.
-    await mgr.ingest("domain-a", clear_existing=True)
+    await mgr.ingest("domain-a", swap_mode=IngestSwapMode.CLEAR_FIRST)
     domain_a_count_before = await kb.vector_store.count(
         filter={"domain_id": "domain-a"}
     )
@@ -63,10 +64,10 @@ async def test_reingest_one_domain_preserves_others():
         "expected domain-a to have chunks after first ingest"
     )
 
-    # Re-ingest domain-b with clear_existing=True. Pre-fix this
+    # Re-ingest domain-b with CLEAR_FIRST. Pre-fix this
     # wipes every domain in the shared store (including domain-a);
     # post-fix it scopes the clear to ``domain_id=domain-b`` only.
-    await mgr.ingest("domain-b", clear_existing=True)
+    await mgr.ingest("domain-b", swap_mode=IngestSwapMode.CLEAR_FIRST)
 
     # domain-a chunks must survive.
     domain_a_count_after = await kb.vector_store.count(

@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, BinaryIO, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from .models import ChangeSet, KnowledgeBaseInfo, KnowledgeFile
+    from .models import (
+        ChangeSet,
+        IngestionStatus,
+        KnowledgeBaseInfo,
+        KnowledgeFile,
+    )
 
 
 @runtime_checkable
@@ -239,8 +244,10 @@ class KnowledgeResourceBackend(Protocol):
     async def set_ingestion_status(
         self,
         domain_id: str,
-        status: str,
+        status: IngestionStatus | str,
         error: str | None = None,
+        *,
+        generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -248,11 +255,26 @@ class KnowledgeResourceBackend(Protocol):
 
         Args:
             domain_id: Knowledge base identifier
-            status: Status string ("pending", "ingesting", "ready", "error")
-            error: Error message if status is "error"
+            status: An :class:`IngestionStatus` member (the preferred,
+                typed form) or its string value (e.g. ``"ready"``).
+                Implementations normalize via
+                :func:`normalize_ingestion_status`.
+            error: Error message if status is the error state
+            generation: In-flight TOMBSTONE swap token. Passed by the
+                SWAPPING transition so an interrupted swap can be
+                reconciled; defaults to ``None`` and is **always**
+                written through (so any non-SWAPPING transition clears
+                a stale token). Implementations store it on
+                :attr:`KnowledgeBaseInfo.generation`.
 
         Raises:
-            ValueError: If domain_id doesn't exist
+            ValueError: If ``domain_id`` doesn't exist.
+            ValidationError: If ``status`` is a string with no matching
+                :class:`IngestionStatus` member (raised by
+                :func:`normalize_ingestion_status`; carries the list of
+                accepted values). ``ValidationError`` is a
+                :class:`~dataknobs_common.exceptions.DataknobsError`,
+                not a ``ValueError`` subclass.
         """
         ...
 

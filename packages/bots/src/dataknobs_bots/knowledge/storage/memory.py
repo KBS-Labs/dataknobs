@@ -19,6 +19,7 @@ from .models import (
     InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
+    normalize_ingestion_status,
 )
 
 
@@ -60,7 +61,8 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # domain_id -> canonical version (get_checksum) -> {path: checksum}.
         # In-process per-version store backing _load_snapshot so memory
-        # produces minimal diffs (file/S3 get this natively in Phase 3).
+        # produces minimal diffs (a native per-version diff for the
+        # file/S3 backends is a possible future enhancement).
         self._snapshots: dict[str, dict[str, dict[str, str]]] = {}
 
         self._initialized = False
@@ -265,16 +267,21 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     async def set_ingestion_status(
         self,
         domain_id: str,
-        status: str,
+        status: IngestionStatus | str,
         error: str | None = None,
+        *,
+        generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base."""
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
         kb_info = self._kb_info[domain_id]
-        kb_info.ingestion_status = IngestionStatus(status)
+        kb_info.ingestion_status = normalize_ingestion_status(status)
         kb_info.ingestion_error = error
+        # Always written through: a non-SWAPPING transition passes the
+        # default None and so clears any stale in-flight swap token.
+        kb_info.generation = generation
 
     # --- Change Detection ---
     #

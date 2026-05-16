@@ -1116,6 +1116,69 @@ class PgVectorStore(VectorStore):
 
         return updated
 
+    async def update_metadata_where(
+        self,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Merge ``set_`` into metadata of every filter-matched vector.
+
+        Emits a single ``UPDATE ... SET metadata = metadata || $1::jsonb``
+        — JSONB ``||`` is a top-level merge (keys in ``set_`` win), so
+        unrelated metadata is preserved. Filter translation reuses
+        :meth:`_build_jsonb_filter_sql` (same four-quadrant ``@>``
+        semantics as :meth:`clear` / :meth:`count`) and the
+        config-level ``domain_id`` scoping. ``updated_at = NOW()`` is
+        refreshed, mirroring :meth:`update_metadata`.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        col_domain_id = self._col("domain_id")
+        col_metadata = self._col("metadata")
+        col_updated_at = self._col("updated_at")
+
+        # $1 is reserved for the merge payload; filter/domain params
+        # start at $2.
+        params: list[Any] = [json.dumps(set_)]
+        where_clauses: list[str] = []
+        param_idx = 2
+
+        if self.domain_id:
+            where_clauses.append(f"{col_domain_id} = ${param_idx}")
+            params.append(self.domain_id)
+            param_idx += 1
+
+        if filter:
+            filter_clauses, filter_params, param_idx = (
+                self._build_jsonb_filter_sql(
+                    filter, param_idx, col_metadata
+                )
+            )
+            where_clauses.extend(filter_clauses)
+            params.extend(filter_params)
+
+        where_sql = ""
+        if where_clauses:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                f"""
+                UPDATE {self._q_qualified}
+                SET {col_metadata} = {col_metadata} || $1::jsonb,
+                    {col_updated_at} = NOW()
+                {where_sql}
+                """,
+                *params,
+            )
+
+        # asyncpg returns the command tag, e.g. "UPDATE 7".
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store."""
         if not self._initialized:

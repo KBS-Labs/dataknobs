@@ -232,16 +232,113 @@ after the pattern match, that restricts enumeration to a subset of
 files while reusing the full pattern/chunking pipeline. `None`
 (default) enumerates every matching file (unchanged behavior).
 
+## Zero-Downtime Re-Ingest — `swap_mode`
+
+`ingest()` and `ingest_changes()` accept a keyword-only
+`swap_mode: IngestSwapMode`:
+
+| Mode | Behavior |
+|---|---|
+| `CLEAR_FIRST` | Delete the (domain-scoped) chunks, then ingest. Historical default; a concurrent reader sees a brief zero-results window. |
+| `APPEND` | Ingest without a preceding full-domain clear. Per-file deletions requested by `ingest_changes` still happen. |
+| `TOMBSTONE` | Crash-safe swap (below). Recommended production default for multi-replica re-ingest. |
+
+```python
+from dataknobs_bots.knowledge import IngestSwapMode
+
+await manager.ingest("my-domain", swap_mode=IngestSwapMode.TOMBSTONE)
+# Per-file delta, same crash-safe guarantee scoped to changed files:
+await manager.ingest_changes(
+    "my-domain", version, swap_mode=IngestSwapMode.TOMBSTONE
+)
+```
+
+### What `TOMBSTONE` guarantees
+
+1. The existing (scoped) chunks are marked `_stale`; reads stop
+   seeing them immediately (the shared read filter for `query()`
+   and `hybrid_query()` hides `_stale` chunks).
+2. Status flips to `IngestionStatus.SWAPPING` and a fresh
+   per-swap generation token is persisted on the domain.
+3. The new generation is ingested with **distinct, generation-keyed
+   chunk ids** (stamped with the token), so it never overwrites the
+   tombstoned old rows in place — both generations coexist
+   physically. New chunks are not `_stale`, so they are read-visible
+   as soon as they commit.
+4. On a clean commit the tombstoned old generation is physically
+   retired. On a raised error **or** a partial-error ingest the
+   rollback drops exactly the new generation by its token, restores
+   the modified files' old generation to visibility, and
+   unconditionally purges files deleted at the source (never
+   resurrected).
+
+Because the new generation has distinct ids, the old generation is
+never overwritten or deleted until the new one commits cleanly — it
+is fully restorable throughout. A crash mid-swap leaves the domain
+in `IngestionStatus.SWAPPING` with the old generation
+tombstoned-but-intact; it is recovered automatically (see below),
+never silently lost. A transient in-swap window does remain (between
+steps 1 and 3 a reader briefly sees neither generation); closing it
+requires a generation pointer-flip — a future swap mode. `TOMBSTONE`
+trades that window for a far simpler crash-safe mechanism. It is
+honored identically by all in-tree vector stores (Memory, FAISS,
+PgVector, Chroma).
+
+### Reading during a swap
+
+`query()` and `hybrid_query()` hide tombstoned chunks by default on
+both the vector and hybrid (native and client-side) paths. Pass
+`include_stale=True` to a query to see them (introspection /
+debugging). Consumers reading through `service.py` or the retrieval
+helpers inherit the exclusion automatically.
+
+### Recovering an interrupted swap
+
+If the process is killed between the upsert and the commit (a
+SIGKILL bypasses Python-level rollback), the domain is left in
+`IngestionStatus.SWAPPING`: the old generation is tombstoned but
+fully intact, and orphan new-generation chunks carrying the crashed
+swap's token may be present. Recovery is automatic — the next
+`ingest()` or `ingest_changes()` for that domain reconciles **before**
+applying anything: it restores the previous generation to visibility
+and drops exactly the crashed swap's orphans by the persisted token.
+
+For a domain that will not be re-ingested soon, trigger recovery
+explicitly:
+
+```python
+recovered = await manager.reconcile("my-domain")
+# True if an interrupted swap was reconciled; False if there was
+# nothing to do (idempotent — safe to call unconditionally).
+```
+
+### `clear_existing=` is deprecated
+
+`KnowledgeIngestionManager.ingest(clear_existing=)` is deprecated in
+favor of `swap_mode=`. `clear_existing=True` maps to `CLEAR_FIRST`,
+`False` to `APPEND`; passing it emits a `DeprecationWarning`. With
+neither argument the default is unchanged (`CLEAR_FIRST`).
+
 ## Status Tracking
 
-`KnowledgeIngestionManager.ingest()` transitions the domain's
+`KnowledgeIngestionManager` transitions the domain's
 `ingestion_status` on the backend:
 
-- `"ingesting"` before processing
-- `"ready"` on success
-- `"error"` on failure (with the error message)
+- `IngestionStatus.INGESTING` before processing
+- `IngestionStatus.SWAPPING` during a `TOMBSTONE` swap (old + new
+  generations coexist; reads are served from the new one). A domain
+  left here by a crash carries the in-flight swap token on
+  `KnowledgeBaseInfo.generation` and is auto-reconciled by the next
+  ingest (or `manager.reconcile(domain_id)`).
+- `IngestionStatus.READY` on success
+- `IngestionStatus.ERROR` on failure (with the error message)
 
-Backends expose `get_info(domain_id)` to read the current status.
+`set_ingestion_status` accepts an `IngestionStatus` member (the
+typed, preferred form) or its string value; an unrecognized string
+raises `ValidationError` (a `dataknobs_common.exceptions`
+`DataknobsError`, not a `ValueError` subclass), carrying the list of
+accepted values. Backends expose `get_info(domain_id)` to read the
+current status.
 
 ## Completion Events
 

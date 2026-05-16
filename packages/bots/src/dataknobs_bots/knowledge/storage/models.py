@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from dataknobs_common.exceptions import ValidationError
+
 
 class IngestionStatus(Enum):
     """Status of knowledge base ingestion into vector storage.
@@ -33,13 +35,47 @@ class IngestionStatus(Enum):
     """Ingestion failed with an error."""
 
     SWAPPING = "swapping"
-    """A zero-downtime swap is in progress (old + new chunks coexist).
+    """A TOMBSTONE swap is in progress (old + new chunks coexist).
 
-    Reserved for the later-phase ``TOMBSTONE`` re-ingest path (no
-    ingestion flow transitions to this value yet): the previous
-    generation stays query-visible while the new one is written, then
-    is atomically retired. Reads stay served throughout.
+    Set by :meth:`KnowledgeIngestionManager._apply_tombstone` while the
+    new generation is being written; the previous generation stays
+    tombstoned-but-restorable until the swap commits cleanly. A crash
+    in this window leaves the status here with
+    :attr:`KnowledgeBaseInfo.generation` carrying the in-flight token;
+    the next :meth:`~KnowledgeIngestionManager.ingest` /
+    :meth:`~KnowledgeIngestionManager.ingest_changes` auto-reconciles
+    (or call :meth:`~KnowledgeIngestionManager.reconcile` explicitly).
+    Cleared to a terminal status (READY/ERROR) on commit or rollback.
     """
+
+
+def normalize_ingestion_status(
+    status: IngestionStatus | str,
+) -> IngestionStatus:
+    """Coerce a status argument to an :class:`IngestionStatus`.
+
+    Backends accept ``IngestionStatus | str`` so callers can pass the
+    enum (the typed, preferred form) or a legacy string. This is the
+    one place that conversion — and the validation of an unknown
+    string — happens, so every backend stays consistent.
+
+    Raises:
+        ValidationError: If ``status`` is a string with no matching
+            member. Carries the list of accepted values so the caller
+            can self-correct. ``ValidationError`` is a
+            :class:`~dataknobs_common.exceptions.DataknobsError`, **not**
+            a ``ValueError`` subclass — a bare ``except ValueError``
+            will not silently swallow an invalid-status bug.
+    """
+    if isinstance(status, IngestionStatus):
+        return status
+    try:
+        return IngestionStatus(status)
+    except ValueError as e:
+        valid = [s.value for s in IngestionStatus]
+        raise ValidationError(
+            f"Unknown ingestion status {status!r}; valid: {valid}"
+        ) from e
 
 
 class InvalidVersionError(ValueError):
@@ -193,6 +229,12 @@ class KnowledgeBaseInfo:
         ingestion_error: Error message if ingestion failed
         vector_store_path: Optional path/identifier for persisted vector store
         metadata: Optional custom metadata for the knowledge base
+        generation: In-flight TOMBSTONE swap token, persisted while
+            ``ingestion_status`` is :attr:`IngestionStatus.SWAPPING` so
+            an interrupted swap can be reconciled (the crashed swap's
+            orphan chunks carry this token). ``None`` in every terminal
+            state; set only by the SWAPPING transition and cleared by
+            any subsequent ``set_ingestion_status`` call.
 
     Example:
         ```python
@@ -216,6 +258,7 @@ class KnowledgeBaseInfo:
     ingestion_error: str | None = None
     vector_store_path: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    generation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -229,6 +272,7 @@ class KnowledgeBaseInfo:
             "ingestion_error": self.ingestion_error,
             "vector_store_path": self.vector_store_path,
             "metadata": self.metadata,
+            "generation": self.generation,
         }
 
     @classmethod
@@ -254,6 +298,7 @@ class KnowledgeBaseInfo:
             ingestion_error=data.get("ingestion_error"),
             vector_store_path=data.get("vector_store_path"),
             metadata=data.get("metadata", {}),
+            generation=data.get("generation"),
         )
 
     def increment_version(self) -> None:

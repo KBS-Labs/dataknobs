@@ -20,6 +20,7 @@ from dataknobs_xization.ingestion import (
 from .base import KnowledgeBase
 from .ingestion import (
     IngestionResult,
+    IngestSwapMode,
     KnowledgeIngestionManager,
 )
 from .orchestration import IngestOrchestrator
@@ -92,6 +93,7 @@ __all__ = [
     # Ingestion manager (file-backend to vector-store)
     "KnowledgeIngestionManager",
     "IngestionResult",
+    "IngestSwapMode",
     # Event-driven orchestration
     "IngestOrchestrator",
     # High-level ingestion service
