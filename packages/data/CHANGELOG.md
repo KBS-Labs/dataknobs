@@ -37,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MemoryVectorStore`/`FaissVectorStore` now own ingested
+  metadata** (copy-on-ingest, parity with `PgVectorStore`/
+  `ChromaVectorStore` which already serialize on write). Callers may
+  safely reuse or mutate the dict they passed to `add_vectors`
+  without corrupting store state, and store-internal keys (`_stale`,
+  injected timestamps) no longer leak onto the caller's dict.
+  (Behavior already in effect since the config-level `domain_id`
+  symmetry change via `VectorStoreBase._apply_domain_default`; this
+  entry documents the guarantee and adds a cross-backend conformance
+  test.)
+
 - **`FaissVectorStore.get_vectors()` returned `(None, None)` for every
   id.** The index was wrapped in `faiss.IndexIDMap`, which does not
   implement reconstruct-by-id; `get_vectors` reconstructs the stored

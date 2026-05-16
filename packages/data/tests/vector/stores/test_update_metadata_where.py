@@ -529,3 +529,89 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     assert legacy_meta["_created_at"] is None
     assert legacy_meta["_updated_at"] is None
     await legacy_store.close()
+
+
+# ---------------------------------------------------------------------------
+# Metadata-aliasing conformance (Item 131)
+#
+# Regression guard: the caller's ``add_vectors`` metadata dict and the
+# store's internal copy must be fully isolated in *both* directions on
+# *every* in-tree backend. The store-side root cause was fixed in PR5
+# via ``VectorStoreBase._apply_domain_default`` (copy-on-ingest,
+# unconditional); PgVector/Chroma already serialized on write. These
+# tests therefore must pass on all four backends today — a failure on
+# memory/FAISS means that copy routing has regressed.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(
+    params=[
+        pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(
+                not is_faiss_available(), reason="faiss not installed"
+            ),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(
+                not is_chromadb_available(), reason="chromadb not installed"
+            ),
+        ),
+        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
+    ]
+)
+async def empty_vector_store(
+    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+) -> AsyncIterator[Any]:
+    """Initialized-but-unseeded store, so the test owns the exact
+    metadata dict passed to ``add_vectors`` (the aliasing subject)."""
+    backend = request.param
+    store = _make_store(backend, pgvector_config)
+    await store.initialize()
+    try:
+        yield store
+    finally:
+        await _teardown_backend(backend, store)
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_caller_mutation_after_add_does_not_leak_into_store(
+    empty_vector_store: Any,
+) -> None:
+    """Caller → store isolation: mutating the dict after ``add_vectors``
+    must not change what the store returns."""
+    caller_meta = {"k": 1}
+    await empty_vector_store.add_vectors(
+        _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
+    )
+
+    caller_meta["k"] = 2  # caller reuses/mutates its own dict
+
+    (_, stored), = await empty_vector_store.get_vectors(
+        ["a"], include_metadata=True
+    )
+    assert stored is not None
+    assert stored["k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_store_writes_do_not_leak_onto_caller_dict(
+    empty_vector_store: Any,
+) -> None:
+    """Store → caller isolation: a store-internal write
+    (``update_metadata_where``) must not appear on the caller's dict."""
+    caller_meta = {"k": 1}
+    await empty_vector_store.add_vectors(
+        _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
+    )
+
+    await empty_vector_store.update_metadata_where(None, {"_stale": True})
+
+    # The store-internal key never lands on the caller's dict, and no
+    # injected bookkeeping (timestamps) leaks back either.
+    assert caller_meta == {"k": 1}
