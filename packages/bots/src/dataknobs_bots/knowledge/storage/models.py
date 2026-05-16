@@ -6,6 +6,7 @@ in a KnowledgeResourceBackend.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -30,6 +31,27 @@ class IngestionStatus(Enum):
 
     ERROR = "error"
     """Ingestion failed with an error."""
+
+    SWAPPING = "swapping"
+    """A zero-downtime swap is in progress (old + new chunks coexist).
+
+    Reserved for the later-phase ``TOMBSTONE`` re-ingest path (no
+    ingestion flow transitions to this value yet): the previous
+    generation stays query-visible while the new one is written, then
+    is atomically retired. Reads stay served throughout.
+    """
+
+
+class InvalidVersionError(ValueError):
+    """A version string cannot be interpreted by a backend.
+
+    Raised by :meth:`KnowledgeResourceBackend.list_changes_since` when
+    the supplied version predates the backend's snapshot retention (or
+    is otherwise unknown), so a minimal diff cannot be produced.
+    Consumers catch this and fall back to a full re-ingest. It subclasses
+    :class:`ValueError` for backward compatibility with callers that
+    already treat version problems as ``ValueError``.
+    """
 
 
 @dataclass
@@ -97,6 +119,56 @@ class KnowledgeFile:
         )
 
 
+@dataclass(frozen=True)
+class ChangeSet:
+    """File-level diff between two snapshots of a knowledge base.
+
+    Returned by :meth:`KnowledgeResourceBackend.list_changes_since`.
+    ``added``/``modified`` carry full :class:`KnowledgeFile` metadata;
+    ``deleted`` carries paths only (the files no longer exist to
+    describe). The three collections are disjoint by construction
+    (a path appears in at most one) and are stored as tuples so the
+    instance is genuinely immutable (``frozen=True`` alone would not
+    stop ``cs.added.append(...)``). Lists may be passed in; they are
+    normalized to tuples. ``version`` is the canonical
+    snapshot identity of the *current* state (equal to
+    :meth:`KnowledgeResourceBackend.get_checksum`), so it can be
+    captured and passed back to a later ``list_changes_since`` call.
+
+    Attributes:
+        added: Files present now but absent at the compared version
+        modified: Files present at both but with a changed checksum
+        deleted: Paths present at the compared version but absent now
+        version: Canonical snapshot id of the current state
+
+    Example:
+        ```python
+        v = await backend.get_checksum("my-domain")
+        await backend.put_file("my-domain", "new.md", b"# New")
+        change = await backend.list_changes_since("my-domain", v)
+        assert [f.path for f in change.added] == ["new.md"]
+        assert not change.is_empty
+        ```
+    """
+
+    added: Sequence[KnowledgeFile]
+    modified: Sequence[KnowledgeFile]
+    deleted: Sequence[str]
+    version: str
+
+    def __post_init__(self) -> None:
+        # frozen=True blocks rebinding but not in-place mutation of a
+        # list field; store tuples so the value object is truly immutable.
+        object.__setattr__(self, "added", tuple(self.added))
+        object.__setattr__(self, "modified", tuple(self.modified))
+        object.__setattr__(self, "deleted", tuple(self.deleted))
+
+    @property
+    def is_empty(self) -> bool:
+        """``True`` when nothing was added, modified, or deleted."""
+        return not (self.added or self.modified or self.deleted)
+
+
 @dataclass
 class KnowledgeBaseInfo:
     """Metadata about a knowledge base.
@@ -109,7 +181,14 @@ class KnowledgeBaseInfo:
         file_count: Number of files in the knowledge base
         total_size_bytes: Total size of all files
         last_updated: When any file was last added/modified
-        version: Incremented on any change (for cache invalidation)
+        version: Monotonic counter, incremented on any change. Retained
+            for cache-invalidation and display only. **No longer the
+            change-detection key** — change detection uses the canonical
+            content snapshot (see
+            :meth:`KnowledgeResourceBackend.get_checksum` /
+            :meth:`~KnowledgeResourceBackend.list_changes_since`). Do not
+            pass this counter to ``has_changes_since``; pass a
+            ``get_checksum`` value.
         ingestion_status: Current ingestion status
         ingestion_error: Error message if ingestion failed
         vector_store_path: Optional path/identifier for persisted vector store

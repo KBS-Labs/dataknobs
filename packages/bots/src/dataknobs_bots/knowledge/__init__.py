@@ -47,12 +47,15 @@ from .service import (
     get_ingestion_service,
 )
 from .storage import (
+    ChangeSet,
     FileKnowledgeBackend,
     IngestionStatus,
     InMemoryKnowledgeBackend,
+    InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
     KnowledgeResourceBackend,
+    KnowledgeResourceBackendMixin,
     create_knowledge_backend,
 )
 
@@ -76,9 +79,12 @@ __all__ = [
     "is_ambiguous_query",
     # Storage backends
     "KnowledgeResourceBackend",
+    "KnowledgeResourceBackendMixin",
     "KnowledgeFile",
     "KnowledgeBaseInfo",
     "IngestionStatus",
+    "ChangeSet",
+    "InvalidVersionError",
     "create_knowledge_backend",
     "InMemoryKnowledgeBackend",
     "FileKnowledgeBackend",

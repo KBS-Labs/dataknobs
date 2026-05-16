@@ -18,12 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
+from .mixin import KnowledgeResourceBackendMixin
 from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
 
 logger = logging.getLogger(__name__)
 
 
-class FileKnowledgeBackend:
+class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     """File system-based knowledge resource storage.
 
     Structure on disk:
@@ -388,27 +389,10 @@ class FileKnowledgeBackend:
         self._save_metadata(domain_id, kb_metadata)
 
     # --- Change Detection ---
-
-    async def get_checksum(self, domain_id: str) -> str:
-        """Get combined checksum of all files."""
-        kb_path = self._kb_path(domain_id)
-        if not kb_path.exists():
-            raise ValueError(f"Knowledge base '{domain_id}' does not exist")
-
-        kb_metadata = self._load_metadata(domain_id)
-        files = kb_metadata.get("files", {})
-
-        if not files:
-            return ""
-
-        # Combine all file checksums sorted by path
-        checksums = sorted(f"{path}:{info['checksum']}" for path, info in files.items())
-        combined = ":".join(checksums)
-        return hashlib.md5(combined.encode()).hexdigest()
-
-    async def has_changes_since(self, domain_id: str, version: str) -> bool:
-        """Check if KB has changed since given version."""
-        info = await self.get_info(domain_id)
-        if info is None:
-            raise ValueError(f"Knowledge base '{domain_id}' does not exist")
-        return info.version != version
+    #
+    # get_checksum / has_changes_since / list_changes_since come from
+    # KnowledgeResourceBackendMixin (one canonical algorithm over
+    # list_files()). The mixin's default _load_snapshot (empty snapshot)
+    # is correct but non-minimal here: a differing version reports every
+    # current file as added (full re-ingest). A native per-version
+    # snapshot diff arrives in Phase 3.
