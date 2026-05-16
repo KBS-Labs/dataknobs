@@ -191,6 +191,47 @@ report every current file as `added` when the version differs (correct
 detection, non-minimal) until native snapshot support lands in a later
 phase.
 
+## Per-File Delta — `ingest_changes`
+
+`ingest_if_changed` is binary: it re-ingests the *whole* domain when
+anything changed. For large corpora where a single file changed (an
+S3 `PutObject` on one of 100 files), that is a 100× embedding
+amplification. `KnowledgeIngestionManager.ingest_changes` re-embeds
+only what actually changed:
+
+```python
+version = await manager.get_current_version("my-domain")
+# ... persist `version`; later, on a change trigger:
+result = await manager.ingest_changes("my-domain", version)
+print(result.files_processed, result.files_deleted)
+```
+
+`ingest_changes(domain_id, since_version, *, progress_callback=None,
+config=None)` diffs the source against `since_version` (a
+`get_current_version` / `get_checksum` value — **not** the monotonic
+`KnowledgeBaseInfo.version` counter), then:
+
+- purges the chunks of **deleted and modified** files (modified files
+  must shed their stale chunks before re-embedding),
+- re-embeds only the **added and modified** files,
+- routes both through the *same* internal apply path as a full
+  `ingest()`, so swap semantics never diverge between the full-domain
+  and per-file routes.
+
+`result.files_processed` counts added + modified; the new
+`result.files_deleted` carries the removed-file count (`0` for a full
+`ingest`). If `since_version` predates the backend's snapshot
+retention the backend raises `InvalidVersionError`; `ingest_changes`
+catches it, logs a warning, and falls back to a full re-ingest — it
+never silently skips an update.
+
+The lower-level seam is
+`RAGKnowledgeBase.ingest_from_backend(file_filter=)`: an optional
+keyword-only `Callable[[KnowledgeFile], bool]` predicate, evaluated
+after the pattern match, that restricts enumeration to a subset of
+files while reusing the full pattern/chunking pipeline. `None`
+(default) enumerates every matching file (unchanged behavior).
+
 ## Status Tracking
 
 `KnowledgeIngestionManager.ingest()` transitions the domain's

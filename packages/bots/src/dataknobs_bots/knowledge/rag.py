@@ -27,6 +27,7 @@ from dataknobs_bots.knowledge.retrieval import (
 
 if TYPE_CHECKING:
     from dataknobs_bots.knowledge.storage.backend import KnowledgeResourceBackend
+    from dataknobs_bots.knowledge.storage.models import KnowledgeFile
 
 logger = logging.getLogger(__name__)
 
@@ -465,6 +466,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         config: KnowledgeBaseConfig | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        *,
+        file_filter: Callable[["KnowledgeFile"], bool] | None = None,
     ) -> dict[str, Any]:
         """Ingest documents from a :class:`KnowledgeResourceBackend`.
 
@@ -497,6 +500,15 @@ class RAGKnowledgeBase(KnowledgeBase):
                 :class:`KnowledgeIngestionManager` to thread the
                 ``domain_id`` onto each chunk so that multi-tenant
                 consumers can filter on it at query time.
+            file_filter: Optional keyword-only predicate evaluated
+                against each :class:`KnowledgeFile` *after* the
+                pattern match. Files for which it returns ``False``
+                are skipped at enumeration. ``None`` (default)
+                enumerates every matching file (unchanged behavior).
+                Used by
+                :meth:`KnowledgeIngestionManager.ingest_changes` to
+                re-embed only the changed files through the same
+                pattern/chunking pipeline.
 
         Returns:
             Statistics dict matching :meth:`load_from_directory`:
@@ -509,7 +521,9 @@ class RAGKnowledgeBase(KnowledgeBase):
                 name=domain_id
             )
 
-        source = BackendDocumentSource(backend, domain_id)
+        source = BackendDocumentSource(
+            backend, domain_id, file_filter=file_filter
+        )
         processor = DirectoryProcessor(config, source, chunker=self._chunker)
         return await self._ingest_from_processor_async(
             processor, progress_callback, extra_metadata=extra_metadata
