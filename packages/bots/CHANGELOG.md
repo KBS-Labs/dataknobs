@@ -33,6 +33,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a later phase.
 - **`IngestionStatus.SWAPPING`** — enum member reserved for the
   zero-downtime re-ingest swap path.
+- **`KnowledgeIngestionManager.ingest_changes(domain_id,
+  since_version, *, progress_callback=None, config=None)`** —
+  per-file delta re-ingest. Diffs the source against
+  `since_version` (a `get_checksum`/`get_current_version` value),
+  purges chunks for deleted *and* modified files, then re-embeds
+  only the added/modified files through the same internal apply
+  path as a full `ingest()` — so swap semantics cannot diverge
+  between the full-domain and per-file routes. An S3 `PutObject`
+  on one file in a 100-file corpus now re-embeds one file, not
+  the whole corpus. If `since_version` predates the backend's
+  snapshot retention (`InvalidVersionError`) it falls back to a
+  full re-ingest after a warning — never a silent skip.
+- **`IngestionResult.files_deleted`** — count of source files
+  whose chunks were removed because the file no longer exists at
+  the source (populated by `ingest_changes`; `0` for a full
+  `ingest`). Included in `to_dict()` and the `knowledge:ingestion`
+  event payload.
+- **`RAGKnowledgeBase.ingest_from_backend(file_filter=)`** —
+  optional keyword-only `Callable[[KnowledgeFile], bool]`
+  predicate, evaluated after the pattern match, restricting
+  enumeration to a subset of the backend's files. `None`
+  (default) is unchanged behavior. This is the seam
+  `ingest_changes` uses to re-embed only the changed files
+  through the full pattern/chunking pipeline.
 
 ### Changed
 

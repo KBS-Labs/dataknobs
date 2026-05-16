@@ -29,7 +29,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dataknobs_bots.knowledge.storage.backend import KnowledgeResourceBackend
+    from dataknobs_bots.knowledge.storage.models import KnowledgeFile
 
 logger = logging.getLogger(__name__)
 
@@ -219,15 +222,27 @@ class BackendDocumentSource:
     patterns (the portion before the first glob metacharacter) and
     passes it to :meth:`backend.list_files` so backends like S3 can
     avoid listing the whole bucket when every pattern shares a prefix.
+
+    An optional ``file_filter`` predicate restricts enumeration to a
+    subset of the backend's files (evaluated against the
+    :class:`KnowledgeFile` *after* the pattern match). It is the seam
+    that lets a per-file delta re-ingest
+    (:meth:`KnowledgeIngestionManager.ingest_changes`) re-embed only
+    the changed files while reusing the full pattern/chunking
+    pipeline. ``None`` (default) enumerates every matching file —
+    behavior-identical to before, so no existing caller changes.
     """
 
     def __init__(
         self,
         backend: KnowledgeResourceBackend,
         domain_id: str,
+        *,
+        file_filter: Callable[[KnowledgeFile], bool] | None = None,
     ) -> None:
         self._backend = backend
         self._domain_id = domain_id
+        self._file_filter = file_filter
 
     @property
     def backend(self) -> KnowledgeResourceBackend:
@@ -261,8 +276,10 @@ class BackendDocumentSource:
         metacharacter) and passes it to
         :meth:`backend.list_files(domain_id, prefix=...)` so prefix-
         aware backends (notably S3) can narrow the listing. After
-        listing, matches are filtered in Python via :meth:`_matches`.
-        Empty ``patterns`` yields every file in the domain.
+        listing, matches are filtered in Python via :meth:`_matches`,
+        then by the optional ``file_filter`` predicate. Empty
+        ``patterns`` yields every file in the domain (still subject to
+        ``file_filter``).
         """
         patterns_list = list(patterns)
         prefix = self._common_prefix(patterns_list)
@@ -278,6 +295,10 @@ class BackendDocumentSource:
             path = kf.path
             if patterns_list and not any(
                 self._matches(path, p) for p in patterns_list
+            ):
+                continue
+            if self._file_filter is not None and not self._file_filter(
+                kf
             ):
                 continue
             size = getattr(kf, "size_bytes", None)

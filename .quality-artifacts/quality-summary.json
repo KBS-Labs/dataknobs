@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-05-16T01:09:08Z",
+  "timestamp": "2026-05-16T01:42:41Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "bots legacy xization",
+  "tested_packages": ["bots", "legacy", "xization"],
   "package_hashes": {
-  "bots": "9214688221b797d9980f16cf5c96f8439b5fdcb0922598bc1e0c800bc638d446",
+  "bots": "d439ea79fa5c0c1af88d716e815e59197ab20880eedbbe933462a1a1b9ec3e42",
   "common": "51760c3f369129ba1ea2f4a786e23d7bca3fcdddeb1a66a89497db7ad33c4b55",
   "config": "a32d8a2381bd657c6e0e7749a575c8ac9fcc29a2de3b274e7c7c5861ac57c60c",
   "data": "df22069f4f8117358f1726ecb3e666bc059a5c74d7a118dfba50988b45d51bc9",
@@ -15,7 +15,7 @@
   "llm": "9cb3957476efe058f609900807bcf68fd179a2e70b07dde9856414f7bf809dd1",
   "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
   "utils": "80f3991652437ffb690bbef75a94aad5e7328ed5fb1d0a9d2660aac4c17c59f4",
-  "xization": "d7c0fa92a5518ea16432a912fdc8256e455f6487d22c6781b7c3ba8212d77c9b",
+  "xization": "925279be1a9a05c77df2d0028099e9039722229becee3da2f57adc75247927d2",
   "_algorithm_version": 3
 },
   "checks": {

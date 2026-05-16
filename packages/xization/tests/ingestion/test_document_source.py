@@ -476,6 +476,55 @@ async def test_backend_iter_files_size_bytes_from_record() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backend_iter_files_file_filter_narrows_within_pattern(
+    backend_corpus_files: dict[str, bytes],
+) -> None:
+    """``file_filter`` is applied *after* the pattern match.
+
+    Per-file delta re-ingest passes a predicate selecting only the
+    changed paths; pattern-matched files it rejects are not yielded.
+    """
+    backend = _StaticBackend(backend_corpus_files)
+    changed = {"docs/guide.md", "docs/nested/deep.md"}
+    source = BackendDocumentSource(
+        backend,
+        "test-domain",
+        file_filter=lambda kf: kf.path in changed,
+    )
+
+    refs = await _collect_backend_refs(source, ["**/*.md"])
+    assert sorted(r.path for r in refs) == sorted(changed)
+
+
+@pytest.mark.asyncio
+async def test_backend_iter_files_file_filter_applies_to_empty_patterns(
+    backend_corpus_files: dict[str, bytes],
+) -> None:
+    """Empty patterns still yield every file, minus ``file_filter``."""
+    backend = _StaticBackend(backend_corpus_files)
+    source = BackendDocumentSource(
+        backend,
+        "test-domain",
+        file_filter=lambda kf: kf.path.endswith(".json"),
+    )
+
+    refs = await _collect_backend_refs(source, [])
+    assert [r.path for r in refs] == ["data.json"]
+
+
+@pytest.mark.asyncio
+async def test_backend_iter_files_none_file_filter_is_unchanged(
+    backend_corpus_files: dict[str, bytes],
+) -> None:
+    """The default (``None``) enumerates everything — no behavior change."""
+    backend = _StaticBackend(backend_corpus_files)
+    source = BackendDocumentSource(backend, "test-domain", file_filter=None)
+
+    refs = await _collect_backend_refs(source, [])
+    assert sorted(r.path for r in refs) == sorted(backend_corpus_files)
+
+
+@pytest.mark.asyncio
 async def test_backend_iter_files_size_falls_back_to_size_attr() -> None:
     """When record lacks ``size_bytes``, fall back to ``size``."""
     backend = _StaticBackend(

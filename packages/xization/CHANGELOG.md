@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`BackendDocumentSource(file_filter=)`** — optional keyword-only
+  `Callable[[KnowledgeFile], bool]` predicate. Evaluated in
+  `iter_files` *after* the glob/pattern match (and applied even when
+  `patterns` is empty), it restricts enumeration to a subset of the
+  backend's files. `None` (default) enumerates every matching file —
+  behavior-identical to prior releases, so no existing caller
+  changes. This is the source-layer seam that lets a per-file delta
+  re-ingest (`dataknobs-bots`
+  `KnowledgeIngestionManager.ingest_changes`) re-embed only the
+  changed files while reusing the full pattern/chunking pipeline.
+
 ## v1.3.5 - 2026-05-09
 
 ### Fixed
