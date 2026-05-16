@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from uuid import uuid4
 
 from ..types import DistanceMetric
 from .base import VectorStore
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -50,6 +53,11 @@ class FaissVectorStore(VectorStore):
         # as empty (rows return None/None on include_timestamps).
         self.timestamps: dict[int, tuple[datetime, datetime]] = {}
         self.next_idx = 0
+        # IVF index types (ivfflat/ivfpq) need an explicit reverse map
+        # before ``reconstruct``-by-id works; built lazily once the
+        # index is trained and populated, and rebuilt after ``load()``
+        # (``faiss.read_index`` does not restore it).
+        self._direct_map_built: bool = False
 
     def _parse_backend_config(self) -> None:
         """Parse Faiss-specific configuration."""
@@ -238,7 +246,46 @@ class FaissVectorStore(VectorStore):
         internal_ids_array = np.array(internal_ids, dtype=np.int64)
         self.index.add_with_ids(vectors, internal_ids_array)
 
+        # IVF reconstruct-by-id (used by get_vectors) needs a direct
+        # map, valid only once the index is trained and populated.
+        self._ensure_ivf_direct_map()
+
         return ids
+
+    def _ensure_ivf_direct_map(self) -> None:
+        """Build the IVF reverse map so ``reconstruct``-by-id works.
+
+        Only the IVF index types (``ivfflat``/``ivfpq``, auto-selected
+        for ``dimensions >= 100``) need this. ``IndexIDMap2.reconstruct``
+        delegates to the wrapped index; ``IndexIVF`` raises
+        ``RuntimeError`` for reconstruct until ``make_direct_map()`` has
+        been called, and the map is valid only after train+populate.
+        Idempotent via ``_direct_map_built``; ``load()`` resets the flag
+        because ``faiss.read_index`` does not restore the map.
+        """
+        if self._direct_map_built:
+            return
+        if self.index_type not in ("ivfflat", "ivfpq"):
+            return
+        if self.index is None or self.index.ntotal <= 0:
+            return
+        # The live faiss object is authoritative — ``index_type`` is
+        # only the configured/auto-selected hint. Reach the wrapped
+        # index through ``IndexIDMap2.index`` and downcast to its
+        # concrete type rather than ``faiss.extract_index_ivf`` (which
+        # *raises* for a degenerate/untrained persisted IVF, breaking
+        # ``load()``). A non-IVF or untrained inner index has nothing
+        # to reconstruct, so there is simply no direct map to build.
+        inner = getattr(self.index, "index", None)
+        if inner is None:
+            return
+        inner = faiss.downcast_index(inner)
+        if not isinstance(inner, faiss.IndexIVF):
+            return
+        if not inner.is_trained:
+            return
+        inner.make_direct_map()
+        self._direct_map_built = True
 
     async def get_vectors(
         self,
@@ -275,7 +322,16 @@ class FaissVectorStore(VectorStore):
                         metadata, created=created, updated=updated
                     )
                 results.append((vector, metadata))
-            except Exception:
+            except Exception as exc:
+                # The "id absent" case is handled before the ``try``
+                # (continue above), so reaching here is a genuine
+                # reconstruct failure (e.g. a post-delete internal-id
+                # reuse race). Surface it at WARNING rather than
+                # silently collapsing it to indistinguishable-from-
+                # absent.
+                logger.warning(
+                    "FAISS reconstruct failed for id %s: %s", ext_id, exc
+                )
                 results.append((None, None))
 
         return results
@@ -518,9 +574,6 @@ class FaissVectorStore(VectorStore):
 
     async def load(self) -> None:
         """Load index and metadata from disk."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         if not self.persist_path or not os.path.exists(self.persist_path):
             logger.debug(f"FAISS: No persist path or file not found: {self.persist_path}")
             return
@@ -531,6 +584,12 @@ class FaissVectorStore(VectorStore):
         # Load index
         self.index = faiss.read_index(persist_path_str)
         logger.info(f"FAISS: Loaded index from {persist_path_str} with {self.index.ntotal} vectors")
+
+        # ``faiss.read_index`` restores the index but not the IVF
+        # direct map, so reconstruct-by-id would fail after a reload.
+        # Reset the guard and rebuild it for the loaded population.
+        self._direct_map_built = False
+        self._ensure_ivf_direct_map()
 
         # Load metadata and mappings
         metadata_path = persist_path_str + ".meta"

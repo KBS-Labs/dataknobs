@@ -57,14 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maintains the reverse map required for reconstruct, with identical
   add/search/remove behavior and unchanged on-disk format. `flat` and
   `hnsw` indexes (auto-selected for typical and small-dimension
-  configs) now reconstruct correctly; the `ivfflat`/`ivfpq` paths
-  additionally require `make_direct_map()` and remain a separately
-  tracked limitation. **Migration note:** an index *persisted before
-  this change* was serialized as `IndexIDMap` and `faiss.read_index`
-  restores it as that type, so a reloaded legacy index still cannot
-  reconstruct (and surfaces empty timestamps) until it is rebuilt —
-  re-add the vectors (or re-ingest) once to upgrade an on-disk index
-  in place; new indexes are unaffected.
+  configs) reconstruct directly; the `ivfflat`/`ivfpq` paths
+  (auto-selected for embedding dimensions ≥ 100 — the 384/768/1024
+  production case) additionally require an IVF direct map, which is
+  now built after the index is trained and populated and rebuilt on
+  `load()` (`faiss.read_index` does not restore it), so IVF
+  `get_vectors` returns stored vectors and metadata as well.
+  Unexpected reconstruct failures are now logged at WARNING instead
+  of being silently collapsed to indistinguishable-from-absent.
+  **Migration note:** an index *persisted before this change* was
+  serialized as `IndexIDMap` and `faiss.read_index` restores it as
+  that type, so a reloaded legacy index still cannot reconstruct (and
+  surfaces empty timestamps) until it is rebuilt — re-add the vectors
+  (or re-ingest) once to upgrade an on-disk index in place; new
+  indexes are unaffected.
 
 ### Changed
 

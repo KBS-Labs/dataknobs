@@ -615,3 +615,141 @@ async def test_store_writes_do_not_leak_onto_caller_dict(
     # The store-internal key never lands on the caller's dict, and no
     # injected bookkeeping (timestamps) leaks back either.
     assert caller_meta == {"k": 1}
+
+
+# ---------------------------------------------------------------------------
+# FAISS IVF reconstruct (Item 130)
+#
+# ``get_vectors`` reconstructs by internal id. For the IVF index types
+# (``ivfflat``/``ivfpq``, auto-selected for ``dimensions >= 100`` — the
+# production 384/768/1024 case) ``IndexIDMap2.reconstruct`` delegates to
+# the wrapped IVF index, which needs ``make_direct_map()`` after
+# train+populate and again after ``read_index`` on ``load()``. Pre-fix
+# every id returned ``(None, None)`` and the broad ``except`` masked it.
+# ---------------------------------------------------------------------------
+
+
+def _ivf_vectors(n: int, dim: int) -> np.ndarray:
+    """``n`` distinct unit-ish rows of width ``dim`` (>= nlist to train)."""
+    arr = np.zeros((n, dim), dtype=np.float32)
+    for i in range(n):
+        arr[i, i % dim] = 1.0
+        arr[i, (i + 1) % dim] = 0.5
+    return arr
+
+
+@pytestmark_faiss
+@pytest.mark.asyncio
+async def test_faiss_ivfflat_get_vectors_reconstructs() -> None:
+    """IVF index types reconstruct stored vectors + metadata + timestamps.
+
+    Reproduce-first: fails pre-fix ((None, None) for every id) because
+    the IVF direct map is never built.
+    """
+    dim = 128
+    n = 8  # >= nlist so the IVF index trains on first add
+    store = FaissVectorStore(
+        {
+            "dimensions": dim,
+            "metric": "cosine",
+            "index_type": "ivfflat",
+            "index_params": {"nlist": 4},
+            "timestamps": {"format": "datetime"},
+        }
+    )
+    await store.initialize()
+    try:
+        ids = [f"v-{i}" for i in range(n)]
+        await store.add_vectors(
+            _ivf_vectors(n, dim),
+            ids=ids,
+            metadata=[{"i": i} for i in range(n)],
+        )
+        got = await store.get_vectors(
+            ids, include_metadata=True, include_timestamps=True
+        )
+        assert len(got) == n
+        for i, (vec, meta) in enumerate(got):
+            assert vec is not None, (
+                f"id v-{i} reconstructed as None — IVF direct map missing"
+            )
+            assert vec.shape == (dim,)
+            assert meta is not None
+            assert meta["i"] == i
+            assert meta["_created_at"] is not None
+            assert meta["_updated_at"] is not None
+    finally:
+        await store.close()
+
+
+@pytestmark_faiss
+@pytest.mark.asyncio
+async def test_faiss_ivfflat_get_vectors_survives_save_load(
+    tmp_path: Any,
+) -> None:
+    """The IVF direct map is re-established after ``load()``
+    (``faiss.read_index`` does not restore it)."""
+    dim = 128
+    n = 8
+    persist = tmp_path / "ivf.index"
+    cfg = {
+        "dimensions": dim,
+        "metric": "cosine",
+        "index_type": "ivfflat",
+        "index_params": {"nlist": 4},
+        "persist_path": str(persist),
+    }
+    store = FaissVectorStore(cfg)
+    await store.initialize()
+    ids = [f"v-{i}" for i in range(n)]
+    await store.add_vectors(
+        _ivf_vectors(n, dim), ids=ids, metadata=[{"i": i} for i in range(n)]
+    )
+    await store.close()  # triggers save()
+
+    reloaded = FaissVectorStore(cfg)
+    await reloaded.initialize()  # triggers load()
+    try:
+        got = await reloaded.get_vectors(ids, include_metadata=True)
+        for i, (vec, meta) in enumerate(got):
+            assert vec is not None, (
+                "IVF direct map not rebuilt after load()"
+            )
+            assert meta is not None and meta["i"] == i
+    finally:
+        await reloaded.close()
+
+
+@pytestmark_faiss
+@pytest.mark.asyncio
+async def test_faiss_get_vectors_unexpected_reconstruct_error_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unexpected reconstruct failure is logged at WARNING and
+    surfaced as ``(None, None)`` — not silently indistinguishable from
+    an absent id."""
+    store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
+    await store.initialize()
+    try:
+        await store.add_vectors(
+            _seed_vectors()[:1], ids=["a"], metadata=[{"k": 1}]
+        )
+
+        class _BoomIndex:
+            def reconstruct(self, _internal_id: int) -> Any:
+                raise RuntimeError("forced reconstruct failure")
+
+        store.index = _BoomIndex()  # type: ignore[assignment]
+
+        with caplog.at_level(
+            logging.WARNING, logger="dataknobs_data.vector.stores.faiss"
+        ):
+            got = await store.get_vectors(["a"])
+
+        assert got == [(None, None)]
+        assert any(
+            "reconstruct failed" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "expected a WARNING for the unexpected reconstruct failure"
+    finally:
+        store._initialized = False  # _BoomIndex has no real close path
