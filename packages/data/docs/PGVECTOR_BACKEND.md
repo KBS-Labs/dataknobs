@@ -53,10 +53,17 @@ await store.close()
 | `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions |
 | `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
-| `schema` | str | `"edubot"` | Database schema |
+| `schema` | str | `"public"` | Database schema |
 | `table_name` | str | `"knowledge_embeddings"` | Table name |
 | `pool_min_size` | int | 2 | Min connection pool size |
 | `pool_max_size` | int | 10 | Max connection pool size |
+
+!!! warning "Review before upgrade — default `schema` changed"
+    The default `schema` changed from `"edubot"` to `"public"` (the
+    PostgreSQL default). Deployments that relied on the implicit
+    default were writing to a schema named after an unrelated project;
+    after upgrade they will use `public`. To retain prior behavior,
+    set `schema="edubot"` explicitly in the store config.
 
 The connection is resolved by the shared
 [Postgres connection config normalizer](../../common/docs/guides/postgres-config.md)

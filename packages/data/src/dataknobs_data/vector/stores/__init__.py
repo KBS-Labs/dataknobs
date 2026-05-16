@@ -98,7 +98,7 @@ def _register_vector_backends(
                     "connection_string": "PostgreSQL connection URL (or use DATABASE_URL env)",
                     "dimensions": "Vector dimensions (required)",
                     "metric": "Distance metric: cosine, euclidean, inner_product",
-                    "schema": "Database schema (default: edubot)",
+                    "schema": "Database schema (default: public)",
                     "table_name": "Table name (default: knowledge_embeddings)",
                     "domain_id": "Domain ID for multi-tenant isolation (optional)",
                     "pool_min_size": "Min connection pool size (default: 2)",

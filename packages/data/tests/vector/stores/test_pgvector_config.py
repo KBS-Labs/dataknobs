@@ -176,3 +176,37 @@ def test_id_type_invalid_raises() -> None:
                 "id_type": "bigint",
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# Default schema neutralization
+# ---------------------------------------------------------------------------
+
+
+def test_default_schema_is_public() -> None:
+    """The implicit default ``schema`` is the neutral PostgreSQL
+    default ``public`` — not a name borrowed from an unrelated
+    downstream project. Reproduces the leak: pre-fix this is
+    ``"edubot"``.
+    """
+    store = PgVectorStore(
+        {
+            "connection_string": "postgresql://u:p@h/db",
+            "dimensions": 4,
+        }
+    )
+    assert store.schema == "public"
+
+
+def test_explicit_schema_retains_prior_default() -> None:
+    """Consumers that depended on the old implicit default can pin it
+    back explicitly (the documented one-line migration).
+    """
+    store = PgVectorStore(
+        {
+            "connection_string": "postgresql://u:p@h/db",
+            "dimensions": 4,
+            "schema": "edubot",
+        }
+    )
+    assert store.schema == "edubot"

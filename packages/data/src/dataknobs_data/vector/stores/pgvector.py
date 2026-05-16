@@ -45,7 +45,7 @@ class PgVectorStore(VectorStore):
     Configuration:
         connection_string: PostgreSQL connection URL
         table_name: Table name (default: knowledge_embeddings)
-        schema: Database schema (default: edubot)
+        schema: Database schema (default: public)
         dimensions: Vector dimensions (required)
         metric: Distance metric (cosine, euclidean, inner_product)
         pool_min_size: Minimum connection pool size (default: 2)
@@ -74,7 +74,7 @@ class PgVectorStore(VectorStore):
             "connection_string": "postgresql://user:pass@host:5432/db",
             "dimensions": 768,
             "metric": "cosine",
-            "schema": "edubot",
+            "schema": "public",
         })
         ```
 
@@ -177,7 +177,7 @@ class PgVectorStore(VectorStore):
             "table_name",
         )
         self.schema = validate_pg_identifier(
-            self.config.get("schema", "edubot"),
+            self.config.get("schema", "public"),
             "schema",
         )
         self._q_schema = quote_ident(self.schema)

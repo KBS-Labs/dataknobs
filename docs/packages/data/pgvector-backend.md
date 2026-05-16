@@ -77,8 +77,15 @@ await store.close()
 | `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions (e.g., 768 for sentence-transformers) |
 | `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
-| `schema` | str | `"edubot"` | Database schema name |
+| `schema` | str | `"public"` | Database schema name |
 | `table_name` | str | `"knowledge_embeddings"` | Table name for vectors |
+
+!!! warning "Review before upgrade — default `schema` changed"
+    The default `schema` changed from `"edubot"` to `"public"` (the
+    PostgreSQL default). Deployments that relied on the implicit
+    default were writing to a schema named after an unrelated project;
+    after upgrade they will use `public`. To retain prior behavior,
+    set `schema="edubot"` explicitly in the store config.
 
 The connection is resolved by the shared
 [Postgres connection config normalizer](../common/postgres-config.md)

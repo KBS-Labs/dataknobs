@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`PgVectorStore` default `schema` changed from `"edubot"` to
+  `"public"`** (the PostgreSQL default). **Review before upgrade:**
+  deployments that relied on the implicit default were writing to a
+  schema named after an unrelated project; after upgrade they will
+  use `public`. To retain prior behavior, set `schema="edubot"`
+  explicitly in the store config. No in-tree consumer relied on the
+  implicit default.
+
 - **`MemoryVectorStore`, `FaissVectorStore`, and `ChromaVectorStore`
   now honor a config-level `domain_id`** (matching `PgVectorStore`).
   A store constructed with `{"domain_id": "x", ...}` defaults
