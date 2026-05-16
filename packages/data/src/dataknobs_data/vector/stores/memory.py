@@ -111,14 +111,14 @@ class MemoryVectorStore(VectorStore):
 
         # Store vectors, metadata, and timestamps. Upsert semantics:
         # preserve created_at across re-adds of the same id; refresh
-        # updated_at every time.
+        # updated_at every time. ``_apply_domain_default`` returns
+        # fresh per-row dicts (config-level domain_id defaulted in,
+        # caller's dicts never aliased — see Items #8 / 131).
+        rows = self._apply_domain_default(metadata, len(ids))
         now = datetime.now(timezone.utc)
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
-            if metadata and i < len(metadata):
-                self.metadata_store[vector_id] = metadata[i]
-            else:
-                self.metadata_store[vector_id] = {}
+            self.metadata_store[vector_id] = rows[i]
             if vector_id in self.timestamps:
                 created, _ = self.timestamps[vector_id]
                 self.timestamps[vector_id] = (created, now)
@@ -189,6 +189,9 @@ class MemoryVectorStore(VectorStore):
 
         if not self.vectors:
             return []
+
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
 
         # Prepare query
         query = query_vector.astype(np.float32)
@@ -265,11 +268,28 @@ class MemoryVectorStore(VectorStore):
 
         return updated
 
+    async def update_metadata_where(
+        self,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Merge ``set_`` into metadata of every filter-matched vector."""
+        if not self._initialized:
+            await self.initialize()
+
+        return self._update_metadata_where_filtered(
+            self.metadata_store.items(),
+            self.timestamps,
+            self._effective_filter(filter),
+            set_,
+        )
+
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors."""
         if not self._initialized:
             await self.initialize()
 
+        filter = self._effective_filter(filter)
         if filter is None:
             return len(self.vectors)
 
@@ -297,6 +317,7 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        filter = self._effective_filter(filter)
         if filter is None:
             self.vectors.clear()
             self.metadata_store.clear()

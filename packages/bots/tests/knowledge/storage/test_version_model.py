@@ -229,3 +229,42 @@ class TestIngestIfChangedRoundTrip:
 
         await rag.close()
         await backend.close()
+
+
+def test_normalize_ingestion_status_rejects_unknown_with_validation_error() -> None:
+    """Finding #13: an invalid status raises ``ValidationError``.
+
+    ``normalize_ingestion_status`` previously surfaced the bare
+    ``ValueError`` from ``IngestionStatus(<bad>)`` — an opaque
+    ``'xyz' is not a valid IngestionStatus`` with no list of accepted
+    values, and the wrong exception type for the project's contract
+    (``ValidationError`` is a ``DataknobsError``, **not** a
+    ``ValueError`` subclass). The message must enumerate the valid
+    statuses so a caller can self-correct.
+    """
+    from dataknobs_common.exceptions import ValidationError
+
+    from dataknobs_bots.knowledge.storage.models import (
+        IngestionStatus,
+        normalize_ingestion_status,
+    )
+
+    # The typed and valid-string forms still pass through unchanged.
+    assert (
+        normalize_ingestion_status(IngestionStatus.READY)
+        is IngestionStatus.READY
+    )
+    assert (
+        normalize_ingestion_status("swapping")
+        is IngestionStatus.SWAPPING
+    )
+
+    with pytest.raises(ValidationError) as excinfo:
+        normalize_ingestion_status("not-a-real-status")
+
+    msg = str(excinfo.value)
+    for member in IngestionStatus:
+        assert member.value in msg
+    # Contract: ValidationError is NOT a ValueError (a bare
+    # `except ValueError` must not silently swallow it).
+    assert not isinstance(excinfo.value, ValueError)

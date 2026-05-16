@@ -159,6 +159,40 @@ class VectorStore(ABC, VectorStoreBase):
         """
         pass
 
+    async def update_metadata_where(
+        self,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Bulk-merge ``set_`` into the metadata of every matching vector.
+
+        The filter-keyed sibling of :meth:`update_metadata` (which is
+        id-keyed). ``filter`` has the same shape and four-quadrant
+        semantics as :meth:`clear` / :meth:`count` / :meth:`search`;
+        ``None`` matches every vector. ``set_`` is *merged* into each
+        matched vector's existing metadata (existing keys overwritten,
+        absent keys added) — it does not replace the metadata wholesale.
+
+        Args:
+            filter: Metadata filter selecting the rows to update.
+            set_: Key/value pairs merged into each matched row's metadata.
+
+        Returns:
+            Number of vectors whose metadata was updated.
+
+        Note:
+            The default raises ``NotImplementedError``. This is the
+            contract for **out-of-tree** vector stores only — it makes
+            an unported backend fail loudly rather than silently skip a
+            tombstone swap. Every in-tree store (Memory, FAISS,
+            PgVector, Chroma) overrides this with a real implementation,
+            so the default is never reached for a backend DataKnobs
+            ships.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support update_metadata_where()"
+        )
+
     async def metadata_fields(self) -> set[str]:
         """Discover metadata field names present across stored vectors.
 

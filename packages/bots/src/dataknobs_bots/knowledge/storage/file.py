@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import BinaryIO
 
 from .mixin import KnowledgeResourceBackendMixin
-from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
+from .models import (
+    IngestionStatus,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+    normalize_ingestion_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -372,8 +377,10 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     async def set_ingestion_status(
         self,
         domain_id: str,
-        status: str,
+        status: IngestionStatus | str,
         error: str | None = None,
+        *,
+        generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base."""
         kb_path = self._kb_path(domain_id)
@@ -382,8 +389,15 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         kb_metadata = self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
-        info_dict["ingestion_status"] = status
+        # Persist the string value so the JSON round-trips and
+        # KnowledgeBaseInfo.from_dict rehydrates the enum.
+        info_dict["ingestion_status"] = normalize_ingestion_status(
+            status
+        ).value
         info_dict["ingestion_error"] = error
+        # Always written through: a non-SWAPPING transition passes the
+        # default None and so clears any stale in-flight swap token.
+        info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
         self._save_metadata(domain_id, kb_metadata)

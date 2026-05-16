@@ -155,9 +155,9 @@ class ChromaVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
-        # Ensure metadata is provided
-        if metadata is None:
-            metadata = [{} for _ in range(len(vectors))]
+        # Per-row metadata: fresh dicts with config-level domain_id
+        # defaulted in (caller's dicts never aliased — Items #8 / 131).
+        metadata = self._apply_domain_default(metadata, len(ids))
 
         # Add to collection
         self.collection.add(
@@ -299,6 +299,9 @@ class ChromaVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
+
         # Convert query vector
         if hasattr(query_vector, "tolist"):
             query_vector = query_vector.tolist()
@@ -394,6 +397,54 @@ class ChromaVectorStore(VectorStore):
 
         return 0
 
+    async def update_metadata_where(
+        self,
+        filter: dict[str, Any] | None,
+        set_: dict[str, Any],
+    ) -> int:
+        """Merge ``set_`` into metadata of every filter-matched vector.
+
+        Mirrors the filtered :meth:`clear` path: partition the filter
+        into a Chroma-native ``where`` plus a Python post-filter, fetch
+        matching rows with their metadata, merge ``set_`` into each
+        (Chroma ``update`` replaces a row's metadata wholesale, so the
+        merge is done here), then write back via ``collection.update``.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
+
+        if filter is not None and self._filter_is_unsatisfiable(filter):
+            return 0
+
+        where, post_filter = self._partition_filter_for_chroma(filter or {})
+        result = self.collection.get(
+            where=where if where else None,
+            include=["metadatas"],
+        )
+        ids = result.get("ids") or []
+        metadatas = result.get("metadatas") or []
+
+        update_ids: list[str] = []
+        update_metadatas: list[dict[str, Any]] = []
+        for cid, meta in zip(ids, metadatas, strict=False):
+            existing = dict(meta or {})
+            if post_filter and not self._match_metadata_filter(
+                existing, post_filter
+            ):
+                continue
+            existing.update(set_)
+            update_ids.append(cid)
+            update_metadatas.append(existing)
+
+        if update_ids:
+            self.collection.update(
+                ids=update_ids, metadatas=update_metadatas
+            )
+        return len(update_ids)
+
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the collection.
 
@@ -421,6 +472,9 @@ class ChromaVectorStore(VectorStore):
         """
         if not self._initialized:
             await self.initialize()
+
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
 
         if filter is None:
             return self.collection.count()
@@ -472,6 +526,9 @@ class ChromaVectorStore(VectorStore):
         """
         if not self._initialized:
             await self.initialize()
+
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
 
         if not filter:
             # Delete and recreate collection
@@ -540,6 +597,9 @@ class ChromaVectorStore(VectorStore):
         """Search using text query (uses Chroma's embedding)."""
         if not self._initialized:
             await self.initialize()
+
+        # Apply config-level domain_id scoping (no-op when unset).
+        filter = self._effective_filter(filter)
 
         if self._filter_is_unsatisfiable(filter):
             return []

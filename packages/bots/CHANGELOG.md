@@ -31,8 +31,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FileKnowledgeBackend` / `S3KnowledgeBackend` produce correct
   (full, non-minimal) diffs until native snapshot support lands in
   a later phase.
-- **`IngestionStatus.SWAPPING`** — enum member reserved for the
-  zero-downtime re-ingest swap path.
+- **`IngestionStatus.SWAPPING`** — set by the `TOMBSTONE` swap path
+  while the new generation is written; a crash here leaves the
+  domain in this state with the in-flight token recoverable.
+- **Interrupted-swap auto-reconciliation + `KnowledgeIngestionManager.
+  reconcile(domain_id) -> bool`.** A process crash between the upsert
+  and the commit of a `TOMBSTONE` swap leaves the domain in
+  `SWAPPING` with the old generation tombstoned-but-intact and orphan
+  new-generation chunks possibly present. The next `ingest()` /
+  `ingest_changes()` for that domain now reconciles *before* applying
+  anything — restoring the previous generation to visibility and
+  dropping exactly the crashed swap's orphans by its persisted
+  token — so residue never accumulates and unrelated files are never
+  left hidden. `reconcile()` exposes the same recovery as an
+  idempotent one-shot for domains that will not be re-ingested soon
+  (returns `True` if it reconciled, `False` if there was nothing to
+  do). Backed by a new `KnowledgeBaseInfo.generation: str | None`
+  field (round-trips through `to_dict`/`from_dict`) and a kw-only
+  `generation=` parameter on `KnowledgeResourceBackend.
+  set_ingestion_status` (always written through, so any non-SWAPPING
+  transition clears a stale token); implemented by the in-memory,
+  file, and S3 backends.
 - **`KnowledgeIngestionManager.ingest_changes(domain_id,
   since_version, *, progress_callback=None, config=None)`** —
   per-file delta re-ingest. Diffs the source against
@@ -57,6 +76,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default) is unchanged behavior. This is the seam
   `ingest_changes` uses to re-embed only the changed files
   through the full pattern/chunking pipeline.
+- **`IngestSwapMode`** (`CLEAR_FIRST` / `APPEND` / `TOMBSTONE`)
+  plus a keyword-only `swap_mode=` on
+  `KnowledgeIngestionManager.ingest()` and `ingest_changes()`
+  (exported as `dataknobs_bots.knowledge.IngestSwapMode`).
+  `TOMBSTONE` is a crash-safe re-ingest: the existing (scoped)
+  chunks are marked `_stale` (hidden from reads), the new
+  generation is ingested under distinct generation-keyed chunk
+  ids so it never overwrites the old rows, and the old
+  generation is physically retired **only on a clean commit** —
+  on a raised error or partial-error ingest the rollback drops
+  the new generation by its token and restores the old one. The
+  old generation is never overwritten or deleted before the new
+  one commits, so a crash, a raised error, or a racing
+  same-domain re-ingest always leaves a fully restorable
+  previous generation (unlike the `CLEAR_FIRST`
+  delete-then-insert). A crash mid-swap leaves the domain in
+  `IngestionStatus.SWAPPING`, auto-reconciled by the next ingest
+  (or `KnowledgeIngestionManager.reconcile`). Honored identically
+  by all in-tree vector stores (Memory, FAISS, PgVector, Chroma);
+  `ingest_changes(swap_mode=TOMBSTONE)` scopes the swap to
+  exactly the changed/deleted files. A transient in-swap read
+  window remains (closing it needs a generation pointer-flip,
+  a future mode).
+- **`RAGKnowledgeBase.query(..., include_stale=False)`** and
+  **`hybrid_query(..., include_stale=False)`** — a single shared
+  read chokepoint hides chunks tombstoned by an in-progress
+  `TOMBSTONE` swap on **both** read paths (vector search and
+  hybrid, native and client-side fusion); `include_stale=True`
+  returns them. `service.py` / retrieval inherit this through
+  `query` / `hybrid_query`.
+- **`RAGKnowledgeBase.update_metadata_where(filter, set_)`** —
+  delegates to the vector store's filter-keyed bulk metadata
+  merge; the destination-side primitive the `TOMBSTONE` swap
+  uses to mark (and, on rollback, un-mark) a generation without
+  enumerating ids.
 
 ### Changed
 
@@ -81,6 +135,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built-in Postgres advisory-lock backend ships in a follow-up phase;
   until then register a cross-replica backend via
   `dataknobs_common.locks.lock_backends`.
+- **`KnowledgeResourceBackend.set_ingestion_status`** accepts
+  `IngestionStatus | str` (Protocol + memory / file / S3
+  backends). The typed enum is the preferred form; legacy
+  string values still work and are normalized internally. An
+  unrecognized status string now raises
+  `dataknobs_common.exceptions.ValidationError` (was a bare
+  `ValueError`) — the message enumerates the accepted values, and
+  the type is a `DataknobsError`, **not** a `ValueError` subclass,
+  so a bare `except ValueError` no longer silently swallows an
+  invalid-status bug. Domain-not-found still raises `ValueError`.
+  No in-tree caller catches `ValueError` around status
+  normalization, so this is contract-tightening only.
+- **`RAGKnowledgeBase.count()` excludes tombstoned chunks by
+  default.** A mid-`TOMBSTONE`-swap `count(filter)` previously
+  delegated straight to the store and reported old+new (≈double)
+  while `query()`/`hybrid_query()` only returned the new
+  generation. `count()` now returns the read-visible count
+  (`count(filter) − count(filter ∧ _stale=True)`, two store-agnostic
+  counts); the new kw-only `include_stale=True` restores the prior
+  single delegated count (every stored chunk). The numbers differ
+  **only** while a swap is in flight; outside a swap there are no
+  `_stale` chunks and the result is unchanged.
+
+### Deprecated
+
+- **`KnowledgeIngestionManager.ingest(clear_existing=)`** — pass
+  `swap_mode=` (`IngestSwapMode`) instead. `clear_existing=True`
+  maps to `CLEAR_FIRST`, `False` to `APPEND`; passing the
+  argument emits a `DeprecationWarning`. With neither argument
+  set the default is unchanged (`CLEAR_FIRST`), so existing
+  callers that omit it are unaffected.
 
 ### Fixed
 
@@ -105,6 +190,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `domain_id` grew it unbounded for the lifetime of the
   orchestrator. The injected `InProcessLock` reference-count evicts
   its key map, closing the leak.
+- **`IngestSwapMode.TOMBSTONE` re-ingest is now genuinely
+  crash-safe.** Chunk ids were deterministic, so a re-embedded
+  file's new chunks upserted *over* the tombstoned old rows in
+  place — clearing their `_stale` mark and destroying the old
+  generation the instant the new one was written. TOMBSTONE was a
+  no-op for the dominant re-ingest case (any file whose content
+  changed), a mid-swap crash or partial-error left freshly written
+  chunks live with no `_stale` key (leaked partial generation), and
+  an `ingest_changes` rollback un-tombstoned the *whole* swap scope
+  — resurrecting files that had been deleted at the source. Each
+  swap now mints a `uuid4` generation token folded into the new
+  chunks' ids and stamped on their metadata (`_generation`), so the
+  two generations coexist physically until a clean commit. Rollback
+  (raised failure *or* partial error) drops exactly the new
+  generation by its token, restores the modified files' old
+  generation to visibility, and unconditionally purges files
+  deleted at the source (never resurrected). On a clean commit the
+  old generation is physically retired. APPEND / CLEAR_FIRST id
+  derivation is byte-for-byte unchanged (the token is opt-in by
+  presence), so single-domain consumers and existing populated
+  stores are unaffected.
+- **Native hybrid fusion no longer under-returns mid-swap.**
+  `hybrid_query(fusion_strategy="native")` requested exactly `k`
+  from the store's `hybrid_search` and *then* dropped tombstoned
+  rows, so when `_stale` chunks ranked in the top `k` it returned
+  fewer than `k` visible results during a `TOMBSTONE` swap. Both the
+  vector and native-hybrid read paths now share a single
+  `_fetch_drop_stale_truncate` helper that over-fetches
+  `k * _STALE_OVERFETCH` before the stale gate and truncates to `k`,
+  so a swap in progress no longer shrinks native-fusion result
+  sets. (`_is_stale`'s `None`-guard was also tightened from a
+  truthiness check to an explicit `is not None` — same result for
+  every real input, but it correctly documents that the guard
+  protects against a metadata-less row, not an empty dict.)
 
 ## v0.6.20 - 2026-05-13
 
