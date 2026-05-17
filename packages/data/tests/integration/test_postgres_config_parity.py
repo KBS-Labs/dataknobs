@@ -1,7 +1,7 @@
-"""Cross-site postgres config parity integration test (Phase 2e).
+"""Cross-site postgres config parity integration test.
 
-One config dict feeds all five postgres-using constructs that were routed
-through ``normalize_postgres_connection_config`` in Phase 2:
+One config dict feeds all five postgres-using constructs that are routed
+through ``normalize_postgres_connection_config``:
 
 1. ``SyncPostgresDatabase``
 2. ``AsyncPostgresDatabase``
@@ -57,7 +57,7 @@ async def test_one_config_feeds_all_postgres_constructs(
 ) -> None:
     """Single unified config drives every postgres-using construct.
 
-    Exercises the Phase 2 contract: after routing through
+    Exercises the normalization contract: after routing through
     ``normalize_postgres_connection_config``, each construct accepts the
     same individual-keys shape with no connection_string synthesis by the
     caller.

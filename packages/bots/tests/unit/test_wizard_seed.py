@@ -1,6 +1,6 @@
 """Tests for artifact file seeding in wizard initialization.
 
-Covers Phase 4 of 03b:
+Covers artifact file seeding:
 - _seed_artifact: JSON and JSONL file loading
 - First-turn-only seeding (no re-seed on restore)
 - Graceful failure on missing files

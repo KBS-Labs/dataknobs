@@ -397,7 +397,7 @@ class TestInMemoryBackendConcurrency:
 
 
 class TestInMemoryBackendMetadata:
-    """Metadata channel + filter_metadata coverage (item 122 Phase 2)."""
+    """Metadata channel + filter_metadata coverage."""
 
     @pytest.fixture
     def backend(self):
@@ -517,7 +517,7 @@ class TestInMemoryBackendMetadata:
 
 
 class TestInMemoryBackendSurfaceCompletion:
-    """Phase 6a surface — status kwarg, list_inactive, sort/limit/offset, stream."""
+    """Backend surface — status kwarg, list_inactive, sort/limit/offset, stream."""
 
     @pytest.fixture
     def backend(self):

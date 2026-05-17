@@ -1,8 +1,8 @@
-"""Phase 3 tests for :class:`KnowledgeIngestionManager` delegation.
+"""Tests for :class:`KnowledgeIngestionManager` delegation.
 
-Before Phase 3, the manager did its own per-file dispatch by extension and
-ignored the backend's ``_metadata/knowledge_base.yaml`` config. After
-Phase 3, it delegates to :meth:`RAGKnowledgeBase.ingest_from_backend`,
+Previously, the manager did its own per-file dispatch by extension and
+ignored the backend's ``_metadata/knowledge_base.yaml`` config. Now
+it delegates to :meth:`RAGKnowledgeBase.ingest_from_backend`,
 which honors patterns, exclude patterns, and streaming JSON.
 
 The first test in this module is the **reproduce-first failing test**
@@ -62,7 +62,7 @@ def _make_progress_capture() -> tuple[list[tuple[str, int]], Any]:
 async def test_ingest_respects_patterns_through_manager() -> None:
     """Reproducer: manager must honor ``_metadata/knowledge_base.yaml`` excludes.
 
-    Before Phase 3, :class:`KnowledgeIngestionManager` dispatched by file
+    Previously, :class:`KnowledgeIngestionManager` dispatched by file
     extension and never consulted
     ``_metadata/knowledge_base.(yaml|yml|json)``. This test places a
     config document that excludes ``docs/sidenote.md`` and asserts that

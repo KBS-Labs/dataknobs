@@ -591,7 +591,7 @@ class TestPostgresMetadataFilterIntegration:
 
 
 class TestQueryHistoriesFilterSymmetry:
-    """Phase 7b — ``query_histories`` filter/sort kwargs mirror the registry layer."""
+    """``query_histories`` filter/sort kwargs mirror the registry layer."""
 
     @pytest.mark.asyncio
     async def test_filter_metadata_kwarg_equivalent_to_prefix(

@@ -1,9 +1,9 @@
-"""Tests for 03c Phase 1: Tool Polish.
+"""Tests for Tool Polish.
 
 Verifies:
 - Response format consistency (all tools use success_response())
 - Effects metadata in all catalog_metadata() methods
-- Updated tool descriptions per 02b §5.2
+- Updated tool descriptions
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from dataknobs_bots.tools.catalog_tools import (
     SaveToCatalogTool,
 )
 
-# Valid effect categories per 02b P5a
+# Valid effect categories
 VALID_EFFECTS = {"query", "mutating", "persisting", "locking", "signaling"}
 
 # All tool classes that have catalog_metadata()
@@ -170,7 +170,7 @@ class TestEffectsMetadata:
             )
 
     def test_expected_effects_per_tool(self) -> None:
-        """Verify specific effect classifications per 02b §5.3."""
+        """Verify specific effect classifications."""
         expected = {
             "list_bank_records": ("query",),
             "add_bank_record": ("mutating", "persisting"),

@@ -1,4 +1,4 @@
-"""Tests for :meth:`RAGKnowledgeBase.ingest_from_backend` (Phase 2).
+"""Tests for :meth:`RAGKnowledgeBase.ingest_from_backend`.
 
 Cross-backend parity guarantees the unified ingest pipeline behaves
 identically whether driven from a local directory, an in-memory

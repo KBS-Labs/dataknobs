@@ -8,7 +8,7 @@ This module provides the core data structures for:
 Rubrics support three scoring methods:
 - DETERMINISTIC: Python functions evaluate against criteria
 - SCHEMA: JSON Schema validation for structural checks
-- LLM_DECODE: Narrow LLM classification (Phase 3)
+- LLM_DECODE: Narrow LLM classification
 
 Example:
     >>> rubric = Rubric(
@@ -59,9 +59,9 @@ class ScoringMethod:
             in the format ``"module.path:function"``.
         schema_ref: For schema scoring, a reference to an external JSON Schema.
         schema: For schema scoring, an inline JSON Schema dict.
-        decode_prompt: For llm_decode scoring, the prompt template (Phase 3).
+        decode_prompt: For llm_decode scoring, the prompt template.
         decode_output_schema: For llm_decode scoring, the expected output
-            schema (Phase 3).
+            schema.
     """
 
     type: ScoringType

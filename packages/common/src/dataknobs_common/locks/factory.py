@@ -52,8 +52,8 @@ def _create_in_process_lock(config: dict[str, Any]) -> DistributedLock:
 
 
 lock_backends.register("memory", _create_in_process_lock)
-# Note: the "postgres" backend (PostgresAdvisoryLock) is registered in
-# Phase 2 alongside locks/postgres.py. Until then an unknown "postgres"
+# Note: the "postgres" backend (PostgresAdvisoryLock) is not yet
+# registered alongside locks/postgres.py. Until then an unknown "postgres"
 # backend resolves to the same ValueError as any other unknown backend,
 # keeping this change behaviour-identical for the single built-in.
 

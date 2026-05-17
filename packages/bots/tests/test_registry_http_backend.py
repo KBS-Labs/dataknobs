@@ -8,7 +8,7 @@ import pytest
 from dataknobs_bots.registry import HTTPRegistryBackend, create_registry_backend
 
 # Matches ``GET /configs`` with or without a query string.  Used by the
-# Phase 3b wire-protocol tests because ``aioresponses`` 0.7.8 matches
+# wire-protocol tests because ``aioresponses`` 0.7.8 matches
 # URLs by strict equality — a bare-URL registration would not match a
 # request carrying ``?filter_metadata=...``.
 _CONFIGS_URL_PATTERN = re.compile(
@@ -681,7 +681,7 @@ class TestHTTPRegistryBackendWithMockServer:
         # Server returned both, but the client must filter on tenant_id.
         assert [r.bot_id for r in regs] == ["bot-1"]
 
-    # --- Phase 6b: status/sort/limit/offset push-down -----------------
+    # --- status/sort/limit/offset push-down -----------------
 
     @pytest.mark.asyncio
     async def test_status_pushed_to_server(self, backend, mock_responses):
@@ -888,7 +888,7 @@ class TestHTTPRegistryBackendWithMockServer:
 
     @pytest.mark.asyncio
     async def test_no_params_sends_no_query_string(self, backend, mock_responses):
-        """Confirm Phase 6a invariant: bare ``list_all()`` adds no query string."""
+        """Confirm invariant: bare ``list_all()`` adds no query string."""
         mock_responses.get(
             _CONFIGS_URL_PATTERN,
             payload=[],

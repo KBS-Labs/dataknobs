@@ -1,6 +1,6 @@
 """Tests for MemoryBank checkpoint/undo and source_node_id provenance.
 
-Phase 2a of the conversation undo plan: bank provenance and checkpointing.
+Conversation undo: bank provenance and checkpointing.
 """
 
 from __future__ import annotations

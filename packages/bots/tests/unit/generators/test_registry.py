@@ -382,11 +382,11 @@ class TestGeneratorRegistryFromConfig:
         assert ids == []
 
 
-# --- Metadata channel routing (Phase 3e) ---
+# --- Metadata channel routing ---
 
 
 class TestGeneratorRegistryMetadata:
-    """Phase 3e — metadata channel routes through ``record.metadata``.
+    """Metadata channel routes through ``record.metadata``.
 
     The old ``register()`` had a shadow bug where a local variable named
     ``metadata`` was passed positionally as ``Record(metadata)``, landing
@@ -524,7 +524,7 @@ class TestGeneratorRegistryMetadata:
         assert {d.generator_id for d in with_empty} == {d.generator_id for d in with_none}
 
 
-# --- Pagination + count (Phase 6e) ---
+# --- Pagination + count ---
 
 
 def _make_template_gen(

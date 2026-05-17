@@ -100,7 +100,7 @@ class GroundedIntentConfig:
     default_filters: dict[str, Any] = field(default_factory=dict)
 
 
-# Backward-compatible alias — GroundedQueryConfig was the Phase 1 name.
+# Backward-compatible alias — former name of GroundedIntentConfig.
 GroundedQueryConfig = GroundedIntentConfig
 
 
@@ -211,7 +211,7 @@ class GroundedResultProcessingConfig:
     """Configuration for the result processing pipeline.
 
     Stages run in order: normalize -> filter -> rerank -> cluster
-    (Phase 3) -> cluster-query score (Phase 3).  Each stage is
+    -> cluster-query score.  Each stage is
     enabled by setting its config.  Omitting a field disables that
     stage entirely.
 
@@ -229,7 +229,7 @@ class GroundedResultProcessingConfig:
         min_results: Never drop below this count regardless of scores.
         query_rerank_weight: Blend weight for query term overlap
             (0.0-1.0).  ``None`` disables re-ranking.
-        cluster_strategy: Clustering method or strategy chain (Phase 3).
+        cluster_strategy: Clustering method or strategy chain.
             String shorthand: ``"embedding"``, ``"tfidf"``,
             ``"term_overlap"``.  ``None`` disables clustering.
         cluster_min_size: Minimum results to form a cluster.
@@ -242,7 +242,7 @@ class GroundedResultProcessingConfig:
     min_results: int = 3
     query_rerank_weight: float | None = None
 
-    # Level 2-3 (Phase 3)
+    # Level 2-3
     cluster_strategy: str | list[dict[str, Any]] | None = None
     cluster_min_size: int = 2
     cluster_threshold: float = 0.7

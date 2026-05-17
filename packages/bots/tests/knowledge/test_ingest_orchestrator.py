@@ -1,4 +1,4 @@
-"""Phase 4 tests for :class:`IngestOrchestrator`.
+"""Tests for :class:`IngestOrchestrator`.
 
 The orchestrator is a thin subscriber-side primitive: it listens on an
 :class:`EventBus` trigger topic and dispatches to
@@ -455,7 +455,7 @@ async def test_concurrent_triggers_different_domains_run_in_parallel() -> None:
 async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
     """A passed-in ``DistributedLock`` is used, keyed ``ingest:<domain>``.
 
-    Verifies the Phase 1 injection seam: the orchestrator delegates
+    Verifies the injection seam: the orchestrator delegates
     serialization to the injected lock rather than an internal
     ``asyncio.Lock``. Uses a real :class:`InProcessLock` subclass (not
     a mock) that records the keys it is asked to hold.

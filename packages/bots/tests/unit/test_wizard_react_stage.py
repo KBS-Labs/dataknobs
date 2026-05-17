@@ -1,4 +1,4 @@
-"""Tests for Wizard + strategy composition (Phase 4).
+"""Tests for Wizard + strategy composition.
 
 This module tests per-state strategy injection in wizard stages,
 including ReAct-style tool iteration within a single wizard turn.

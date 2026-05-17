@@ -173,8 +173,8 @@ class TestSaveStepMetadataPostgres:
     ) -> None:
         """``metadata.X`` dot-notation filter reaches the JSONB column on PG.
 
-        Phase 7a added the ``filter_metadata=`` kwarg on ``load_steps``
-        so production callers no longer need to drop to the raw
+        The ``filter_metadata=`` kwarg on ``load_steps`` lets
+        production callers avoid dropping to the raw
         database surface.  This test stays at the raw-``Query`` layer
         as a lower-level regression guard on the PG JSONB pushdown
         path; the higher-level ``load_steps(filter_metadata=...)``

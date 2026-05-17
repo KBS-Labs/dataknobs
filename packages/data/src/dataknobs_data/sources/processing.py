@@ -33,7 +33,7 @@ Level 2-3 processors (clustering + query-cluster scoring):
 
 This module is intentionally LLM-free -- it lives in ``dataknobs-data``
 so any project can use it without depending on LLM or bots packages.
-Embedding-based processors (Phase 3) accept an ``embed_fn`` callable
+Embedding-based processors accept an ``embed_fn`` callable
 injected by the consumer.
 """
 
@@ -891,9 +891,9 @@ def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
     - ``relative_threshold`` -- ``float``
     - ``min_results`` -- ``int`` (default 3)
     - ``query_rerank_weight`` -- ``float``
-    - ``cluster_strategy`` -- ``str`` or ``list[dict]`` (Phase 3)
-    - ``cluster_min_size`` -- ``int`` (Phase 3)
-    - ``cluster_threshold`` -- ``float`` (Phase 3)
+    - ``cluster_strategy`` -- ``str`` or ``list[dict]``
+    - ``cluster_min_size`` -- ``int``
+    - ``cluster_threshold`` -- ``float``
     """
     if not config:
         return None

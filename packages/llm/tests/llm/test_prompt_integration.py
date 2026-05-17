@@ -1,4 +1,4 @@
-"""Tests for LLM-Prompt Library Integration (Phase 6A).
+"""Tests for LLM-Prompt Library Integration.
 
 This module tests the integration between LLM providers and the prompt library,
 specifically the render_and_complete() and render_and_stream() methods.

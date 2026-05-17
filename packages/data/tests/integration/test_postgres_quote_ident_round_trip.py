@@ -1,6 +1,6 @@
 """Integration tests: identifier quoting in AsyncPostgresDatabase edge cases.
 
-Covers regressions introduced in / missed by PR #290:
+Covers identifier-quoting round-trip regressions:
   P2 — copy_records_to_table double-quoting (stream_write with mixed-case table)
   A2 — build_vector_index_sql / get_vector_count_sql unquoted helpers
   A3 — _ensure_vector_column unquoted column name in ALTER TABLE

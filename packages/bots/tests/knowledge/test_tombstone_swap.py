@@ -215,7 +215,7 @@ async def test_tombstone_roundtrip_retires_old_generation(wired) -> None:
 
 
 async def test_query_and_hybrid_query_both_hide_stale(wired) -> None:
-    """RC3 regression: ``query()`` hides stale too, not only hybrid.
+    """Regression: ``query()`` hides stale too, not only hybrid.
 
     Marking ``docs/a.md`` chunks ``_stale`` (simulating the mid-swap
     state) must hide them from **both** read paths; ``include_stale``

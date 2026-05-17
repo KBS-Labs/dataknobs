@@ -18,7 +18,7 @@ reported ``added`` (a full, not delta, re-ingest). ``is_empty`` stays
 correct via the version-equality short-circuit, so change *detection* is
 right for every backend; minimal *diffs* arrive when a backend overrides
 ``_load_snapshot`` with a real per-version store (memory does so now;
-file/S3 in Phase 3).
+file/S3 backends do not yet).
 """
 
 from __future__ import annotations
