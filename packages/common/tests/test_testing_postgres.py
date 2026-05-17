@@ -166,6 +166,218 @@ def test_safe_sql_ident_used_by_fixtures():
 # -- Integration smoke test (real Postgres) --------------------------------
 
 
+class _FixedUUID:
+    """Deterministic stand-in so the fixture's table name is predictable."""
+
+    hex = "deadbeefcafef00d"
+
+
+def _table_exists(params: dict, schema: str, table: str) -> bool:
+    import psycopg2
+
+    conn = psycopg2.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT to_regclass(%s)", (f"{schema}.{table}",))
+        row = cursor.fetchone()
+        cursor.close()
+        return row is not None and row[0] is not None
+    finally:
+        conn.close()
+
+
+@requires_postgres
+def test_make_pgvector_test_table_pre_drops_leaked_table(
+    make_pgvector_test_table, postgres_connection_params, monkeypatch
+):
+    """The **pre-drop** removes a leaked same-named table before yield.
+
+    A killed prior session leaks ``public.test_*``; post-only teardown
+    can never guarantee a clean slate under killed sessions, so the
+    factory drops the (deterministically-named) table *before* yielding.
+    This proves that mechanism using only psycopg2 — deliberately
+    avoiding a ``dataknobs-data`` import so ``dataknobs-common``'s test
+    suite keeps no cross-package coupling (the Change C guard, which
+    relies on this pre-drop in production, has its own reproduce-first
+    test in ``dataknobs-data``).
+    """
+    import psycopg2
+
+    monkeypatch.setattr(
+        "dataknobs_common.testing.postgres_fixtures.uuid.uuid4",
+        lambda: _FixedUUID(),
+    )
+    prefix = "test_pgv_predrop_"
+    table = f"{prefix}{_FixedUUID.hex[:8]}"
+    params = postgres_connection_params
+
+    # Simulate the leaked table from a killed session.
+    conn = psycopg2.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE"
+        )
+        cursor.execute(
+            f"CREATE TABLE public.{safe_sql_ident(table)} (id int)"
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    assert _table_exists(params, "public", table)
+
+    gen = make_pgvector_test_table(prefix, dimensions=768)
+    config = next(gen)
+
+    # Pre-drop must have removed the leaked table by the time the
+    # fixture yields its config.
+    assert config["table_name"] == table
+    assert config["dimensions"] == 768
+    assert not _table_exists(params, "public", table)
+
+    # Give teardown something to drop, then exhaust the generator.
+    conn = psycopg2.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"CREATE TABLE public.{safe_sql_ident(table)} (id int)"
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert not _table_exists(params, "public", table)
+
+
+# -- Change B: gated orphan sweep ------------------------------------------
+
+
+def _run_sweep(params: dict) -> None:
+    postgres_fixtures._sweep_orphan_test_tables.__wrapped__(params)  # type: ignore[attr-defined]
+
+
+def test_sweep_orphan_noop_when_flag_unset(monkeypatch):
+    """Flag unset → returns before any connection (bogus host is safe)."""
+    monkeypatch.delenv("DK_SWEEP_ORPHAN_TEST_TABLES", raising=False)
+    # If it tried to connect to this host it would error; it must not.
+    _run_sweep({"database": "test_x", "host": "127.0.0.1", "port": 1})
+
+
+@pytest.mark.parametrize(
+    ("db", "allowed"),
+    [
+        ("dataknobs_test", True),
+        ("test_dataknobs", True),
+        ("test_records_ab12", True),
+        ("something_test", True),
+        ("dataknobs", False),
+        ("prod", False),
+        ("", False),
+    ],
+)
+def test_sweep_orphan_allowlist(monkeypatch, caplog, db, allowed):
+    """Fail-closed: non-test DB names are refused (warn, no connection)."""
+    monkeypatch.setenv("DK_SWEEP_ORPHAN_TEST_TABLES", "true")
+    # Unreachable host: an *allowed* db proceeds to connect and is
+    # swallowed as "unreachable"; a *refused* db returns before connect.
+    with caplog.at_level("WARNING"):
+        _run_sweep(
+            {
+                "database": db,
+                "host": "127.0.0.1",
+                "port": 1,
+                "user": "u",
+                "password": "p",
+            }
+        )
+    refused_phrase = "not on the test-DB allowlist"
+    if allowed:
+        assert "unreachable" in caplog.text
+        assert refused_phrase not in caplog.text
+    else:
+        assert refused_phrase in caplog.text
+        assert "unreachable" not in caplog.text
+
+
+@requires_postgres
+def test_sweep_orphan_drops_only_test_tables(
+    postgres_connection_params, monkeypatch
+):
+    """Real sweep drops ``public.test_*`` and preserves non-test tables."""
+    import uuid as _uuid
+
+    import psycopg2
+
+    params = postgres_connection_params
+    suffix = _uuid.uuid4().hex[:8]
+    orphan = f"test_sweep_orphan_{suffix}"
+    keep = f"zz_sweep_keep_{suffix}"
+
+    conn = psycopg2.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+    )
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"CREATE TABLE public.{safe_sql_ident(orphan)} (id int)"
+        )
+        cursor.execute(
+            f"CREATE TABLE public.{safe_sql_ident(keep)} (id int)"
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("DK_SWEEP_ORPHAN_TEST_TABLES", "true")
+    try:
+        _run_sweep(params)
+        assert not _table_exists(params, "public", orphan)
+        assert _table_exists(params, "public", keep)
+    finally:
+        conn = psycopg2.connect(
+            host=params["host"],
+            port=params["port"],
+            user=params["user"],
+            password=params["password"],
+            database=params["database"],
+        )
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"DROP TABLE IF EXISTS public.{safe_sql_ident(keep)} CASCADE"
+            )
+            conn.commit()
+            cursor.close()
+        finally:
+            conn.close()
+
+
 @requires_postgres
 def test_make_postgres_test_db_cleanup_on_exception(make_postgres_test_db):
     """Factory-fixture teardown runs even when the test body raises.

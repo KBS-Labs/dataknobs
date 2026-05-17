@@ -216,9 +216,227 @@ try:
 
         return factory
 
+    def _pg_conn_str(params: dict[str, Any]) -> str:
+        """Build a libpq URI from the shared connection-params shape."""
+        return (
+            f"postgresql://{params['user']}:{params['password']}"
+            f"@{params['host']}:{params['port']}/{params['database']}"
+        )
+
+    @pytest.fixture
+    def make_pgvector_test_table(
+        ensure_postgres_ready: None,
+        postgres_connection_params: dict[str, Any],
+    ) -> Callable[..., Iterator[dict[str, Any]]]:
+        """Factory: per-test pgvector table, drop-BEFORE-create + teardown.
+
+        Mirrors :func:`make_postgres_test_db` (sync psycopg2 generator,
+        consumed via ``yield from``) but yields a ``PgVectorStore`` config
+        dict. The **pre-drop** is the load-bearing change: it defeats the
+        ``CREATE TABLE IF NOT EXISTS`` dimension shadow that a killed
+        prior session can leave behind (the same root cause Change C
+        guards in production), which a post-only-teardown DROP can never
+        guarantee under killed sessions. The teardown DROP is retained
+        best-effort, matching ``make_postgres_test_db``.
+
+            @pytest.fixture
+            def pgvector_config(make_pgvector_test_table):
+                yield from make_pgvector_test_table(
+                    "test_tombstone_", dimensions=768)
+
+        Args:
+            ensure_postgres_ready: Session fixture ensuring the test DB
+                exists.
+            postgres_connection_params: Session-scoped connection params.
+
+        Returns:
+            A callable ``factory(prefix, *, dimensions, schema="public")``
+            that yields a ``PgVectorStore`` config dict and drops the
+            table before yielding and again on teardown.
+        """
+
+        def factory(
+            prefix: str, *, dimensions: int, schema: str = "public"
+        ) -> Iterator[dict[str, Any]]:
+            import psycopg2
+
+            table = f"{prefix}{uuid.uuid4().hex[:8]}"
+            params = postgres_connection_params
+
+            def _drop() -> None:
+                conn = psycopg2.connect(
+                    host=params["host"],
+                    port=params["port"],
+                    user=params["user"],
+                    password=params["password"],
+                    database=params["database"],
+                )
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"DROP TABLE IF EXISTS "
+                        f"{safe_sql_ident(schema)}."
+                        f"{safe_sql_ident(table)} CASCADE"
+                    )
+                    conn.commit()
+                finally:
+                    cursor.close()
+                    conn.close()
+
+            def _ensure_vector_extension() -> None:
+                # The pgvector extension is a pgvector-specific
+                # prerequisite, so ensuring it is this fixture's
+                # responsibility — consumers no longer need a local
+                # ``_ensure_pgvector_extension`` helper.
+                conn = psycopg2.connect(
+                    host=params["host"],
+                    port=params["port"],
+                    user=params["user"],
+                    password=params["password"],
+                    database=params["database"],
+                )
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "CREATE EXTENSION IF NOT EXISTS vector"
+                    )
+                    conn.commit()
+                finally:
+                    cursor.close()
+                    conn.close()
+
+            _ensure_vector_extension()
+            _drop()  # pre-drop: defeat the IF-NOT-EXISTS dimension shadow
+            config = {
+                "backend": "pgvector",
+                "connection_string": _pg_conn_str(params),
+                "dimensions": dimensions,
+                "schema": schema,
+                "table_name": table,
+                "auto_create_table": True,
+                "id_type": "text",
+            }
+            try:
+                yield config
+            finally:
+                _drop()  # best-effort teardown
+
+        return factory
+
+    @pytest.fixture(scope="session", autouse=True)
+    def _sweep_orphan_test_tables(
+        postgres_connection_params: dict[str, Any],
+    ) -> None:
+        """Belt-and-suspenders sweep of *other* sessions' leaked tables.
+
+        Killed test sessions leak ``public.test_*`` tables (post-only
+        teardown can't drop them). This one-time session sweep removes
+        them, but is **fail-closed and opt-in**:
+
+        - no-op unless ``DK_SWEEP_ORPHAN_TEST_TABLES=true``;
+        - refuses (warns, drops nothing) unless the connected DB name is
+          on a test-DB allowlist — a ``test_`` prefix, a ``_test``
+          suffix, or one of the known test DB names. ``dataknobs_test``
+          (this repo's verified ``POSTGRES_DB`` default) matches via the
+          ``_test`` suffix; a production-looking name (``dataknobs``,
+          ``prod``) does not and is refused;
+        - drops only ``public.test_*``; never touches non-test tables;
+        - no-op (swallowed) when Postgres is unreachable.
+
+        Args:
+            postgres_connection_params: Session-scoped connection params
+                (read-only; this fixture deliberately does NOT depend on
+                ``ensure_postgres_ready`` so it cannot force DB creation).
+        """
+        if os.environ.get(
+            "DK_SWEEP_ORPHAN_TEST_TABLES", ""
+        ).lower() != "true":
+            return
+
+        db = str(postgres_connection_params.get("database", ""))
+        allowed = (
+            db in {"test_dataknobs", "dataknobs_test"}
+            or db.startswith("test_")
+            or db.endswith("_test")
+        )
+        if not allowed:
+            logger.warning(
+                "Orphan test-table sweep refused: database %r is not on "
+                "the test-DB allowlist (test_ prefix / _test suffix). "
+                "Dropping nothing.",
+                db,
+            )
+            return
+
+        import psycopg2
+
+        try:
+            conn = psycopg2.connect(
+                host=postgres_connection_params["host"],
+                port=postgres_connection_params["port"],
+                user=postgres_connection_params["user"],
+                password=postgres_connection_params["password"],
+                database=db,
+            )
+        except (OSError, psycopg2.OperationalError) as exc:
+            logger.warning(
+                "Orphan test-table sweep skipped: Postgres unreachable "
+                "(%s)",
+                exc,
+            )
+            return
+
+        # Autocommit + per-table DROP: a leaked backlog can be hundreds
+        # of tables (the very condition this sweep exists to clear);
+        # batching them into one transaction exhausts
+        # max_locks_per_transaction ("out of shared memory"). Each DROP
+        # commits and releases its locks immediately, and a single bad
+        # table cannot abort the rest.
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                r"""
+                SELECT tablename FROM pg_tables
+                WHERE schemaname = 'public' AND tablename LIKE 'test\_%'
+                """
+            )
+            orphans = [row[0] for row in cursor.fetchall()]
+            dropped = 0
+            for tbl in orphans:
+                try:
+                    cursor.execute(
+                        f"DROP TABLE IF EXISTS public."
+                        f"{safe_sql_ident(tbl)} CASCADE"
+                    )
+                    dropped += 1
+                except psycopg2.Error as exc:
+                    logger.warning(
+                        "Orphan test-table sweep could not drop %r: %s",
+                        tbl,
+                        exc,
+                    )
+            if dropped:
+                logger.info(
+                    "Orphan test-table sweep dropped %d/%d public.test_* "
+                    "table(s) in %r",
+                    dropped,
+                    len(orphans),
+                    db,
+                )
+        except psycopg2.Error as exc:
+            logger.warning("Orphan test-table sweep error: %s", exc)
+        finally:
+            cursor.close()
+            conn.close()
+
 except ImportError:
     # pytest not installed — fixture decorators unavailable.
     # The wait_for_postgres helper above remains usable.
     postgres_connection_params = None  # type: ignore[assignment]
     ensure_postgres_ready = None  # type: ignore[assignment]
     make_postgres_test_db = None  # type: ignore[assignment]
+    make_pgvector_test_table = None  # type: ignore[assignment]
+    _sweep_orphan_test_tables = None  # type: ignore[assignment]
