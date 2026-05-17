@@ -11,23 +11,21 @@ ingest, and unfiltered clear continues to wipe everything.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import numpy as np
 import pytest
 import pytest_asyncio
-
 from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
     requires_postgres,
-    safe_sql_ident,
 )
+
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if is_faiss_available():
@@ -59,48 +57,29 @@ _pgvector_marks = [
 ]
 
 
-def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-
-
-@pytest.fixture(scope="session")
-def _ensure_pgvector_extension() -> None:
-    if not ASYNCPG_AVAILABLE:
-        return
-
-    async def _setup() -> None:
-        conn = await asyncpg.connect(_get_test_connection_string())
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        finally:
-            await conn.close()
-
-    try:
-        asyncio.run(_setup())
-    except (OSError, asyncpg.PostgresError):
-        pass
-
-
 @pytest.fixture
-def pgvector_config(_ensure_pgvector_extension: None) -> dict[str, Any]:
-    return {
-        "connection_string": _get_test_connection_string(),
-        "dimensions": 4,
-        "metric": "cosine",
-        "schema": "public",
-        "table_name": f"test_clear_filter_{uuid.uuid4().hex[:8]}",
-        "auto_create_table": True,
-        "id_type": "text",
-    }
+def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
+    """Per-test pgvector config from the shared ``dataknobs-common``
+    fixture (pre-drop + teardown drop + pgvector-extension ensure live
+    there now). ``metric`` is preserved at ``cosine`` to keep behavior
+    byte-identical to the prior hand-rolled config.
+    """
+    gen = make_pgvector_test_table("test_clear_filter_", dimensions=4)
+    cfg = next(gen)
+    cfg["metric"] = "cosine"
+    try:
+        yield cfg
+    finally:
+        gen.close()
 
 
 async def _teardown_backend(backend: str, store: Any) -> None:
-    """Drop the per-test collection/table created by a fixture."""
+    """Drop the per-test collection created by a fixture.
+
+    pgvector tables are owned by the shared ``make_pgvector_test_table``
+    fixture (pre-drop + teardown drop); only Chroma needs explicit
+    collection cleanup here.
+    """
     if backend == "chroma":
         try:
             store.client.delete_collection(name=store.collection_name)
@@ -110,24 +89,6 @@ async def _teardown_backend(backend: str, store: Any) -> None:
                 store.collection_name,
                 exc,
             )
-    elif backend == "pgvector":
-        conn = None
-        try:
-            conn = await asyncpg.connect(_get_test_connection_string())
-            await conn.execute(
-                f"DROP TABLE IF EXISTS "
-                f"{safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
-            )
-        except (OSError, asyncpg.PostgresError) as exc:
-            logger.warning(
-                "pgvector teardown failed for table %s.%s: %s",
-                store.schema,
-                store.table_name,
-                exc,
-            )
-        finally:
-            if conn is not None:
-                await conn.close()
 
 
 # Three vectors split across two tenants. Vector values are

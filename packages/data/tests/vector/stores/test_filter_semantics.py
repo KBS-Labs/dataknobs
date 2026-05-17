@@ -21,23 +21,21 @@ pgvector-only cases.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import numpy as np
 import pytest
 import pytest_asyncio
-
 from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
     requires_postgres,
-    safe_sql_ident,
 )
+
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if is_faiss_available():
@@ -69,53 +67,29 @@ _pgvector_marks = [
 ]
 
 
-def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-
-
-@pytest.fixture(scope="session")
-def _ensure_pgvector_extension() -> None:
-    if not ASYNCPG_AVAILABLE:
-        return
-
-    async def _setup() -> None:
-        conn = await asyncpg.connect(_get_test_connection_string())
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        finally:
-            await conn.close()
-
-    try:
-        asyncio.run(_setup())
-    except (OSError, asyncpg.PostgresError):
-        pass
-
-
 @pytest.fixture
-def pgvector_config(_ensure_pgvector_extension: None) -> dict[str, Any]:
-    return {
-        "connection_string": _get_test_connection_string(),
-        "dimensions": 4,
-        "metric": "cosine",
-        "schema": "public",
-        "table_name": f"test_filter_{uuid.uuid4().hex[:8]}",
-        "auto_create_table": True,
-        "id_type": "text",
-    }
+def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
+    """Per-test pgvector config from the shared ``dataknobs-common``
+    fixture (pre-drop + teardown drop + pgvector-extension ensure live
+    there now). ``metric`` is preserved at ``cosine`` to keep behavior
+    byte-identical to the prior hand-rolled config.
+    """
+    gen = make_pgvector_test_table("test_filter_", dimensions=4)
+    cfg = next(gen)
+    cfg["metric"] = "cosine"
+    try:
+        yield cfg
+    finally:
+        gen.close()
 
 
 async def _teardown_backend(backend: str, store: Any) -> None:
-    """Drop the per-test collection/table created by a fixture.
+    """Drop the per-test Chroma collection created by a fixture.
 
-    Uses out-of-band connections so we don't depend on private store
-    attributes (notably ``PgVectorStore._pool``). Failures are logged
-    rather than swallowed so orphaned test collections/tables become
-    visible in pytest output.
+    pgvector tables are owned by the shared ``make_pgvector_test_table``
+    fixture (pre-drop + teardown drop), so only Chroma needs explicit
+    cleanup here. The Chroma failure is logged rather than swallowed so
+    an orphaned test collection becomes visible in pytest output.
     """
     if backend == "chroma":
         try:
@@ -126,23 +100,6 @@ async def _teardown_backend(backend: str, store: Any) -> None:
                 store.collection_name,
                 exc,
             )
-    elif backend == "pgvector":
-        conn = None
-        try:
-            conn = await asyncpg.connect(_get_test_connection_string())
-            await conn.execute(
-                f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
-            )
-        except (OSError, asyncpg.PostgresError) as exc:
-            logger.warning(
-                "pgvector teardown failed for table %s.%s: %s",
-                store.schema,
-                store.table_name,
-                exc,
-            )
-        finally:
-            if conn is not None:
-                await conn.close()
 
 
 # Five seed records exercising every metadata shape used by the
@@ -389,7 +346,8 @@ _DOMAIN_SCOPED_IDS = ["s1", "s2", "o1"]
 
 def _domain_scoped_metadata() -> list[dict[str, Any]]:
     """s1/s2 carry NO ``domain_id`` (must default to config ``t1``);
-    o1 explicitly belongs to ``t2`` (must be scoped out)."""
+    o1 explicitly belongs to ``t2`` (must be scoped out).
+    """
     return [
         {"k": "v"},
         {"k": "v"},
@@ -473,7 +431,8 @@ async def test_config_domain_id_scopes_count(
     domain_scoped_store: Any,
 ) -> None:
     """count() is implicitly scoped to the configured domain; a
-    cross-domain probe intersects to empty on every backend."""
+    cross-domain probe intersects to empty on every backend.
+    """
     # s1/s2 defaulted to t1; o1 is t2 and scoped out.
     assert await domain_scoped_store.count() == 2
     # Caller asking for a different domain than the configured scope
@@ -502,7 +461,8 @@ async def test_config_domain_id_scopes_update_metadata_where(
 ) -> None:
     """update_metadata_where(None, ...) only touches the configured
     domain — the count of affected rows is exactly the in-domain set,
-    and a cross-domain request is a no-op."""
+    and a cross-domain request is a no-op.
+    """
     affected = await domain_scoped_store.update_metadata_where(
         None, {"_stale": True}
     )

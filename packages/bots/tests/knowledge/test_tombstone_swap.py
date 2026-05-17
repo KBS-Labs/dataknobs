@@ -46,7 +46,7 @@ from dataknobs_data.vector.stores.memory import MemoryVectorStore
 logger = logging.getLogger(__name__)
 
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     ASYNCPG_AVAILABLE = True
 except ImportError:
@@ -70,15 +70,6 @@ _EMBED_DIM = 768  # EchoProvider's default embedding dimension.
 _ALL = -1.0
 
 
-def _pg_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-
-
 def _vector_store_config(backend: str) -> dict[str, Any]:
     if backend == "memory":
         return {"backend": "memory", "dimensions": _EMBED_DIM}
@@ -97,17 +88,10 @@ def _vector_store_config(backend: str) -> dict[str, Any]:
             "dimensions": _EMBED_DIM,
             "collection_name": f"tombstone_{uuid.uuid4().hex[:8]}",
         }
-    if backend == "pgvector":
-        return {
-            "backend": "pgvector",
-            "connection_string": _pg_connection_string(),
-            "dimensions": _EMBED_DIM,
-            "metric": "cosine",
-            "schema": "public",
-            "table_name": f"test_tombstone_{uuid.uuid4().hex[:8]}",
-            "auto_create_table": True,
-            "id_type": "text",
-        }
+    # pgvector config is sourced from the shared
+    # ``make_pgvector_test_table`` fixture in ``wired`` (pre-drop +
+    # teardown drop + pgvector-extension ensure live there), so it is
+    # never requested through this helper.
     raise AssertionError(f"unknown backend {backend}")
 
 
@@ -118,42 +102,15 @@ async def _seed(backend: InMemoryKnowledgeBackend) -> None:
     await backend.put_file("d", "docs/b.md", b"# B\n\nAlpha banana uniqueb.\n")
 
 
-async def _drop_pg_table(schema: str, table_name: str) -> None:
-    """Drop a pgvector test table if it exists.
-
-    The shared ``dataknobs_test`` database accumulates leftover tables
-    from suites whose teardown did not run (a killed/timed-out session).
-    ``PgVectorStore`` uses ``CREATE TABLE IF NOT EXISTS``, so a stale
-    same-named table at a different ``vector(N)`` would silently shadow
-    the store's intended dimension and surface as
-    ``asyncpg.DataError: expected <stale> dimensions, not <echo>``.
-    Calling this both *before* store construction and on teardown makes
-    the table's dimension deterministic regardless of leftover state.
-    """
-    conn = None
-    try:
-        from dataknobs_common.testing import safe_sql_ident
-
-        conn = await asyncpg.connect(_pg_connection_string())
-        await conn.execute(
-            f"DROP TABLE IF EXISTS "
-            f"{safe_sql_ident(schema)}.{safe_sql_ident(table_name)}"
-        )
-    except (OSError, asyncpg.PostgresError) as exc:
-        logger.warning("pgvector table drop failed: %s", exc)
-    finally:
-        if conn is not None:
-            await conn.close()
-
-
 async def _teardown_store(backend_name: str, store: Any) -> None:
+    # pgvector tables are owned by the shared make_pgvector_test_table
+    # fixture (pre-drop + teardown drop); only Chroma needs explicit
+    # collection cleanup here.
     if backend_name == "chroma":
         try:
             store.client.delete_collection(name=store.collection_name)
         except Exception as exc:
             logger.warning("Chroma teardown failed: %s", exc)
-    elif backend_name == "pgvector":
-        await _drop_pg_table(store.schema, store.table_name)
 
 
 @pytest.fixture(
@@ -189,12 +146,22 @@ async def wired(
     backend_name = request.param
     src = InMemoryKnowledgeBackend()
     await _seed(src)
-    vs_config = _vector_store_config(backend_name)
+    pg_gen = None
     if backend_name == "pgvector":
-        # Pre-drop: a leftover same-named table at a different
-        # vector(N) would shadow CREATE TABLE IF NOT EXISTS and make
-        # the column dimension non-deterministic in the shared DB.
-        await _drop_pg_table(vs_config["schema"], vs_config["table_name"])
+        # Lazily resolve the shared fixture only for pgvector so its
+        # ``ensure_postgres_ready`` dependency is not forced on the
+        # memory/faiss params (which run without Postgres). The fixture
+        # pre-drops the table and tears it down on ``pg_gen.close()``.
+        make_pgvector_test_table = request.getfixturevalue(
+            "make_pgvector_test_table"
+        )
+        pg_gen = make_pgvector_test_table(
+            "test_tombstone_", dimensions=_EMBED_DIM
+        )
+        vs_config = next(pg_gen)
+        vs_config["metric"] = "cosine"
+    else:
+        vs_config = _vector_store_config(backend_name)
     rag = await RAGKnowledgeBase.from_config(
         {
             "vector_store": vs_config,
@@ -208,6 +175,8 @@ async def wired(
     finally:
         await _teardown_store(backend_name, rag.vector_store)
         await rag.close()
+        if pg_gen is not None:
+            pg_gen.close()  # shared-fixture teardown drop
         await src.close()
 
 

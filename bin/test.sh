@@ -220,7 +220,15 @@ ${YELLOW}Advanced Usage:${NC}
     --ff                    Run failures first, then other tests
     --pdb                   Drop into debugger on failures
     --maxfail=N             Stop after N failures
-    
+
+${YELLOW}Randomized test order (pytest-randomly):${NC}
+    Test order is randomized each run. pytest prints the seed in its
+    header (e.g. "Using --randomly-seed=123456789"); pass it back to
+    reproduce an order-dependent flake from the log:
+    $0 data -- -p no:randomly             # Disable randomization
+    $0 data -- --randomly-seed=last       # Replay the previous run's order
+    $0 data -- --randomly-seed=123456789  # Replay a specific logged seed
+
 ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
     $0 data                               # Test data package
@@ -624,6 +632,10 @@ fi
 if [ -n "$PYTEST_ARGS" ]; then
     echo -e "Pytest args: ${CYAN}$PYTEST_ARGS${NC}"
 fi
+echo -e "${YELLOW}Test order is randomized (pytest-randomly).${NC} The seed is" \
+        "printed in the pytest header below; replay an order-dependent" \
+        "flake with ${CYAN}-- --randomly-seed=last${NC} (or a logged seed)," \
+        "or disable with ${CYAN}-- -p no:randomly${NC}."
 echo ""
 
 # Track overall test result

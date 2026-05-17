@@ -16,19 +16,18 @@ import asyncio
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import numpy as np
 import pytest
 import pytest_asyncio
-
 from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
     requires_postgres,
-    safe_sql_ident,
 )
+
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if is_faiss_available():
@@ -62,48 +61,29 @@ _pgvector_marks = [
 ]
 
 
-def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-
-
-@pytest.fixture(scope="session")
-def _ensure_pgvector_extension() -> None:
-    if not ASYNCPG_AVAILABLE:
-        return
-
-    async def _setup() -> None:
-        conn = await asyncpg.connect(_get_test_connection_string())
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        finally:
-            await conn.close()
-
-    try:
-        asyncio.run(_setup())
-    except (OSError, asyncpg.PostgresError):
-        pass
-
-
 @pytest.fixture
-def pgvector_config(_ensure_pgvector_extension: None) -> dict[str, Any]:
-    return {
-        "connection_string": _get_test_connection_string(),
-        "dimensions": 4,
-        "metric": "cosine",
-        "schema": "public",
-        "table_name": f"test_update_meta_where_{uuid.uuid4().hex[:8]}",
-        "auto_create_table": True,
-        "id_type": "text",
-    }
+def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
+    """Per-test pgvector config from the shared ``dataknobs-common``
+    fixture (pre-drop + teardown drop + pgvector-extension ensure live
+    there now). ``metric`` is preserved at ``cosine`` to keep behavior
+    byte-identical to the prior hand-rolled config.
+    """
+    gen = make_pgvector_test_table("test_update_meta_where_", dimensions=4)
+    cfg = next(gen)
+    cfg["metric"] = "cosine"
+    try:
+        yield cfg
+    finally:
+        gen.close()
 
 
 async def _teardown_backend(backend: str, store: Any) -> None:
-    """Drop the per-test collection/table created by a fixture."""
+    """Drop the per-test collection created by a fixture.
+
+    pgvector tables are owned by the shared ``make_pgvector_test_table``
+    fixture (pre-drop + teardown drop); only Chroma needs explicit
+    collection cleanup here.
+    """
     if backend == "chroma":
         try:
             store.client.delete_collection(name=store.collection_name)
@@ -113,24 +93,6 @@ async def _teardown_backend(backend: str, store: Any) -> None:
                 store.collection_name,
                 exc,
             )
-    elif backend == "pgvector":
-        conn = None
-        try:
-            conn = await asyncpg.connect(_get_test_connection_string())
-            await conn.execute(
-                f"DROP TABLE IF EXISTS "
-                f"{safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
-            )
-        except (OSError, asyncpg.PostgresError) as exc:
-            logger.warning(
-                "pgvector teardown failed for table %s.%s: %s",
-                store.schema,
-                store.table_name,
-                exc,
-            )
-        finally:
-            if conn is not None:
-                await conn.close()
 
 
 # Three vectors split across two tenants. Orthogonal unit vectors so
@@ -412,7 +374,8 @@ async def test_faiss_add_vectors_sets_created_equals_updated() -> None:
 @pytest.mark.asyncio
 async def test_faiss_readd_preserves_created_advances_updated() -> None:
     """Re-adding an existing id keeps ``_created_at``, advances
-    ``_updated_at`` (upsert semantics across FAISS internal-id eviction)."""
+    ``_updated_at`` (upsert semantics across FAISS internal-id eviction).
+    """
     store = FaissVectorStore(
         {
             "dimensions": 4,
@@ -483,7 +446,8 @@ async def test_faiss_update_metadata_refreshes_updated_at() -> None:
 async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     """Timestamps round-trip through the ``.meta`` pickle; a legacy
     pickle without a ``timestamps`` key loads as empty (rows return
-    ``None`` for both timestamps), mirroring ``memory.py`` load."""
+    ``None`` for both timestamps), mirroring ``memory.py`` load.
+    """
     persist = tmp_path / "faiss_ts.index"
     cfg = {
         "dimensions": 4,
@@ -570,7 +534,8 @@ async def empty_vector_store(
     request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
 ) -> AsyncIterator[Any]:
     """Initialized-but-unseeded store, so the test owns the exact
-    metadata dict passed to ``add_vectors`` (the aliasing subject)."""
+    metadata dict passed to ``add_vectors`` (the aliasing subject).
+    """
     backend = request.param
     store = _make_store(backend, pgvector_config)
     await store.initialize()
@@ -586,7 +551,8 @@ async def test_caller_mutation_after_add_does_not_leak_into_store(
     empty_vector_store: Any,
 ) -> None:
     """Caller → store isolation: mutating the dict after ``add_vectors``
-    must not change what the store returns."""
+    must not change what the store returns.
+    """
     caller_meta = {"k": 1}
     await empty_vector_store.add_vectors(
         _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
@@ -606,7 +572,8 @@ async def test_store_writes_do_not_leak_onto_caller_dict(
     empty_vector_store: Any,
 ) -> None:
     """Store → caller isolation: a store-internal write
-    (``update_metadata_where``) must not appear on the caller's dict."""
+    (``update_metadata_where``) must not appear on the caller's dict.
+    """
     caller_meta = {"k": 1}
     await empty_vector_store.add_vectors(
         _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
@@ -693,7 +660,8 @@ async def test_faiss_ivfflat_get_vectors_survives_save_load(
     tmp_path: Any,
 ) -> None:
     """IVF ``get_vectors`` still returns stored vectors after a
-    save/reload cycle (the side-car is pickled and restored)."""
+    save/reload cycle (the side-car is pickled and restored).
+    """
     dim = 128
     n = 8
     persist = tmp_path / "ivf.index"

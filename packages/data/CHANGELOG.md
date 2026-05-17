@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a backend DataKnobs ships. This is the store-layer primitive behind
   `dataknobs-bots`' `IngestSwapMode.TOMBSTONE` re-ingest.
 
+### Changed
+
+- **Review before upgrade.** `PgVectorStore` now validates the
+  existing `embedding` column's vector dimensionality at
+  initialization (when the table already exists and
+  `auto_create_table=True`). A mismatch between the stored
+  `vector(N)` and the configured `dimensions` now raises
+  `ConfigurationError` at `initialize()` — naming both dimensions —
+  instead of deferring to an opaque `asyncpg.DataError` at the first
+  insert. The guard is read-only (it reads
+  `pg_attribute.atttypmod`; no schema is altered or dropped).
+  Consumers that (incorrectly) relied on the silent
+  `CREATE TABLE IF NOT EXISTS` dimension shadow must drop/migrate the
+  mismatched table or reconfigure `dimensions`.
+
 ### Fixed
 
 - **`MemoryVectorStore`/`FaissVectorStore` now own ingested

@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `dataknobs_common.testing.postgres_fixtures` gains two pytest11
+  fixtures (auto-discovered by any package depending on
+  `dataknobs-common`; dev/test only — no runtime/consumer
+  propagation): `make_pgvector_test_table` — a factory mirroring
+  `make_postgres_test_db` that yields a per-test `PgVectorStore`
+  config dict and **drops the table before yielding** (the pre-drop
+  defeats the `CREATE TABLE IF NOT EXISTS` dimension shadow a killed
+  prior session can leave behind) as well as on teardown; and
+  `_sweep_orphan_test_tables` — a session-scoped autouse sweep of
+  leaked `public.test_*` tables that is fail-closed and opt-in (no-op
+  unless `DK_SWEEP_ORPHAN_TEST_TABLES=true`, refuses unless the
+  connected DB name is on a test-DB allowlist, drops per-table in
+  autocommit so a large leaked backlog cannot exhaust
+  `max_locks_per_transaction`).
+- `pytest-randomly` is now a dev/test dependency (root
+  `[dependency-groups] dev`; no runtime/consumer propagation). Test
+  order is randomized each run and the seed is printed in the pytest
+  header; `bin/test.sh` notes the replay/disable flags
+  (`--randomly-seed=last`, `--randomly-seed=<N>`, `-p no:randomly`) and
+  its `--help` documents them. Reproducible-order is the general
+  lever for order-dependent flakes.
 - `dataknobs_common.events.event_bus_backends` — a registry-extensible
   plugin point for `create_event_bus()`. Out-of-tree consumers register
   a custom `EventBus` backend

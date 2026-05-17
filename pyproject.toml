@@ -45,6 +45,7 @@ dev = [
     "mkdocs-awesome-pages-plugin>=2.9.0",
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "pytest-xdist>=3.5.0",
+    "pytest-randomly>=3.15.0",  # randomized test order; prints/replays a seed so order-dependent flakes are reproducible from the log
 ]
 
 [tool.uv.workspace]
