@@ -82,7 +82,7 @@ def _create_redis_bus(config: dict[str, Any]) -> EventBus:
 event_bus_backends.register("memory", _create_memory_bus)
 event_bus_backends.register("postgres", _create_postgres_bus)
 event_bus_backends.register("redis", _create_redis_bus)
-# Note: the "sqs" backend (SqsEventBus) is registered in Phase 2 alongside
+# Note: the "sqs" backend (SqsEventBus) is not yet registered alongside
 # events/sqs.py and the optional [sqs] dependency. Until then an unknown
 # "sqs" backend resolves to the same ValueError as any other unknown
 # backend, keeping this change behaviour-identical to the prior if/elif.

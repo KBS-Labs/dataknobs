@@ -1,12 +1,12 @@
-"""Tests for the distributed lock abstraction (Phase 1).
+"""Tests for the distributed lock abstraction.
 
 Real constructs only — no mocked/faked lock. A ``FakeLock`` appending
 to a list has the same blindness as ``MagicMock``; the point of a lock
 is its concurrency behaviour, so the real :class:`InProcessLock` is
 exercised directly (it is also the documented testing construct).
 
-Phase 2 adds ``PostgresAdvisoryLock`` with ``@requires_postgres``
-two-connection contention tests; not covered here.
+``PostgresAdvisoryLock`` with ``@requires_postgres``
+two-connection contention tests is not covered here.
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ class TestLockFactory:
         assert create_lock_top_level is create_lock
 
     def test_only_memory_registered_in_phase_1(self) -> None:
-        """Phase 1 registers exactly ``memory`` (postgres is Phase 2)."""
+        """The registry contains exactly ``memory`` (postgres is registered separately)."""
         assert set(lock_backends.list_keys()) == {"memory"}
 
     def test_unknown_backend_lists_registered(self) -> None:
