@@ -107,11 +107,11 @@ by design, since the two clocks are already unsynchronised.
   the timestamp side-car loads empty (`data.get("timestamps", {})`),
   so existing rows return `None` for both keys until the next
   `add_vectors` or `update_metadata` refresh repopulates them. An
-  index *persisted before the `IndexIDMap2` change* additionally
-  reloads as the original `IndexIDMap` (the serialized type is
-  restored by `faiss.read_index`) and still cannot reconstruct
-  vectors at all; re-adding the vectors once rebuilds it as
-  `IndexIDMap2` and restores both `get_vectors()` and timestamps.
+  index *persisted before the stored-vector side-car was added* also
+  has no `vectors` side-car (`data.get("vectors", {})` loads empty),
+  so `get_vectors()` returns `None` for its ids until the vectors are
+  re-added (or the corpus re-ingested) once; similarity `search` is
+  unaffected because the FAISS index itself is restored normally.
 
 ## Consumer metadata key collision
 
