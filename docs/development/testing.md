@@ -672,6 +672,36 @@ pytest -n auto          # Auto-detect CPU count
 pytest -n 4             # Use 4 processes
 ```
 
+### Randomized Test Order
+
+Test order is randomized on every run by
+[`pytest-randomly`](https://pypi.org/project/pytest-randomly/) (a dev
+dependency). This surfaces order-dependent flakes that a fixed order
+would hide. pytest prints the seed in its header:
+
+```
+Using --randomly-seed=123456789
+```
+
+Pass that seed back to reproduce a failure from the log:
+
+```bash
+# Replay the exact order from a logged seed
+pytest --randomly-seed=123456789
+
+# Replay the previous run's order
+pytest --randomly-seed=last
+
+# Disable randomization entirely
+pytest -p no:randomly
+```
+
+Via `bin/test.sh`, pass these after `--`
+(e.g. `./bin/test.sh data -- --randomly-seed=last`). UUID-based table
+names use `os.urandom` and are unaffected by the seed — randomized
+order is the general reproducibility lever, not a guarantee for
+fixtures that draw their own entropy.
+
 ### Verbose Output
 
 ```bash
