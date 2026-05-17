@@ -516,6 +516,18 @@ elif [[ "$TODO_COUNT" -gt 0 ]]; then
     fi
 fi
 
+# Check for internal-tracking-label leakage (Item NNN, RCN, PR #NNN, etc.)
+# This is a tree-wide invariant: a single hard-fail invocation over the
+# full packages/*/src + packages/*/tests scope (fast; runs in all modes),
+# independent of the per-target loop above.  Allowlist of genuine
+# fixture/data values lives in bin/internal-label-allowlist.txt.
+echo -e "${YELLOW}  Checking for internal-tracking-label leakage...${NC}"
+if uv run python "$ROOT_DIR/bin/check-internal-labels.py"; then
+    : # script prints its own success line
+else
+    FAILED=true
+fi
+
 # Summary
 echo -e "\n${YELLOW}Validation Summary:${NC}"
 echo -e "${YELLOW}==================${NC}"

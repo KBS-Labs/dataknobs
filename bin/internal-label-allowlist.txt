@@ -1,0 +1,33 @@
+# Internal-tracking-label guard allowlist
+#
+# Consumed by bin/check-internal-labels.py.  Each non-comment line is:
+#
+#     <repo-relative-path><TAB><exact-substring><TAB><reason>
+#
+# A label-regex hit is suppressed ONLY when the offending file's path
+# equals the entry path AND the offending line contains the exact
+# substring.  Keying is (path, substring) -- never line number, because
+# line numbers drift while content is stable.
+#
+# Every entry below is a genuine fixture record value or markdown
+# list-item test fixture -- NOT a planning/tracker reference.  Adding a
+# new entry is intentional friction: it produces a reviewer-visible diff
+# here and must state why the hit is data, not a leak.  Do NOT add an
+# entry to silence a real tracker label -- reword the source instead.
+#
+# Columns are TAB-separated.
+
+packages/bots/tests/test_knowledge.py	{"title": "Item 1"}	fixture record value
+packages/common/src/dataknobs_common/testing/_core.py	, "name": "Item 	fixture record value (Item 1-4)
+packages/fsm/src/dataknobs_fsm/api/async_simple.py	, 'text': 'Item 	docstring example fixture value (Item 1-3)
+packages/fsm/tests/test_streaming.py	, 'name': 'Item 	fixture record value (Item 1-3)
+packages/llm/tests/benchmarks/test_prompt_benchmarks.py	"Item 0" in result.content	generated benchmark test content
+packages/llm/tests/prompts/test_rag_caching.py	{"content": "Item 	fixture record value (Item 1-2)
+packages/xization/tests/test_content_transformer.py	{"name": "Item 	fixture record value (Item 1-2)
+packages/xization/tests/test_content_transformer.py	assert "Item 	fixture assertion on record value
+packages/xization/tests/test_ingestion.py	{"title": "Item 	fixture record value (Item 1-2)
+packages/xization/tests/test_json_chunker.py	, "description": "Item 	fixture record value (Item 1-3)
+packages/xization/tests/test_md_constructs.py	- Item 	markdown list-item test fixture
+packages/xization/tests/test_md_constructs.py	* Item 	markdown list-item test fixture
+packages/xization/tests/test_md_constructs.py	+ Item 	markdown list-item test fixture
+packages/xization/tests/test_md_constructs.py	assert "Item 	fixture assertion on markdown list content
