@@ -476,7 +476,8 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     assert rt["_updated_at"] == saved["_updated_at"]
     await reloaded.close()
 
-    # Simulate a pre-Item-36 .meta pickle (no "timestamps" key).
+    # Simulate a .meta pickle written before timestamp tracking
+    # existed (no "timestamps" key).
     import pickle
 
     meta_path = str(persist) + ".meta"

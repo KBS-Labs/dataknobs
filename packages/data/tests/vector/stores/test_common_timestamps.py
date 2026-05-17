@@ -1,4 +1,4 @@
-"""Tests for VectorStoreBase timestamp config + helpers (Item 36, Phase 2).
+"""Tests for VectorStoreBase timestamp config + helpers.
 
 Covers the shared timestamp exposure contract that all vector store
 backends inherit: ``timestamps`` sub-config parsing, ``_format_timestamp``

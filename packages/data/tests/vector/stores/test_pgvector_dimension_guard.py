@@ -1,4 +1,4 @@
-"""``PgVectorStore`` init-time vector-dimension mismatch guard (Item 129 C).
+"""``PgVectorStore`` init-time vector-dimension mismatch guard.
 
 ``_create_table`` uses ``CREATE TABLE IF NOT EXISTS ... embedding
 vector({dimensions})``. When a same-named table already exists at a

@@ -79,8 +79,9 @@ class MemoryVectorStore(VectorStore):
             # Convert lists back to numpy arrays
             self.vectors = {k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()}
             self.metadata_store = data["metadata_store"]
-            # .get() for backward-compat with pre-Item-36 pickle files —
-            # those files have no tracked timestamps, so existing rows
+            # .get() for backward-compat with pickle files written before
+            # timestamp tracking existed — those files have no tracked
+            # timestamps, so existing rows
             # return None/None on include_timestamps=True (analogous to
             # pgvector's pre-migration NULL rows).
             self.timestamps = data.get("timestamps", {})

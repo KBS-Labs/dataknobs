@@ -89,7 +89,7 @@ class TestPostgresIntegration:
         """``db.read(id)`` returns a record where ``record.id == id``.
 
         Pins the round-trip property that the async sibling silently
-        dropped pre-Item-114. Mirroring the assertion on the sync side
+        dropped before the id round-trip fix. Mirroring the assertion on the sync side
         keeps both backends honest about id round-trip — a future
         regression in either direction trips the parity test.
         """
@@ -441,7 +441,7 @@ class TestPostgresAsyncIntegration:
     async def test_async_read_preserves_record_id(self, postgres_test_db):
         """Async ``db.read(id)`` returns a record where ``record.id == id``.
 
-        Reproduces the Item 114 bug: pre-fix, async ``_row_to_record``
+        Reproduces the async id round-trip bug: pre-fix, async ``_row_to_record``
         copy-pasted the sync serializer body but dropped the
         ``ensure_record_id`` step. ``record.id`` was whatever was in
         the JSON payload — typically ``None`` for records written

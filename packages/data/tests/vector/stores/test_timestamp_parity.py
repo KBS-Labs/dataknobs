@@ -1,6 +1,6 @@
-"""Cross-backend parity tests for timestamp exposure (Item 36, Phase 7).
+"""Cross-backend parity tests for timestamp exposure.
 
-The Phase 2 abstraction exists so consumers can runtime-swap between
+The shared timestamp abstraction exists so consumers can runtime-swap between
 vector store backends without behavioral surprises. These tests
 parameterize the same body over every shipping backend and assert
 identical timestamp semantics:
@@ -10,7 +10,7 @@ identical timestamp semantics:
 - Upsert preserves ``_created_at`` and advances ``_updated_at``.
 
 Only **memory** and **pgvector** run today. FAISS and Chroma are
-deferred (see Item 36 plan, §Deferred Follow-ups) — when they land,
+deferred — when they land,
 each is added as a single ``pytest.param`` line; the test bodies do
 not change.
 """
@@ -81,8 +81,8 @@ async def any_vector_store(
 ) -> AsyncIterator[Any]:
     """Yield a freshly-initialized VectorStore for each backend param.
 
-    FAISS and Chroma will be added to ``params`` when Phases 5 and 6
-    of Item 36 land.
+    FAISS and Chroma will be added to ``params`` when their
+    timestamp support lands.
     """
     backend = request.param
     store: Any
