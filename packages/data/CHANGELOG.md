@@ -37,25 +37,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`FaissVectorStore.get_vectors()` returned `(None, None)` for every
-  id.** The index was wrapped in `faiss.IndexIDMap`, which does not
-  implement reconstruct-by-id; `get_vectors` reconstructs the stored
-  vector by internal id, so the underlying `RuntimeError` was caught
-  by a broad `except` and every lookup returned `(None, None)`. The
-  store now wraps with `faiss.IndexIDMap2` — a strict superset that
-  maintains the reverse map required for reconstruct, with identical
-  add/search/remove behavior and unchanged on-disk format. `flat` and
-  `hnsw` indexes (auto-selected for typical and small-dimension
-  configs) now reconstruct correctly; the `ivfflat`/`ivfpq` paths
-  additionally require `make_direct_map()` and remain a separately
-  tracked limitation. **Migration note:** an index *persisted before
-  this change* was serialized as `IndexIDMap` and `faiss.read_index`
-  restores it as that type, so a reloaded legacy index still cannot
-  reconstruct (and surfaces empty timestamps) until it is rebuilt —
-  re-add the vectors (or re-ingest) once to upgrade an on-disk index
-  in place; new indexes are unaffected.
+- **`MemoryVectorStore`/`FaissVectorStore` now own ingested
+  metadata** (copy-on-ingest, parity with `PgVectorStore`/
+  `ChromaVectorStore` which already serialize on write). Callers may
+  safely reuse or mutate the dict they passed to `add_vectors`
+  without corrupting store state, and store-internal keys (`_stale`,
+  injected timestamps) no longer leak onto the caller's dict.
+  (Behavior already in effect since the config-level `domain_id`
+  symmetry change via `VectorStoreBase._apply_domain_default`; this
+  entry documents the guarantee and adds a cross-backend conformance
+  test.)
+
+- **`FaissVectorStore.get_vectors()` returns stored vectors and
+  metadata for every index type.** Previously it returned
+  `(None, None)` for all ids on `ivfflat`/`ivfpq` indexes
+  (auto-selected for embedding dimensions ≥ 100 — the 384/768/1024
+  production case); `flat`/`hnsw` were unaffected. The store now keeps
+  the authoritative vectors in an internal side-car (same key space
+  as its metadata/timestamp stores) and serves `get_vectors` from
+  there instead of FAISS reconstruct-by-id, which is not usable for
+  IVF without a maintained direct map that this faiss build refuses
+  to combine with `remove_ids`. The FAISS index is retained for
+  similarity `search`; `get_vectors`, `delete_vectors`, upsert,
+  `clear`, and save/reload stay correct for IVF across re-ingest and
+  clear/repopulate cycles. A resolved id whose internal id has no
+  stored vector (post-delete reuse race) is logged at WARNING rather
+  than being silently indistinguishable from an absent id.
+  **Migration:** an index persisted by an earlier `dataknobs-data`
+  has no stored-vector side-car, so `get_vectors` returns `None` (and
+  empty timestamps) for its ids until rebuilt — re-add the vectors
+  (or re-ingest) once; `search` is unaffected, and new indexes need
+  no action.
+- **`FaissVectorStore` no longer crashes when an IVF store's first
+  batch is smaller than `nlist`.** Previously a sub-`nlist` first
+  `add_vectors` on an `ivfflat`/`ivfpq` store raised
+  `RuntimeError: ... 'is_trained' failed` (the train-skip path fell
+  through to `add_with_ids` on an untrained IVF index). The store now
+  serves a temporary flat index until the corpus reaches `nlist`,
+  then trains the real IVF and migrates to it from the side-car —
+  search and `get_vectors` stay correct throughout. The deferred
+  state is persisted, so a save/reload before the threshold resumes
+  correctly.
+- **`FaissVectorStore` IVF search now honors the configured
+  `nprobe`.** The index is wrapped in `IndexIDMap2`, which does not
+  proxy `nprobe`, so the setting never reached the underlying IVF and
+  every `ivfflat`/`ivfpq` search ran at FAISS's default `nprobe=1`
+  regardless of `search_params.nprobe` — silently degrading recall.
+  `search()` now unwraps the inner index and applies `nprobe` there.
 
 ### Changed
+
+- **`PgVectorStore` default `schema` changed from `"edubot"` to
+  `"public"`** (the PostgreSQL default). **Review before upgrade:**
+  deployments that relied on the implicit default were writing to a
+  schema named after an unrelated project; after upgrade they will
+  use `public`. To retain prior behavior, set `schema="edubot"`
+  explicitly in the store config. No in-tree consumer relied on the
+  implicit default.
 
 - **`MemoryVectorStore`, `FaissVectorStore`, and `ChromaVectorStore`
   now honor a config-level `domain_id`** (matching `PgVectorStore`).

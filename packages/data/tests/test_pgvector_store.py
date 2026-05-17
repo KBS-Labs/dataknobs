@@ -137,7 +137,7 @@ class TestPgVectorStoreConfiguration:
         store = PgVectorStore(config)
 
         assert store.table_name == "knowledge_embeddings"
-        assert store.schema == "edubot"
+        assert store.schema == "public"
         assert store.pool_min_size == 2
         assert store.pool_max_size == 10
         assert store.auto_create_table is True

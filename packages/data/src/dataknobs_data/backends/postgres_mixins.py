@@ -47,8 +47,8 @@ def validate_pg_identifier(value: Any, key: str) -> str:
 
     Raises ``ConfigurationError`` with a clear message when the value
     is not a string (e.g. a ``DatabaseSchema`` object accidentally
-    injected via a config-key collision — see Item 117) or has an
-    unsupported identifier shape (e.g. embedded spaces or quotes).
+    injected via a config-key collision) or has an unsupported
+    identifier shape (e.g. embedded spaces or quotes).
 
     Args:
         value: Config value to validate.
@@ -99,7 +99,7 @@ class PostgresBaseConfig(VectorConfigMixin):
         # Extract PostgreSQL-specific configuration.  Validate both
         # ``table`` and ``schema`` early to catch non-string or
         # malformed identifiers before they propagate to broken DDL
-        # at first query (Item 117 Change C).
+        # at first query.
         raw_table = config.pop("table", config.pop("table_name", "records"))
         raw_schema = config.pop("schema", config.pop("schema_name", "public"))
         table_name = validate_pg_identifier(raw_table, "table")

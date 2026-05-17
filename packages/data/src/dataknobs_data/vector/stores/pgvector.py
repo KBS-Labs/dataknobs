@@ -45,7 +45,7 @@ class PgVectorStore(VectorStore):
     Configuration:
         connection_string: PostgreSQL connection URL
         table_name: Table name (default: knowledge_embeddings)
-        schema: Database schema (default: edubot)
+        schema: Database schema (default: public)
         dimensions: Vector dimensions (required)
         metric: Distance metric (cosine, euclidean, inner_product)
         pool_min_size: Minimum connection pool size (default: 2)
@@ -74,7 +74,7 @@ class PgVectorStore(VectorStore):
             "connection_string": "postgresql://user:pass@host:5432/db",
             "dimensions": 768,
             "metric": "cosine",
-            "schema": "edubot",
+            "schema": "public",
         })
         ```
 
@@ -169,15 +169,15 @@ class PgVectorStore(VectorStore):
         # Validate identifier shape early so misconfiguration surfaces
         # as ``ConfigurationError`` at construction rather than as a
         # ``PostgresSyntaxError`` at first DDL.  Same defense-in-depth
-        # the records backends apply via ``_parse_postgres_config``
-        # (Item 117); the third Postgres consumer goes through this
-        # path independently.
+        # the records backends apply via ``_parse_postgres_config``;
+        # this Postgres consumer applies the same identifier
+        # validation independently.
         self.table_name = validate_pg_identifier(
             self.config.get("table_name", "knowledge_embeddings"),
             "table_name",
         )
         self.schema = validate_pg_identifier(
-            self.config.get("schema", "edubot"),
+            self.config.get("schema", "public"),
             "schema",
         )
         self._q_schema = quote_ident(self.schema)
