@@ -19,15 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import numpy as np
 import pytest
 import pytest_asyncio
+from dataknobs_common.testing import requires_postgres
 
-from dataknobs_common.testing import requires_postgres, safe_sql_ident
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 try:
@@ -55,53 +54,20 @@ _pgvector_marks = [
 ]
 
 
-def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
-
-
-@pytest.fixture(scope="session")
-def _ensure_pgvector_extension() -> None:
-    """Install the pgvector extension once per session.
-
-    No-op when asyncpg or postgres is unavailable — the
-    ``requires_postgres`` marker on the pgvector param will skip
-    pgvector-parameterized tests cleanly.
-    """
-    if not ASYNCPG_AVAILABLE:
-        return
-
-    async def _setup() -> None:
-        conn = await asyncpg.connect(_get_test_connection_string())
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        finally:
-            await conn.close()
-
-    try:
-        asyncio.run(_setup())
-    except (OSError, asyncpg.PostgresError):
-        # Postgres unavailable or extension install blocked; the
-        # requires_postgres marker handles skipping.
-        pass
-
-
 @pytest.fixture
-def pgvector_config(_ensure_pgvector_extension: None) -> dict[str, Any]:
-    """Per-test pgvector config with a unique table name for isolation."""
-    return {
-        "connection_string": _get_test_connection_string(),
-        "dimensions": 4,
-        "metric": "cosine",
-        "schema": "public",
-        "table_name": f"test_parity_{uuid.uuid4().hex[:8]}",
-        "auto_create_table": True,
-        "id_type": "text",
-    }
+def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
+    """Per-test pgvector config from the shared ``dataknobs-common``
+    fixture (pre-drop + teardown drop + pgvector-extension ensure live
+    there now). ``metric`` is preserved at ``cosine`` to keep behavior
+    byte-identical to the prior hand-rolled config.
+    """
+    gen = make_pgvector_test_table("test_parity_", dimensions=4)
+    cfg = next(gen)
+    cfg["metric"] = "cosine"
+    try:
+        yield cfg
+    finally:
+        gen.close()
 
 
 @pytest_asyncio.fixture(
@@ -133,14 +99,9 @@ async def any_vector_store(
         try:
             yield store
         finally:
-            try:
-                async with store._pool.acquire() as conn:
-                    await conn.execute(
-                        f"DROP TABLE IF EXISTS "
-                        f"{safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
-                    )
-            except Exception:
-                pass
+            # The shared make_pgvector_test_table fixture owns the
+            # table drop (it tears down after this store is closed,
+            # since any_vector_store depends on pgvector_config).
             await store.close()
     else:
         pytest.fail(f"Unknown backend param: {backend}")
