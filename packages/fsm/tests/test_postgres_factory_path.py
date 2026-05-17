@@ -31,7 +31,7 @@ def postgres_factory_path_config(
     No ``'type'`` key in ``connection_params`` — proves the canonical
     enum drives backend selection.  Uses the shared
     ``make_postgres_test_db`` fixture from
-    ``dataknobs_common.testing`` (Item 106 pytest11 plugin) so the
+    ``dataknobs_common.testing`` (pytest11 plugin) so the
     table is unique per test and dropped on teardown.
     """
     for pg in make_postgres_test_db("test_fsm_factory_"):
@@ -56,14 +56,14 @@ class TestPostgresFactoryPath:
     async def test_factory_path_initializes_against_postgres(
         self, postgres_factory_path_config: StorageConfig,
     ) -> None:
-        """Items 116 + 117: factory path produces ``AsyncPostgresDatabase``
+        """Factory path produces ``AsyncPostgresDatabase``
         and ``initialize()`` succeeds against a real PG.
 
         Failing pre-fix for two reasons simultaneously:
 
-        - Item 116: ``_db`` is ``AsyncMemoryDatabase`` because
+        - ``_db`` is ``AsyncMemoryDatabase`` because
           ``connection_params['type']`` is missing.
-        - Item 117: even with the type-key workaround in place,
+        - Even with the type-key workaround in place,
           ``initialize()`` would raise ``PostgresSyntaxError``
           because the FSM's ``DatabaseSchema`` object collided
           with the PG ``schema`` (schema-name) config key.
@@ -89,7 +89,7 @@ class TestPostgresFactoryPath:
         revert.
 
         The leading ``isinstance`` guard ensures this test fails
-        pre-fix on the silent-fallback bug (Item 116) rather than
+        pre-fix on the silent-fallback bug rather than
         passing trivially because the round-trip happened to
         succeed in memory.  Without the guard, this test would
         pass on the buggy code path because save → query succeeds
@@ -105,7 +105,7 @@ class TestPostgresFactoryPath:
                 "Factory path silently fell back to "
                 f"{type(storage._db).__name__} instead of producing an "
                 "AsyncPostgresDatabase — round-trip below would test "
-                "the wrong backend (Item 116)."
+                "the wrong backend."
             )
 
             history = ExecutionHistory(

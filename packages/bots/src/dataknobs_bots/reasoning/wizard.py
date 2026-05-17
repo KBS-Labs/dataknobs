@@ -3015,7 +3015,7 @@ class WizardReasoning(ReasoningStrategy):
                configured.
             2. **Re-extraction** — re-extract from the user's message
                at the landing stage when ``re_extract_on_entry`` is
-               configured (Item 89).  Skipped when ``user_message``
+               configured.  Skipped when ``user_message``
                is ``None`` (greet, or dict-input in ``advance()``).
             3. **Post-transition lifecycle** — subflow pop,
                auto-advance loop, entry/completion hooks.
@@ -3055,7 +3055,7 @@ class WizardReasoning(ReasoningStrategy):
                     exc_info=True,
                 )
 
-        # 2. Re-extraction (Item 89)
+        # 2. Re-extraction
         re_extracted = await self._run_post_transition_re_extraction(
             state, from_stage, user_message,
             llm=llm, manager=manager,

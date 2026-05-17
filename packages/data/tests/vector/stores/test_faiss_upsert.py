@@ -1,6 +1,6 @@
 """FaissVectorStore upsert / orphan-leak tests.
 
-Pre-existing bug surfaced by Item 118 review: ``add_vectors`` on
+Pre-existing bug: ``add_vectors`` on
 ``FaissVectorStore`` overwrote ``id_map[ext_id]`` for an already-
 present external ID without removing the prior internal ID's entries
 from the FAISS index or ``metadata_store``. Result: silent residuals

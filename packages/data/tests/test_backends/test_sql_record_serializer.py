@@ -2,7 +2,7 @@
 
 Pins the serializer's contract so the inbound (`row_to_record`) and
 outbound (`record_to_row`) directions cannot silently drift again — the
-same drift that produced the Item 114 async-postgres asymmetry.
+same drift that produced the async-postgres id round-trip asymmetry.
 """
 
 from __future__ import annotations

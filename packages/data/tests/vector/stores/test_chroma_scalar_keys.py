@@ -1,6 +1,6 @@
 """ChromaVectorStore ``scalar_metadata_keys`` opt-in tests.
 
-Item 118 review #13: pre-fix, ``ChromaVectorStore.count(filter=...)``
+Pre-fix, ``ChromaVectorStore.count(filter=...)``
 materialized all matching metadata in process whenever the filter
 included a scalar value, because Chroma's ``$eq`` does not match
 list-valued metadata and the partitioner conservatively post-filtered

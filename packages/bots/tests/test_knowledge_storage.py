@@ -297,7 +297,7 @@ class TestInMemoryKnowledgeBackend:
         The version passed to ``has_changes_since`` is a ``get_checksum``
         value (the canonical content snapshot), not the monotonic
         ``info.version`` counter — those lived in different spaces, which
-        was RC1 (a checksum-keyed check always reported "changed").
+        caused a checksum-keyed check to always report "changed".
         """
         await memory_backend.create_kb("test-domain")
 

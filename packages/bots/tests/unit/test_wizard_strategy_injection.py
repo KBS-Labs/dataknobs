@@ -1,4 +1,4 @@
-"""Tests for per-state strategy injection in wizard stages (Item 64A).
+"""Tests for per-state strategy injection in wizard stages.
 
 Validates that wizard stages can reference any registered strategy by
 name, not just the hardcoded single/react binary.

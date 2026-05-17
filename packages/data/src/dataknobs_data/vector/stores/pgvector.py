@@ -713,7 +713,7 @@ class PgVectorStore(VectorStore):
 
         Current steps:
 
-        * Add ``updated_at TIMESTAMP`` (Item 36). The column is added
+        * Add ``updated_at TIMESTAMP``. The column is added
           without a default so Postgres does not rewrite the table to
           backfill existing rows; ``NOW()`` is a volatile default and
           Postgres would otherwise evaluate it for every pre-existing

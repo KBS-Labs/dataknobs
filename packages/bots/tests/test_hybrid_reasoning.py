@@ -587,7 +587,7 @@ class TestHybridGreeting:
 
 
 # ------------------------------------------------------------------
-# Public API composition tests (Item 71)
+# Public API composition tests
 # ------------------------------------------------------------------
 
 

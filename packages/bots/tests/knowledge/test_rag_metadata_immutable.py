@@ -1,4 +1,4 @@
-"""Item 118 scope expansion 1: RAG chunk-metadata system-field protection.
+"""RAG chunk-metadata system-field protection.
 
 Pre-fix, ``RAGKnowledgeBase._embed_and_store_chunks`` built a
 chunk-metadata dict with system-controlled fields (``text``,

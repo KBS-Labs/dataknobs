@@ -1,4 +1,4 @@
-"""Item 118 scope expansion 2: markdown chunker node_type defense-in-depth.
+"""Markdown chunker node_type defense-in-depth.
 
 Pre-fix, ``MarkdownChunker._create_chunk`` built
 ``custom_metadata = {"node_type": node_type}`` then unconditionally

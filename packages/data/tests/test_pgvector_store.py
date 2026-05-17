@@ -1396,7 +1396,7 @@ class TestPgVectorStoreMetadataFields:
 @pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreUpdatedAtColumn:
-    """Test the ``updated_at`` column and migration (Item 36).
+    """Test the ``updated_at`` column and migration.
 
     Covers the base defect from PR #185 code review X4: the pgvector
     table should record when a row was last refreshed. The column is
@@ -1519,7 +1519,8 @@ class TestPgVectorStoreUpdatedAtColumn:
     ):
         """Pre-existing table without updated_at gains the column on init.
 
-        Simulates a consumer upgrading from a pre-Item-36 release: their
+        Simulates a consumer upgrading from a release predating
+        timestamp tracking: their
         table was created without ``updated_at``. On next
         ``initialize()``, the migration helper adds the column. Legacy
         rows have ``NULL`` in ``updated_at`` until re-ingested.
@@ -1671,7 +1672,7 @@ class TestPgVectorStoreUpdatedAtColumn:
 @pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreIncludeTimestamps:
-    """Tests for ``include_timestamps`` exposure on get_vectors/search (Item 36, Phase 3).
+    """Tests for ``include_timestamps`` exposure on get_vectors/search.
 
     Verifies that consumers can opt into per-row created_at/updated_at
     metadata via the cross-backend ``include_timestamps=True`` kwarg.

@@ -151,7 +151,7 @@ class TestSubstituteEnvVars:
         assert result["path"].endswith("/test")
 
     def test_url_with_double_slash_preserved(self, monkeypatch):
-        """Bug B4: URLs with :// must not have double-slash collapsed.
+        """URLs with :// must not have double-slash collapsed.
 
         Path(result).expanduser() normalizes path separators, turning
         postgresql://host:5432/db into postgresql:/host:5432/db.
@@ -163,7 +163,7 @@ class TestSubstituteEnvVars:
         assert result["dsn"] == "postgresql://host:5432/db"
 
     def test_url_env_var_substitution_preserves_scheme(self, monkeypatch):
-        """Bug B4: Various URL schemes must survive env var substitution."""
+        """Various URL schemes must survive env var substitution."""
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         monkeypatch.setenv("HTTP_URL", "https://api.example.com/v1")
 
@@ -193,7 +193,7 @@ class TestSubstituteEnvVars:
         assert result == data
 
     def test_dict_key_substitution(self, monkeypatch):
-        """Bug B5: Dict keys containing ${VAR} must be substituted."""
+        """Dict keys containing ${VAR} must be substituted."""
         monkeypatch.setenv("TOKEN", "secret-abc-123")
 
         result = substitute_env_vars({"${TOKEN}": {"role": "admin"}})
@@ -232,7 +232,7 @@ class TestSubstituteEnvVars:
         assert "~" not in key
         assert key.endswith("/configs")
 
-    # --- Item 109 — bash-superset syntax + new option flags ---
+    # --- bash-superset syntax + new option flags ---
 
     def test_dash_default_syntax(self, monkeypatch):
         """Bash-style ${VAR:-default} works as alias for ${VAR:default}."""

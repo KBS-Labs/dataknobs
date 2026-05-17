@@ -1,6 +1,6 @@
 """Tests for Postgres config-key identifier validation.
 
-Item 117 Change C: the postgres backend config parser must reject a
+The postgres backend config parser must reject a
 non-string ``schema`` or ``table`` value at construction time with a
 clear ``ConfigurationError``, rather than silently propagating it
 through ``quote_ident()`` and producing broken DDL at first query.
@@ -27,9 +27,9 @@ class TestPostgresConfigValidation:
     """Validation of the ``schema`` / ``table`` config keys."""
 
     def test_non_string_schema_raises_configuration_error(self) -> None:
-        """Item 117 Change C: a non-string ``schema`` is rejected.
+        """A non-string ``schema`` is rejected.
 
-        Reproduces Bug B16's surface: when the FSM's
+        Reproduces the failure surface where the FSM's
         ``DatabaseSchema`` object was injected as the ``schema`` key
         (a config-name collision with the PG schema-name key), the
         prior code passed it through ``quote_ident()`` and emitted
@@ -46,7 +46,7 @@ class TestPostgresConfigValidation:
         assert "string" in msg.lower()
 
     def test_non_string_table_raises_configuration_error(self) -> None:
-        """Item 117 Change C (expansion): same validation on ``table``.
+        """Same validation on ``table``.
 
         Same shape, same hazard — a non-string ``table`` value
         would propagate to broken DDL identically.  Pin the

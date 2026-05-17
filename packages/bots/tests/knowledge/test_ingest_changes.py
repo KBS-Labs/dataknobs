@@ -1,4 +1,4 @@
-"""Per-file delta ingest (Items 125+126 Phase 1).
+"""Per-file delta ingest.
 
 Real constructs only — ``InMemoryKnowledgeBackend`` is the documented
 testing backend, ``RAGKnowledgeBase`` uses the in-memory vector store

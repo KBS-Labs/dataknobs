@@ -1,7 +1,7 @@
-"""Item 118 Option B: ``VectorStore.clear(filter=...)`` cross-backend tests.
+"""``VectorStore.clear(filter=...)`` cross-backend tests.
 
 The unscoped ``clear()`` API has been a known limitation since
-multi-tenant scoping shipped (Item 8); the consumer-reachable bug at
+multi-tenant scoping shipped; the consumer-reachable bug at
 ``KnowledgeIngestionManager.ingest()`` (which calls unscoped
 ``clear()`` while reloading a single domain in a shared store)
 made it production-affecting.  These tests pin the post-fix

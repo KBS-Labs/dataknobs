@@ -1,7 +1,7 @@
 """Behavioral tests for identity/metadata configurability in
 ``VectorKnowledgeSource``.
 
-Covers Item 97: three optional callables (``dedup_key``,
+Covers three optional callables (``dedup_key``,
 ``source_id_fn``, ``metadata_fn``) on both the main
 ``VectorKnowledgeSource.query`` path and the topic-index path
 (``_build_vector_query_fn`` closure), plus factory wiring via

@@ -5,8 +5,8 @@ algorithm, not three per-backend reimplementations. Historically each
 backend copy-pasted ``return info.version != version`` for
 ``has_changes_since`` while ``get_checksum`` returned a content-snapshot
 MD5 — different value spaces, so the documented
-``get_checksum``→``has_changes_since`` pairing always reported "changed"
-(RC1; see Items 125+126 Phase 0). This mixin makes the canonical content
+``get_checksum``→``has_changes_since`` pairing always reported "changed".
+This mixin makes the canonical content
 snapshot *the* version: ``get_checksum`` produces it, and both
 ``has_changes_since`` and ``list_changes_since`` derive from it. One
 reviewed implementation; every backend inherits correct behaviour.
@@ -91,8 +91,8 @@ class KnowledgeResourceBackendMixin:
         ``version`` is a value previously returned by
         :meth:`get_checksum`. If it equals the current canonical
         identity the result is empty without needing a stored snapshot
-        (the equality short-circuit — correct for every backend, and the
-        RC1 fix). Otherwise the current files are diffed against
+        (the equality short-circuit — correct for every backend).
+        Otherwise the current files are diffed against
         :meth:`_load_snapshot`.
 
         Raises:

@@ -97,7 +97,7 @@ class VectorStoreBase(ConfigurableBase):
         # semantics. None ⇒ no implicit scoping (prior behavior).
         self.domain_id = self.config.get("domain_id")
 
-        # Timestamp exposure config (Item 36). All vector stores expose
+        # Timestamp exposure config. All vector stores expose
         # created_at / updated_at metadata via include_timestamps=True
         # on get_vectors() and search(). Backends that don't natively
         # persist timestamps (MVS, FAISS) track them in-process. Format

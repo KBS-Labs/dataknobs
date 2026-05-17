@@ -1,4 +1,4 @@
-"""Cross-backend metadata-filter semantics tests (Item 98).
+"""Cross-backend metadata-filter semantics tests.
 
 The four-quadrant semantics are:
 
