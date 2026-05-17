@@ -1,4 +1,4 @@
-"""Tests for re_extract_on_entry stage option (Item 89).
+"""Tests for re_extract_on_entry stage option.
 
 When a wizard transitions from stage A to stage B mid-turn and stage B
 has ``re_extract_on_entry: true``, the wizard re-extracts from the
@@ -274,7 +274,7 @@ class TestReExtractAdvancePath:
         is left True on the state.  If the next advance() transitions to
         a re_extract_on_entry stage, re-extraction clears the flag so
         extraction runs.  After re-extraction captures data, auto-advance
-        chains through to done (Item 92 gate relaxation).
+        chains through to done (gate relaxation).
         """
         config = _edit_back_config(re_extract=True, auto_advance_filled=False)
         # Force LLM extraction on all schema stages so the
@@ -317,7 +317,7 @@ class TestReExtractAdvancePath:
         )
 
         # Transitioned source → target, re-extraction captured value_field,
-        # then auto-advance chained target → done (Item 92: re-extraction
+        # then auto-advance chained target → done (re-extraction
         # relaxes the auto_advance gate).
         assert result.transitioned is True
         assert state.data.get("routing_field") == "go"
@@ -335,7 +335,7 @@ class TestReExtractAdvancePath:
 
 
 class TestReExtractAutoAdvanceFalse:
-    """Item 92: re-extraction should chain-advance past auto_advance: false.
+    """Re-extraction should chain-advance past auto_advance: false.
 
     ``auto_advance: false`` means "don't auto-advance during normal turn
     processing" — NOT "never advance under any circumstances".  After
@@ -530,7 +530,7 @@ def _configbot_like_config(
 
 
 class TestReExtractRequiredFieldsGate:
-    """Item 92b: required-fields gate must be skipped after re-extraction.
+    """Required-fields gate must be skipped after re-extraction.
 
     When a stage has ``required: []`` (all fields optional), the
     required-fields fallback treats ALL properties as required.

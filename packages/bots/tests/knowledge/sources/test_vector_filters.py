@@ -1,6 +1,6 @@
 """Behavioral tests for filter passthrough in ``VectorKnowledgeSource``.
 
-Covers Item 95: ``intent.filters[self._name]`` must flow through to
+``intent.filters[self._name]`` must flow through to
 ``KnowledgeBase.query(filter_metadata=...)`` with scalar-equality
 semantics.
 """

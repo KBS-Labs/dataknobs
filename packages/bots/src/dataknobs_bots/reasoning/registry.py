@@ -61,7 +61,7 @@ def _register_builtins(
 
 
 # Module-level singleton — configured PluginRegistry replaces
-# the former StrategyRegistry class (consumer-gaps plan Item 65).
+# the former StrategyRegistry class.
 _registry: PluginRegistry[ReasoningStrategy] = PluginRegistry(
     "reasoning_strategies",
     validate_type=ReasoningStrategy,

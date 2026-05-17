@@ -1,4 +1,4 @@
-"""Integration tests for confirm_on_new_data refactor (Item 87).
+"""Integration tests for confirm_on_new_data refactor.
 
 Verifies the ConfirmationEvaluator is correctly wired into wizard.py
 and produces the expected confirmation behavior through BotTestHarness.

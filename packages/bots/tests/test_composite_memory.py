@@ -162,7 +162,7 @@ class TestVectorMemoryScoping:
     async def test_immutable_metadata_keys_block_caller_override(
         self, caplog
     ):
-        """Item 118: ``immutable_metadata_keys`` blocks caller override.
+        """``immutable_metadata_keys`` blocks caller override.
 
         Reproduces the consumer-reported tenant-scoping bypass: when a
         caller passes ``metadata={"user_id": "ATTACKER"}`` to
@@ -289,7 +289,7 @@ class TestVectorMemoryScoping:
 
     @pytest.mark.asyncio
     async def test_clear_auto_applies_default_filter(self):
-        """Item 118 sub-issue 8b: clear() auto-applies default_filter.
+        """clear() auto-applies default_filter.
 
         Pre-fix, ``clear()`` was unconditionally unscoped — even on
         tenant-scoped instances. Post-fix, calling ``clear()`` with no

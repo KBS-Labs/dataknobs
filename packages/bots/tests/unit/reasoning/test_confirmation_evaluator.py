@@ -1,4 +1,4 @@
-"""Unit tests for ConfirmationEvaluator (Item 87).
+"""Unit tests for ConfirmationEvaluator.
 
 Mostly pure synchronous tests — no LLM, no BotTestHarness.  Construct
 stage dicts and ``WizardState`` objects, call ``evaluate()``, assert on

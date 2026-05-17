@@ -3,7 +3,7 @@
 Real constructs only — `InMemoryKnowledgeBackend` / `FileKnowledgeBackend`
 are the documented testing backends; no mocks.
 
-RC1 regression: `get_checksum()` and `has_changes_since()` are
+Regression: `get_checksum()` and `has_changes_since()` are
 documented as a change-detection pair, but historically lived in
 different value spaces (`get_checksum` → content-snapshot MD5;
 `has_changes_since` → monotonic `info.version` counter). A consumer
@@ -132,7 +132,7 @@ class TestChangeSetInvariants:
 
     async def test_unchanged_short_circuit_is_empty(self, backend) -> None:
         """Equal version ⇒ empty ChangeSet for every backend (no snapshot
-        store needed — this is the RC1 fix that works universally)."""
+        store needed — this is the fix that works universally)."""
         await backend.create_kb("d")
         await backend.put_file("d", "a.md", b"A")
         version = await backend.get_checksum("d")
@@ -190,7 +190,7 @@ class TestInvalidVersionError:
 
 
 class TestIngestIfChangedRoundTrip:
-    """RC1 at the manager layer: capturing get_current_version and
+    """At the manager layer, capturing get_current_version and
     passing it back must NOT spuriously re-ingest an unchanged KB."""
 
     async def test_no_spurious_reingest_then_detects_real_change(

@@ -2973,7 +2973,7 @@ class TestTopicIndexIntegration:
 
 
 # ------------------------------------------------------------------
-# Public API for composition tests (Item 71)
+# Public API for composition tests
 # ------------------------------------------------------------------
 
 
