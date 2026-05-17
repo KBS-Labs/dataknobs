@@ -281,18 +281,18 @@ class ConfigLoader:
         reference is unset but ``${FSM_VAR}`` is set, the prefixed value is
         used (the prefix comes from ``self._env_prefix``).
 
-        Supported syntax (canonical, post-Item 109):
+        Supported syntax (canonical):
         - ``${VAR}`` — required; raises ``ValueError`` if unset
         - ``${VAR:default}`` — DataKnobs legacy default form
         - ``${VAR:-default}`` — bash-style default
         - ``${VAR:?error_msg}`` — bash-style required with custom error
 
-        ``substitute_keys=False`` matches the pre-Item 111 inline parser,
+        ``substitute_keys=False`` matches the legacy inline parser,
         which only walked dict values. Out-of-tree configs may have
         literal ``${...}`` strings as dict keys; expanding them is a
         behavior change beyond the migration's documented scope.
 
-        ``expand_user_paths=False`` matches the pre-Item 111 inline parser,
+        ``expand_user_paths=False`` matches the legacy inline parser,
         which returned ``os.environ[name]`` verbatim. The canonical helper
         defaults to ``True``, but the other in-tree config-loading callers
         (``Config._load_dict``, the legacy ``VariableSubstitution`` shim)

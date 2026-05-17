@@ -370,7 +370,7 @@ class TestConfigLoader:
             loader.load_from_dict(config_dict)
 
     def test_embedded_substitution_now_supported(self, monkeypatch):
-        """Embedded ${VAR} in a larger string substitutes (was literal pre-Item 111)."""
+        """Embedded ${VAR} in a larger string substitutes (was previously literal)."""
         monkeypatch.setenv("HOST", "db.example.com")
         monkeypatch.setenv("DB_PORT", "5432")
 
@@ -385,7 +385,7 @@ class TestConfigLoader:
     def test_legacy_dollar_var_form_no_longer_supported(self, monkeypatch):
         """Legacy unbraced `$VAR` form is no longer substituted; treated as literal.
 
-        Documented breaking change. Pre-flight audit (Item 111) confirmed
+        Documented breaking change. A pre-flight audit confirmed
         zero in-tree usage and zero documentation; out-of-tree consumers
         must migrate to ``${VAR}``.
         """

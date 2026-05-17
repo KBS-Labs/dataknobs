@@ -1,4 +1,4 @@
-"""Tests for shared-DB collision fix (Item 67, Bug B14).
+"""Tests for shared-DB collision fix.
 
 When a single AsyncDatabase instance is shared between history and step
 storage, queries must filter by record_type to avoid returning the wrong
@@ -75,7 +75,7 @@ class TestSharedDatabaseCollision:
     async def test_load_steps_does_not_crash(
         self, shared_storage: UnifiedDatabaseStorage
     ) -> None:
-        """Bug B14: load_steps() KeyError when history records in same DB."""
+        """load_steps() KeyError when history records in same DB."""
         exec_id = "exec-1"
         await shared_storage.save_history(_make_history(exec_id))
         await shared_storage.save_step(exec_id, _make_step("step-1"))

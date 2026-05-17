@@ -54,8 +54,8 @@ class FileStorage(UnifiedDatabaseStorage):
         config.connection_params = dict(config.connection_params)
 
         # Backend selection is now driven by ``StorageConfig.backend``
-        # (the canonical enum), so no ``'type'`` injection is needed
-        # — see Item 116.  This class is registered for
+        # (the canonical enum), so no ``'type'`` injection is needed.
+        # This class is registered for
         # ``StorageBackend.FILE`` and the parent's ``_setup_backend``
         # reads from the enum, so the file backend is selected
         # automatically.

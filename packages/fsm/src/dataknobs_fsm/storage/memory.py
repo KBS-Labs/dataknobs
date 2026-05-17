@@ -46,8 +46,8 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         config.mode_specific_config = dict(config.mode_specific_config)
 
         # Backend selection is now driven by ``StorageConfig.backend``
-        # (the canonical enum), so no ``'type'`` injection is needed
-        # — see Item 116.  This class is registered for
+        # (the canonical enum), so no ``'type'`` injection is needed.
+        # This class is registered for
         # ``StorageBackend.MEMORY`` and the parent's ``_setup_backend``
         # reads from the enum, so the memory backend is selected
         # automatically.

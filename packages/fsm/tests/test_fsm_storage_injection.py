@@ -1,4 +1,4 @@
-"""Tests for FSM storage database instance injection (Item 6).
+"""Tests for FSM storage database instance injection.
 
 Verifies that UnifiedDatabaseStorage (and subclasses) accept pre-built
 AsyncDatabase instances via keyword-only ``database`` and ``steps_database``

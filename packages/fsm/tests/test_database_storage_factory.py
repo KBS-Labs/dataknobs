@@ -9,7 +9,7 @@ This test suite covers:
 - Concurrent database operations
 - Transaction support
 - Error recovery
-- InMemoryStorage shared-DB collision (Bug B3)
+- InMemoryStorage shared-DB collision
 
 Uses real implementations instead of mocks following DRY principle.
 """
@@ -128,7 +128,7 @@ class TestDatabaseStorageFactory:
                     os.unlink(sqlite_config._temp_db_path)
     
     # Note: a former ``test_database_factory_with_invalid_backend`` was
-    # removed in the Item 116 fix.  It relied on the buggy
+    # removed in the fix.  It relied on the buggy
     # ``connection_params['type']`` factory-input path that has since been
     # removed; the canonical backend selection is now driven by the
     # ``StorageBackend`` enum on ``StorageConfig``, which Python's enum
@@ -382,9 +382,9 @@ class TestDatabaseStorageFactory:
     
     @pytest.mark.asyncio
     async def test_factory_path_uses_canonical_backend_enum(self) -> None:
-        """Item 116: ``_setup_backend`` reads from ``StorageConfig.backend``.
+        """``_setup_backend`` reads from ``StorageConfig.backend``.
 
-        Reproduces Bug B15: when ``connection_params`` does NOT
+        Reproduces the bug where, when ``connection_params`` does NOT
         redundantly carry a ``'type'`` key, the prior implementation
         defaulted to ``'memory'`` and silently constructed an
         ``AsyncMemoryDatabase`` regardless of the requested backend.
@@ -423,7 +423,7 @@ class TestDatabaseStorageFactory:
 
     @pytest.mark.asyncio
     async def test_statistics_reports_canonical_backend_type(self) -> None:
-        """Item 116 second site (database.py:571): ``get_statistics``
+        """Second site (database.py:571): ``get_statistics``
         reports the backend from ``StorageConfig.backend``, not
         ``connection_params['type']``.
 
@@ -447,7 +447,7 @@ class TestDatabaseStorageFactory:
 
     @pytest.mark.asyncio
     async def test_legacy_type_key_emits_deprecation_warning(self) -> None:
-        """Item 116: passing 'type' in connection_params is deprecated.
+        """Passing 'type' in connection_params is deprecated.
 
         Pins three contracts at once:
 
