@@ -1,13 +1,25 @@
 """Test that legacy package re-exports work correctly."""
 
+import sys
 import warnings
 
 
 def test_legacy_package_deprecation_warning():
-    """Test that importing the legacy package shows a deprecation warning."""
+    """Test that importing the legacy package shows a deprecation warning.
+
+    The warning is emitted at module-import time (``dataknobs/__init__.py``).
+    Since Python caches modules in ``sys.modules``, the module body only runs
+    on the first import in the process. Any other test that imports
+    ``dataknobs`` first would otherwise make this a no-op (an order-dependent
+    flake surfaced by randomized test order). Evict the package so the import
+    re-executes the module body and re-emits the warning regardless of order.
+    """
+    for name in [n for n in sys.modules if n == "dataknobs" or n.startswith("dataknobs.")]:
+        del sys.modules[name]
+
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        import dataknobs
+        import dataknobs  # noqa: F401  (import side effect under test)
 
         # Check that a deprecation warning was issued
         assert len(w) >= 1
