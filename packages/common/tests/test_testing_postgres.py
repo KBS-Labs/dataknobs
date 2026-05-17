@@ -274,6 +274,9 @@ def test_make_pgvector_test_table_pre_drops_leaked_table(
 
 
 def _run_sweep(params: dict) -> None:
+    # ``@pytest.fixture`` sets ``__wrapped__`` to the undecorated
+    # function; calling it directly exercises the sweep body without
+    # pytest's fixture injection.
     postgres_fixtures._sweep_orphan_test_tables.__wrapped__(params)  # type: ignore[attr-defined]
 
 

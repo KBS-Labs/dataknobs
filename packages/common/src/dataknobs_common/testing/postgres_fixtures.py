@@ -272,15 +272,14 @@ try:
                     database=params["database"],
                 )
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        f"DROP TABLE IF EXISTS "
-                        f"{safe_sql_ident(schema)}."
-                        f"{safe_sql_ident(table)} CASCADE"
-                    )
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            f"DROP TABLE IF EXISTS "
+                            f"{safe_sql_ident(schema)}."
+                            f"{safe_sql_ident(table)} CASCADE"
+                        )
                     conn.commit()
                 finally:
-                    cursor.close()
                     conn.close()
 
             def _ensure_vector_extension() -> None:
@@ -296,13 +295,12 @@ try:
                     database=params["database"],
                 )
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "CREATE EXTENSION IF NOT EXISTS vector"
-                    )
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "CREATE EXTENSION IF NOT EXISTS vector"
+                        )
                     conn.commit()
                 finally:
-                    cursor.close()
                     conn.close()
 
             _ensure_vector_extension()
@@ -396,40 +394,41 @@ try:
 
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         try:
-            cursor = conn.cursor()
-            cursor.execute(
-                r"""
-                SELECT tablename FROM pg_tables
-                WHERE schemaname = 'public' AND tablename LIKE 'test\_%'
-                """
-            )
-            orphans = [row[0] for row in cursor.fetchall()]
-            dropped = 0
-            for tbl in orphans:
-                try:
-                    cursor.execute(
-                        f"DROP TABLE IF EXISTS public."
-                        f"{safe_sql_ident(tbl)} CASCADE"
-                    )
-                    dropped += 1
-                except psycopg2.Error as exc:
-                    logger.warning(
-                        "Orphan test-table sweep could not drop %r: %s",
-                        tbl,
-                        exc,
-                    )
-            if dropped:
-                logger.info(
-                    "Orphan test-table sweep dropped %d/%d public.test_* "
-                    "table(s) in %r",
-                    dropped,
-                    len(orphans),
-                    db,
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    r"""
+                    SELECT tablename FROM pg_tables
+                    WHERE schemaname = 'public'
+                      AND tablename LIKE 'test\_%'
+                    """
                 )
+                orphans = [row[0] for row in cursor.fetchall()]
+                dropped = 0
+                for tbl in orphans:
+                    try:
+                        cursor.execute(
+                            f"DROP TABLE IF EXISTS public."
+                            f"{safe_sql_ident(tbl)} CASCADE"
+                        )
+                        dropped += 1
+                    except psycopg2.Error as exc:
+                        logger.warning(
+                            "Orphan test-table sweep could not drop "
+                            "%r: %s",
+                            tbl,
+                            exc,
+                        )
+                if dropped:
+                    logger.info(
+                        "Orphan test-table sweep dropped %d/%d "
+                        "public.test_* table(s) in %r",
+                        dropped,
+                        len(orphans),
+                        db,
+                    )
         except psycopg2.Error as exc:
             logger.warning("Orphan test-table sweep error: %s", exc)
         finally:
-            cursor.close()
             conn.close()
 
 except ImportError:
