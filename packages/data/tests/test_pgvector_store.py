@@ -1398,7 +1398,7 @@ class TestPgVectorStoreMetadataFields:
 class TestPgVectorStoreUpdatedAtColumn:
     """Test the ``updated_at`` column and migration.
 
-    Covers the base defect from PR #185 code review X4: the pgvector
+    Covers the base defect: the pgvector
     table should record when a row was last refreshed. The column is
     added to fresh tables via ``CREATE TABLE`` and to pre-existing
     tables via an idempotent ``ALTER TABLE ADD COLUMN IF NOT EXISTS``
