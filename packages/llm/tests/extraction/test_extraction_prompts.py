@@ -20,7 +20,7 @@ from dataknobs_llm.prompts.base.types import TemplateMode
 
 
 class TestPhrasingPreservationInstruction:
-    """Item 93: extraction prompts include phrasing-preservation instruction."""
+    """Extraction prompts include phrasing-preservation instruction."""
 
     def test_default_instructions_include_phrasing_preservation(self) -> None:
         """Instruction 10 tells the LLM to preserve user phrasing."""
