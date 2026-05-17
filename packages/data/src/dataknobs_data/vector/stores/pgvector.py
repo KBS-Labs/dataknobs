@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_utils.sql_utils import quote_ident
 
 from ...backends.postgres_mixins import validate_pg_identifier
@@ -600,6 +601,44 @@ class PgVectorStore(VectorStore):
                     raise RuntimeError(
                         f"Table {self.schema}.{self.table_name} does not exist "
                         "and auto_create_table is disabled."
+                    )
+            elif self.auto_create_table:
+                # Table already exists and we own its DDL. The embedding
+                # column's vector(N) typmod is authoritative: a stale
+                # same-named table at a different dimension makes
+                # ``CREATE TABLE IF NOT EXISTS`` a silent no-op, deferring
+                # the failure to an opaque ``asyncpg.DataError`` at the
+                # first insert. Read-only guard (pg_attribute.atttypmod;
+                # no DDL) — convert that into a loud, actionable
+                # construction-time error.
+                actual_dim = await conn.fetchval(
+                    """
+                    SELECT a.atttypmod
+                    FROM pg_attribute a
+                    JOIN pg_class c ON c.oid = a.attrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = $1 AND c.relname = $2
+                      AND a.attname = $3 AND NOT a.attisdropped
+                    """,
+                    self.schema,
+                    self.table_name,
+                    self._col("embedding"),
+                )
+                # pgvector encodes vector(N) dimensionality in atttypmod
+                # directly (no VARCHAR-style -4 offset); pinned by
+                # test_pgvector_atttypmod_decodes_to_vector_dimension. A
+                # dimensionless ``vector`` column has atttypmod -1 — skip
+                # (nothing authoritative to compare against).
+                if (
+                    actual_dim is not None
+                    and actual_dim > 0
+                    and actual_dim != self.dimensions
+                ):
+                    raise ConfigurationError(
+                        f"Table {self.schema}.{self.table_name} has "
+                        f"embedding vector({actual_dim}); store configured "
+                        f"for vector({self.dimensions}). Drop/migrate the "
+                        f"table or reconfigure dimensions."
                     )
 
             # Apply additive schema migrations for existing tables. Only
