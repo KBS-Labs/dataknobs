@@ -234,8 +234,9 @@ try:
         consumed via ``yield from``) but yields a ``PgVectorStore`` config
         dict. The **pre-drop** is the load-bearing change: it defeats the
         ``CREATE TABLE IF NOT EXISTS`` dimension shadow that a killed
-        prior session can leave behind (the same root cause Change C
-        guards in production), which a post-only-teardown DROP can never
+        prior session can leave behind (the same root cause the
+        production ``PgVectorStore`` init-time dimension guard
+        addresses), which a post-only-teardown DROP can never
         guarantee under killed sessions. The teardown DROP is retained
         best-effort, matching ``make_postgres_test_db``.
 

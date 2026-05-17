@@ -203,9 +203,9 @@ def test_make_pgvector_test_table_pre_drops_leaked_table(
     factory drops the (deterministically-named) table *before* yielding.
     This proves that mechanism using only psycopg2 — deliberately
     avoiding a ``dataknobs-data`` import so ``dataknobs-common``'s test
-    suite keeps no cross-package coupling (the Change C guard, which
-    relies on this pre-drop in production, has its own reproduce-first
-    test in ``dataknobs-data``).
+    suite keeps no cross-package coupling (the production init-time
+    dimension guard, which relies on this pre-drop in production, has
+    its own reproduce-first test in ``dataknobs-data``).
     """
     import psycopg2
 
