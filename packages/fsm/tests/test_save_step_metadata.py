@@ -1,4 +1,4 @@
-"""Phase 3f — metadata channel routes through ``record.metadata`` at save_step.
+"""Metadata channel routes through ``record.metadata`` at save_step.
 
 These tests exercise the structural prevention contract introduced by
 the ``AsyncKeyedRecordStore[_StepRecord]`` migration of
@@ -175,9 +175,9 @@ class TestSaveStepMetadataFiltering:
 
         Verifies the underlying structural contract: metadata written
         through ``save_step`` is filterable via the ``metadata.X``
-        field-path convention that backends already honor.  Phase 7
-        added the ``filter_metadata=`` kwarg on ``load_steps`` so
-        production callers no longer need to drop to the raw database
+        field-path convention that backends already honor.  The
+        ``filter_metadata=`` kwarg on ``load_steps`` lets
+        production callers avoid dropping to the raw database
         surface; the lower-level test stays here as a regression guard
         on the persisted shape.
         """
@@ -199,7 +199,7 @@ class TestSaveStepMetadataFiltering:
 
 
 class TestLoadStepsFilterSymmetry:
-    """Phase 7a — ``load_steps`` filter/pagination kwargs mirror the registry layer."""
+    """``load_steps`` filter/pagination kwargs mirror the registry layer."""
 
     @pytest.mark.asyncio
     async def test_filter_metadata_routes_to_metadata_column(self) -> None:

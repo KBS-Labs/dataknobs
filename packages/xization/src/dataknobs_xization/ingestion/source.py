@@ -10,7 +10,6 @@ module:
 * :class:`LocalDocumentSource` — backed by a local :class:`pathlib.Path`.
 * :class:`BackendDocumentSource` — backed by any
   :class:`KnowledgeResourceBackend` (file, memory, S3).
-  Added in Phase 2.
 
 Both are async-native. :class:`DirectoryProcessor` drives the protocol
 through :meth:`DirectoryProcessor.process_async`; the sync
@@ -84,7 +83,7 @@ class DocumentFileRef:
         source_uri: Opaque identifier for logging and metadata.
             Local: ``file:///abs/path``. Backend:
             ``{BackendClassName}://{domain_id}/{path}`` unless the
-            backend exposes a ``uri`` property (Phase 2).
+            backend exposes a ``uri`` property.
     """
 
     path: str

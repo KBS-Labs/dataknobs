@@ -1,4 +1,4 @@
-"""Async-specific processor tests for the Phase 1 refactor.
+"""Async-specific processor tests for the async refactor.
 
 Existing sync ``test_ingestion.py::TestDirectoryProcessor`` coverage
 is preserved unchanged by the sync ``process()`` wrapper. These tests
