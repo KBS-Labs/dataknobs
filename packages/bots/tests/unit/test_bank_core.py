@@ -1,8 +1,8 @@
 """Tests for _BankCore shared logic, Protocol conformance, storage layer, and lifecycle hooks.
 
-Covers Phases 2–4 of 03a: _BankCore logic, Protocol conformance (Phase 2),
-storage_id as record key, direct lookups, Query/Filter find (Phase 3),
-lifecycle hooks on MemoryBank/AsyncMemoryBank (Phase 4).
+Covers _BankCore logic, Protocol conformance,
+storage_id as record key, direct lookups, Query/Filter find,
+and lifecycle hooks on MemoryBank/AsyncMemoryBank.
 """
 
 from __future__ import annotations
@@ -469,12 +469,12 @@ class TestEmptyBankProxyNewMethods:
 
 
 # =====================================================================
-# Phase 3: Storage ID as record key
+# Storage ID as record key
 # =====================================================================
 
 
 class TestBankCoreStorageId:
-    """Verify storage_id is set on all created Records (Phase 3, AD-3)."""
+    """Verify storage_id is set on all created Records (AD-3)."""
 
     def test_create_bank_record_sets_storage_id(self) -> None:
         core = _make_core()
@@ -514,7 +514,7 @@ class TestBankCoreStorageId:
 
 
 class TestDirectLookupSync:
-    """Verify MemoryBank uses direct DB lookups (Phase 3, AD-10)."""
+    """Verify MemoryBank uses direct DB lookups (AD-10)."""
 
     def test_get_uses_direct_lookup(self) -> None:
         """Record added via add() is retrievable by db.read(record_id)."""
@@ -557,7 +557,7 @@ class TestDirectLookupSync:
 
 
 class TestDirectLookupAsync:
-    """Verify AsyncMemoryBank uses direct DB lookups (Phase 3, AD-10)."""
+    """Verify AsyncMemoryBank uses direct DB lookups (AD-10)."""
 
     @pytest.mark.asyncio
     async def test_get_uses_direct_lookup(self) -> None:
@@ -590,7 +590,7 @@ class TestDirectLookupAsync:
 
 
 class TestQueryFilterFind:
-    """Verify find() uses Query/Filter for DB-level filtering (Phase 3)."""
+    """Verify find() uses Query/Filter for DB-level filtering."""
 
     def test_find_with_field_values(self) -> None:
         db = SyncMemoryDatabase()
@@ -672,7 +672,7 @@ class TestFromDictBackwardCompat:
 
 
 # =====================================================================
-# Phase 4 — Lifecycle hooks
+# Lifecycle hooks
 # =====================================================================
 
 

@@ -749,7 +749,7 @@ class TestDataKnobsRegistryAdapterMetadata:
 
 
 class TestDataKnobsRegistryAdapterSurfaceCompletion:
-    """Phase 6a surface — status kwarg, list_inactive, sort/limit/offset, stream."""
+    """Adapter surface — status kwarg, list_inactive, sort/limit/offset, stream."""
 
     @pytest.fixture
     async def adapter(self):

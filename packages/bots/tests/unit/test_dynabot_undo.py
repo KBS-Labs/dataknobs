@@ -1,6 +1,6 @@
 """Tests for DynaBot.undo_last_turn() and rewind_to_turn().
 
-Phase 2b of the conversation undo plan: per-node FSM state, checkpoint
+Conversation undo: per-node FSM state, checkpoint
 recording, and coordinated undo across tree, memory, wizard state, and banks.
 """
 

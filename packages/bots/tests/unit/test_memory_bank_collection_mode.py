@@ -1,6 +1,6 @@
 """Tests for MemoryBank collection mode in wizard flows.
 
-Covers Phase 2: done signal detection, field clearing between records,
+Covers done signal detection, field clearing between records,
 and collection-mode branching in WizardReasoning.generate().
 """
 

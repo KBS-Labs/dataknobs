@@ -1,6 +1,6 @@
 """Tests for AsyncMemoryBank — async variant backed by AsyncDatabase.
 
-Covers Phase 4: async CRUD, duplicate detection, serialization modes.
+Covers async CRUD, duplicate detection, and serialization modes.
 """
 
 from __future__ import annotations

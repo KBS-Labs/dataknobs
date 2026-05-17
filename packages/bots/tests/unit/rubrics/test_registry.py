@@ -238,7 +238,7 @@ class TestRubricRegistry:
 
 
 class TestRubricRegistryMetadata:
-    """Phase 3d — metadata channel routes through ``record.metadata``."""
+    """Metadata channel routes through ``record.metadata``."""
 
     async def test_metadata_round_trips_through_metadata_column(self) -> None:
         """``Rubric.metadata`` is stored in and read from the metadata column."""
@@ -385,7 +385,7 @@ class TestRubricRegistryMetadata:
 
 
 class TestRubricRegistryPagination:
-    """Phase 6d — ``get_for_target``/``list_all`` sort/limit/offset and counts.
+    """``get_for_target``/``list_all`` sort/limit/offset and counts.
 
     Pins the post-dedup pagination contract: ``sort`` pushes to the
     database but ``limit``/``offset`` apply to the deduplicated rubric

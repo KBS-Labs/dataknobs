@@ -126,7 +126,7 @@ async def test_list_filter_metadata_non_object_returns_422(app_client) -> None:
     assert resp.status_code == 422
 
 
-# --- Phase 6b query-param push-down: status/sort/limit/offset --------
+# --- query-param push-down: status/sort/limit/offset --------
 
 
 @pytest.mark.asyncio
@@ -312,7 +312,7 @@ async def test_list_negative_offset_returns_422(app_client) -> None:
 
 @pytest.mark.asyncio
 async def test_list_all_params_combined(app_client) -> None:
-    """All Phase 6b params compose: status + filter_metadata + sort + offset + limit."""
+    """All params compose: status + filter_metadata + sort + offset + limit."""
     client, backend = app_client
     for i in range(6):
         await backend.register(
@@ -597,10 +597,10 @@ async def test_roundtrip_list_shape_matches_client_parser(
     assert parsed[0].metadata == {"tenant_id": "acme"}
 
 
-# --- Phase 6b round-trip: client encoding ↔ server parsing -----------
+# --- round-trip: client encoding ↔ server parsing -----------
 #
 # These tests construct the wire string the *client* would send for a
-# given set of Phase 6b kwargs, then feed it to the *server* via the
+# given set of query kwargs, then feed it to the *server* via the
 # in-process FastAPI app.  This catches drift between
 # ``HTTPRegistryBackend.list_all``'s URL building and the router's
 # ``Query`` parsing — for example, if the client switched from
@@ -634,7 +634,7 @@ async def test_roundtrip_sort_wire_format(http_backend_against_router) -> None:
 async def test_roundtrip_all_phase_6b_params(
     http_backend_against_router,
 ) -> None:
-    """All Phase 6b params encode → parse → push-down end-to-end."""
+    """All query params encode → parse → push-down end-to-end."""
     from dataknobs_data import SortOrder, SortSpec
 
     client, backend = http_backend_against_router

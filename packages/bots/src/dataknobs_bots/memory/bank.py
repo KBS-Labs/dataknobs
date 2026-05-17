@@ -499,7 +499,7 @@ class MemoryBank:
     Args:
         name: Bank identifier (e.g. ``"ingredients"``).
         schema: JSON-Schema-like dict.  Only ``required`` is enforced
-            in Phase 1 (fields that must be present and non-None).
+            (fields that must be present and non-None).
         db: Sync database backend for record storage.
         max_records: Optional cap on the number of records.
         duplicate_strategy: How to handle duplicates:
@@ -978,7 +978,7 @@ class AsyncMemoryBank:
 
     Args:
         name: Bank identifier.
-        schema: JSON-Schema-like dict (``required`` enforced in Phase 1).
+        schema: JSON-Schema-like dict (``required`` enforced).
         db: Async database backend for record storage.
         max_records: Optional cap on the number of records.
         duplicate_strategy: ``"allow"`` | ``"reject"`` | ``"merge"``.

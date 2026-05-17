@@ -1,6 +1,6 @@
 """Tests for intent classification and verbatim capture in wizard collection mode.
 
-Covers Phase 3 of 03b:
+Covers:
 - _needs_llm_extraction: schema-based auto-detection and capture_mode config
 - _classify_collection_intent: rule-based help detection
 - Verbatim capture path in _extract_data: single string field → no LLM call

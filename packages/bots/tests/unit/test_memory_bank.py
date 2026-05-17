@@ -1,7 +1,7 @@
 """Tests for MemoryBank — typed collection of structured records.
 
-Covers Phase 1 (core CRUD, serialization, EmptyBankProxy) and
-Phase 3 (duplicate detection, find) of the MemoryBank abstraction.
+Covers core CRUD, serialization, EmptyBankProxy,
+duplicate detection, and find for the MemoryBank abstraction.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ class TestMemoryBankMaxRecords:
 
 
 # =====================================================================
-# Duplicate detection tests (Phase 3)
+# Duplicate detection tests
 # =====================================================================
 
 class TestMemoryBankDuplicates:

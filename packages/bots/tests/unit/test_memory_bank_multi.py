@@ -1,7 +1,7 @@
 """Tests for multi-bank wizard flows and advanced operations.
 
-Covers Phase 5: multiple banks, cross-bank conditions, bank access
-in TransformContext, rich template rendering.
+Covers multiple banks, cross-bank conditions, bank access
+in TransformContext, and rich template rendering.
 """
 
 from __future__ import annotations
