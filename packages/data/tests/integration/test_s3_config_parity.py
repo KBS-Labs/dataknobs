@@ -68,7 +68,7 @@ def test_sync_and_async_accept_same_region_key(region_key: str) -> None:
     # Async path uses S3PoolConfig — its from_dict must accept the
     # same key shapes. Verify the projection without spinning up a
     # full aioboto3 session (the kwarg-shaping is exercised in the
-    # Phase 1 unit tests).
+    # unit tests).
     pool_cfg = S3PoolConfig.from_dict(cfg)
     assert pool_cfg.region_name == "eu-west-1"
     sess_cfg = pool_cfg.to_session_config()

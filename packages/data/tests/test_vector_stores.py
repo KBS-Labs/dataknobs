@@ -267,7 +267,7 @@ class TestMemoryVectorStore:
 
 
 class TestMemoryVectorStoreTimestamps:
-    """Phase 4: timestamp tracking + include_timestamps exposure on MVS."""
+    """Timestamp tracking + include_timestamps exposure on MVS."""
 
     @pytest.fixture
     def store(self):
