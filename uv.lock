@@ -1401,7 +1401,7 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'vector'", specifier = ">=0.29.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
-    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
+    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", extras = ["postgres", "sqlite", "duckdb", "s3", "elasticsearch", "parquet", "vector"], marker = "extra == 'all'", editable = "packages/data" },
@@ -1513,7 +1513,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'http'", specifier = ">=3.13.4" },
     { name = "anthropic", marker = "extra == 'llm'", specifier = ">=0.7.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.1" },
-    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
+    { name = "chromadb", marker = "extra == 'vector'", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.1.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
@@ -1705,6 +1705,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "dataknobs-data", extra = ["vector"] },
     { name = "editables" },
     { name = "hatchling" },
     { name = "ipywidgets" },
@@ -1750,6 +1751,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=26.3.1" },
+    { name = "dataknobs-data", extras = ["vector"], editable = "packages/data" },
     { name = "editables", specifier = ">=0.3" },
     { name = "hatchling", specifier = ">=1.21.0" },
     { name = "ipywidgets", specifier = ">=8.1.5" },

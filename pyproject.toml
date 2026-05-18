@@ -46,6 +46,13 @@ dev = [
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "pytest-xdist>=3.5.0",
     "pytest-randomly>=3.15.0",  # randomized test order; prints/replays a seed so order-dependent flakes are reproducible from the log
+    # Optional vector backends (faiss-cpu, chromadb, pgvector, asyncpg) must be
+    # present in the synced dev/test env so the @requires_faiss / @requires_*
+    # behavioral suites RUN rather than silently skip. `vector` stays an
+    # optional *consumer* extra; this only activates it for workspace dev.
+    # Referenced via the extra (not re-listed) to keep version specifiers
+    # single-sourced in packages/data/pyproject.toml.
+    "dataknobs-data[vector]",
 ]
 
 [tool.uv.workspace]
