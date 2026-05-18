@@ -372,8 +372,11 @@ class PostgresEventBus:
         on ``_listen_conn``, and asyncpg forbids concurrent operations
         on one connection, so it must be serialized against
         ``subscribe``/``_unsubscribe``'s ``LISTEN``/``UNLISTEN`` on the
-        same connection.
+        same connection. The invariant is asserted (cheap) rather than
+        left implicit, so a future caller that forgets the lock fails
+        loudly instead of racing asyncpg.
         """
+        assert self._lock.locked(), "_listen_conn_is_alive requires self._lock"
         conn = self._listen_conn
         if conn is None or conn.is_closed():
             return False
@@ -394,8 +397,12 @@ class PostgresEventBus:
         discipline). Both statements are awaited — the missing-``await``
         class of bug this guards against. ``asyncpg.connect`` is bounded
         by an explicit timeout so a wedged reconnect cannot stall
-        ``close()`` (which acquires the same lock) indefinitely.
+        ``close()`` (which acquires the same lock) indefinitely. The
+        held-lock invariant is asserted rather than left implicit.
         """
+        assert (
+            self._lock.locked()
+        ), "_reestablish_listen_conn_locked requires self._lock"
         import asyncpg
 
         new_conn = await asyncpg.connect(
@@ -436,18 +443,22 @@ class PostgresEventBus:
         ``subscribe``/``_unsubscribe`` (asyncpg has no concurrent-op
         safety on a single connection).
 
-        Healthy: sleep the poll interval and return (the supervisor
-        resets its failure counter on a clean return). Dead: rebuild and
-        re-register; any failure propagates so the shared supervisor
-        logs and backs off (exponential + jitter) before retrying —
-        never giving up.
+        Healthy: nothing to do. Dead: rebuild and re-register; any
+        failure propagates so the shared supervisor logs and backs off
+        (exponential + jitter) before retrying — never giving up.
+
+        Either way (healthy probe *or* successful rebuild) the watchdog
+        then sleeps the poll interval before the next probe, so the
+        cadence is uniform and a successful reconnect does not spin the
+        loop back into an immediate re-probe. The sleep is outside the
+        lock so it never blocks ``subscribe``/``_unsubscribe``. If the
+        rebuild raised, control never reaches the sleep — the supervisor
+        owns the back-off for the failure path.
         """
         async with self._lock:
-            healthy = await self._listen_conn_is_alive()
-            if not healthy:
+            if not await self._listen_conn_is_alive():
                 await self._reestablish_listen_conn_locked()
-        if healthy:
-            await asyncio.sleep(_LISTEN_POLL_INTERVAL)
+        await asyncio.sleep(_LISTEN_POLL_INTERVAL)
 
     def _notification_handler(
         self,
@@ -516,3 +527,16 @@ class PostgresEventBus:
     def subscription_count(self) -> int:
         """Get the number of active subscriptions."""
         return len(self._subscriptions)
+
+    @property
+    def is_listening(self) -> bool:
+        """Whether the dedicated-LISTEN-connection watchdog is running.
+
+        ``True`` between a successful ``connect()`` and ``close()`` while
+        the supervisory task is alive. Push-based delivery depends on
+        that task re-establishing a dropped LISTEN connection, so this is
+        the observable health signal for the delivery path (and lets
+        callers/tests assert supervision without reaching into
+        ``_listen_task``).
+        """
+        return self._listen_task is not None and not self._listen_task.done()

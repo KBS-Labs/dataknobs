@@ -1134,6 +1134,58 @@ result = await executor.execute(fetch_data, url)
 result = await executor.execute(parse_json, raw_text)
 ```
 
+### `compute_backoff_delay`
+
+Pure function that computes a single back-off delay for a given strategy
+and attempt. Shared by `RetryExecutor` (bounded "give up after N"
+retries) and the internal event-bus supervised-loop helper (unbounded
+"never give up" listeners), so the delay math lives in exactly one
+place. Stateless and side-effect-free (other than `random` for the
+jittered/decorrelated strategies) — safe to call directly.
+
+```python
+def compute_backoff_delay(
+    strategy: BackoffStrategy,
+    *,
+    attempt: int,
+    initial_delay: float,
+    max_delay: float,
+    backoff_multiplier: float = 2.0,
+    jitter_range: float = 0.1,
+    previous_delay: float | None = None,
+) -> float: ...
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `strategy` | `BackoffStrategy` | — | The back-off algorithm to apply |
+| `attempt` | `int` | — | The 1-based attempt number that just failed |
+| `initial_delay` | `float` | — | Base delay in seconds |
+| `max_delay` | `float` | — | Upper bound on the returned delay |
+| `backoff_multiplier` | `float` | `2.0` | Multiplier for `EXPONENTIAL` and `JITTER` |
+| `jitter_range` | `float` | `0.1` | Fractional jitter for `JITTER` (0.1 = +/-10%) |
+| `previous_delay` | `float \| None` | `None` | Prior delay; only consulted by `DECORRELATED` |
+
+**Returns:**
+
+- Delay in seconds, capped at `max_delay`.
+
+**Example:**
+```python
+from dataknobs_common import compute_backoff_delay
+from dataknobs_common.retry import BackoffStrategy
+
+# Exponential-with-jitter back-off for the 3rd consecutive failure.
+delay = compute_backoff_delay(
+    BackoffStrategy.JITTER,
+    attempt=3,
+    initial_delay=1.0,
+    max_delay=30.0,
+)
+```
+
 ---
 
 ## Transitions Module
@@ -1354,6 +1406,7 @@ from dataknobs_common import (
     BackoffStrategy,
     RetryConfig,
     RetryExecutor,
+    compute_backoff_delay,
 )
 
 # Transitions

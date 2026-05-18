@@ -3,19 +3,19 @@
 An event-bus listener is an *infinite supervised loop*: it must survive
 transient backend failures and back off between them, but it must
 **never give up** (unlike :class:`dataknobs_common.retry.RetryExecutor`,
-which retries N times then raises). Two backends previously each
-re-implemented the same flat ``await asyncio.sleep(1.0)`` loop with no
-jitter and no escalation, so a broker/region blip made every poll loop
-across every replica wake on the same 1-second boundary and re-hammer a
-degraded service in lockstep.
+which retries N times then raises).
 
-:func:`run_supervised_loop` is that loop, once. It owns the
-``while should_run()`` lifecycle, the cancel semantics, and the
-exponential-with-jitter back-off (via the shared
-:func:`dataknobs_common.retry.compute_backoff_delay`). It is an
-internal backend-implementation helper, **not** part of the public
-``EventBus`` protocol surface, so it is intentionally not re-exported
-from ``dataknobs_common.events``.
+:func:`run_supervised_loop` is that loop, defined once and shared by
+every backend listener. It owns the ``while should_run()`` lifecycle,
+the cancel semantics, and the exponential-with-jitter back-off (via the
+shared :func:`dataknobs_common.retry.compute_backoff_delay`). The jitter
+is what keeps listeners across replicas from waking on the same
+1-second boundary and re-hammering a degraded backend in lockstep; the
+escalation (capped, reset on a clean iteration) keeps a sustained
+outage from being polled tightly. It is an internal
+backend-implementation helper, **not** part of the public ``EventBus``
+protocol surface, so it is intentionally not re-exported from
+``dataknobs_common.events``.
 """
 
 from __future__ import annotations
