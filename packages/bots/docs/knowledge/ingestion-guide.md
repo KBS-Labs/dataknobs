@@ -325,6 +325,37 @@ favor of `swap_mode=`. `clear_existing=True` maps to `CLEAR_FIRST`,
 `False` to `APPEND`; passing it emits a `DeprecationWarning`. With
 neither argument the default is unchanged (`CLEAR_FIRST`).
 
+## Rate-Limiting the Embedder
+
+Each chunk is embedded with one provider call. Against a local
+Ollama embedder that is free; against a rate-limited hosted
+embedding API a large corpus can burst past the provider's limit and
+fail the whole ingest. Pass an optional
+`dataknobs_common.ratelimit.RateLimiter` to pace the ingest-path
+embed calls — every per-chunk embed is preceded by
+`await rate_limiter.acquire("embed")`.
+
+```python
+from dataknobs_common.ratelimit import create_rate_limiter
+from dataknobs_bots.knowledge import KnowledgeIngestionManager
+
+# e.g. 60 embeds/minute to stay under a hosted provider's quota
+limiter = create_rate_limiter({"rates": [{"limit": 60, "interval": 60}]})
+
+manager = KnowledgeIngestionManager(
+    source=backend,
+    destination=rag,
+    rate_limiter=limiter,
+)
+# Every ingest()/ingest_changes()/ingest_if_changed() now paces embeds.
+```
+
+The same `rate_limiter=` is available keyword-only on
+`RAGKnowledgeBase.ingest_from_backend(...)` for direct callers.
+`None` (the default) is unchanged behaviour — no pacing — so local
+Ollama deployments need no configuration. Pacing applies to the
+ingest path only; query/hybrid-search embedding is not throttled.
+
 ## Status Tracking
 
 `KnowledgeIngestionManager` transitions the domain's

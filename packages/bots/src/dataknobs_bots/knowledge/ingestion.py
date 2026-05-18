@@ -19,6 +19,7 @@ from .storage import IngestionStatus, InvalidVersionError
 
 if TYPE_CHECKING:
     from dataknobs_common.events import EventBus
+    from dataknobs_common.ratelimit import RateLimiter
     from dataknobs_xization.ingestion import KnowledgeBaseConfig
 
     from .rag import RAGKnowledgeBase
@@ -199,6 +200,7 @@ class KnowledgeIngestionManager:
         source: KnowledgeResourceBackend,
         destination: RAGKnowledgeBase,
         event_bus: EventBus | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         """Initialize the ingestion manager.
 
@@ -206,10 +208,19 @@ class KnowledgeIngestionManager:
             source: Backend storing knowledge files
             destination: RAG knowledge base for vector storage
             event_bus: Optional event bus for publishing ingestion events
+            rate_limiter: Optional :class:`~dataknobs_common.ratelimit.RateLimiter`
+                paced over the ingest-path embedder. When set, every
+                per-chunk embed call during ingest is preceded by
+                ``await rate_limiter.acquire("embed")`` so a
+                rate-limited embedding provider (e.g. a hosted API)
+                cannot fail the whole ingest under burst. ``None``
+                (default) is today's behaviour exactly — no pacing,
+                correct for a local Ollama embedder.
         """
         self._source = source
         self._destination = destination
         self._event_bus = event_bus
+        self._rate_limiter = rate_limiter
 
     @staticmethod
     def _resolve_swap_mode(
@@ -463,6 +474,7 @@ class KnowledgeIngestionManager:
             progress_callback=progress_callback,
             extra_metadata=extra_metadata,
             file_filter=upsert_filter,
+            rate_limiter=self._rate_limiter,
         )
 
         result.files_processed = int(stats.get("total_files", 0))

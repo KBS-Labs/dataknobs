@@ -132,6 +132,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge; the destination-side primitive the `TOMBSTONE` swap
   uses to mark (and, on rollback, un-mark) a generation without
   enumerating ids.
+- **Optional embedder rate-limit seam.**
+  `KnowledgeIngestionManager(__init__, rate_limiter=)` and the
+  keyword-only `RAGKnowledgeBase.ingest_from_backend(...,
+  rate_limiter=)` accept a
+  `dataknobs_common.ratelimit.RateLimiter`. When set, every
+  per-chunk embed on the ingest path is preceded by
+  `await rate_limiter.acquire("embed")`, so a rate-limited
+  embedding provider (e.g. a hosted API) cannot fail a whole
+  ingest under burst. The manager threads its `rate_limiter`
+  through to the embed core for every swap mode. `None` (the
+  default) is byte-for-byte the prior behaviour — no pacing,
+  correct for a local Ollama embedder.
 
 ### Changed
 
@@ -145,16 +157,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it and passing it back to `ingest_if_changed(last_version=...)`
   is now a correct round-trip.
 - **`IngestOrchestrator(__init__)`** accepts a new optional
-  `lock: DistributedLock | None = None` parameter. Per-domain
-  serialization of ingest triggers is now backed by an injected
-  `dataknobs_common.locks.DistributedLock` (keyed
-  `ingest:<domain_id>`) instead of an internal `asyncio.Lock`. The
-  default is `InProcessLock()` — process-local and
-  behaviour-identical to prior releases for single-replica
-  deployments. Multi-replica deployments must inject a cross-replica
-  lock; a process-local lock cannot serialize across replicas. A
-  built-in Postgres advisory-lock backend ships in a follow-up phase;
-  until then register a cross-replica backend via
+  `lock: DistributedLock | None = None` parameter **and** a
+  configuration-driven `lock_config: dict | None = None`
+  alternative. Per-domain serialization of ingest triggers is
+  backed by a `dataknobs_common.locks.DistributedLock` (keyed
+  `ingest:<domain_id>`) instead of an internal `asyncio.Lock`.
+  Supply a pre-built lock via `lock=`, or let the orchestrator
+  resolve one through the shared `create_lock` factory by passing
+  `lock_config={"backend": "postgres", ...}` — so a multi-replica
+  deployment selects a cross-replica backend by configuration
+  without writing code (no lock logic lives in `dataknobs-bots`).
+  The two are mutually exclusive (passing both raises
+  `ValueError`); an unknown `lock_config` backend raises
+  `ValueError` (fail closed). The default — neither supplied — is
+  `InProcessLock()`, process-local and behaviour-identical to
+  prior releases for single-replica deployments. Multi-replica
+  deployments must configure a cross-replica lock; a process-local
+  lock cannot serialize across replicas. A built-in Postgres
+  advisory-lock backend ships in a follow-up phase; until then
+  register a cross-replica backend via
   `dataknobs_common.locks.lock_backends`.
 - **`KnowledgeResourceBackend.set_ingestion_status`** accepts
   `IngestionStatus | str` (Protocol + memory / file / S3
