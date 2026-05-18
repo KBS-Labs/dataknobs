@@ -25,23 +25,9 @@ from dataknobs_bots.knowledge import (
 from dataknobs_bots.knowledge.orchestration import IngestOrchestrator
 from dataknobs_bots.knowledge.storage import InMemoryKnowledgeBackend
 from dataknobs_common.events import Event, EventType, InMemoryEventBus
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import requires_real_postgres
 
 TRIGGER_TOPIC = "knowledge:trigger"
-
-try:
-    import asyncpg  # noqa: F401
-
-    _ASYNCPG_AVAILABLE = True
-except ImportError:
-    _ASYNCPG_AVAILABLE = False
-
-_requires_real_postgres = pytest.mark.skipif(
-    os.environ.get("TEST_POSTGRES", "").lower() != "true"
-    or not _ASYNCPG_AVAILABLE,
-    reason="cross-replica orchestrator test requires "
-    "TEST_POSTGRES=true and asyncpg",
-)
 
 
 class _StubManager:
@@ -548,8 +534,7 @@ def pg_dsn(
 
 
 @pytest.mark.asyncio
-@requires_postgres
-@_requires_real_postgres
+@requires_real_postgres
 async def test_two_replicas_serialized_by_postgres_lock(
     pg_dsn: str,
 ) -> None:
@@ -668,7 +653,7 @@ class TestLockConfigConstruction:
 
         bus = await _make_bus()
         manager = _StubManager()
-        with pytest.raises(ValueError, match="lock.*lock_config"):
+        with pytest.raises(ValueError, match=r"lock.*lock_config"):
             IngestOrchestrator(
                 manager,  # type: ignore[arg-type]
                 bus,

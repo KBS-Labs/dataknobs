@@ -34,6 +34,7 @@ Example:
 
 import importlib.util
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -293,6 +294,14 @@ try:
         reason="LocalStack not available",
     )
 
+    requires_real_postgres = pytest.mark.skipif(
+        not is_postgres_available()
+        or os.environ.get("TEST_POSTGRES", "").lower() != "true"
+        or not is_package_available("asyncpg"),
+        reason="real-Postgres behavioural test requires a reachable "
+        "server, TEST_POSTGRES=true, and asyncpg installed",
+    )
+
     def requires_package(package_name: str) -> Any:
         """Create a skip marker for a required package.
 
@@ -328,6 +337,7 @@ except ImportError:
     requires_chromadb = None  # type: ignore
     requires_redis = None  # type: ignore
     requires_postgres = None  # type: ignore
+    requires_real_postgres = None  # type: ignore
     requires_localstack = None  # type: ignore
 
     def requires_package(package_name: str) -> Any:  # type: ignore

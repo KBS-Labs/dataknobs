@@ -6,8 +6,8 @@ is its concurrency behaviour, so the real :class:`InProcessLock` is
 exercised directly (it is also the documented testing construct).
 
 ``PostgresAdvisoryLock`` is exercised against a **real** Postgres with
-two independent instances (simulating two replicas) under
-``@requires_postgres`` + ``TEST_POSTGRES=true`` — never a fake; the
+two independent instances (simulating two replicas) under the shared
+``@requires_real_postgres`` gate — never a fake; the
 whole point of the backend is cross-process behaviour a list-appending
 fake cannot show. The ``_key_to_bigint`` keyspace mapping is a pure
 function and is tested without a database.
@@ -30,24 +30,7 @@ from dataknobs_common.locks import (
     create_lock,
     lock_backends,
 )
-from dataknobs_common.testing import requires_postgres
-
-try:
-    import asyncpg  # noqa: F401
-
-    _ASYNCPG_AVAILABLE = True
-except ImportError:
-    _ASYNCPG_AVAILABLE = False
-
-_pg_marks = [
-    requires_postgres,
-    pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not _ASYNCPG_AVAILABLE,
-        reason="postgres advisory-lock tests require "
-        "TEST_POSTGRES=true and asyncpg",
-    ),
-]
+from dataknobs_common.testing import requires_real_postgres
 
 
 class TestInProcessLock:
@@ -397,7 +380,7 @@ class TestPostgresAdvisoryLock:
     lock lets both "replicas" proceed).
     """
 
-    pytestmark = _pg_marks
+    pytestmark = requires_real_postgres
 
     async def test_two_instances_contend_same_key(self, pg_dsn: str) -> None:
         """Instance A holds; B times out; A releases; B then acquires."""

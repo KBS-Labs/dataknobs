@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connected DB name is on a test-DB allowlist, drops per-table in
   autocommit so a large leaked backlog cannot exhaust
   `max_locks_per_transaction`).
+- `dataknobs_common.testing.requires_real_postgres` — a pytest skip
+  mark for behavioural tests that need a live Postgres: skips unless
+  the server is reachable, `TEST_POSTGRES=true`, and `asyncpg` is
+  installed. A single shared gate for opt-in real-Postgres tests
+  across packages (no per-file re-derivation).
 - `pytest-randomly` is now a dev/test dependency (root
   `[dependency-groups] dev`; no runtime/consumer propagation). Test
   order is randomized each run and the seed is printed in the pytest

@@ -161,6 +161,12 @@ class PostgresAdvisoryLock:
         a finite ``timeout`` tries the non-blocking
         ``pg_try_advisory_lock`` fast path, then a bounded wait on the
         blocking form, returning ``False`` if it elapses.
+
+        ``timeout`` bounds only the lock-wait phase. Establishing the
+        dedicated connection is separately bounded by the fixed
+        ``_CONNECT_TIMEOUT`` and is not deducted from ``timeout``, so
+        worst-case wall time for a finite ``timeout`` is
+        ``_CONNECT_TIMEOUT + timeout``.
         """
         import asyncpg
 

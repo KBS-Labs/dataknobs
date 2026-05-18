@@ -276,8 +276,10 @@ The cross-replica `PostgresAdvisoryLock` is **not** faked in its own
 tests either — a fake has the same blindness as a mock, and the entire
 point of that backend is cross-process behaviour. It is exercised
 against a real Postgres with two independent instances simulating two
-replicas (gated by `@requires_postgres` + `TEST_POSTGRES=true`); start
-the service with `bin/dk up`.
+replicas, gated by the shared
+`dataknobs_common.testing.requires_real_postgres` mark (reachable
+server **and** `TEST_POSTGRES=true` **and** `asyncpg` installed);
+start the service with `bin/dk up`.
 
 ## API Reference
 

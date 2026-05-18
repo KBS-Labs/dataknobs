@@ -60,6 +60,7 @@ from dataknobs_common.testing._core import (
     requires_ollama_model,
     requires_package,
     requires_postgres,
+    requires_real_postgres,
     requires_redis,
     safe_sql_ident,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "requires_ollama_model",
     "requires_package",
     "requires_postgres",
+    "requires_real_postgres",
     "requires_redis",
     "safe_sql_ident",
     "wait_for_elasticsearch",
