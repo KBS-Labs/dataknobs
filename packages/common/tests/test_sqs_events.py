@@ -193,6 +193,60 @@ class TestSqsEventBus:
         assert len(attempts) >= 2
 
     @pytest.mark.asyncio
+    async def test_poll_loop_survives_transient_receive_error(
+        self, make_queue
+    ):
+        """A transient receive_message failure must not kill the loop.
+
+        The supervised loop logs the failure, backs off (non-zero
+        elapsed), then resumes delivery on the next iteration.
+        """
+        url = await make_queue()
+        bus = _make_bus(url)
+        await bus.connect()
+        received: list[Event] = []
+        timeline: dict[str, float] = {}
+
+        async def handler(event: Event) -> None:
+            timeline["delivered"] = asyncio.get_event_loop().time()
+            received.append(event)
+
+        # bus._client is the live aioboto3 SQS client (real LocalStack
+        # queue — no mock). Wrapping its receive_message is the single
+        # narrowest seam to inject ONE transient failure into the real
+        # poll path: it exercises run_supervised_loop's actual back-off
+        # + recovery against a real broker rather than a fake. The
+        # type: ignore is the expected cost of patching a bound method
+        # on a third-party client instance.
+        real_receive = bus._client.receive_message
+        state = {"failed": False}
+
+        async def flaky_receive(**kwargs):
+            if not state["failed"]:
+                state["failed"] = True
+                timeline["failed"] = asyncio.get_event_loop().time()
+                raise RuntimeError("injected transient receive failure")
+            return await real_receive(**kwargs)
+
+        bus._client.receive_message = flaky_receive  # type: ignore[method-assign]
+
+        try:
+            await bus.subscribe("flaky", handler)
+            await bus.publish(
+                "flaky",
+                Event(type=EventType.CREATED, topic="flaky", payload={"n": 1}),
+            )
+            await _wait_for(lambda: len(received) >= 1, timeout=20.0)
+        finally:
+            await bus.close()
+
+        assert state["failed"], "transient failure was never injected"
+        assert received[0].payload == {"n": 1}, "delivery did not resume"
+        # A back-off elapsed between the injected failure and recovery
+        # (base_delay 1.0 with +/-10% jitter -> at least ~0.8s).
+        assert timeline["delivered"] - timeline["failed"] >= 0.8
+
+    @pytest.mark.asyncio
     async def test_connect_idempotent_no_double_poll(self, make_queue):
         """Double connect() then one publish → exactly one delivery."""
         url = await make_queue()

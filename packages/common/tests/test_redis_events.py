@@ -69,6 +69,59 @@ class TestRedisEventBusIntegration:
             await bus.close()
 
     @pytest.mark.asyncio
+    async def test_listener_reestablishes_dropped_pubsub(self):
+        """A dropped pub/sub connection must be re-established.
+
+        Reproduce-first: before this fix the listener retried
+        ``get_message`` on the same dead pub/sub forever, so delivery
+        never resumed. Now each iteration owns rebuilding ``_pubsub``
+        and re-subscribing every tracked channel.
+        """
+        bus = RedisEventBus()
+        await bus.connect()
+        try:
+            received: list[Event] = []
+
+            async def handler(event: Event) -> None:
+                received.append(event)
+
+            await bus.subscribe("test:reconnect", handler)
+
+            # Forcibly kill the underlying pub/sub out from under the bus.
+            original = bus._pubsub
+            assert original is not None
+            await original.aclose()
+
+            # The listener iteration fails, discards the dead pub/sub,
+            # backs off, then re-establishes a *new* one and re-subscribes.
+            for _ in range(150):  # generous: back-off is ~1s jittered
+                if bus._pubsub is not None and bus._pubsub is not original:
+                    break
+                await asyncio.sleep(0.1)
+            assert bus._pubsub is not None and bus._pubsub is not original, (
+                "listener did not re-establish the pub/sub connection"
+            )
+
+            # Delivery resumes on the rebuilt connection.
+            await bus.publish(
+                "test:reconnect",
+                Event(
+                    type=EventType.UPDATED,
+                    topic="test:reconnect",
+                    payload={"resumed": True},
+                ),
+            )
+            for _ in range(50):
+                if received:
+                    break
+                await asyncio.sleep(0.05)
+
+            assert len(received) == 1
+            assert received[0].payload == {"resumed": True}
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
     async def test_unsubscribe_stops_delivery(self):
         """After unsubscribing, events are no longer delivered."""
         bus = RedisEventBus()

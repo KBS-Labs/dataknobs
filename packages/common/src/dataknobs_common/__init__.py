@@ -93,6 +93,7 @@ from dataknobs_common.retry import (
     BackoffStrategy,
     RetryConfig,
     RetryExecutor,
+    compute_backoff_delay,
 )
 from dataknobs_common.transitions import (
     InvalidTransitionError,
@@ -192,6 +193,7 @@ __all__ = [
     "BackoffStrategy",
     "RetryConfig",
     "RetryExecutor",
+    "compute_backoff_delay",
     # Transitions
     "InvalidTransitionError",
     "TransitionValidator",

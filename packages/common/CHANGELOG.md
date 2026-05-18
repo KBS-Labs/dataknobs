@@ -83,12 +83,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError` listing the registered backends.
 
 ### Changed
+- `compute_backoff_delay()` is now a public pure function in
+  `dataknobs_common.retry` (also re-exported from the top-level
+  `dataknobs_common` namespace). It encapsulates the back-off delay math
+  for every `BackoffStrategy` (FIXED/LINEAR/EXPONENTIAL/JITTER/
+  DECORRELATED) including the `max_delay` cap. `RetryExecutor` is
+  unchanged for callers — it now delegates its internal delay
+  computation to this function so the math has a single home shared with
+  the internal event-bus supervised-loop helper.
+- The `SqsEventBus` and `RedisEventBus` listener loops now back off with
+  exponential delay **plus jitter** and **escalate** under sustained
+  failure (capped), instead of a flat 1-second retry. A broker/region
+  blip no longer makes every listener (across replicas) wake on the same
+  1-second boundary and re-hammer a degraded backend in lockstep; a
+  recovered listener resets to the base delay. Both backends now share a
+  single internal supervised-loop helper, so back-off behaviour is
+  consistent and has one home.
 - `create_event_bus()` now resolves backends through
   `event_bus_backends` instead of a sealed `if/elif` chain. Behaviour is
   identical for the three built-in backends; the unknown-backend
   `ValueError` now lists all registered backends (including
   consumer-registered ones) instead of a hard-coded
   `memory, postgres, redis`.
+
+### Fixed
+- `PostgresEventBus` now reconnects a dropped dedicated LISTEN
+  connection. Previously, if that connection failed the notification
+  callback simply stopped firing and the bus **silently stopped
+  delivering events** with no error surfaced to subscribers. A
+  supervised watchdog now probes the LISTEN connection's liveness and,
+  on a drop, re-opens it and re-registers every active channel, so
+  delivery resumes.
+- `RedisEventBus` now re-establishes its pub/sub connection on
+  connection loss instead of retrying a dead one forever. Each listener
+  iteration owns rebuilding the pub/sub and re-subscribing every active
+  channel and pattern before reading, so delivery resumes after a
+  dropped connection.
+- `SqsEventBus` no longer starves a topic's consumer on a shared
+  single queue. A subscriber that receives a message for a *different*
+  topic now returns it to the queue immediately (visibility reset to 0)
+  instead of leaving it hidden for the full visibility timeout.
+  Previously, with multiple topic subscribers on one queue, a
+  subscriber could repeatedly receive-and-park another topic's message,
+  delaying or starving the subscriber that actually handles it; the
+  release is best-effort and never disrupts the poll loop.
 
 ## v1.3.12 - 2026-05-09
 

@@ -1,11 +1,17 @@
 """Tests for dataknobs_common.retry module."""
 
 import asyncio
+import random
 from unittest.mock import AsyncMock
 
 import pytest
 
-from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
+from dataknobs_common.retry import (
+    BackoffStrategy,
+    RetryConfig,
+    RetryExecutor,
+    compute_backoff_delay,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,124 @@ class TestBackoffDelayCalculation:
         executor = RetryExecutor(config)
         # attempt 5: 1.0 * 2^4 = 16.0, capped to 10.0
         assert executor._calculate_delay(5) == 10.0
+
+
+class TestComputeBackoffDelay:
+    """Direct unit tests for the public pure compute_backoff_delay().
+
+    RetryExecutor._calculate_delay delegates to this; the
+    TestBackoffDelayCalculation class above is the delegation regression
+    guard. These tests pin the pure function's own contract.
+    """
+
+    def test_fixed(self):
+        for attempt in (1, 2, 5):
+            assert (
+                compute_backoff_delay(
+                    BackoffStrategy.FIXED,
+                    attempt=attempt,
+                    initial_delay=2.0,
+                    max_delay=60.0,
+                )
+                == 2.0
+            )
+
+    def test_linear(self):
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.LINEAR, attempt=1, initial_delay=1.0, max_delay=60.0
+            )
+            == 1.0
+        )
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.LINEAR, attempt=3, initial_delay=1.0, max_delay=60.0
+            )
+            == 3.0
+        )
+
+    def test_exponential(self):
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.EXPONENTIAL,
+                attempt=1,
+                initial_delay=1.0,
+                max_delay=60.0,
+                backoff_multiplier=2.0,
+            )
+            == 1.0
+        )
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.EXPONENTIAL,
+                attempt=4,
+                initial_delay=1.0,
+                max_delay=60.0,
+                backoff_multiplier=2.0,
+            )
+            == 8.0  # 1.0 * 2^3
+        )
+
+    def test_jitter_within_bounds_seeded(self):
+        random.seed(1234)
+        for _ in range(100):
+            delay = compute_backoff_delay(
+                BackoffStrategy.JITTER,
+                attempt=1,
+                initial_delay=1.0,
+                max_delay=60.0,
+                backoff_multiplier=2.0,
+                jitter_range=0.1,
+            )
+            assert 0.9 <= delay <= 1.1
+
+    def test_decorrelated_first_attempt(self):
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.DECORRELATED,
+                attempt=1,
+                initial_delay=1.0,
+                max_delay=60.0,
+                previous_delay=None,
+            )
+            == 1.0
+        )
+
+    def test_decorrelated_subsequent_seeded(self):
+        random.seed(99)
+        for _ in range(100):
+            delay = compute_backoff_delay(
+                BackoffStrategy.DECORRELATED,
+                attempt=2,
+                initial_delay=1.0,
+                max_delay=60.0,
+                previous_delay=2.0,
+            )
+            assert 1.0 <= delay <= 6.0  # [initial_delay, previous_delay * 3]
+
+    def test_max_delay_caps_result(self):
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.FIXED,
+                attempt=1,
+                initial_delay=10.0,
+                max_delay=5.0,
+            )
+            == 5.0
+        )
+
+    def test_exponential_capped_by_max_delay(self):
+        # attempt 5: 1.0 * 2^4 = 16.0, capped to 10.0
+        assert (
+            compute_backoff_delay(
+                BackoffStrategy.EXPONENTIAL,
+                attempt=5,
+                initial_delay=1.0,
+                max_delay=10.0,
+                backoff_multiplier=2.0,
+            )
+            == 10.0
+        )
 
 
 # ---------------------------------------------------------------------------

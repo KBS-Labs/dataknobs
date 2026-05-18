@@ -8,12 +8,19 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
+from ._resilient_loop import run_supervised_loop
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_LISTEN_POLL_INTERVAL = 2.0
+"""Seconds between dedicated-LISTEN-connection liveness probes."""
+
+_LISTEN_RECONNECT_TIMEOUT = 10.0
+"""Bound on a single LISTEN-connection reconnect attempt (seconds)."""
 
 
 class PostgresEventBus:
@@ -183,6 +190,19 @@ class PostgresEventBus:
             self._listen_conn = await asyncpg.connect(self._connection_string)
 
             self._connected = True
+
+            # Supervise the dedicated LISTEN connection. It is push-based
+            # (asyncpg add_listener callbacks), so without this a dropped
+            # _listen_conn would silently stop all delivery with no error
+            # surfaced to subscribers. close() already cancels+awaits
+            # self._listen_task, so this is torn down cleanly.
+            self._listen_task = asyncio.create_task(
+                run_supervised_loop(
+                    self._reconnect_iteration,
+                    should_run=lambda: self._connected,
+                    name="PostgresEventBus listen-supervisor",
+                )
+            )
             logger.info("PostgresEventBus connected")
 
     async def close(self) -> None:
@@ -341,6 +361,105 @@ class PostgresEventBus:
 
             logger.debug("Unsubscribed %s from topic %s", subscription_id[:8], topic)
 
+    async def _listen_conn_is_alive(self) -> bool:
+        """Return whether the dedicated LISTEN connection is usable.
+
+        ``is_closed()`` is cheap but does not notice a server-side
+        termination until the next query, so a lightweight ``SELECT 1``
+        probe is also issued — any raised connection error means dead.
+
+        The caller must hold ``self._lock``: the probe runs ``execute``
+        on ``_listen_conn``, and asyncpg forbids concurrent operations
+        on one connection, so it must be serialized against
+        ``subscribe``/``_unsubscribe``'s ``LISTEN``/``UNLISTEN`` on the
+        same connection. The invariant is asserted (cheap) rather than
+        left implicit, so a future caller that forgets the lock fails
+        loudly instead of racing asyncpg.
+        """
+        assert self._lock.locked(), "_listen_conn_is_alive requires self._lock"
+        conn = self._listen_conn
+        if conn is None or conn.is_closed():
+            return False
+        try:
+            await conn.execute("SELECT 1")
+        except Exception:
+            return False
+        return True
+
+    async def _reestablish_listen_conn_locked(self) -> None:
+        """Re-open ``_listen_conn`` and re-register every active channel.
+
+        The caller must already hold ``self._lock`` (this method does
+        not re-acquire it — asyncio locks are not reentrant). The new
+        connection is swapped in only after every ``LISTEN`` +
+        ``add_listener`` succeeds, so a partially-registered connection
+        is never observed (mirrors the Redis pub/sub re-establish
+        discipline). Both statements are awaited — the missing-``await``
+        class of bug this guards against. ``asyncpg.connect`` is bounded
+        by an explicit timeout so a wedged reconnect cannot stall
+        ``close()`` (which acquires the same lock) indefinitely. The
+        held-lock invariant is asserted rather than left implicit.
+        """
+        assert (
+            self._lock.locked()
+        ), "_reestablish_listen_conn_locked requires self._lock"
+        import asyncpg
+
+        new_conn = await asyncpg.connect(
+            self._connection_string,
+            timeout=_LISTEN_RECONNECT_TIMEOUT,
+        )
+        try:
+            for channel in self._channel_topics:
+                await new_conn.execute(f"LISTEN {channel}")
+                await new_conn.add_listener(
+                    channel, self._notification_handler
+                )
+        except Exception:
+            try:
+                await new_conn.close()
+            except Exception:
+                pass
+            raise
+        old_conn, self._listen_conn = self._listen_conn, new_conn
+        channel_count = len(self._channel_topics)
+
+        if old_conn is not None:
+            try:
+                await old_conn.close()
+            except Exception:
+                pass
+        logger.warning(
+            "PostgresEventBus re-established dropped LISTEN connection "
+            "(%d channels re-registered)",
+            channel_count,
+        )
+
+    async def _reconnect_iteration(self) -> None:
+        """One supervised iteration of the LISTEN-connection watchdog.
+
+        The liveness probe and the rebuild both touch ``_listen_conn``,
+        so both run under ``self._lock`` to serialize against
+        ``subscribe``/``_unsubscribe`` (asyncpg has no concurrent-op
+        safety on a single connection).
+
+        Healthy: nothing to do. Dead: rebuild and re-register; any
+        failure propagates so the shared supervisor logs and backs off
+        (exponential + jitter) before retrying — never giving up.
+
+        Either way (healthy probe *or* successful rebuild) the watchdog
+        then sleeps the poll interval before the next probe, so the
+        cadence is uniform and a successful reconnect does not spin the
+        loop back into an immediate re-probe. The sleep is outside the
+        lock so it never blocks ``subscribe``/``_unsubscribe``. If the
+        rebuild raised, control never reaches the sleep — the supervisor
+        owns the back-off for the failure path.
+        """
+        async with self._lock:
+            if not await self._listen_conn_is_alive():
+                await self._reestablish_listen_conn_locked()
+        await asyncio.sleep(_LISTEN_POLL_INTERVAL)
+
     def _notification_handler(
         self,
         connection: Any,
@@ -408,3 +527,16 @@ class PostgresEventBus:
     def subscription_count(self) -> int:
         """Get the number of active subscriptions."""
         return len(self._subscriptions)
+
+    @property
+    def is_listening(self) -> bool:
+        """Whether the dedicated-LISTEN-connection watchdog is running.
+
+        ``True`` between a successful ``connect()`` and ``close()`` while
+        the supervisory task is alive. Push-based delivery depends on
+        that task re-establishing a dropped LISTEN connection, so this is
+        the observable health signal for the delivery path (and lets
+        callers/tests assert supervision without reaching into
+        ``_listen_task``).
+        """
+        return self._listen_task is not None and not self._listen_task.done()
