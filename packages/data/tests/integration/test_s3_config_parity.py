@@ -18,31 +18,18 @@ from dataknobs_data.pooling.s3 import S3PoolConfig
 
 
 @pytest.fixture(autouse=True)
-def _isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear ambient AWS env so cross-construct parity assertions are deterministic.
+def _isolate_aws_env(isolate_aws_env: None) -> None:
+    """Apply the shared ambient-AWS-env scrub (conftest) to this module.
 
-    ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT_URL_S3`` / ``LOCALSTACK_ENDPOINT``
-    are cleared because botocore 1.34+ honors them as global default
-    endpoints — including inside ``mock_aws()``. ``bin/test.sh`` exports
-    these for integration tests against a running LocalStack container,
-    and without clearing them, boto3 here would route to LocalStack
-    instead of moto and pick up persistent state.
+    Cross-construct parity assertions require a hermetic moto
+    environment; the scrub logic lives once in the ``isolate_aws_env``
+    conftest fixture (see its docstring for the botocore-1.34
+    rationale).
     """
-    for key in (
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_PROFILE",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_ENDPOINT_URL",
-        "AWS_ENDPOINT_URL_S3",
-        "LOCALSTACK_ENDPOINT",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    # Intentionally no body: this fixture exists only to make pytest
+    # request ``isolate_aws_env`` (autouse) for every test in this
+    # module. Do not "tidy up" by deleting it — the scrub would stop
+    # being applied.
 
 
 @pytest.mark.parametrize(
@@ -76,7 +63,7 @@ def test_sync_and_async_accept_same_region_key(region_key: str) -> None:
 
     # AsyncS3Database accepts the same dict and sets up its pool config.
     async_db = AsyncS3Database(cfg)
-    assert async_db._pool_config.region_name == "eu-west-1"
+    assert async_db.region == "eu-west-1"
 
 
 def test_sync_and_async_share_default_chain_when_region_unset(
