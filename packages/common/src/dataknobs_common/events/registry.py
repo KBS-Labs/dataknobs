@@ -84,8 +84,12 @@ def _create_sqs_bus(config: dict[str, Any]) -> EventBus:
     # consumer that never selects "sqs" needs no AWS dependency.
     from .sqs import SqsEventBus
 
+    # Use ``.get(... , "")`` rather than a bare ``config["queue_url"]``: a
+    # missing key should surface as ``SqsEventBus.__init__``'s clean
+    # ``ValueError`` (consistent with every other validation error in this
+    # layer), not a raw ``KeyError`` leaking out of ``create_event_bus()``.
     return SqsEventBus(
-        queue_url=config["queue_url"],
+        queue_url=config.get("queue_url", ""),
         region=config.get("region"),
         endpoint_url=config.get("endpoint_url"),
         wait_time_seconds=config.get("wait_time_seconds", 20),
