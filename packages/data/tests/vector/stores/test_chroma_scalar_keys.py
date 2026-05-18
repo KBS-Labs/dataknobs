@@ -63,11 +63,12 @@ def make_chroma_store() -> Iterator[Callable[..., ChromaVectorStore]]:
     ``uuid4`` collection name per store plus a teardown that drops every
     created collection.
 
-    NOTE: this hardens *these* tests' own isolation; it does not by
-    itself eliminate the broader ``pytest-randomly`` cross-test
-    metadata bleed observed in ``test_vector_stores.py`` — that has a
-    deeper root cause in chromadb's shared in-process System under
-    suite-wide create/delete churn (tracked separately).
+    The broader ``pytest-randomly`` cross-test metadata bleed that this
+    pattern alone could not stop (list-valued metadata corrupting
+    unrelated collections via chromadb's scalar-only store) is fixed at
+    the source in ``ChromaVectorStore._encode_metadata`` /
+    ``_decode_metadata``; see ``test_chroma_isolation.py``. This fixture
+    remains good per-test hygiene regardless.
     """
     created: list[ChromaVectorStore] = []
 

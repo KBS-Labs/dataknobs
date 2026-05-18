@@ -58,17 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`ChromaVectorStore` works against chromadb 1.x.** Empty-dict and
-  empty-list metadata values are encoded at the Chroma boundary
-  (chromadb 1.x rejects both) and decoded on read, so the metadata
-  round-trip — including `{"k": []}` — matches `MemoryVectorStore`/
-  `FaissVectorStore`. chromadb result fields (now numpy arrays) are
-  coerced before truthiness/indexing, fixing `get_vectors`/`search`
-  silently returning no rows. List filter values are post-filtered
-  (chromadb's where-engine returns zero rows for any predicate
-  against list-valued metadata) unless the key is declared in
-  `scalar_metadata_keys`; four-quadrant results are unchanged. The
-  `chromadb` floor is now `>=1.0.0`.
+- **`ChromaVectorStore` works against chromadb 1.x and no longer
+  corrupts non-scalar metadata.** chromadb's metadata contract is
+  scalar-only: it rejects an empty/`None` metadata dict, and — the
+  dangerous case — *silently accepts* a list/dict-valued metadata
+  value then corrupts it, bleeding the value positionally across
+  unrelated collections that share chromadb's process-wide in-memory
+  `System`. Every list/dict value (including `[]`) is now encoded to a
+  reversible JSON sentinel at the Chroma boundary and restored on read
+  (the legacy empty-list sentinel still decodes), so chromadb only ever
+  stores scalars and the metadata round-trip — `{"k": []}`,
+  `{"k": [...]}`, nested dicts — matches `MemoryVectorStore`/
+  `FaissVectorStore` with no cross-store contamination. chromadb result
+  fields (now numpy arrays) are coerced before truthiness/indexing,
+  fixing `get_vectors`/`search` silently returning no rows. List
+  filter values are post-filtered (chromadb's where-engine returns
+  zero rows for any predicate against list-valued metadata) unless the
+  key is declared in `scalar_metadata_keys`; four-quadrant results are
+  unchanged. The `chromadb` floor is now `>=1.0.0`.
 
 - **`MemoryVectorStore`/`FaissVectorStore` now own ingested
   metadata** (copy-on-ingest, parity with `PgVectorStore`/

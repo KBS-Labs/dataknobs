@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -90,31 +91,46 @@ class ChromaVectorStore(VectorStore):
         }
         self.chroma_metric = metric_map.get(self.metric, "cosine")
 
-    # chromadb 1.x rejects empty-list metadata values (and empty/None
-    # metadata dicts). Empty lists are encoded to this scalar string on
-    # write and decoded back to ``[]`` on read so the cross-backend
-    # round-trip contract (Memory/FAISS preserve ``{"k": []}``) holds.
-    # The NUL-delimited form makes a real-value collision infeasible.
+    # chromadb's metadata contract is scalar-only (str/int/float/bool).
+    # It rejects an empty/``None`` metadata dict outright, and — worse —
+    # chromadb 1.x *silently accepts* a list-valued metadata value and
+    # then corrupts it: the value bleeds positionally across unrelated
+    # collections sharing chromadb's process-wide in-memory System
+    # (reproduced as cross-test ``metadata_fields`` contamination).
+    #
+    # So every non-scalar value (any list — including ``[]`` — and any
+    # dict) is encoded to a reversible scalar string on write and
+    # restored on read, keeping chromadb scalar-only while preserving the
+    # cross-backend round-trip contract (Memory/FAISS preserve
+    # ``{"k": []}`` and ``{"k": [...]}`` as real values). The NUL-
+    # delimited prefixes make a real-value collision infeasible.
+    #
+    # ``_EMPTY_LIST_SENTINEL`` is retained for backward-compatible decode
+    # of data written by earlier versions (which sentinelled only ``[]``);
+    # new writes use the JSON form uniformly for all non-scalars.
     _EMPTY_LIST_SENTINEL = "\x00dk\x00empty_list\x00"
+    _NONSCALAR_PREFIX = "\x00dk\x00json\x00"
 
     @classmethod
     def _encode_metadata(
         cls, meta: dict[str, Any] | None
     ) -> dict[str, Any] | None:
-        """Adapt one row's metadata to chromadb 1.x constraints.
+        """Adapt one row's metadata to chromadb's scalar-only contract.
 
-        chromadb 1.x raises on an empty metadata dict and on
-        empty-list values. Map an empty/``None`` dict to ``None``
-        (the only "no metadata" form chromadb accepts) and replace
-        ``[]`` values with a reversible sentinel. Non-empty lists and
-        scalars pass through. Inverse of :meth:`_decode_metadata`.
+        Map an empty/``None`` dict to ``None`` (the only "no metadata"
+        form chromadb accepts). JSON-encode every list/dict value behind
+        :attr:`_NONSCALAR_PREFIX` so chromadb only ever stores scalars
+        (lists corrupt across collections otherwise). Scalars pass
+        through. Inverse of :meth:`_decode_metadata`.
         """
         if not meta:
             return None
         encoded: dict[str, Any] = {}
         for key, value in meta.items():
-            if isinstance(value, list) and not value:
-                encoded[key] = cls._EMPTY_LIST_SENTINEL
+            if isinstance(value, (list, dict)):
+                encoded[key] = cls._NONSCALAR_PREFIX + json.dumps(
+                    value, sort_keys=True, separators=(",", ":")
+                )
             else:
                 encoded[key] = value
         return encoded or None
@@ -126,15 +142,25 @@ class ChromaVectorStore(VectorStore):
         """Reverse :meth:`_encode_metadata`.
 
         chromadb returns ``None`` for rows stored without metadata;
-        surface ``{}`` to match the Memory/FAISS contract. Sentinel
-        values decode back to ``[]``.
+        surface ``{}`` to match the Memory/FAISS contract. JSON-prefixed
+        values are parsed back to their list/dict form; the legacy
+        empty-list sentinel still decodes to ``[]``.
         """
         if not meta:
             return {}
-        return {
-            key: ([] if value == cls._EMPTY_LIST_SENTINEL else value)
-            for key, value in meta.items()
-        }
+        decoded: dict[str, Any] = {}
+        for key, value in meta.items():
+            if isinstance(value, str) and value.startswith(
+                cls._NONSCALAR_PREFIX
+            ):
+                decoded[key] = json.loads(
+                    value[len(cls._NONSCALAR_PREFIX):]
+                )
+            elif value == cls._EMPTY_LIST_SENTINEL:
+                decoded[key] = []
+            else:
+                decoded[key] = value
+        return decoded
 
     @staticmethod
     def _as_list(value: Any) -> list[Any]:
