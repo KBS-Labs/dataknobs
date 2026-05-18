@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a backend DataKnobs ships. This is the store-layer primitive behind
   `dataknobs-bots`' `IngestSwapMode.TOMBSTONE` re-ingest.
 
+- **`AsyncS3Database.region`** — public attribute exposing the resolved
+  region (`None` when the config relies on the boto default chain), at
+  parity with the long-standing `SyncS3Database.region`. Lets callers
+  inspect region resolution without reaching into the internal pool
+  config.
+
 ### Changed
 
 - **Review before upgrade.** `PgVectorStore` now validates the

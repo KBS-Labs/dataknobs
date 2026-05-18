@@ -5,6 +5,7 @@ import pytest
 from datetime import datetime
 from typing import Generator
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from moto import mock_aws
 
 from dataknobs_data import Record, Query
@@ -23,8 +24,14 @@ def s3_config():
 
 
 @pytest.fixture
-def mock_s3_backend(s3_config):
-    """Create a mock S3 backend using moto."""
+def mock_s3_backend(s3_config, isolate_aws_env):
+    """Create a mock S3 backend using moto.
+
+    Depends on ``isolate_aws_env`` (conftest) so the ambient
+    ``AWS_ENDPOINT_URL`` / ``LOCALSTACK_ENDPOINT`` that ``bin/test.sh``
+    exports cannot leak past ``mock_aws()`` and silently route these
+    "mock" tests to the shared persistent LocalStack container.
+    """
     with mock_aws():
         # The SyncS3Database will create the bucket if it doesn't exist
         db = SyncS3Database(s3_config)
@@ -61,7 +68,10 @@ def localstack_s3_backend(s3_config):
             aws_secret_access_key="test"
         )
         test_client.list_buckets()
-    except Exception:
+    except (BotoCoreError, ClientError):
+        # Connection refused / endpoint unreachable / auth rejected ->
+        # LocalStack isn't up for this run. Narrow to botocore errors so
+        # unrelated failures (e.g. bugs in fixture setup) still surface.
         pytest.skip("LocalStack not available")
     
     # Create backend with LocalStack endpoint
@@ -524,31 +534,17 @@ class TestS3RegionFallback:
     """
 
     @pytest.fixture(autouse=True)
-    def _isolate_aws_env(self, monkeypatch):
-        """Clear ambient AWS env so resolved-region assertions are deterministic.
+    def _isolate_aws_env(self, isolate_aws_env):
+        """Apply the shared ambient-AWS-env scrub (conftest) to this class.
 
-        ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT_URL_S3`` / ``LOCALSTACK_ENDPOINT``
-        are cleared because botocore 1.34+ honors them as global default
-        endpoints — including inside ``mock_aws()``. ``bin/test.sh``
-        exports these for integration tests against a running LocalStack
-        container, and without clearing them, boto3 here would route
-        to LocalStack instead of moto.
+        Resolved-region assertions require a hermetic moto environment;
+        the scrub logic lives once in the ``isolate_aws_env`` conftest
+        fixture (see its docstring for the botocore-1.34 rationale).
         """
-        for key in (
-            "AWS_REGION",
-            "AWS_DEFAULT_REGION",
-            "AWS_PROFILE",
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-            "AWS_ENDPOINT_URL",
-            "AWS_ENDPOINT_URL_S3",
-            "LOCALSTACK_ENDPOINT",
-        ):
-            monkeypatch.delenv(key, raising=False)
-        monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
-        monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-        monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+        # Intentionally no body: this fixture exists only to make
+        # pytest request ``isolate_aws_env`` (autouse) for every test
+        # in this class. Do not "tidy up" by deleting it — the scrub
+        # would stop being applied.
 
     def test_bucket_create_uses_resolved_region_when_region_unset(
         self, monkeypatch
