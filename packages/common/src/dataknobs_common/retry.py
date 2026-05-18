@@ -83,6 +83,62 @@ class RetryConfig:
     on_failure: Callable[[Exception], None] | None = None
 
 
+def compute_backoff_delay(
+    strategy: BackoffStrategy,
+    *,
+    attempt: int,
+    initial_delay: float,
+    max_delay: float,
+    backoff_multiplier: float = 2.0,
+    jitter_range: float = 0.1,
+    previous_delay: float | None = None,
+) -> float:
+    """Compute a back-off delay for a given strategy and attempt.
+
+    Pure function shared by :class:`RetryExecutor` (bounded "give up after
+    N" retries) and the internal event-bus supervised-loop helper
+    (unbounded "never give up" listeners). The delay math lives here once
+    so neither caller re-implements it.
+
+    Args:
+        strategy: The backoff algorithm to apply.
+        attempt: The attempt number (1-based) that just failed.
+        initial_delay: Base delay in seconds.
+        max_delay: Upper bound on the returned delay in seconds.
+        backoff_multiplier: Multiplier for EXPONENTIAL and JITTER strategies.
+        jitter_range: Fractional jitter range for JITTER (e.g. 0.1 = +/-10%).
+        previous_delay: The delay used before the previous attempt
+            (only consulted by DECORRELATED).
+
+    Returns:
+        Delay in seconds, capped at ``max_delay``.
+    """
+    if strategy == BackoffStrategy.FIXED:
+        delay = initial_delay
+
+    elif strategy == BackoffStrategy.LINEAR:
+        delay = initial_delay * attempt
+
+    elif strategy == BackoffStrategy.EXPONENTIAL:
+        delay = initial_delay * (backoff_multiplier ** (attempt - 1))
+
+    elif strategy == BackoffStrategy.JITTER:
+        base_delay = initial_delay * (backoff_multiplier ** (attempt - 1))
+        jitter = random.uniform(-jitter_range, jitter_range)
+        delay = base_delay * (1 + jitter)
+
+    elif strategy == BackoffStrategy.DECORRELATED:
+        if previous_delay is None:
+            delay = initial_delay
+        else:
+            delay = random.uniform(initial_delay, previous_delay * 3)
+
+    else:
+        delay = initial_delay
+
+    return min(delay, max_delay)
+
+
 class RetryExecutor:
     """Executes a callable with retry logic and configurable backoff.
 
@@ -118,31 +174,15 @@ class RetryExecutor:
             Delay in seconds, capped at config.max_delay.
         """
         cfg = self.config
-
-        if cfg.backoff_strategy == BackoffStrategy.FIXED:
-            delay = cfg.initial_delay
-
-        elif cfg.backoff_strategy == BackoffStrategy.LINEAR:
-            delay = cfg.initial_delay * attempt
-
-        elif cfg.backoff_strategy == BackoffStrategy.EXPONENTIAL:
-            delay = cfg.initial_delay * (cfg.backoff_multiplier ** (attempt - 1))
-
-        elif cfg.backoff_strategy == BackoffStrategy.JITTER:
-            base_delay = cfg.initial_delay * (cfg.backoff_multiplier ** (attempt - 1))
-            jitter = random.uniform(-cfg.jitter_range, cfg.jitter_range)
-            delay = base_delay * (1 + jitter)
-
-        elif cfg.backoff_strategy == BackoffStrategy.DECORRELATED:
-            if previous_delay is None:
-                delay = cfg.initial_delay
-            else:
-                delay = random.uniform(cfg.initial_delay, previous_delay * 3)
-
-        else:
-            delay = cfg.initial_delay
-
-        return min(delay, cfg.max_delay)
+        return compute_backoff_delay(
+            cfg.backoff_strategy,
+            attempt=attempt,
+            initial_delay=cfg.initial_delay,
+            max_delay=cfg.max_delay,
+            backoff_multiplier=cfg.backoff_multiplier,
+            jitter_range=cfg.jitter_range,
+            previous_delay=previous_delay,
+        )
 
     async def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute a callable with retry logic.

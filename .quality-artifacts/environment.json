@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-18T18:11:00Z",
+  "timestamp": "2026-05-18T19:04:16Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.14 (Homebrew 2026-05-12 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/s3-moto-isolation",
-  "git_commit": "ebbe83f96a5ab1f3d33d8fc5e2d13759c1f4449e",
+  "git_branch": "sbk/dk-137-event-bus-resilient-loop",
+  "git_commit": "635b6004690c596256b0fba8cde964cb38c179d2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
