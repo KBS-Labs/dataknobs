@@ -11,6 +11,7 @@ completion event is still published by the manager.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import pytest
@@ -24,6 +25,7 @@ from dataknobs_bots.knowledge import (
 from dataknobs_bots.knowledge.orchestration import IngestOrchestrator
 from dataknobs_bots.knowledge.storage import InMemoryKnowledgeBackend
 from dataknobs_common.events import Event, EventType, InMemoryEventBus
+from dataknobs_common.testing import requires_real_postgres
 
 TRIGGER_TOPIC = "knowledge:trigger"
 
@@ -518,6 +520,82 @@ async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
     await bus.close()
 
 
+@pytest.fixture
+def pg_dsn(
+    ensure_postgres_ready: None,
+    postgres_connection_params: dict[str, Any],
+) -> str:
+    """libpq URI for the shared test DB (advisory locks are global)."""
+    p = postgres_connection_params
+    return (
+        f"postgresql://{p['user']}:{p['password']}"
+        f"@{p['host']}:{p['port']}/{p['database']}"
+    )
+
+
+@pytest.mark.asyncio
+@requires_real_postgres
+async def test_two_replicas_serialized_by_postgres_lock(
+    pg_dsn: str,
+) -> None:
+    """Two orchestrators sharing one Postgres lock serialize a domain.
+
+    Two independent ``IngestOrchestrator`` instances — separate event
+    buses, each with its own ``PostgresAdvisoryLock`` built from
+    ``lock_config`` — stand in for two replicas. A same-domain trigger
+    is delivered to *both* (at-least-once delivery). The cross-replica
+    lock must let only one ingest the domain at a time, exactly the
+    guarantee a process-local ``InProcessLock`` cannot provide across
+    replicas.
+    """
+    bus1 = await _make_bus()
+    bus2 = await _make_bus()
+    manager = _GatedManager()  # the shared store both replicas race on
+    lock_cfg: dict[str, Any] = {
+        "backend": "postgres",
+        "connection_string": pg_dsn,
+    }
+    domain = f"repl-{os.getpid()}"
+
+    orch1 = IngestOrchestrator(manager, bus1, lock_config=lock_cfg)  # type: ignore[arg-type]
+    orch2 = IngestOrchestrator(manager, bus2, lock_config=lock_cfg)  # type: ignore[arg-type]
+    await orch1.start()
+    await orch2.start()
+    try:
+        pub1 = asyncio.create_task(
+            bus1.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": domain}))
+        )
+        pub2 = asyncio.create_task(
+            bus2.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": domain}))
+        )
+
+        # One replica enters the critical section; the other is blocked
+        # acquiring the shared Postgres advisory lock.
+        await _wait_for(lambda: len(manager.started) >= 1, timeout=5.0)
+        await asyncio.sleep(0.2)  # give the 2nd a real chance to race
+        assert manager.peak_concurrency.get(domain, 0) == 1, (
+            "cross-replica serialization failed; peak concurrency for "
+            f"{domain} was {manager.peak_concurrency.get(domain)}"
+        )
+        assert len(manager.started) == 1
+
+        # Release the first; the second acquires the lock and proceeds.
+        manager.gate_for(domain).set()
+        await _wait_for(lambda: len(manager.finished) >= 2, timeout=10.0)
+        assert manager.peak_concurrency[domain] == 1
+        assert manager.started == [domain, domain]
+        assert manager.finished == [domain, domain]
+
+        await asyncio.gather(pub1, pub2)
+    finally:
+        await orch1.stop()
+        await orch2.stop()
+        await orch1.lock.close()
+        await orch2.lock.close()
+        await bus1.close()
+        await bus2.close()
+
+
 class TestLockConfigConstruction:
     """``lock_config=`` builds the lock via ``create_lock`` at the
     orchestrator construction site (125/126 Phase 4).
@@ -575,7 +653,7 @@ class TestLockConfigConstruction:
 
         bus = await _make_bus()
         manager = _StubManager()
-        with pytest.raises(ValueError, match="lock.*lock_config"):
+        with pytest.raises(ValueError, match=r"lock.*lock_config"):
             IngestOrchestrator(
                 manager,  # type: ignore[arg-type]
                 bus,

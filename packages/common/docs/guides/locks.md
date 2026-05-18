@@ -27,7 +27,13 @@ The in-process lock is included in `dataknobs-common`:
 pip install dataknobs-common
 ```
 
-No extra dependency is required for the default backend.
+No extra dependency is required for the default backend. The
+cross-replica Postgres backend reuses the existing optional `postgres`
+extra (shared with `PostgresEventBus` — no new dependency):
+
+```bash
+pip install 'dataknobs-common[postgres]'
+```
 
 ## Quick Start
 
@@ -117,13 +123,55 @@ process-local lock is **insufficient** — two replicas each acquire
 their own `asyncio.Lock` and both proceed. A **cross-replica backend**
 is required.
 
-Cross-replica backends are registry-pluggable (see
-[Custom Backends](#custom-backends-plugin-registry)). A built-in
-Postgres advisory-lock backend (`{"backend": "postgres", ...}`,
-reusing the shared
-[Postgres connection config](postgres-config.md)) is delivered in a
-follow-up phase; until then, register your own cross-replica
-implementation or pin to the phase that ships it. Application code
+#### Postgres (Built-in Cross-Replica Backend)
+
+`PostgresAdvisoryLock` provides mutual exclusion across **every
+process pointing at the same database** using a **session-scoped**
+`pg_advisory_lock` on a dedicated connection per held key. Select it
+purely by config — application code is unchanged:
+
+```python
+lock = create_lock({
+    "backend": "postgres",
+    "connection_string": "postgresql://user:pass@host:5432/db",
+})
+```
+
+The connection is resolved by the *same*
+[Postgres connection config](postgres-config.md) helper
+`PostgresEventBus` uses, so `connection_string`, individual
+host/port/database/user/password keys, `DATABASE_URL`, and
+`POSTGRES_*` env-var fallbacks all work identically:
+
+```python
+lock = create_lock({"backend": "postgres"})  # resolves from env
+```
+
+**Properties:**
+
+- **Session-level, not transaction-level.** A critical section (e.g.
+  an ingest) routinely outlives any single transaction;
+  `pg_advisory_xact_lock` would release at the first commit inside the
+  section, so the session-scoped form is used.
+- **Liveness (guaranteed).** If a holding replica crashes, its
+  Postgres session dies and the lock is released automatically — a
+  dead replica can never wedge a domain.
+- **Not a fencing token.** Advisory locks bound concurrency, not
+  ordering. Mutual exclusion fully meets the orchestrator's need;
+  fencing/leasing is a deliberately out-of-scope, distinct
+  abstraction.
+- **Stable keyspace.** The opaque string key is mapped to the signed
+  64-bit id via Python `blake2b` (not Postgres `hashtext`, whose
+  algorithm is not contractually stable across major versions), so a
+  key means the same thing after a DB upgrade.
+- **No new dependency.** `asyncpg` is the existing optional `postgres`
+  extra, lazily imported — importing `dataknobs_common.locks` never
+  requires it.
+
+Other cross-replica backends (Redis, etcd, ZooKeeper, …) are
+registry-pluggable (see
+[Custom Backends](#custom-backends-plugin-registry)); only add a
+specific one when a real consumer lacks Postgres. Application code
 does not change — only the `create_lock({...})` config does.
 
 ### Custom Backends (Plugin Registry)
@@ -224,6 +272,15 @@ async def test_critical_section_is_serialized() -> None:
     await lock.close()
 ```
 
+The cross-replica `PostgresAdvisoryLock` is **not** faked in its own
+tests either — a fake has the same blindness as a mock, and the entire
+point of that backend is cross-process behaviour. It is exercised
+against a real Postgres with two independent instances simulating two
+replicas, gated by the shared
+`dataknobs_common.testing.requires_real_postgres` mark (reachable
+server **and** `TEST_POSTGRES=true` **and** `asyncpg` installed);
+start the service with `bin/dk up`.
+
 ## API Reference
 
 ### DistributedLock Protocol
@@ -296,6 +353,18 @@ See [Custom Backends](#custom-backends-plugin-registry) for usage.
 
 No additional keys. `{}` is equivalent — `"memory"` is the default.
 
+### Postgres Backend
+
+```python
+{"backend": "postgres", "connection_string": "postgresql://..."}
+```
+
+Accepts the full [Postgres connection config](postgres-config.md)
+shape: `connection_string`, individual `host`/`port`/`database`/
+`user`/`password` keys, `DATABASE_URL`, or `POSTGRES_*` env-var
+fallbacks. Requires the `postgres` extra
+(`pip install 'dataknobs-common[postgres]'`).
+
 ## Usage Across DataKnobs
 
 | Package | Component | How It Uses the Lock |
@@ -315,6 +384,8 @@ from dataknobs_common.locks import (
     LockFactory,
     # Default / testing implementation
     InProcessLock,
+    # Cross-replica implementation
+    PostgresAdvisoryLock,
 )
 
 # Also re-exported from the top-level namespace:

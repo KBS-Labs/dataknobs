@@ -51,11 +51,17 @@ def _create_in_process_lock(config: dict[str, Any]) -> DistributedLock:
     return InProcessLock()
 
 
+def _create_postgres_lock(config: dict[str, Any]) -> DistributedLock:
+    # Lazy import keeps ``factory.py`` (and ``dataknobs_common.locks``)
+    # importable without asyncpg — the optional ``postgres`` extra is
+    # only required when this backend is actually selected.
+    from .postgres import PostgresAdvisoryLock
+
+    return PostgresAdvisoryLock(config=config)
+
+
 lock_backends.register("memory", _create_in_process_lock)
-# Note: the "postgres" backend (PostgresAdvisoryLock) is not yet
-# registered alongside locks/postgres.py. Until then an unknown "postgres"
-# backend resolves to the same ValueError as any other unknown backend,
-# keeping this change behaviour-identical for the single built-in.
+lock_backends.register("postgres", _create_postgres_lock)
 
 
 def create_lock(config: dict[str, Any]) -> DistributedLock:

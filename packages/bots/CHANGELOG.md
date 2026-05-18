@@ -173,9 +173,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InProcessLock()`, process-local and behaviour-identical to
   prior releases for single-replica deployments. Multi-replica
   deployments must configure a cross-replica lock; a process-local
-  lock cannot serialize across replicas. A built-in Postgres
-  advisory-lock backend ships in a follow-up phase; until then
-  register a cross-replica backend via
+  lock cannot serialize across replicas. The built-in Postgres
+  advisory-lock backend (`lock_config={"backend": "postgres", ...}`)
+  provides cross-replica serialization out of the box; other backends
+  remain registry-pluggable via
   `dataknobs_common.locks.lock_backends`.
 - **`KnowledgeResourceBackend.set_ingestion_status`** accepts
   `IngestionStatus | str` (Protocol + memory / file / S3

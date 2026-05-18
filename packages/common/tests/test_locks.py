@@ -5,13 +5,18 @@ to a list has the same blindness as ``MagicMock``; the point of a lock
 is its concurrency behaviour, so the real :class:`InProcessLock` is
 exercised directly (it is also the documented testing construct).
 
-``PostgresAdvisoryLock`` with ``@requires_postgres``
-two-connection contention tests is not covered here.
+``PostgresAdvisoryLock`` is exercised against a **real** Postgres with
+two independent instances (simulating two replicas) under the shared
+``@requires_real_postgres`` gate — never a fake; the
+whole point of the backend is cross-process behaviour a list-appending
+fake cannot show. The ``_key_to_bigint`` keyspace mapping is a pure
+function and is tested without a database.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import pytest
@@ -21,9 +26,11 @@ from dataknobs_common.exceptions import OperationError
 from dataknobs_common.locks import (
     DistributedLock,
     InProcessLock,
+    PostgresAdvisoryLock,
     create_lock,
     lock_backends,
 )
+from dataknobs_common.testing import requires_real_postgres
 
 
 class TestInProcessLock:
@@ -223,9 +230,30 @@ class TestLockFactory:
         """``dataknobs_common.create_lock`` re-exports the same callable."""
         assert create_lock_top_level is create_lock
 
-    def test_only_memory_registered_in_phase_1(self) -> None:
-        """The registry contains exactly ``memory`` (postgres is registered separately)."""
-        assert set(lock_backends.list_keys()) == {"memory"}
+    def test_builtin_backends_registered(self) -> None:
+        """The registry contains exactly the two built-ins.
+
+        ``memory`` (``InProcessLock``) and ``postgres``
+        (``PostgresAdvisoryLock``). Consumer-registered backends are
+        additive on top of these.
+        """
+        assert set(lock_backends.list_keys()) == {"memory", "postgres"}
+
+    def test_postgres_backend_resolves_without_asyncpg_import(self) -> None:
+        """``create_lock({"backend":"postgres", ...})`` builds the lock.
+
+        The factory + ``PostgresAdvisoryLock.__init__`` only resolve a
+        DSN (no connection, no asyncpg needed) — asyncpg is imported
+        lazily inside ``acquire``/``release``. A bogus-but-parseable DSN
+        is enough to prove the wiring without a live server.
+        """
+        lock = create_lock(
+            {
+                "backend": "postgres",
+                "connection_string": "postgresql://u:p@localhost:5432/db",
+            }
+        )
+        assert isinstance(lock, PostgresAdvisoryLock)
 
     def test_unknown_backend_lists_registered(self) -> None:
         """Unknown backend raises ``ValueError`` naming registered ones.
@@ -237,7 +265,9 @@ class TestLockFactory:
             create_lock({"backend": "nope"})
         msg = str(exc.value)
         assert "Unknown lock backend: nope" in msg
-        assert "Available backends: memory" in msg
+        # Sorted, includes every built-in (the G1 ``get_optional``
+        # correction shared with ``create_event_bus``).
+        assert "Available backends: memory, postgres" in msg
 
     async def test_custom_backend_plugin(self) -> None:
         """A consumer-registered backend resolves through the factory."""
@@ -270,3 +300,184 @@ class TestLockFactory:
             lock_backends.register("memory", lambda config: InProcessLock())
         # Built-in still intact and usable.
         assert isinstance(create_lock({"backend": "memory"}), InProcessLock)
+
+
+class TestPostgresKeyspace:
+    """Pure-function tests for ``_key_to_bigint`` — no database.
+
+    The mapping must be deterministic, process-independent, and land in
+    the signed 64-bit range ``pg_advisory_lock`` accepts; that is the
+    property the cross-replica guarantee rests on, so it is pinned
+    without needing a server.
+    """
+
+    _SIGNED64_MIN = -(2**63)
+    _SIGNED64_MAX = 2**63 - 1
+
+    def test_deterministic(self) -> None:
+        """Same key → same id, every call (blake2b, not random)."""
+        a = PostgresAdvisoryLock._key_to_bigint("ingest:my-domain")
+        b = PostgresAdvisoryLock._key_to_bigint("ingest:my-domain")
+        assert a == b
+
+    def test_within_signed_64_bit_range(self) -> None:
+        """Every id fits a Postgres ``bigint`` (signed 64-bit)."""
+        for key in ("", "a", "ingest:x", "ingest:" + "z" * 4096, "🔒"):
+            v = PostgresAdvisoryLock._key_to_bigint(key)
+            assert self._SIGNED64_MIN <= v <= self._SIGNED64_MAX, (key, v)
+
+    def test_distinct_keys_distinct_ids(self) -> None:
+        """Distinct keys do not collide across a realistic sample."""
+        keys = [f"ingest:domain-{i}" for i in range(1000)]
+        ids = {PostgresAdvisoryLock._key_to_bigint(k) for k in keys}
+        assert len(ids) == len(keys)
+
+    def test_stable_against_recomputed_blake2b(self) -> None:
+        """Pin the exact algorithm so a DB upgrade can't shift keyspace.
+
+        ``hashtext`` is not contractually stable across PG majors; this
+        asserts the implementation is the documented
+        ``blake2b(digest_size=8)`` big-endian, biased to signed.
+        """
+        import hashlib
+
+        key = "ingest:my-domain"
+        expected = (
+            int.from_bytes(
+                hashlib.blake2b(key.encode(), digest_size=8).digest(),
+                "big",
+                signed=False,
+            )
+            - (1 << 63)
+        )
+        assert PostgresAdvisoryLock._key_to_bigint(key) == expected
+
+
+@pytest.fixture
+def pg_dsn(
+    ensure_postgres_ready: None,
+    postgres_connection_params: dict[str, Any],
+) -> str:
+    """libpq URI for the shared test database (real Postgres).
+
+    Depends on ``ensure_postgres_ready`` so the server is reachable and
+    the test DB exists; advisory locks are cluster-global (no table
+    needed). Mirrors ``postgres_fixtures._pg_conn_str``.
+    """
+    p = postgres_connection_params
+    return (
+        f"postgresql://{p['user']}:{p['password']}"
+        f"@{p['host']}:{p['port']}/{p['database']}"
+    )
+
+
+class TestPostgresAdvisoryLock:
+    """Real-Postgres cross-replica behaviour.
+
+    Two **independent** ``PostgresAdvisoryLock`` instances on separate
+    connections stand in for two replicas. This is the test that would
+    have caught the original ``asyncio.Lock`` defect (a process-local
+    lock lets both "replicas" proceed).
+    """
+
+    pytestmark = requires_real_postgres
+
+    async def test_two_instances_contend_same_key(self, pg_dsn: str) -> None:
+        """Instance A holds; B times out; A releases; B then acquires."""
+        a = PostgresAdvisoryLock(connection_string=pg_dsn)
+        b = PostgresAdvisoryLock(connection_string=pg_dsn)
+        key = f"it:contend:{os.getpid()}"
+        try:
+            assert await a.acquire(key) is True
+            # B (a separate "replica") cannot get it while A holds it.
+            assert await b.acquire(key, timeout=0.5) is False
+            await a.release(key)
+            # Now B can.
+            assert await b.acquire(key, timeout=3.0) is True
+            await b.release(key)
+        finally:
+            await a.close()
+            await b.close()
+
+    async def test_distinct_keys_do_not_contend(self, pg_dsn: str) -> None:
+        """Different keys are independent across instances."""
+        a = PostgresAdvisoryLock(connection_string=pg_dsn)
+        b = PostgresAdvisoryLock(connection_string=pg_dsn)
+        suffix = os.getpid()
+        try:
+            assert await a.acquire(f"it:k1:{suffix}") is True
+            # Different key on a different instance is not serialized.
+            assert await b.acquire(f"it:k2:{suffix}", timeout=1.0) is True
+        finally:
+            await a.release(f"it:k1:{suffix}")
+            await b.release(f"it:k2:{suffix}")
+            await a.close()
+            await b.close()
+
+    async def test_connection_death_releases_lock(self, pg_dsn: str) -> None:
+        """A crashed holder must not wedge the key (liveness).
+
+        Session-scoped locks are released by Postgres when the holding
+        session dies. Forcibly closing A's held connection simulates a
+        replica crash; B must then be able to acquire.
+        """
+        a = PostgresAdvisoryLock(connection_string=pg_dsn)
+        b = PostgresAdvisoryLock(connection_string=pg_dsn)
+        key = f"it:death:{os.getpid()}"
+        try:
+            assert await a.acquire(key) is True
+            # Kill A's underlying session out from under it.
+            await a._held[key].close()
+            # Postgres released the advisory lock with the dead session.
+            assert await b.acquire(key, timeout=5.0) is True
+            await b.release(key)
+        finally:
+            # A.close() must tolerate the already-closed connection.
+            await a.close()
+            await b.close()
+
+    async def test_hold_releases_on_exception(self, pg_dsn: str) -> None:
+        """``hold()`` releases the cross-replica lock even on error."""
+        a = PostgresAdvisoryLock(connection_string=pg_dsn)
+        key = f"it:hold-exc:{os.getpid()}"
+        try:
+            with pytest.raises(RuntimeError, match="boom"):
+                async with a.hold(key) as got:
+                    assert got is True
+                    raise RuntimeError("boom")
+            # Released — re-acquire without contention.
+            assert await a.acquire(key, timeout=2.0) is True
+            await a.release(key)
+        finally:
+            await a.close()
+
+    async def test_create_lock_round_trip(self, pg_dsn: str) -> None:
+        """Factory-built postgres lock acquires and releases for real."""
+        lock = create_lock(
+            {"backend": "postgres", "connection_string": pg_dsn}
+        )
+        assert isinstance(lock, PostgresAdvisoryLock)
+        key = f"it:factory:{os.getpid()}"
+        try:
+            async with lock.hold(key) as got:
+                assert got is True
+        finally:
+            await lock.close()
+
+    async def test_close_releases_all_held(self, pg_dsn: str) -> None:
+        """``close()`` frees every held lock (session teardown)."""
+        a = PostgresAdvisoryLock(connection_string=pg_dsn)
+        b = PostgresAdvisoryLock(connection_string=pg_dsn)
+        k1 = f"it:close1:{os.getpid()}"
+        k2 = f"it:close2:{os.getpid()}"
+        try:
+            assert await a.acquire(k1) is True
+            assert await a.acquire(k2) is True
+            await a.close()  # releases both via session close
+            # A fresh "replica" can take both immediately.
+            assert await b.acquire(k1, timeout=3.0) is True
+            assert await b.acquire(k2, timeout=3.0) is True
+        finally:
+            await b.release(k1)
+            await b.release(k2)
+            await b.close()
