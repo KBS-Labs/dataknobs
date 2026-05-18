@@ -80,12 +80,13 @@ all four backends.
 
 ### Optional `scalar_metadata_keys` push-down on `ChromaVectorStore`
 
-By default, `ChromaVectorStore` post-filters every scalar filter
-value in Python because Chroma's `$eq` does not match list-valued
-metadata — a real bug for consumers whose metadata stores tags or
-categories as lists. The post-filter is correct but materializes
-matching metadata in process for `count()` and over-fetches for
-`search()`.
+By default, `ChromaVectorStore` post-filters every filter value
+(scalar *and* list) in Python: chromadb's where-engine returns zero
+rows for any predicate against list-valued metadata, so a pushed-down
+predicate would silently drop matches for consumers whose metadata
+stores tags or categories as lists. The post-filter is correct but
+materializes matching metadata in process for `count()` and
+over-fetches for `search()`.
 
 Consumers whose metadata for a given key is **always scalar** (the
 common multi-tenant scoping pattern) can declare those keys via
@@ -102,11 +103,13 @@ store = ChromaVectorStore({
 })
 ```
 
-For declared keys with scalar filter values, the partitioner
-pushes a Chroma-native `$eq` predicate, eliminating the
-post-filter. `count(filter={"domain_id": "x"})` then fetches only
-IDs (no metadata) when the entire filter pushes down, regardless
-of collection size.
+For declared keys the partitioner pushes a Chroma-native predicate
+(`$eq` for a scalar filter value, `$in` for a list filter value),
+eliminating the post-filter. `count(filter={"domain_id": "x"})`
+then fetches only IDs (no metadata) when the entire filter pushes
+down, regardless of collection size. (Declaring a key scalar is a
+contract that its stored values are never lists; pushing a native
+predicate for a genuinely list-valued key would drop all matches.)
 
 The declaration is opt-in and additive: keys not declared keep
 the conservative post-filter behavior, so existing consumers see
@@ -163,7 +166,7 @@ await store.search(q, k=10, filter={"missing_key": "value"})
 | Backend | Implementation |
 |---|---|
 | `MemoryVectorStore` / `FaissVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter`. Applied after similarity ranking. `update_metadata_where` walks the in-process `metadata_store` (FAISS: the same side-car `search`/`clear` already post-filter — no FAISS index involvement) and `dict.update`s `set_` into each match. |
-| `ChromaVectorStore` | Native Chroma `$in` predicate for list filter values (pushed down for prefiltering); scalar filter values are post-filtered in Python because Chroma's `$eq` does not match list-valued metadata. Scalar/list-metadata fix is the gap this was designed to close. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. |
+| `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. Metadata is encoded at the Chroma boundary (empty dict → no-metadata, empty list → reversible sentinel) since chromadb 1.x rejects both; reads decode back so the round-trip matches Memory/FAISS. |
 | `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. `update_metadata_where` reuses this translation in a single `UPDATE ... SET metadata = metadata || $::jsonb` (JSONB merge, `updated_at` refreshed). |
 
 ## Type safety (PgVector)
