@@ -17,10 +17,17 @@ benefits ``search`` and ``clear``.
 
 from __future__ import annotations
 
+import logging
+from typing import TYPE_CHECKING
+from uuid import uuid4
+
 import numpy as np
 import pytest
-
 from dataknobs_common.testing import is_chromadb_available
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from typing import Any
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
@@ -29,23 +36,74 @@ requires_chromadb = pytest.mark.skipif(
     not is_chromadb_available(), reason="chromadb not installed"
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _vec(seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     return rng.random(4, dtype=np.float32)
 
 
+@pytest.fixture
+def make_chroma_store() -> Iterator[Callable[..., ChromaVectorStore]]:
+    """Build isolated ChromaVectorStores with guaranteed teardown.
+
+    Two real defects in the previous inline construction:
+
+    1. The ``id(object())`` collection-name suffix is *not* unique.
+       ``object()`` is freed immediately, and CPython reuses the freed
+       address, so ``id(object())`` returns the same value on every
+       call — the four tests' collections were stable, predictable
+       names rather than per-run-unique ones.
+    2. No teardown — collections were never dropped, accumulating in
+       chromadb's in-process client for the rest of the session.
+
+    This factory mirrors the isolation pattern already used by the
+    ``test_vector_stores.py`` Chroma fixture: a genuinely unique
+    ``uuid4`` collection name per store plus a teardown that drops every
+    created collection.
+
+    NOTE: this hardens *these* tests' own isolation; it does not by
+    itself eliminate the broader ``pytest-randomly`` cross-test
+    metadata bleed observed in ``test_vector_stores.py`` — that has a
+    deeper root cause in chromadb's shared in-process System under
+    suite-wide create/delete churn (tracked separately).
+    """
+    created: list[ChromaVectorStore] = []
+
+    def _make(**extra_config: Any) -> ChromaVectorStore:
+        config: dict[str, Any] = {
+            "dimensions": 4,
+            "collection_name": f"test_scalar_keys_{uuid4().hex[:8]}",
+        }
+        config.update(extra_config)
+        store = ChromaVectorStore(config)
+        created.append(store)
+        return store
+
+    yield _make
+
+    for store in created:
+        if store.client is not None:
+            try:
+                store.client.delete_collection(name=store.collection_name)
+            except Exception as exc:
+                logger.warning(
+                    "Chroma teardown failed for collection %r: %s",
+                    store.collection_name,
+                    exc,
+                )
+
+
 @requires_chromadb
 @pytest.mark.asyncio
-async def test_undeclared_scalar_key_post_filters():
+async def test_undeclared_scalar_key_post_filters(make_chroma_store):
     """Without ``scalar_metadata_keys``, scalar filters post-filter as before.
 
     Backward-compat guard: the new opt-in does not change behavior
     for keys consumers haven't declared.
     """
-    store = ChromaVectorStore(
-        {"dimensions": 4, "collection_name": f"test_undecl_{id(object())}"}
-    )
+    store = make_chroma_store()
     await store.initialize()
 
     await store.add_vectors(
@@ -71,15 +129,9 @@ async def test_undeclared_scalar_key_post_filters():
 
 @requires_chromadb
 @pytest.mark.asyncio
-async def test_declared_scalar_key_pushes_down_eq():
+async def test_declared_scalar_key_pushes_down_eq(make_chroma_store):
     """Declared scalar keys produce a Chroma-native ``$eq`` predicate."""
-    store = ChromaVectorStore(
-        {
-            "dimensions": 4,
-            "collection_name": f"test_decl_{id(object())}",
-            "scalar_metadata_keys": ["domain_id"],
-        }
-    )
+    store = make_chroma_store(scalar_metadata_keys=["domain_id"])
     await store.initialize()
 
     await store.add_vectors(
@@ -105,7 +157,9 @@ async def test_declared_scalar_key_pushes_down_eq():
 
 @requires_chromadb
 @pytest.mark.asyncio
-async def test_count_with_pure_pushdown_skips_metadata_materialization():
+async def test_count_with_pure_pushdown_skips_metadata_materialization(
+    make_chroma_store,
+):
     """``count`` with no post-filter remainder fetches IDs only.
 
     This is the primary win of the Tier A optimization combined with
@@ -114,13 +168,7 @@ async def test_count_with_pure_pushdown_skips_metadata_materialization():
     fetches IDs only — no metadata materialization, regardless of
     collection size.
     """
-    store = ChromaVectorStore(
-        {
-            "dimensions": 4,
-            "collection_name": f"test_count_pushdown_{id(object())}",
-            "scalar_metadata_keys": ["domain_id"],
-        }
-    )
+    store = make_chroma_store(scalar_metadata_keys=["domain_id"])
     await store.initialize()
 
     await store.add_vectors(
@@ -156,15 +204,10 @@ async def test_count_with_pure_pushdown_skips_metadata_materialization():
 
 @requires_chromadb
 @pytest.mark.asyncio
-async def test_count_with_post_filter_still_materializes():
+async def test_count_with_post_filter_still_materializes(make_chroma_store):
     """Mixed/post-filter cases still materialize metadata (correct behavior)."""
-    store = ChromaVectorStore(
-        {
-            "dimensions": 4,
-            "collection_name": f"test_count_postfilter_{id(object())}",
-            # scalar_metadata_keys NOT set → ``domain_id`` post-filtered.
-        }
-    )
+    # scalar_metadata_keys NOT set → ``domain_id`` post-filtered.
+    store = make_chroma_store()
     await store.initialize()
 
     await store.add_vectors(
