@@ -598,8 +598,9 @@ class TestPostgresEventBusIntegration:
         bus = PostgresEventBus(connection_string=PG_DSN)
         await bus.connect()
         try:
-            # The push-based bus now has a supervisory task.
-            assert bus._listen_task is not None
+            # The push-based bus has a supervisory watchdog (public
+            # health signal — no reach into the private _listen_task).
+            assert bus.is_listening
 
             received: list[Event] = []
 
@@ -617,6 +618,16 @@ class TestPostgresEventBusIntegration:
             # The watchdog detects the dead connection (next liveness
             # poll), re-opens it, and re-registers the channel. Swap of
             # self._listen_conn happens only after re-LISTEN succeeds.
+            # Observing the physical connection-object swap is the
+            # reproduce mechanism itself — there is no public signal for
+            # "the connection instance changed", so the internal access
+            # here is deliberate, not incidental coupling. The behavior
+            # is independently re-proven below by delivery resuming.
+            # 25s bound = generous headroom over the worst real-server
+            # case: up to one _LISTEN_POLL_INTERVAL (2s) before the drop
+            # is detected + up to _LISTEN_RECONNECT_TIMEOUT (10s) for the
+            # rebuild. Not a tight assertion — just keeps a wedged
+            # reconnect from hanging the suite.
             deadline = asyncio.get_event_loop().time() + 25.0
             while asyncio.get_event_loop().time() < deadline:
                 conn = bus._listen_conn

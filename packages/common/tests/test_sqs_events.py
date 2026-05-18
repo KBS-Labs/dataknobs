@@ -211,6 +211,13 @@ class TestSqsEventBus:
             timeline["delivered"] = asyncio.get_event_loop().time()
             received.append(event)
 
+        # bus._client is the live aioboto3 SQS client (real LocalStack
+        # queue — no mock). Wrapping its receive_message is the single
+        # narrowest seam to inject ONE transient failure into the real
+        # poll path: it exercises run_supervised_loop's actual back-off
+        # + recovery against a real broker rather than a fake. The
+        # type: ignore is the expected cost of patching a bound method
+        # on a third-party client instance.
         real_receive = bus._client.receive_message
         state = {"failed": False}
 
