@@ -59,7 +59,7 @@ def test_sync_and_async_accept_same_region_key(region_key: str) -> None:
 
     # AsyncS3Database accepts the same dict and sets up its pool config.
     async_db = AsyncS3Database(cfg)
-    assert async_db._pool_config.region_name == "eu-west-1"
+    assert async_db.region == "eu-west-1"
 
 
 def test_sync_and_async_share_default_chain_when_region_unset(
