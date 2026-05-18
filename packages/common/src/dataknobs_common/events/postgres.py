@@ -62,7 +62,8 @@ class PostgresEventBus:
         ```
 
     Requires:
-        asyncpg: Async PostgreSQL driver (pip install asyncpg)
+        asyncpg: Async PostgreSQL driver
+            (``pip install 'dataknobs-common[postgres]'``)
     """
 
     def __init__(
@@ -171,7 +172,7 @@ class PostgresEventBus:
         except ImportError as e:
             raise ImportError(
                 "asyncpg is required for PostgresEventBus. "
-                "Install it with: pip install asyncpg"
+                "Install it with: pip install 'dataknobs-common[postgres]'"
             ) from e
 
         async with self._lock:

@@ -143,7 +143,7 @@ get_health_check() {
                 echo "curl -s http://$ELASTICSEARCH_HOST:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"
                 ;;
             localstack)
-                echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -r '.services.s3' 2>/dev/null | grep -q 'available'"
+                echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -e '.services.s3 == \"available\" and .services.sqs == \"available\"' >/dev/null 2>&1"
                 ;;
             redis)
                 echo "redis-cli -h $REDIS_HOST ping 2>/dev/null | grep -q PONG"
@@ -162,7 +162,7 @@ get_health_check() {
                 echo "curl -s http://$ELASTICSEARCH_HOST:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"
                 ;;
             localstack)
-                echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -r '.services.s3' 2>/dev/null | grep -q 'available'"
+                echo "curl -s http://$LOCALSTACK_HOST:4566/_localstack/health | jq -e '.services.s3 == \"available\" and .services.sqs == \"available\"' >/dev/null 2>&1"
                 ;;
             redis)
                 echo "run_compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG"

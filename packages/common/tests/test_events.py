@@ -480,11 +480,71 @@ class TestEventBusRegistry:
     """
 
     def test_builtin_backends_registered(self):
-        """memory/postgres/redis are registered by default."""
+        """memory/postgres/redis/sqs are registered by default."""
         from dataknobs_common.events import event_bus_backends
 
         keys = set(event_bus_backends.list_keys())
-        assert {"memory", "postgres", "redis"} <= keys
+        assert {"memory", "postgres", "redis", "sqs"} <= keys
+
+    def test_sqs_factory_wires_config(self):
+        """The sqs wrapper builds SqsEventBus from config (no service).
+
+        Construction is side-effect-free and does NOT import aioboto3
+        (that is deferred to ``connect()``), so this runs everywhere —
+        it locks the registry → SqsEventBus wiring and FIFO detection.
+        """
+        from dataknobs_common.events.sqs import SqsEventBus
+
+        bus = create_event_bus(
+            {
+                "backend": "sqs",
+                "queue_url": "https://sqs.us-east-1.amazonaws.com/0/q.fifo",
+                "region": "us-east-1",
+                "topic_attribute": "dk_topic",
+            }
+        )
+        assert isinstance(bus, SqsEventBus)
+        assert bus._is_fifo is True
+        assert bus._topic_attribute == "dk_topic"
+
+    def test_events_import_does_not_pull_aioboto3(self):
+        """The headline contract: the base install stays aioboto3-free.
+
+        Importing ``dataknobs_common.events``, touching the PEP 562 lazy
+        ``SqsEventBus`` export, and building the bus through the factory
+        must NOT import ``aioboto3`` — only ``connect()`` may. Asserted
+        in a clean subinterpreter because ``sys.modules`` is
+        process-global: an in-process check would be polluted by any
+        other test (or dev dependency) that has already imported
+        ``aioboto3``, and ``pytest-randomly`` makes that order
+        nondeterministic.
+        """
+        import subprocess
+        import sys
+
+        script = (
+            "import sys\n"
+            "import dataknobs_common.events as ev\n"
+            "from dataknobs_common.events import create_event_bus\n"
+            # PEP 562 attribute access must not trigger the import.
+            "assert ev.SqsEventBus.__name__ == 'SqsEventBus'\n"
+            # Factory construction must not trigger the import either.
+            "bus = create_event_bus({'backend': 'sqs',\n"
+            "    'queue_url': 'https://sqs.us-east-1.amazonaws.com/0/q'})\n"
+            "assert type(bus).__name__ == 'SqsEventBus'\n"
+            "leaked = sorted(m for m in sys.modules if 'boto' in m)\n"
+            "assert not leaked, leaked\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, (
+            f"aioboto3 leaked into the base import path:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
 
     @pytest.mark.asyncio
     async def test_memory_factory_round_trip(self):
@@ -560,6 +620,7 @@ class TestEventBusRegistry:
         assert "memory" in msg
         assert "postgres" in msg
         assert "redis" in msg
+        assert "sqs" in msg
 
     @pytest.mark.asyncio
     async def test_custom_backend_plugin(self):

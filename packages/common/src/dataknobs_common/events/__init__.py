@@ -58,10 +58,15 @@ Configuration Examples:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .bus import EventBus, create_event_bus
 from .memory import InMemoryEventBus
 from .registry import EventBusFactory, event_bus_backends
 from .types import Event, EventType, Subscription
+
+if TYPE_CHECKING:
+    from .sqs import SqsEventBus
 
 __all__ = [
     # Protocol
@@ -77,7 +82,26 @@ __all__ = [
     "Subscription",
     # Implementations
     "InMemoryEventBus",
+    "SqsEventBus",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazily expose ``SqsEventBus`` (PEP 562).
+
+    Importing it eagerly would pull the optional ``aioboto3`` dependency
+    at ``dataknobs_common.events`` import time, breaking the
+    ``dependencies = []`` base install. This defers the import to first
+    attribute access. The registry's ``"sqs"`` factory lazy-imports
+    independently, so ``create_event_bus({"backend": "sqs"})`` works even
+    if this top-level symbol is never touched.
+    """
+    if name == "SqsEventBus":
+        from .sqs import SqsEventBus
+
+        return SqsEventBus
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Note: PostgresEventBus and RedisEventBus are not exported by default
 # to avoid requiring their dependencies. Import them directly:

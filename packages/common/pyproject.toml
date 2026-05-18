@@ -15,6 +15,21 @@ dependencies = []
 # dotenv layer is silently skipped (os.environ + config still work),
 # so it stays opt-in to keep the base install lean.
 dotenv = ["python-dotenv>=1.0.0"]
+# PostgreSQL LISTEN/NOTIFY EventBus (``PostgresEventBus`` / the
+# ``"postgres"`` backend). asyncpg is lazy-imported inside the backend
+# and its registry wrapper, so the base install stays
+# ``dependencies = []``.
+postgres = ["asyncpg>=0.29.0"]
+# The ``redis`` driver, used by the Redis pub/sub EventBus
+# (``RedisEventBus`` / the ``"redis"`` backend) and the pyrate
+# Redis-bucket rate limiter. Lazy-imported at each use site, so the
+# base install stays ``dependencies = []``.
+redis = ["redis>=5.0.0"]
+# AWS SQS-backed EventBus (``SqsEventBus`` / the ``"sqs"`` backend).
+# Lazy-imported inside the backend and its registry wrapper, so the
+# base install stays ``dependencies = []`` and importing
+# ``dataknobs_common.events`` never requires aioboto3.
+sqs = ["aioboto3>=12.0.0"]
 
 [project.entry-points.pytest11]
 dataknobs_common_postgres = "dataknobs_common.testing.postgres_fixtures"
@@ -35,6 +50,7 @@ dev = [
     "pyrate-limiter>=3.0.0",
     "asyncpg>=0.29.0",
     "redis>=5.0.0",
+    "aioboto3>=12.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -21,8 +21,8 @@ consistent.
 
 Each built-in wrapper imports its concrete backend *lazily* (inside the
 factory call) so importing this module never pulls optional backend
-dependencies (asyncpg, redis) at module load time, preserving the
-``dependencies = []`` base install.
+dependencies (asyncpg, redis, aioboto3) at module load time, preserving
+the ``dependencies = []`` base install.
 """
 
 from __future__ import annotations
@@ -79,10 +79,28 @@ def _create_redis_bus(config: dict[str, Any]) -> EventBus:
     )
 
 
+def _create_sqs_bus(config: dict[str, Any]) -> EventBus:
+    # Lazy: aioboto3 (optional [sqs] extra) is imported only here, so a
+    # consumer that never selects "sqs" needs no AWS dependency.
+    from .sqs import SqsEventBus
+
+    # Use ``.get(... , "")`` rather than a bare ``config["queue_url"]``: a
+    # missing key should surface as ``SqsEventBus.__init__``'s clean
+    # ``ValueError`` (consistent with every other validation error in this
+    # layer), not a raw ``KeyError`` leaking out of ``create_event_bus()``.
+    return SqsEventBus(
+        queue_url=config.get("queue_url", ""),
+        region=config.get("region"),
+        endpoint_url=config.get("endpoint_url"),
+        wait_time_seconds=config.get("wait_time_seconds", 20),
+        visibility_timeout=config.get("visibility_timeout", 60),
+        topic_attribute=config.get("topic_attribute", "topic"),
+        aws_access_key_id=config.get("aws_access_key_id"),
+        aws_secret_access_key=config.get("aws_secret_access_key"),
+    )
+
+
 event_bus_backends.register("memory", _create_memory_bus)
 event_bus_backends.register("postgres", _create_postgres_bus)
 event_bus_backends.register("redis", _create_redis_bus)
-# Note: the "sqs" backend (SqsEventBus) is not yet registered alongside
-# events/sqs.py and the optional [sqs] dependency. Until then an unknown
-# "sqs" backend resolves to the same ValueError as any other unknown
-# backend, keeping this change behaviour-identical to the prior if/elif.
+event_bus_backends.register("sqs", _create_sqs_bus)

@@ -189,6 +189,62 @@ def is_postgres_available(
         return False
 
 
+def is_localstack_available(
+    host: str | None = None, port: int | None = None
+) -> bool:
+    """Check if a LocalStack edge endpoint is reachable.
+
+    Resolution order for the endpoint, highest priority first:
+    explicit ``host``/``port`` args, then ``LOCALSTACK_ENDPOINT`` /
+    ``AWS_ENDPOINT_URL`` (a full URL), then ``LOCALSTACK_HOST`` /
+    ``LOCALSTACK_PORT``, finally ``localhost:4566``. This mirrors
+    :func:`is_redis_available` so the check works both on the host and
+    inside Docker where LocalStack runs on a network hostname.
+
+    Any connection error returns ``False`` (skip, never fail) — the
+    same fail-soft contract as the other service probes.
+
+    Args:
+        host: LocalStack host (overrides env resolution when given)
+        port: LocalStack edge port (overrides env resolution when given)
+
+    Returns:
+        True if the LocalStack edge port accepts a TCP connection.
+    """
+    import os
+    from urllib.parse import urlparse
+
+    if host is None or port is None:
+        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
+            "AWS_ENDPOINT_URL"
+        )
+        if endpoint:
+            parsed = urlparse(endpoint)
+            host = host if host is not None else (parsed.hostname or "localhost")
+            port = port if port is not None else (parsed.port or 4566)
+        else:
+            host = (
+                host
+                if host is not None
+                else os.environ.get("LOCALSTACK_HOST", "localhost")
+            )
+            port = (
+                port
+                if port is not None
+                else int(os.environ.get("LOCALSTACK_PORT", "4566"))
+            )
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
 def is_package_available(package_name: str) -> bool:
     """Check if a Python package is available.
 
@@ -232,6 +288,11 @@ try:
         reason="PostgreSQL not available",
     )
 
+    requires_localstack = pytest.mark.skipif(
+        not is_localstack_available(),
+        reason="LocalStack not available",
+    )
+
     def requires_package(package_name: str) -> Any:
         """Create a skip marker for a required package.
 
@@ -267,6 +328,7 @@ except ImportError:
     requires_chromadb = None  # type: ignore
     requires_redis = None  # type: ignore
     requires_postgres = None  # type: ignore
+    requires_localstack = None  # type: ignore
 
     def requires_package(package_name: str) -> Any:  # type: ignore
         return None
