@@ -21,6 +21,7 @@ from typing import BinaryIO
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
     IngestionStatus,
+    InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
     normalize_ingestion_status,
@@ -63,6 +64,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     METADATA_FILE = "_metadata.json"
     CONTENT_DIR = "content"
+    SNAPSHOTS_DIR = "_snapshots"
 
     def __init__(self, base_path: str | Path) -> None:
         """Initialize the file backend.
@@ -105,6 +107,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     def _content_path(self, domain_id: str) -> Path:
         """Get the path to a KB's content directory."""
         return self._kb_path(domain_id) / self.CONTENT_DIR
+
+    def _snapshots_path(self, domain_id: str) -> Path:
+        """Get the path to a KB's per-version snapshot directory."""
+        return self._kb_path(domain_id) / self.SNAPSHOTS_DIR
+
+    def _snapshot_file(self, domain_id: str, version: str) -> Path:
+        """Path of the snapshot JSON for ``version`` (an MD5 hex id)."""
+        return self._snapshots_path(domain_id) / f"{version}.json"
 
     def _file_path(self, domain_id: str, path: str) -> Path:
         """Get the full path to a file."""
@@ -206,6 +216,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_metadata["info"] = kb_info.to_dict()
 
         self._save_metadata(domain_id, kb_metadata)
+        self._record_snapshot(domain_id, files)
 
         logger.debug(
             "%s file: %s/%s (%d bytes)",
@@ -267,6 +278,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_metadata["info"] = kb_info.to_dict()
 
         self._save_metadata(domain_id, kb_metadata)
+        self._record_snapshot(domain_id, files)
 
         # Clean up empty parent directories
         self._cleanup_empty_dirs(file_path.parent, self._content_path(domain_id))
@@ -406,7 +418,70 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     #
     # get_checksum / has_changes_since / list_changes_since come from
     # KnowledgeResourceBackendMixin (one canonical algorithm over
-    # list_files()). The mixin's default _load_snapshot (empty snapshot)
-    # is correct but non-minimal here: a differing version reports every
-    # current file as added (full re-ingest). A native per-version
-    # snapshot diff is a possible future enhancement.
+    # list_files()). This backend overrides _load_snapshot with a real
+    # per-version store so list_changes_since produces a minimal
+    # file-level diff rather than the mixin's full-set default. The
+    # snapshot for a version is the {path: checksum} map captured at the
+    # moment the KB had that canonical identity; it is written after
+    # every mutation, mirroring InMemoryKnowledgeBackend.
+
+    def _record_snapshot(
+        self, domain_id: str, files: dict[str, dict]
+    ) -> None:
+        """Persist the post-mutation ``{path: checksum}`` map.
+
+        Keyed by the canonical :meth:`get_checksum` identity (computed
+        from the same map via the shared mixin formula, so a later
+        ``list_changes_since(domain_id, that_version)`` can diff against
+        the exact state). The empty KB has identity ``""`` and needs no
+        file — :meth:`_load_snapshot` resolves ``""`` to the empty
+        snapshot directly.
+
+        Called after :meth:`put_file` / :meth:`delete_file` write
+        metadata. ``files`` is the KB's file index (the value already in
+        hand at the call site) — ``{path: KnowledgeFile.to_dict()}``.
+        """
+        snapshot = {
+            path: info.get("checksum", "") for path, info in files.items()
+        }
+        version = self._identity_of_snapshot(snapshot)
+        if not version:
+            return
+        snap_dir = self._snapshots_path(domain_id)
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        snap_path = self._snapshot_file(domain_id, version)
+        if snap_path.exists():
+            return  # identical content state already captured
+        fd, tmp_path = tempfile.mkstemp(dir=snap_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f)
+            os.replace(tmp_path, snap_path)
+        except Exception:
+            tmp = Path(tmp_path)
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
+    async def _load_snapshot(
+        self, domain_id: str, version: str
+    ) -> dict[str, str]:
+        """Resolve ``version`` to its retained ``{path: checksum}`` map.
+
+        ``""`` is the empty-KB baseline (no file written for it — every
+        current file diffs as ``added``). Any other version with no
+        retained snapshot predates retention / is unknown ⇒
+        :class:`InvalidVersionError` (callers fall back to a full
+        re-ingest).
+        """
+        if not version:
+            return {}
+        snap_path = self._snapshot_file(domain_id, version)
+        if not snap_path.exists():
+            raise InvalidVersionError(
+                f"Version {version!r} is not retained for domain "
+                f"{domain_id!r}"
+            )
+        with open(snap_path, encoding="utf-8") as f:
+            data: dict[str, str] = json.load(f)
+        return data

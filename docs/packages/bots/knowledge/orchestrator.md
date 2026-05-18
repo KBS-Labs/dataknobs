@@ -2,7 +2,9 @@
 
 `IngestOrchestrator` is the subscriber-side primitive for event-driven
 knowledge-base ingestion. It listens on an `EventBus` trigger topic and
-dispatches each event to `KnowledgeIngestionManager.ingest_if_changed`.
+dispatches each event to the `KnowledgeIngestionManager` — to
+`ingest_changes`, `ingest`, or `ingest_if_changed` depending on the
+payload (see [Trigger-Event Payload](#trigger-event-payload)).
 
 It is intentionally small: trigger adapters (S3 event bridges, SQS
 consumers, cron schedulers, webhook handlers) are deployment-specific
@@ -38,15 +40,29 @@ Both `start()` and `stop()` are idempotent — repeated calls are safe.
 ```python
 {
     "domain_id": str,             # required
+    "since_version": str | None,  # optional
+    "force_full": bool | None,    # optional
     "last_version": str | None,   # optional
 }
 ```
 
 - **`domain_id`** is required. Missing payload skips dispatch and logs
   a WARNING (`dataknobs_bots.knowledge.orchestration`).
-- **`last_version`**, when present, is forwarded to
-  `ingest_if_changed(domain_id, last_version=...)`. When absent, the
-  manager always runs (treating as "version unknown").
+- The remaining keys select the ingest entry point, checked in this
+  order (so a `since_version` present alongside `force_full` takes the
+  delta path — the more specific intent wins):
+  1. **`since_version`** present (truthy) → `ingest_changes(domain_id,
+     since_version)` — a per-file delta re-ingest of only what changed
+     since that canonical snapshot id.
+  2. **`force_full`** truthy → `ingest(domain_id,
+     swap_mode=IngestSwapMode.CLEAR_FIRST)` — an unconditional full
+     re-ingest.
+  3. otherwise → `ingest_if_changed(domain_id,
+     last_version=last_version)` (the default; `last_version` absent ⇒
+     the manager always runs, treating the version as unknown).
+
+  Every path is serialized through the same per-domain lock
+  (`ingest:<domain_id>`); only the dispatched method differs.
 
 Example trigger event:
 

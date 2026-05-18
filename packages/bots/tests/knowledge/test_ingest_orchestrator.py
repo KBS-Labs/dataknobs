@@ -17,6 +17,7 @@ import pytest
 
 from dataknobs_bots.knowledge import (
     IngestionResult,
+    IngestSwapMode,
     KnowledgeIngestionManager,
     RAGKnowledgeBase,
 )
@@ -43,6 +44,8 @@ class _StubManager:
         returns: IngestionResult | None = None,
     ) -> None:
         self.calls: list[tuple[str, str | None]] = []
+        self.change_calls: list[tuple[str, str]] = []
+        self.ingest_calls: list[tuple[str, Any]] = []
         self._raise = raise_exc
         self._returns = returns
 
@@ -56,6 +59,30 @@ class _StubManager:
         if self._raise is not None:
             raise self._raise
         return self._returns
+
+    async def ingest_changes(
+        self,
+        domain_id: str,
+        since_version: str,
+        **_kwargs: Any,
+    ) -> IngestionResult:
+        self.change_calls.append((domain_id, since_version))
+        if self._raise is not None:
+            raise self._raise
+        return self._returns or IngestionResult(domain_id=domain_id)
+
+    async def ingest(
+        self,
+        domain_id: str,
+        clear_existing: bool | None = None,
+        *,
+        swap_mode: Any = None,
+        **_kwargs: Any,
+    ) -> IngestionResult:
+        self.ingest_calls.append((domain_id, swap_mode))
+        if self._raise is not None:
+            raise self._raise
+        return self._returns or IngestionResult(domain_id=domain_id)
 
 
 async def _make_bus() -> InMemoryEventBus:
@@ -489,6 +516,132 @@ async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
 
     await orch.stop()
     await bus.close()
+
+
+class TestDispatchMatrix:
+    """Payload selects the ingest entry point (class-docstring contract)."""
+
+    @pytest.mark.asyncio
+    async def test_since_version_dispatches_ingest_changes(self) -> None:
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+        await orch.start()
+
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "since_version": "v-abc"}),
+        )
+        await _wait_for(lambda: len(manager.change_calls) >= 1)
+
+        assert manager.change_calls == [("d1", "v-abc")]
+        assert manager.calls == []  # not the default path
+        assert manager.ingest_calls == []
+
+        await orch.stop()
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_force_full_dispatches_clear_first(self) -> None:
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+        await orch.start()
+
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "force_full": True}),
+        )
+        await _wait_for(lambda: len(manager.ingest_calls) >= 1)
+
+        assert manager.ingest_calls == [("d1", IngestSwapMode.CLEAR_FIRST)]
+        assert manager.calls == []
+        assert manager.change_calls == []
+
+        await orch.stop()
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_since_version_takes_precedence_over_force_full(
+        self,
+    ) -> None:
+        """Both present → the more specific delta intent wins."""
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+        await orch.start()
+
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event(
+                {
+                    "domain_id": "d1",
+                    "since_version": "v-abc",
+                    "force_full": True,
+                }
+            ),
+        )
+        await _wait_for(lambda: len(manager.change_calls) >= 1)
+
+        assert manager.change_calls == [("d1", "v-abc")]
+        assert manager.ingest_calls == []
+
+        await orch.stop()
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_default_payload_uses_ingest_if_changed(self) -> None:
+        """No since_version / force_full → unchanged default path."""
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+        await orch.start()
+
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "last_version": "v1"}),
+        )
+        await _wait_for(lambda: len(manager.calls) >= 1)
+
+        assert manager.calls == [("d1", "v1")]
+        assert manager.change_calls == []
+        assert manager.ingest_calls == []
+
+        await orch.stop()
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_delta_path_still_serialized_per_domain(self) -> None:
+        """The injected lock guards every dispatch path, keyed per domain."""
+        from dataknobs_common.locks import InProcessLock
+
+        class RecordingLock(InProcessLock):
+            def __init__(self) -> None:
+                super().__init__()
+                self.held_keys: list[str] = []
+
+            def hold(  # type: ignore[override]
+                self, key: str, *, timeout: float | None = None
+            ):
+                self.held_keys.append(key)
+                return super().hold(key, timeout=timeout)
+
+        bus = await _make_bus()
+        manager = _StubManager()
+        lock = RecordingLock()
+        orch = IngestOrchestrator(manager, bus, lock=lock)  # type: ignore[arg-type]
+        await orch.start()
+
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d9", "since_version": "v"}),
+        )
+        await _wait_for(lambda: len(manager.change_calls) >= 1)
+
+        assert lock.held_keys == ["ingest:d9"]
+
+        await orch.stop()
+        await bus.close()
 
 
 @pytest.mark.asyncio

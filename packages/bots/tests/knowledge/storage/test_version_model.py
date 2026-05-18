@@ -142,26 +142,72 @@ class TestChangeSetInvariants:
         assert cs.version == version
 
 
-class TestNaiveBackendChangeSet:
-    """File/S3 backends have no per-version store: a differing version
-    reports every current file as ``added`` — correct, non-minimal."""
+class TestFileBackendNativeSnapshot:
+    """The file backend retains a per-version ``_snapshots/<v>.json``
+    store, so ``list_changes_since`` is a minimal file-level diff (not
+    the mixin's full-set default)."""
 
-    async def test_file_backend_differing_version_all_added(
+    async def test_file_backend_minimal_disjoint_diff(
         self, tmp_path: Path
     ) -> None:
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
         await be.initialize()
         await be.create_kb("d")
-        await be.put_file("d", "a.md", b"A")
-        old = await be.get_checksum("d")
-        await be.put_file("d", "b.md", b"B")  # version now differs
+        await be.put_file("d", "a.md", b"A1")
+        await be.put_file("d", "b.md", b"B1")
+        version = await be.get_checksum("d")
 
-        cs = await be.list_changes_since("d", old)
-        # Naive: no retained snapshot ⇒ all current files are "added".
-        assert sorted(f.path for f in cs.added) == ["a.md", "b.md"]
-        assert not cs.modified
-        assert not cs.deleted
-        assert cs.is_empty is False  # detection still correct
+        await be.put_file("d", "a.md", b"A2")  # modified
+        await be.put_file("d", "c.md", b"C1")  # added
+        await be.delete_file("d", "b.md")  # deleted
+
+        cs = await be.list_changes_since("d", version)
+        assert sorted(f.path for f in cs.added) == ["c.md"]
+        assert sorted(f.path for f in cs.modified) == ["a.md"]
+        assert sorted(cs.deleted) == ["b.md"]
+
+        added = {f.path for f in cs.added}
+        modified = {f.path for f in cs.modified}
+        deleted = set(cs.deleted)
+        assert added & modified == set()
+        assert added & deleted == set()
+        assert modified & deleted == set()
+        assert cs.version == await be.get_checksum("d")
+        assert cs.is_empty is False
+        await be.close()
+
+    async def test_file_backend_empty_baseline_round_trips(
+        self, tmp_path: Path
+    ) -> None:
+        """The empty-KB identity ("") resolves to the empty snapshot
+        even though no file is written for it."""
+        be = FileKnowledgeBackend(base_path=tmp_path / "kb")
+        await be.initialize()
+        await be.create_kb("d")
+        baseline = await be.get_checksum("d")
+        assert baseline == ""
+
+        await be.put_file("d", "a.md", b"A")
+        cs = await be.list_changes_since("d", baseline)
+        assert sorted(f.path for f in cs.added) == ["a.md"]
+        assert not cs.modified and not cs.deleted
+        await be.close()
+
+    async def test_file_backend_unretained_version_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A real store ⇒ an unknown version is reported, not silently
+        treated as the empty snapshot (which would mis-report a full
+        add-everything diff)."""
+        be = FileKnowledgeBackend(base_path=tmp_path / "kb")
+        await be.initialize()
+        await be.create_kb("d")
+        await be.put_file("d", "a.md", b"A")
+
+        with pytest.raises(InvalidVersionError):
+            await be.list_changes_since("d", "deadbeef-not-a-snapshot")
+        # has_changes_since maps the unresolvable version to "changed".
+        assert await be.has_changes_since("d", "deadbeef") is True
         await be.close()
 
 

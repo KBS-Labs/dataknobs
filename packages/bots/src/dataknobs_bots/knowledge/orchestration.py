@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.locks import InProcessLock
 
+from .ingestion import IngestSwapMode
+
 if TYPE_CHECKING:
     from dataknobs_common.events import Event, EventBus, Subscription
     from dataknobs_common.locks import DistributedLock
@@ -27,14 +29,32 @@ logger = logging.getLogger(__name__)
 
 
 class IngestOrchestrator:
-    """Subscribe to a trigger topic and dispatch to ``ingest_if_changed``.
+    """Subscribe to a trigger topic and dispatch an ingest for a domain.
 
     Expected trigger-event payload shape::
 
         {
             "domain_id": str,             # required
+            "since_version": str | None,  # optional
+            "force_full": bool | None,    # optional
             "last_version": str | None,   # optional
         }
+
+    Dispatch is decided by the payload (checked in this order, so a
+    ``since_version`` present alongside ``force_full`` takes the
+    delta path — the more specific intent wins):
+
+    1. ``since_version`` present (truthy) →
+       :meth:`KnowledgeIngestionManager.ingest_changes` — a per-file
+       delta re-ingest of only what changed since that canonical
+       snapshot id.
+    2. ``force_full`` truthy →
+       :meth:`KnowledgeIngestionManager.ingest` with
+       :attr:`~dataknobs_bots.knowledge.ingestion.IngestSwapMode.CLEAR_FIRST`
+       — an unconditional full re-ingest.
+    3. otherwise →
+       :meth:`KnowledgeIngestionManager.ingest_if_changed` with
+       ``last_version`` (the default; skips when nothing changed).
 
     The orchestrator is stateless across restarts — it does not persist
     last-seen versions. Consumers needing version persistence either:
@@ -100,8 +120,9 @@ class IngestOrchestrator:
         """Initialize the orchestrator.
 
         Args:
-            ingestion_manager: Manager whose ``ingest_if_changed`` is
-                invoked for each trigger event
+            ingestion_manager: Manager dispatched to per trigger event
+                (``ingest_changes`` / ``ingest`` / ``ingest_if_changed``
+                depending on the payload — see the class docstring)
             event_bus: Bus to subscribe on
             trigger_topic: Topic name to subscribe to (default
                 ``"knowledge:trigger"``)
@@ -145,13 +166,20 @@ class IngestOrchestrator:
         logger.info("IngestOrchestrator unsubscribed from %s", self._topic)
 
     async def _handle_trigger(self, event: Event) -> None:
-        """Dispatch a trigger event to ``ingest_if_changed``.
+        """Dispatch a trigger event to the appropriate ingest entry point.
+
+        ``since_version`` → ``ingest_changes`` (per-file delta);
+        ``force_full`` → ``ingest(swap_mode=CLEAR_FIRST)`` (full
+        re-ingest); otherwise ``ingest_if_changed(last_version)`` (the
+        default skip-if-unchanged path) — see the class docstring for
+        the precedence.
 
         Concurrent triggers for the same ``domain_id`` are serialized
-        through the injected lock (keyed ``f"ingest:{domain_id}"``);
-        different domains proceed in parallel. Errors are logged but
-        not re-raised — the EventBus dispatcher continues serving
-        subsequent events to other handlers.
+        through the injected lock (keyed ``f"ingest:{domain_id}"``)
+        regardless of which path is taken; different domains proceed in
+        parallel. Errors are logged but not re-raised — the EventBus
+        dispatcher continues serving subsequent events to other
+        handlers.
         """
         payload: dict[str, Any] = event.payload or {}
         domain_id = payload.get("domain_id")
@@ -162,6 +190,8 @@ class IngestOrchestrator:
                 event.event_id,
             )
             return
+        since_version = payload.get("since_version")
+        force_full = payload.get("force_full")
         last_version = payload.get("last_version")
         # No timeout: queue-and-wait, preserving the prior
         # ``async with asyncio.Lock()`` semantics exactly. timeout=None
@@ -177,16 +207,28 @@ class IngestOrchestrator:
                 )
                 return
             try:
-                result = await self._manager.ingest_if_changed(
-                    domain_id, last_version=last_version
-                )
-                if result is None:
-                    logger.debug(
-                        "No changes for domain=%s since version=%s",
+                if since_version:
+                    result = await self._manager.ingest_changes(
+                        domain_id, since_version
+                    )
+                elif force_full:
+                    result = await self._manager.ingest(
                         domain_id,
-                        last_version,
+                        swap_mode=IngestSwapMode.CLEAR_FIRST,
                     )
                 else:
+                    result = await self._manager.ingest_if_changed(
+                        domain_id, last_version=last_version
+                    )
+                    # Only the default path can yield None
+                    # (ingest_changes / ingest always return a result).
+                    if result is None:
+                        logger.debug(
+                            "No changes for domain=%s since version=%s",
+                            domain_id,
+                            last_version,
+                        )
+                if result is not None:
                     logger.info(
                         "Ingest complete for domain=%s (chunks=%d)",
                         domain_id,

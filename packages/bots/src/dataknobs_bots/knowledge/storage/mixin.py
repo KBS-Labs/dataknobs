@@ -16,9 +16,12 @@ reviewed implementation; every backend inherits correct behaviour.
 the requested version differs from the current one every current file is
 reported ``added`` (a full, not delta, re-ingest). ``is_empty`` stays
 correct via the version-equality short-circuit, so change *detection* is
-right for every backend; minimal *diffs* arrive when a backend overrides
-``_load_snapshot`` with a real per-version store (memory does so now;
-file/S3 backends do not yet).
+right for every backend even without an override. All three in-tree
+backends now override ``_load_snapshot`` with a real per-version store
+for minimal diffs: memory (in-process map), file
+(``_snapshots/<version>.json``), and S3 (snapshot objects, or the
+metadata object's own S3 version history in ``s3_versioning`` mode). The
+base default remains for out-of-tree backends.
 """
 
 from __future__ import annotations
@@ -55,18 +58,30 @@ class KnowledgeResourceBackendMixin:
     # --- Canonical change-detection algorithm (shared) ---
 
     @staticmethod
-    def _snapshot_identity(files: list[KnowledgeFile]) -> str:
+    def _identity_of_snapshot(snapshot: dict[str, str]) -> str:
+        """Canonical content-snapshot identity of a ``{path: checksum}`` map.
+
+        MD5 over the sorted ``path:checksum`` pairs; ``""`` for an empty
+        map. This is *the* version-identity formula — every other
+        identity entry point (:meth:`_snapshot_identity`,
+        :meth:`get_checksum`, and the S3-versioning backend's
+        history-matching fast path) routes through here so a stored
+        snapshot and a freshly-listed one can never disagree on identity.
+        """
+        if not snapshot:
+            return ""
+        combined = ":".join(sorted(f"{p}:{c}" for p, c in snapshot.items()))
+        return hashlib.md5(combined.encode()).hexdigest()
+
+    @classmethod
+    def _snapshot_identity(cls, files: list[KnowledgeFile]) -> str:
         """Canonical content-snapshot identity of a file list.
 
-        MD5 over the sorted ``path:checksum`` of every file; ``""`` for
-        an empty list. Pure function of the supplied files so it can be
-        applied to an already-fetched ``list_files()`` result without a
-        second backend round-trip.
+        Thin adapter over :meth:`_identity_of_snapshot` — pure function
+        of the supplied files so it can be applied to an already-fetched
+        ``list_files()`` result without a second backend round-trip.
         """
-        if not files:
-            return ""
-        combined = ":".join(sorted(f"{f.path}:{f.checksum}" for f in files))
-        return hashlib.md5(combined.encode()).hexdigest()
+        return cls._identity_of_snapshot({f.path: f.checksum for f in files})
 
     async def get_checksum(self, domain_id: str) -> str:
         """Canonical content-snapshot identity of the whole KB.
