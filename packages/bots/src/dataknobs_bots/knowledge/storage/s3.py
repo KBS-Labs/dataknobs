@@ -21,10 +21,13 @@ from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
     IngestionStatus,
+    InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
     normalize_ingestion_status,
 )
+
+_CHANGE_DETECTION_MODES = ("snapshot", "s3_versioning")
 
 if TYPE_CHECKING:
     import boto3
@@ -69,6 +72,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     METADATA_FILE = "_metadata.json"
     CONTENT_DIR = "content"
+    SNAPSHOTS_DIR = "_snapshots"
 
     def __init__(
         self,
@@ -81,6 +85,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         aws_session_token: str | None = None,
         *,
         session_config: S3SessionConfig | None = None,
+        change_detection_mode: str = "snapshot",
     ) -> None:
         """Initialize the S3 backend.
 
@@ -100,7 +105,34 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             session_config: Pre-built :class:`S3SessionConfig`. When
                 provided, it wins over the individual kwargs above —
                 useful for sharing one config across multiple backends.
+            change_detection_mode: How per-version snapshots are
+                resolved for minimal :meth:`list_changes_since` diffs.
+
+                - ``"snapshot"`` (default): a small ``{path: checksum}``
+                  JSON object is written under
+                  ``{domain}/_snapshots/<version>.json`` after every
+                  mutation. Self-contained; works on any bucket.
+                - ``"s3_versioning"``: no extra objects are written —
+                  the metadata object's own S3 version history *is* the
+                  snapshot store, walked via ``ListObjectVersions``.
+                  Requires **bucket versioning enabled** (a deploy-time
+                  responsibility); with versioning off only the current
+                  version resolves and stale versions fall back to a
+                  full re-ingest (correct, non-minimal).
+
+        Raises:
+            ValueError: If ``change_detection_mode`` is not one of
+                ``"snapshot"`` / ``"s3_versioning"`` (fail closed —
+                an unrecognized mode is never silently treated as a
+                default).
         """
+        if change_detection_mode not in _CHANGE_DETECTION_MODES:
+            raise ValueError(
+                f"Unknown change_detection_mode "
+                f"{change_detection_mode!r}; expected one of "
+                f"{list(_CHANGE_DETECTION_MODES)}"
+            )
+        self._change_detection_mode = change_detection_mode
         self._bucket = bucket
         self._prefix = prefix.rstrip("/") + "/" if prefix else ""
         if session_config is None:
@@ -129,6 +161,9 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             bucket=config["bucket"],
             prefix=config.get("prefix", "knowledge/"),
             session_config=S3SessionConfig.from_dict(config),
+            change_detection_mode=config.get(
+                "change_detection_mode", "snapshot"
+            ),
         )
 
     async def initialize(self) -> None:
@@ -162,6 +197,13 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     def _metadata_key(self, domain_id: str) -> str:
         """Get the S3 key for a KB's metadata file."""
         return f"{self._prefix}{domain_id}/{self.METADATA_FILE}"
+
+    def _snapshot_key(self, domain_id: str, version: str) -> str:
+        """S3 key of the snapshot object for ``version`` (snapshot mode)."""
+        return (
+            f"{self._prefix}{domain_id}/{self.SNAPSHOTS_DIR}/"
+            f"{version}.json"
+        )
 
     def _load_metadata(self, domain_id: str) -> dict:
         """Load metadata from S3."""
@@ -272,6 +314,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_metadata["info"] = kb_info.to_dict()
 
         self._save_metadata(domain_id, kb_metadata)
+        self._record_snapshot(domain_id, files)
 
         logger.debug(
             "%s file: s3://%s/%s (%d bytes)",
@@ -357,6 +400,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_metadata["info"] = kb_info.to_dict()
 
         self._save_metadata(domain_id, kb_metadata)
+        self._record_snapshot(domain_id, files)
 
         logger.debug("Deleted file: s3://%s/%s", self._bucket, key)
         return True
@@ -517,7 +561,127 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     #
     # get_checksum / has_changes_since / list_changes_since come from
     # KnowledgeResourceBackendMixin (one canonical algorithm over
-    # list_files()). The mixin's default _load_snapshot (empty snapshot)
-    # is correct but non-minimal here: a differing version reports every
-    # current file as added (full re-ingest). A native S3-versioning
-    # snapshot diff (fast path) is a possible future enhancement.
+    # list_files()). This backend overrides _load_snapshot so
+    # list_changes_since yields a minimal file-level diff. Two
+    # strategies, selected by change_detection_mode:
+    #   - "snapshot": a {path: checksum} object per version (mirrors the
+    #     file backend).
+    #   - "s3_versioning": the metadata object's own S3 version history
+    #     IS the snapshot store (no extra writes) — the fast path.
+
+    @staticmethod
+    def _snapshot_from_metadata(metadata: dict) -> dict[str, str]:
+        """Reconstruct a ``{path: checksum}`` map from a KB metadata dict."""
+        files = metadata.get("files", {})
+        return {
+            path: info.get("checksum", "")
+            for path, info in files.items()
+        }
+
+    def _record_snapshot(
+        self, domain_id: str, files: dict[str, dict]
+    ) -> None:
+        """Persist the post-mutation ``{path: checksum}`` map.
+
+        No-op in ``s3_versioning`` mode — there the metadata object's
+        own version history is the snapshot store, so writing a separate
+        object would be redundant. In ``snapshot`` mode the map is
+        written under ``{domain}/_snapshots/<version>.json`` keyed by the
+        canonical :meth:`get_checksum` identity (computed from the same
+        map via the shared mixin formula). The empty KB has identity
+        ``""`` and needs no object — :meth:`_load_snapshot` resolves
+        ``""`` to the empty snapshot directly.
+        """
+        if self._change_detection_mode != "snapshot":
+            return
+        if not self._client:
+            raise RuntimeError("Backend not initialized")
+        snapshot = {
+            path: info.get("checksum", "") for path, info in files.items()
+        }
+        version = self._identity_of_snapshot(snapshot)
+        if not version:
+            return
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=self._snapshot_key(domain_id, version),
+            Body=json.dumps(snapshot).encode("utf-8"),
+            ContentType="application/json",
+        )
+
+    async def _load_snapshot(
+        self, domain_id: str, version: str
+    ) -> dict[str, str]:
+        """Resolve ``version`` to its retained ``{path: checksum}`` map.
+
+        ``""`` is the empty-KB baseline (every current file diffs as
+        ``added``). Otherwise the resolution depends on
+        ``change_detection_mode``; an unresolvable version raises
+        :class:`InvalidVersionError` so callers fall back to a full
+        re-ingest.
+        """
+        if not version:
+            return {}
+        if not self._client:
+            raise RuntimeError("Backend not initialized")
+        if self._change_detection_mode == "s3_versioning":
+            return self._load_snapshot_from_versions(domain_id, version)
+        # snapshot mode
+        try:
+            response = self._client.get_object(
+                Bucket=self._bucket,
+                Key=self._snapshot_key(domain_id, version),
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+                raise InvalidVersionError(
+                    f"Version {version!r} is not retained for domain "
+                    f"{domain_id!r}"
+                ) from e
+            raise
+        data: dict[str, str] = json.loads(
+            response["Body"].read().decode("utf-8")
+        )
+        return data
+
+    def _load_snapshot_from_versions(
+        self, domain_id: str, version: str
+    ) -> dict[str, str]:
+        """Walk the metadata object's S3 version history for ``version``.
+
+        Each historical metadata version reconstructs a
+        ``{path: checksum}`` map; the first whose canonical identity
+        equals ``version`` is the answer. Requires bucket versioning;
+        with it disabled only the current version is listed, so a stale
+        ``version`` raises :class:`InvalidVersionError` (a correct,
+        non-minimal full re-ingest — never a wrong diff).
+        """
+        if not self._client:
+            raise RuntimeError("Backend not initialized")
+        metadata_key = self._metadata_key(domain_id)
+        paginator = self._client.get_paginator("list_object_versions")
+        for page in paginator.paginate(
+            Bucket=self._bucket, Prefix=metadata_key
+        ):
+            # DeleteMarkers are returned under "DeleteMarkers", not
+            # "Versions", so iterating "Versions" already excludes them
+            # (the metadata object is overwritten, never deleted, anyway).
+            for entry in page.get("Versions", []):
+                if entry["Key"] != metadata_key:
+                    continue  # Prefix is a prefix-match; require exact key
+                obj = self._client.get_object(
+                    Bucket=self._bucket,
+                    Key=metadata_key,
+                    VersionId=entry["VersionId"],
+                )
+                metadata = json.loads(
+                    obj["Body"].read().decode("utf-8")
+                )
+                snapshot = self._snapshot_from_metadata(metadata)
+                if self._identity_of_snapshot(snapshot) == version:
+                    return snapshot
+        raise InvalidVersionError(
+            f"Version {version!r} is not resolvable from the S3 "
+            f"version history of domain {domain_id!r} (bucket "
+            f"versioning may be disabled or the version predates it)"
+        )

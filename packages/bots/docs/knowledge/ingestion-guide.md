@@ -185,11 +185,17 @@ frozen `ChangeSet` (`added` / `modified` / `deleted` / `version`, with
 `is_empty`). `has_changes_since` is its degenerate case. If `version`
 predates the backend's snapshot retention the backend raises
 `InvalidVersionError`; catch it and fall back to a full re-ingest.
-`InMemoryKnowledgeBackend` retains per-version snapshots so it returns
-a minimal diff; `FileKnowledgeBackend` / `S3KnowledgeBackend` currently
-report every current file as `added` when the version differs (correct
-detection, non-minimal) until native snapshot support lands in a later
-phase.
+All three in-tree backends retain per-version snapshots so
+`list_changes_since` returns a minimal diff: `InMemoryKnowledgeBackend`
+(in-process map), `FileKnowledgeBackend` (a `{path: checksum}` file
+written to `<domain>/_snapshots/<version>.json` after every mutation),
+and `S3KnowledgeBackend` (a snapshot object per version, or — with
+`change_detection_mode="s3_versioning"` — the metadata object's own S3
+version history, which requires bucket versioning and otherwise falls
+back to a full re-ingest). An out-of-tree backend that does not
+override `_load_snapshot` still gets correct change *detection* (every
+current file reported `added` when the version differs) via the
+version-equality short-circuit.
 
 ## Per-File Delta — `ingest_changes`
 

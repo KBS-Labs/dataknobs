@@ -26,11 +26,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change-detection algorithm (`get_checksum` / `has_changes_since`
   / `list_changes_since` over `list_files()` plus a `_load_snapshot`
   seam). All in-tree backends inherit it; out-of-tree backends mix
-  it in for correct behaviour for free. `InMemoryKnowledgeBackend`
-  retains per-version snapshots so it produces minimal diffs;
-  `FileKnowledgeBackend` / `S3KnowledgeBackend` produce correct
-  (full, non-minimal) diffs until native snapshot support lands in
-  a later phase.
+  it in for correct behaviour for free. All three in-tree backends
+  retain per-version snapshots so `list_changes_since` is a minimal
+  file-level diff: `InMemoryKnowledgeBackend` (in-process map),
+  `FileKnowledgeBackend` (`_snapshots/<version>.json` written after
+  every mutation), and `S3KnowledgeBackend` (snapshot objects, or the
+  metadata object's own S3 version history — see
+  `change_detection_mode` below). An out-of-tree backend that does
+  not override `_load_snapshot` still gets correct (full, non-minimal)
+  change *detection* via the version-equality short-circuit.
+- **`S3KnowledgeBackend(change_detection_mode=...)`** (also via
+  `from_config`, default `"snapshot"`) selects how per-version
+  snapshots are resolved: `"snapshot"` writes a small
+  `{path: checksum}` object under `{domain}/_snapshots/<version>.json`
+  after every mutation (self-contained, any bucket); `"s3_versioning"`
+  writes no extra objects and instead walks the metadata object's own
+  S3 version history (`ListObjectVersions`) — requires bucket
+  versioning enabled, and with it disabled a stale version safely
+  falls back to a full re-ingest. An unrecognized mode raises
+  `ValueError` (fail closed).
+- **`IngestOrchestrator` trigger-payload dispatch.** The trigger
+  event payload now selects the ingest entry point: `since_version`
+  → `ingest_changes` (per-file delta), `force_full` →
+  `ingest(swap_mode=CLEAR_FIRST)` (full re-ingest), otherwise the
+  unchanged `ingest_if_changed(last_version)` default. `since_version`
+  takes precedence over `force_full`. Payloads using only
+  `domain_id` / `last_version` are byte-for-byte unchanged.
 - **`IngestionStatus.SWAPPING`** — set by the `TOMBSTONE` swap path
   while the new generation is written; a crash here leaves the
   domain in this state with the in-flight token recoverable.
