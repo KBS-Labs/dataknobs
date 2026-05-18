@@ -124,7 +124,8 @@ def _create_bucket(rates: list[Any], config: dict[str, Any]) -> Any:
             from redis import Redis
         except ImportError as e:
             raise ImportError(
-                "Redis bucket requires the 'redis' package: pip install redis"
+                "Redis bucket requires the 'redis' package: "
+                "pip install 'dataknobs-common[redis]'"
             ) from e
         # Using sync Redis client so RedisBucket.init() returns synchronously.
         # SSL is inferred from the URL scheme: use rediss:// for TLS.

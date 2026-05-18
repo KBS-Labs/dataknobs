@@ -61,7 +61,8 @@ class RedisEventBus:
         ```
 
     Requires:
-        redis: Async Redis client (pip install redis)
+        redis: Async Redis client
+            (``pip install 'dataknobs-common[redis]'``)
     """
 
     def __init__(
@@ -131,7 +132,7 @@ class RedisEventBus:
         except ImportError as e:
             raise ImportError(
                 "redis package is required for RedisEventBus. "
-                "Install it with: pip install redis"
+                "Install it with: pip install 'dataknobs-common[redis]'"
             ) from e
 
         async with self._lock:

@@ -23,10 +23,13 @@ For production backends:
 
 ```bash
 # PostgreSQL (uses LISTEN/NOTIFY)
-pip install dataknobs-common[postgres]
+pip install 'dataknobs-common[postgres]'
 
 # Redis (uses pub/sub)
-pip install dataknobs-common[redis]
+pip install 'dataknobs-common[redis]'
+
+# AWS SQS (cloud-native, at-least-once)
+pip install 'dataknobs-common[sqs]'
 ```
 
 ## Quick Start
@@ -212,6 +215,62 @@ bus = create_event_bus({
 from dataknobs_common.events.redis import RedisEventBus
 ```
 
+### AWS SQS (Cloud-native, at-least-once)
+
+`SqsEventBus` is backed by a single AWS SQS queue. Every topic shares
+the queue; the topic travels in a message attribute (default `"topic"`)
+and each subscriber long-polls and filters by exact match. Delivery is
+**at-least-once** — a handler that raises is *not* acked, so the message
+is redelivered after the queue's visibility timeout. **Handlers must be
+idempotent** (the ingest trigger path already is).
+
+Requires the optional `[sqs]` extra (`aioboto3`):
+
+```bash
+pip install 'dataknobs-common[sqs]'
+```
+
+```python
+bus = create_event_bus({
+    "backend": "sqs",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789012/events",
+    # All optional below — omit to defer to boto's default chains:
+    "region": "us-east-1",
+    "endpoint_url": "http://localhost:4566",   # LocalStack / VPC endpoint
+    "wait_time_seconds": 20,                    # ReceiveMessage long-poll
+    "visibility_timeout": 60,                   # at-least-once retry window
+    "topic_attribute": "topic",                 # routing attribute name
+    # "aws_access_key_id" / "aws_secret_access_key" optional —
+    # default credential chain is used when omitted.
+})
+```
+
+A `queue_url` ending in `.fifo` is treated as a FIFO queue:
+`MessageGroupId` is the topic (per-topic ordering) and
+`MessageDeduplicationId` is the event id.
+
+**Use when:**
+
+- AWS-native deployment; no broker to operate
+- Durable triggers that must survive subscriber restarts
+- Downstream of an SNS→SQS fan-out (works unchanged)
+
+**Limitations:**
+
+- At-least-once only — handlers must be idempotent
+- Single-queue topic-attribute routing (queue-per-topic is out of
+  scope); a topic with no subscriber recirculates until retention
+  expires
+- Wildcard `pattern` subscriptions are unsupported and raise
+  `NotImplementedError` (loud rather than silent mis-routing)
+
+**Note:** Import directly for type hints (lazy — does not pull
+`aioboto3` until first access):
+
+```python
+from dataknobs_common.events import SqsEventBus
+```
+
 ### Custom Backends (Plugin Registry)
 
 `create_event_bus()` resolves the `backend` key through the
@@ -239,8 +298,8 @@ bus = create_event_bus({"backend": "kafka", "brokers": "broker:9092"})
 
 A backend factory is any `Callable[[dict], EventBus]`. Registering a key
 that already exists raises `OperationError` unless you pass
-`allow_overwrite=True`. The built-in `memory`, `postgres`, and `redis`
-backends are registered automatically and are unchanged. Passing
+`allow_overwrite=True`. The built-in `memory`, `postgres`, `redis`, and
+`sqs` backends are registered automatically and are unchanged. Passing
 `allow_overwrite=True` for one of those built-in names *will* replace
 the built-in backend process-wide — this is supported but strongly
 discouraged; prefer a distinct backend name. Selecting an unregistered

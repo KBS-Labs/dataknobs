@@ -38,6 +38,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DataKnobs. Exported from `dataknobs_common.events` along with the
   `EventBusFactory` type alias. The built-in `memory`/`postgres`/`redis`
   backends and the `create_event_bus()` signature are unchanged.
+- `dataknobs_common.events.SqsEventBus` — an AWS SQS-backed `EventBus`
+  (the built-in `"sqs"` backend). Single queue with the topic carried
+  in a configurable message attribute (default `"topic"`); subscribers
+  long-poll and filter by exact match. At-least-once delivery —
+  handlers must be idempotent; a handler that raises is not acked and
+  the message is redelivered after the queue's visibility timeout.
+  FIFO queues (`queue_url` ending `.fifo`) get per-topic
+  `MessageGroupId` ordering. Wildcard `pattern` subscriptions are
+  unsupported and raise `NotImplementedError`. Selectable via
+  `create_event_bus({"backend": "sqs", "queue_url": ...})`. Requires
+  the optional `aioboto3` dependency: `pip install
+  'dataknobs-common[sqs]'`; it is lazy-imported, so the base install
+  stays dependency-free and importing `dataknobs_common.events` never
+  pulls `aioboto3` (the top-level `SqsEventBus` symbol is a PEP 562
+  lazy export). Added the `requires_localstack` pytest marker and
+  `is_localstack_available()` probe (`dataknobs_common.testing`) for
+  gating the real-LocalStack behavioural tests.
+- `postgres` and `redis` optional-dependency extras
+  (`pip install 'dataknobs-common[postgres]'` /
+  `'dataknobs-common[redis]'`) pulling `asyncpg` / `redis`. `[postgres]`
+  serves `PostgresEventBus`; `[redis]` serves both `RedisEventBus` and
+  the pyrate Redis-bucket rate limiter. These complete the optional
+  EventBus-backend install matrix alongside `[sqs]`; the base install
+  remains `dependencies = []` (all three drivers stay lazy-imported).
+  The backends' `ImportError` guidance now points at the extra.
 - `dataknobs_common.locks` — distributed lock abstraction; the third
   member of the concurrency-primitive set alongside `RateLimiter` and
   `EventBus`. A `@runtime_checkable` `DistributedLock` protocol

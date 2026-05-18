@@ -480,11 +480,32 @@ class TestEventBusRegistry:
     """
 
     def test_builtin_backends_registered(self):
-        """memory/postgres/redis are registered by default."""
+        """memory/postgres/redis/sqs are registered by default."""
         from dataknobs_common.events import event_bus_backends
 
         keys = set(event_bus_backends.list_keys())
-        assert {"memory", "postgres", "redis"} <= keys
+        assert {"memory", "postgres", "redis", "sqs"} <= keys
+
+    def test_sqs_factory_wires_config(self):
+        """The sqs wrapper builds SqsEventBus from config (no service).
+
+        Construction is side-effect-free and does NOT import aioboto3
+        (that is deferred to ``connect()``), so this runs everywhere —
+        it locks the registry → SqsEventBus wiring and FIFO detection.
+        """
+        from dataknobs_common.events.sqs import SqsEventBus
+
+        bus = create_event_bus(
+            {
+                "backend": "sqs",
+                "queue_url": "https://sqs.us-east-1.amazonaws.com/0/q.fifo",
+                "region": "us-east-1",
+                "topic_attribute": "dk_topic",
+            }
+        )
+        assert isinstance(bus, SqsEventBus)
+        assert bus._is_fifo is True
+        assert bus._topic_attribute == "dk_topic"
 
     @pytest.mark.asyncio
     async def test_memory_factory_round_trip(self):
@@ -560,6 +581,7 @@ class TestEventBusRegistry:
         assert "memory" in msg
         assert "postgres" in msg
         assert "redis" in msg
+        assert "sqs" in msg
 
     @pytest.mark.asyncio
     async def test_custom_backend_plugin(self):
