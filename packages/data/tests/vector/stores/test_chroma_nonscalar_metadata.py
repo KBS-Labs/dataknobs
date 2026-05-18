@@ -21,11 +21,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from dataknobs_common.testing import is_chromadb_available
-
-requires_chromadb = pytest.mark.skipif(
-    not is_chromadb_available(), reason="chromadb not installed"
-)
+from dataknobs_common.testing import is_chromadb_available, requires_chromadb
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore

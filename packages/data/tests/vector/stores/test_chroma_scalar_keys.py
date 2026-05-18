@@ -23,7 +23,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
-from dataknobs_common.testing import is_chromadb_available
+from dataknobs_common.testing import is_chromadb_available, requires_chromadb
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -31,10 +31,6 @@ if TYPE_CHECKING:
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
-
-requires_chromadb = pytest.mark.skipif(
-    not is_chromadb_available(), reason="chromadb not installed"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +63,7 @@ def make_chroma_store() -> Iterator[Callable[..., ChromaVectorStore]]:
     pattern alone could not stop (list-valued metadata corrupting
     unrelated collections via chromadb's scalar-only store) is fixed at
     the source in ``ChromaVectorStore._encode_metadata`` /
-    ``_decode_metadata``; see ``test_chroma_isolation.py``. This fixture
+    ``_decode_metadata``; see ``test_chroma_nonscalar_metadata.py``. This fixture
     remains good per-test hygiene regardless.
     """
     created: list[ChromaVectorStore] = []
