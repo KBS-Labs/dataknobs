@@ -267,6 +267,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every real input, but it correctly documents that the guard
   protects against a metadata-less row, not an empty dict.)
 
+### Security
+
+- Bumped the `[server]` extra's and dev group's minimum `fastapi`
+  requirement from `>=0.110.0` to `>=0.120.1` and added an explicit
+  `starlette>=0.49.1` floor to exclude starlette versions affected
+  by GHSA-7f5h-v6xp-fcq8 (CVSS 7.5) and GHSA-2c2j-9gv5-cj73
+  (CVSS 5.3), both fixed in starlette 0.49.1. `starlette` reaches
+  the package only transitively via `fastapi`, but `fastapi`'s own
+  lower bound on `starlette` never rises to the patched version, so
+  an explicit floor is required to guarantee a safe `starlette` for
+  all resolvers — not only the floor-resolve audit. The `fastapi`
+  bump is required for graph satisfiability: `fastapi 0.110.0`
+  capped `starlette<0.37.0`, and `0.120.1` is the lowest `fastapi`
+  whose constraint (`starlette<0.50.0,>=0.40.0`) permits 0.49.1.
+  Surfaced by the floor-resolve OSV audit in the
+  `dependency-update` workflow.
+
 ## v0.6.20 - 2026-05-13
 
 ### Added
