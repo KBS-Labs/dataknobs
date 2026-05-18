@@ -16,6 +16,39 @@ import pytest
 
 
 @pytest.fixture
+def isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scrub ambient AWS env so ``moto.mock_aws()`` is truly hermetic.
+
+    botocore 1.34+ honors ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT_URL_S3`` /
+    ``LOCALSTACK_ENDPOINT`` as global default endpoints **even inside
+    ``mock_aws()``**. ``bin/test.sh`` exports these for the real-LocalStack
+    integration tests; without scrubbing them, a moto-based fixture
+    silently routes to the shared persistent LocalStack container and
+    picks up cross-test / cross-run state (e.g. ``test_list_all`` seeing
+    leftover objects from an interrupted prior run -> ``assert 25 == 5``).
+
+    Single source of truth: every moto fixture and every
+    region-resolution test class depends on this instead of duplicating
+    the scrub list.
+    """
+    for key in (
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_ENDPOINT_URL",
+        "AWS_ENDPOINT_URL_S3",
+        "LOCALSTACK_ENDPOINT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+@pytest.fixture
 def postgres_test_db(make_postgres_test_db) -> Generator[dict[str, Any], None, None]:
     """Provide a clean PostgreSQL table per test, using the ``test_records_`` prefix."""
     yield from make_postgres_test_db("test_records_")
