@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.21 - 2026-05-18
+
 ### Added
 
 - **`KnowledgeResourceBackend.list_changes_since(domain_id, version)

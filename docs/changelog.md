@@ -5,6 +5,98 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-18
+
+### dataknobs-common [1.3.13]
+
+#### Added
+- Add PostgresAdvisoryLock cross-replica DistributedLock backend
+- feat(common): add internal run_supervised_loop helper for event-bus listeners
+- feat(common): extract compute_backoff_delay as a public pure function
+- feat(common): add SqsEventBus backend + optional-dependency extras
+- Add dataknobs_common.locks distributed lock abstraction (Item 128 Phase 1)
+- feat(common): registry-extensible event bus backends (Item 127 Phase 1)
+
+#### Changed
+- docs(common): document event-bus connection resilience; CHANGELOG
+- common: reword plan-tracking refs (no behavior change)
+- common: reword internal tracking labels (no behavior change)
+- common: shared make_pgvector_test_table fixture + gated orphan sweep (Item 129 Changes A+B)
+
+#### Fixed
+- fix(common): pace Postgres LISTEN watchdog; add is_listening; doc compute_backoff_delay
+- fix(common): PostgresEventBus reconnects a dropped LISTEN connection
+- fix(common): RedisEventBus re-establishes pub/sub on connection loss
+- refactor(common): SqsEventBus on shared supervised loop; fix topic starvation
+- fix(common): sqs factory raises clean ValueError; guard aioboto3-free import
+- common: shared make_pgvector_test_table fixture + gated orphan sweep (Item 129 Changes A+B)
+
+### dataknobs-config [0.3.14]
+
+#### Changed
+- config: reword internal tracking labels (no behavior change)
+
+### dataknobs-xization [1.3.6]
+
+#### Added
+- Add per-file delta ingestion to KnowledgeIngestionManager
+
+#### Changed
+- fsm/llm/xization: reword plan-phase refs (no behavior change)
+- xization: reword internal tracking labels (no behavior change)
+- bumped versions, updated release notes
+
+### dataknobs-data [0.4.19]
+
+#### Added
+- feat(data): expose AsyncS3Database.region for sync/async parity
+- Address PR5A triage findings: label leakage, test fake, lazy logging
+- Item 131: add cross-backend metadata-aliasing conformance test
+- PgVectorStore init-time dimension-mismatch guard (Item 129 Change C)
+
+#### Fixed
+- encode non-scalar Chroma metadata to stop cross-collection corruption
+- Make ChromaVectorStore compatible with chromadb 1.x
+- reword plan-phase refs (no behavior change)
+- reword PR#/review# refs (no behavior change)
+- reword internal tracking labels (no behavior change)
+- Item 130: replace IVF make_direct_map with raw-vector side-car (supersedes 887430f5)
+- Item 130: fix FaissVectorStore.get_vectors() for IVF index types
+- Item 132: neutralize PgVectorStore default schema (edubot -> public)
+- Item 133: remove pre-existing internal tracking labels from committed source
+- Address PR #317 review: fix TOMBSTONE additive-delta data loss
+- Redesign TOMBSTONE re-ingest: crash-safe generation swap
+
+### dataknobs-fsm [0.1.20]
+
+#### Fixed
+- Make ChromaVectorStore compatible with chromadb 1.x
+- reword plan-phase refs (no behavior change)
+- reword internal tracking labels (no behavior change)
+
+### dataknobs-llm [0.5.13]
+
+#### Fixed
+- reword plan-phase refs (no behavior change)
+- reword internal tracking labels (no behavior change)
+
+### dataknobs-bots [0.6.21]
+
+#### Added
+- Add PostgresAdvisoryLock cross-replica DistributedLock backend
+- PR7 (125/126 Phase 4): embedder rate-limit seam + config-driven orchestrator lock
+- Add native per-version snapshots and orchestrator dispatch matrix
+- Add per-file delta ingestion to KnowledgeIngestionManager
+- Add dataknobs_common.locks distributed lock abstraction (Item 128 Phase 1)
+
+#### Fixed
+- Extract shared requires_real_postgres mark; doc/changelog accuracy
+- updated CVE dependency floors and ran quality checks
+- reword plan-tracking refs (no behavior change)
+- reword internal tracking labels (no behavior change)
+- Unify the knowledge-backend version model (Items 125/126 Phase 0)
+
+
 ## Release - 2026-05-13
 
 ### dataknobs-config [0.3.13]

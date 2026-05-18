@@ -61,7 +61,7 @@ from .tools import (
     ValidateConfigTool,
 )
 
-__version__ = "0.6.20"
+__version__ = "0.6.21"
 
 __all__ = [
     "AddKBResourceTool",
