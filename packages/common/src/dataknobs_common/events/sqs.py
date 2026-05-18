@@ -27,6 +27,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ._resilient_loop import run_supervised_loop
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
@@ -353,29 +354,33 @@ class SqsEventBus:
         topic: str,
         handler: Callable[[Event], Any],
     ) -> None:
-        """Long-poll the queue, dispatch matching events for one topic."""
-        while self._running:
-            try:
-                response = await self._client.receive_message(
-                    QueueUrl=self._queue_url,
-                    MaxNumberOfMessages=10,
-                    WaitTimeSeconds=self._wait_time_seconds,
-                    VisibilityTimeout=self._visibility_timeout,
-                    MessageAttributeNames=[self._topic_attribute],
+        """Long-poll the queue, dispatch matching events for one topic.
+
+        The supervised-loop helper owns the ``while self._running``
+        lifecycle, cancellation, and the exponential-with-jitter
+        back-off; this method only supplies one poll-and-dispatch
+        iteration. Cancellation / ``_running`` / ``_unsubscribe``
+        semantics are unchanged for callers.
+        """
+
+        async def _one() -> None:
+            response = await self._client.receive_message(
+                QueueUrl=self._queue_url,
+                MaxNumberOfMessages=10,
+                WaitTimeSeconds=self._wait_time_seconds,
+                VisibilityTimeout=self._visibility_timeout,
+                MessageAttributeNames=[self._topic_attribute],
+            )
+            for message in response.get("Messages", []):
+                await self._handle_message(
+                    message, subscription_id, topic, handler
                 )
-                for message in response.get("Messages", []):
-                    await self._handle_message(
-                        message, subscription_id, topic, handler
-                    )
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception(
-                    "SqsEventBus poll error for subscription %s (queue=%s)",
-                    subscription_id[:8],
-                    self._queue_url,
-                )
-                await asyncio.sleep(1.0)  # back off on transient errors
+
+        await run_supervised_loop(
+            _one,
+            should_run=lambda: self._running,
+            name=f"SqsEventBus poll {subscription_id[:8]}",
+        )
 
     async def _handle_message(
         self,
@@ -395,10 +400,28 @@ class SqsEventBus:
         attrs = message.get("MessageAttributes") or {}
         topic_attr = attrs.get(self._topic_attribute) or {}
         msg_topic = topic_attr.get("StringValue")
-        if msg_topic != topic:
-            return  # another topic's message; leave for its subscriber
-
         receipt_handle = message.get("ReceiptHandle")
+        if msg_topic != topic:
+            # Another topic's message. Return it to the queue
+            # *immediately* (visibility 0) rather than letting it sit
+            # invisible for the full visibility timeout: on a shared
+            # single queue, parking it lets a subscriber on a different
+            # topic repeatedly "steal and hold" the message and starve
+            # the subscriber that actually handles this topic. Resetting
+            # visibility makes it instantly available for the right
+            # consumer's next poll. Best-effort: the matching subscriber
+            # may have already received+deleted it (benign expired/
+            # invalid receipt handle race) — never propagate that into
+            # the supervised poll loop as a failure.
+            if receipt_handle:
+                with contextlib.suppress(Exception):
+                    await self._client.change_message_visibility(
+                        QueueUrl=self._queue_url,
+                        ReceiptHandle=receipt_handle,
+                        VisibilityTimeout=0,
+                    )
+            return
+
         message_id = message.get("MessageId", "")
 
         try:

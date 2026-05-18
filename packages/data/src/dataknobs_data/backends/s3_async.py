@@ -53,6 +53,11 @@ class AsyncS3Database(  # type: ignore[misc]
             raise ValueError("S3 backend requires 'bucket' in configuration")
 
         self._pool_config = S3PoolConfig.from_dict(config)
+        # Public, symmetric with ``SyncS3Database.region``: the resolved
+        # region (``None`` when config relies on the boto default chain).
+        # Lets callers/tests inspect region resolution without reaching
+        # into ``_pool_config``.
+        self.region = self._pool_config.region_name
         self._session = None
         self._connected = False
 

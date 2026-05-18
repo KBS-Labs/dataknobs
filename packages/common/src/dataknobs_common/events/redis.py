@@ -8,6 +8,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ._resilient_loop import run_supervised_loop
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
@@ -321,21 +322,86 @@ class RedisEventBus:
 
             logger.debug("Unsubscribed %s", subscription_id[:8])
 
+    async def _establish_pubsub(self) -> None:
+        """(Re)create the pub/sub connection and re-apply subscriptions.
+
+        Used both for the initial connection and for recovery: when the
+        prior listener iteration's connection died, ``_pubsub`` is set to
+        ``None`` and the next iteration calls this to rebuild it and
+        re-subscribe every active channel and pattern. The new pub/sub is
+        assigned to ``self._pubsub`` only after every (p)subscribe
+        succeeds, so a partially-subscribed connection is never observed.
+        """
+        if self._redis is None:
+            raise RuntimeError("RedisEventBus redis client is not connected")
+
+        async with self._lock:
+            channels = list(self._channel_subscriptions)
+            patterns = list(self._pattern_subscriptions)
+
+        pubsub = self._redis.pubsub()
+        try:
+            for channel in channels:
+                await pubsub.subscribe(channel)
+            for pattern in patterns:
+                await pubsub.psubscribe(pattern)
+        except Exception:
+            # Leave self._pubsub as None so the next iteration retries
+            # from scratch rather than reading a half-built connection.
+            try:
+                await pubsub.aclose()
+            except Exception:
+                pass
+            raise
+
+        self._pubsub = pubsub
+        logger.debug(
+            "Redis pub/sub established (%d channels, %d patterns)",
+            len(channels),
+            len(patterns),
+        )
+
     async def _message_listener(self) -> None:
-        """Listen for incoming messages and dispatch to handlers."""
-        while self._running and self._pubsub:
+        """Listen for incoming messages and dispatch to handlers.
+
+        The supervised-loop helper owns the lifecycle, cancellation, and
+        the exponential-with-jitter back-off. Each iteration owns
+        (re)establishing ``_pubsub``: when a prior iteration's connection
+        died it discarded ``_pubsub`` (set to ``None``), so the next
+        iteration rebuilds it via :meth:`_establish_pubsub` and
+        re-subscribes before reading. This recovers from a dropped
+        connection instead of retrying forever on a dead pub/sub.
+        """
+
+        async def _one() -> None:
+            if self._pubsub is None:
+                await self._establish_pubsub()
             try:
                 message = await self._pubsub.get_message(
                     ignore_subscribe_messages=True,
                     timeout=1.0,
                 )
-                if message:
-                    await self._handle_message(message)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception:
-                logger.exception("Error in Redis message listener")
-                await asyncio.sleep(1.0)  # Back off on error
+                # Connection is dead — discard it so the next iteration
+                # rebuilds and re-subscribes; re-raise so the supervisor
+                # logs and backs off.
+                dead, self._pubsub = self._pubsub, None
+                if dead is not None:
+                    try:
+                        await dead.aclose()
+                    except Exception:
+                        pass
+                raise
+            if message:
+                await self._handle_message(message)
+
+        await run_supervised_loop(
+            _one,
+            should_run=lambda: self._running,
+            name="RedisEventBus message listener",
+        )
 
     async def _handle_message(self, message: dict[str, Any]) -> None:
         """Handle an incoming Redis message.
