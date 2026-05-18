@@ -20,8 +20,13 @@ IngestOrchestrator(
     ingestion_manager: KnowledgeIngestionManager,
     event_bus: EventBus,
     trigger_topic: str = "knowledge:trigger",
+    lock: DistributedLock | None = None,
+    lock_config: dict | None = None,
 )
 ```
+
+See [Concurrency & Locking](#concurrency-locking) for `lock` /
+`lock_config`.
 
 ## Lifecycle
 
@@ -87,6 +92,53 @@ subsequent events. This is the expected behavior for subscriber loops
 Completion events published by the manager (topic
 `knowledge:ingestion`) are unaffected by this behavior — they still
 fire on successful ingests.
+
+## Concurrency & Locking
+
+Triggers for the same `domain_id` are serialized through a
+`dataknobs_common.locks.DistributedLock` keyed `ingest:<domain_id>`;
+different domains ingest in parallel. The lock's *scope* is exactly
+the serialization scope.
+
+- **Default (neither `lock` nor `lock_config`)** — a process-local
+  `InProcessLock`. Sufficient for single-replica deployments and
+  behaviour-identical to prior releases.
+- **`lock=`** — inject a pre-built `DistributedLock`.
+- **`lock_config=`** — configuration-driven: the orchestrator
+  resolves the lock through the shared `create_lock` factory, so a
+  deployment selects the backend by config without writing code.
+
+`lock` and `lock_config` are mutually exclusive (passing both raises
+`ValueError`); an unknown `lock_config` backend raises `ValueError`
+(fail closed).
+
+> **Multi-replica deployments MUST configure a cross-replica lock.**
+> A process-local lock cannot prevent two replicas from ingesting the
+> same domain concurrently and racing on the vector store.
+
+```python
+from dataknobs_bots.knowledge import IngestOrchestrator
+
+# Configuration-driven cross-replica lock (no lock code in your app):
+orch = IngestOrchestrator(
+    manager,
+    bus,
+    lock_config={"backend": "postgres", "connection_string": dsn},
+)
+
+# Equivalent with a pre-built lock:
+from dataknobs_common.locks import create_lock
+
+orch = IngestOrchestrator(
+    manager,
+    bus,
+    lock=create_lock({"backend": "postgres", "connection_string": dsn}),
+)
+```
+
+A built-in Postgres advisory-lock backend ships in a follow-up phase;
+until then register a cross-replica backend via
+`dataknobs_common.locks.lock_backends`.
 
 ## Stateless by Design
 

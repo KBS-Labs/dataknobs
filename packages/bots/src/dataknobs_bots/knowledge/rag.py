@@ -26,6 +26,8 @@ from dataknobs_bots.knowledge.retrieval import (
 )
 
 if TYPE_CHECKING:
+    from dataknobs_common.ratelimit import RateLimiter
+
     from dataknobs_bots.knowledge.storage.backend import KnowledgeResourceBackend
     from dataknobs_bots.knowledge.storage.models import KnowledgeFile
 
@@ -472,6 +474,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         extra_metadata: dict[str, Any] | None = None,
         *,
         file_filter: Callable[["KnowledgeFile"], bool] | None = None,
+        rate_limiter: "RateLimiter | None" = None,
     ) -> dict[str, Any]:
         """Ingest documents from a :class:`KnowledgeResourceBackend`.
 
@@ -513,6 +516,15 @@ class RAGKnowledgeBase(KnowledgeBase):
                 :meth:`KnowledgeIngestionManager.ingest_changes` to
                 re-embed only the changed files through the same
                 pattern/chunking pipeline.
+            rate_limiter: Optional keyword-only
+                :class:`~dataknobs_common.ratelimit.RateLimiter`. When
+                set, each per-chunk embed call is preceded by
+                ``await rate_limiter.acquire("embed")`` so a
+                rate-limited embedding provider cannot fail the ingest
+                under burst. ``None`` (default) is unchanged behaviour
+                (no pacing). Threaded by
+                :class:`KnowledgeIngestionManager` from its own
+                ``rate_limiter``.
 
         Returns:
             Statistics dict matching :meth:`load_from_directory`:
@@ -530,7 +542,10 @@ class RAGKnowledgeBase(KnowledgeBase):
         )
         processor = DirectoryProcessor(config, source, chunker=self._chunker)
         return await self._ingest_from_processor_async(
-            processor, progress_callback, extra_metadata=extra_metadata
+            processor,
+            progress_callback,
+            extra_metadata=extra_metadata,
+            rate_limiter=rate_limiter,
         )
 
     async def _load_kb_config_from_backend(
@@ -606,6 +621,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         processor: DirectoryProcessor,
         progress_callback: Callable[[str, int], None] | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        *,
+        rate_limiter: "RateLimiter | None" = None,
     ) -> dict[str, Any]:
         """Drive a :class:`DirectoryProcessor` and embed each chunk.
 
@@ -617,6 +634,10 @@ class RAGKnowledgeBase(KnowledgeBase):
         on one document captures an error entry and lets the batch
         continue — matching the pre-unification
         ``KnowledgeIngestionManager._ingest_file`` semantics.
+
+        ``rate_limiter`` (keyword-only, default ``None``) is forwarded
+        unchanged to :meth:`_embed_and_store_chunks`; ``None`` keeps
+        the embed path un-paced.
         """
         results: dict[str, Any] = {
             "total_files": 0,
@@ -656,6 +677,7 @@ class RAGKnowledgeBase(KnowledgeBase):
                     document_type=doc.document_type,
                     source_path=doc.source_path,
                     metadata=merged_metadata or None,
+                    rate_limiter=rate_limiter,
                 )
             except Exception as e:
                 logger.exception(
@@ -691,6 +713,8 @@ class RAGKnowledgeBase(KnowledgeBase):
         document_type: str,
         source_path: str | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        rate_limiter: "RateLimiter | None" = None,
     ) -> int:
         """Embed chunk dicts and add them to the vector store.
 
@@ -712,6 +736,11 @@ class RAGKnowledgeBase(KnowledgeBase):
                 metadata; caller-provided entries win over per-chunk
                 fields. Used for pattern-level and ``domain_id``
                 injection.
+            rate_limiter: Optional keyword-only
+                :class:`~dataknobs_common.ratelimit.RateLimiter`. When
+                set, each per-chunk embed is preceded by
+                ``await rate_limiter.acquire("embed")``. ``None``
+                (default) leaves the embed path un-paced (unchanged).
 
         Returns:
             Number of chunks actually embedded and stored.
@@ -801,6 +830,14 @@ class RAGKnowledgeBase(KnowledgeBase):
             )
             if not text_for_embedding:
                 continue
+
+            # Ingest-path rate-limit seam (125/126 Phase 4): pace the
+            # per-chunk embed against an injected limiter so a
+            # rate-limited embedding provider cannot fail the whole
+            # ingest under burst. ``None`` (default) is a no-op — the
+            # local Ollama embedder needs no pacing.
+            if rate_limiter is not None:
+                await rate_limiter.acquire("embed")
 
             embedding = await self.embedding_provider.embed(text_for_embedding)
             if not isinstance(embedding, np.ndarray):

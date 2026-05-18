@@ -512,6 +512,7 @@ class _PartialWriteFailRAG:
         progress_callback: Any = None,
         extra_metadata: dict[str, Any] | None = None,
         file_filter: Any = None,
+        rate_limiter: Any = None,
     ) -> Any:
         meta = dict(extra_metadata or {})
         self.gen = meta.get("_generation")
@@ -651,6 +652,7 @@ class _CrashAfterOrphanWriteRAG:
         progress_callback: Any = None,
         extra_metadata: dict[str, Any] | None = None,
         file_filter: Any = None,
+        rate_limiter: Any = None,
     ) -> Any:
         meta = dict(extra_metadata or {})
         self.gen = meta.get("_generation")

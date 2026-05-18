@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.locks import InProcessLock
+from dataknobs_common.locks import InProcessLock, create_lock
 
 from .ingestion import IngestSwapMode
 
@@ -74,11 +74,13 @@ class IngestOrchestrator:
     ingest in parallel.
 
     The *scope* of that serialization is exactly the scope of the
-    injected lock. With the default :class:`InProcessLock` it is
+    configured lock. With the default :class:`InProcessLock` it is
     **process-local** — sufficient for single-replica deployments and
     behaviour-identical to prior releases. **Multi-replica deployments
-    MUST inject a cross-replica lock** (e.g.
-    ``create_lock({"backend": "postgres", ...})``); otherwise two
+    MUST configure a cross-replica lock**, either by passing a
+    pre-built one (``lock=create_lock({"backend": "postgres", ...})``)
+    or, configuration-driven, by passing the factory config directly
+    (``lock_config={"backend": "postgres", ...}``); otherwise two
     replicas can ingest the same domain concurrently and race on the
     vector store, which a process-local lock cannot prevent.
 
@@ -116,6 +118,7 @@ class IngestOrchestrator:
         event_bus: EventBus,
         trigger_topic: str = "knowledge:trigger",
         lock: DistributedLock | None = None,
+        lock_config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -126,17 +129,48 @@ class IngestOrchestrator:
             event_bus: Bus to subscribe on
             trigger_topic: Topic name to subscribe to (default
                 ``"knowledge:trigger"``)
-            lock: Lock backing per-domain serialization. Defaults to
+            lock: A pre-built
+                :class:`~dataknobs_common.locks.DistributedLock`
+                backing per-domain serialization. Mutually exclusive
+                with ``lock_config``.
+            lock_config: A :func:`~dataknobs_common.locks.create_lock`
+                config dict (e.g.
+                ``{"backend": "postgres", "connection_string": ...}``)
+                — the configuration-driven alternative to ``lock`` so a
+                multi-replica deployment selects a cross-replica
+                backend without writing code. Resolved through the
+                shared ``dataknobs_common.locks`` factory (no lock
+                logic lives here). Mutually exclusive with ``lock``.
+
+                When neither is given the default is a process-local
                 :class:`~dataknobs_common.locks.InProcessLock` —
-                process-local, behaviour-identical to prior releases.
-                Multi-replica deployments must pass a cross-replica
-                lock (e.g. ``create_lock({"backend": "postgres", ...})``).
+                behaviour-identical to prior releases and correct for
+                single-replica deployments. **Multi-replica
+                deployments MUST supply a cross-replica lock** via one
+                of these (otherwise two replicas can ingest the same
+                domain concurrently — a process-local lock cannot
+                prevent that).
+
+        Raises:
+            ValueError: If both ``lock`` and ``lock_config`` are
+                supplied, or ``lock_config`` names an unknown backend.
         """
+        if lock is not None and lock_config is not None:
+            raise ValueError(
+                "IngestOrchestrator: pass either lock= (a pre-built "
+                "DistributedLock) or lock_config= (a create_lock "
+                "config dict), not both."
+            )
         self._manager = ingestion_manager
         self._event_bus = event_bus
         self._topic = trigger_topic
         self._subscription: Subscription | None = None
-        self._lock: DistributedLock = lock or InProcessLock()
+        if lock is not None:
+            self._lock: DistributedLock = lock
+        elif lock_config is not None:
+            self._lock = create_lock(lock_config)
+        else:
+            self._lock = InProcessLock()
 
     @property
     def trigger_topic(self) -> str:

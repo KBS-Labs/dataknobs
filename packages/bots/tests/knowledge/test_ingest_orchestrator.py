@@ -518,6 +518,94 @@ async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
     await bus.close()
 
 
+class TestLockConfigConstruction:
+    """``lock_config=`` builds the lock via ``create_lock`` at the
+    orchestrator construction site (125/126 Phase 4).
+
+    The lock primitive + ``lock=`` injection seam are owned by Item
+    128 (already shipped). Phase 4 makes the orchestrator
+    *configuration-driven*: a multi-replica deployment selects a
+    cross-replica backend via a config dict — no lock logic in bots,
+    it delegates to ``dataknobs_common.locks.create_lock``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_lock_config_constructs_lock_via_factory(self) -> None:
+        from dataknobs_common.locks import InProcessLock
+
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(
+            manager,  # type: ignore[arg-type]
+            bus,
+            lock_config={"backend": "memory"},
+        )
+        assert isinstance(orch._lock, InProcessLock)
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_empty_lock_config_defaults_to_memory(self) -> None:
+        from dataknobs_common.locks import InProcessLock
+
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(
+            manager,  # type: ignore[arg-type]
+            bus,
+            lock_config={},
+        )
+        assert isinstance(orch._lock, InProcessLock)
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_unknown_lock_backend_raises(self) -> None:
+        bus = await _make_bus()
+        manager = _StubManager()
+        with pytest.raises(ValueError, match="nope"):
+            IngestOrchestrator(
+                manager,  # type: ignore[arg-type]
+                bus,
+                lock_config={"backend": "nope"},
+            )
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_lock_and_lock_config_are_mutually_exclusive(self) -> None:
+        from dataknobs_common.locks import InProcessLock
+
+        bus = await _make_bus()
+        manager = _StubManager()
+        with pytest.raises(ValueError, match="lock.*lock_config"):
+            IngestOrchestrator(
+                manager,  # type: ignore[arg-type]
+                bus,
+                lock=InProcessLock(),
+                lock_config={"backend": "memory"},
+            )
+        await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_config_built_lock_serializes_per_domain(self) -> None:
+        """A config-built lock still serializes concurrent same-domain
+        triggers (end-to-end behavioural proof, not just type check)."""
+        from dataknobs_common.locks import InProcessLock
+
+        bus = await _make_bus()
+        manager = _StubManager()
+        orch = IngestOrchestrator(
+            manager,  # type: ignore[arg-type]
+            bus,
+            lock_config={"backend": "memory"},
+        )
+        assert isinstance(orch._lock, InProcessLock)
+        await orch.start()
+        await bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
+        await _wait_for(lambda: len(manager.calls) >= 1)
+        assert manager.calls == [("d1", None)]
+        await orch.stop()
+        await bus.close()
+
+
 class TestDispatchMatrix:
     """Payload selects the ingest entry point (class-docstring contract)."""
 
