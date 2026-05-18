@@ -182,6 +182,17 @@ class IngestOrchestrator:
         """``True`` after :meth:`start` and before :meth:`stop`."""
         return self._subscription is not None
 
+    @property
+    def lock(self) -> DistributedLock:
+        """The resolved per-domain serialization lock.
+
+        Whichever of ``lock=``, ``lock_config=``, or the
+        ``InProcessLock`` default was selected at construction. Exposed
+        read-only so callers can introspect the active backend without
+        reaching into private state.
+        """
+        return self._lock
+
     async def start(self) -> None:
         """Subscribe to the trigger topic. Idempotent."""
         if self._subscription is not None:

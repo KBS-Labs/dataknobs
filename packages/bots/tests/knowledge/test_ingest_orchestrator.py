@@ -511,8 +511,8 @@ async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
     assert lock.held_keys == ["ingest:d1"]
     # Default construction must NOT reuse the injected instance.
     default_orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
-    assert isinstance(default_orch._lock, InProcessLock)
-    assert default_orch._lock is not lock
+    assert isinstance(default_orch.lock, InProcessLock)
+    assert default_orch.lock is not lock
 
     await orch.stop()
     await bus.close()
@@ -540,7 +540,7 @@ class TestLockConfigConstruction:
             bus,
             lock_config={"backend": "memory"},
         )
-        assert isinstance(orch._lock, InProcessLock)
+        assert isinstance(orch.lock, InProcessLock)
         await bus.close()
 
     @pytest.mark.asyncio
@@ -554,7 +554,7 @@ class TestLockConfigConstruction:
             bus,
             lock_config={},
         )
-        assert isinstance(orch._lock, InProcessLock)
+        assert isinstance(orch.lock, InProcessLock)
         await bus.close()
 
     @pytest.mark.asyncio
@@ -597,7 +597,7 @@ class TestLockConfigConstruction:
             bus,
             lock_config={"backend": "memory"},
         )
-        assert isinstance(orch._lock, InProcessLock)
+        assert isinstance(orch.lock, InProcessLock)
         await orch.start()
         await bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
         await _wait_for(lambda: len(manager.calls) >= 1)
