@@ -90,6 +90,64 @@ class ChromaVectorStore(VectorStore):
         }
         self.chroma_metric = metric_map.get(self.metric, "cosine")
 
+    # chromadb 1.x rejects empty-list metadata values (and empty/None
+    # metadata dicts). Empty lists are encoded to this scalar string on
+    # write and decoded back to ``[]`` on read so the cross-backend
+    # round-trip contract (Memory/FAISS preserve ``{"k": []}``) holds.
+    # The NUL-delimited form makes a real-value collision infeasible.
+    _EMPTY_LIST_SENTINEL = "\x00dk\x00empty_list\x00"
+
+    @classmethod
+    def _encode_metadata(
+        cls, meta: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Adapt one row's metadata to chromadb 1.x constraints.
+
+        chromadb 1.x raises on an empty metadata dict and on
+        empty-list values. Map an empty/``None`` dict to ``None``
+        (the only "no metadata" form chromadb accepts) and replace
+        ``[]`` values with a reversible sentinel. Non-empty lists and
+        scalars pass through. Inverse of :meth:`_decode_metadata`.
+        """
+        if not meta:
+            return None
+        encoded: dict[str, Any] = {}
+        for key, value in meta.items():
+            if isinstance(value, list) and not value:
+                encoded[key] = cls._EMPTY_LIST_SENTINEL
+            else:
+                encoded[key] = value
+        return encoded or None
+
+    @classmethod
+    def _decode_metadata(
+        cls, meta: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Reverse :meth:`_encode_metadata`.
+
+        chromadb returns ``None`` for rows stored without metadata;
+        surface ``{}`` to match the Memory/FAISS contract. Sentinel
+        values decode back to ``[]``.
+        """
+        if not meta:
+            return {}
+        return {
+            key: ([] if value == cls._EMPTY_LIST_SENTINEL else value)
+            for key, value in meta.items()
+        }
+
+    @staticmethod
+    def _as_list(value: Any) -> list[Any]:
+        """Coerce a chromadb result field to a plain list.
+
+        chromadb 1.x returns result fields (e.g. ``embeddings``) as
+        numpy arrays; bare truthiness or ``x or []`` on an ndarray
+        raises ``ValueError: ambiguous truth value``. ``None`` → ``[]``.
+        """
+        if value is None:
+            return []
+        return list(value)
+
     async def initialize(self) -> None:
         """Initialize Chroma client and collection."""
         if self._initialized:
@@ -159,11 +217,12 @@ class ChromaVectorStore(VectorStore):
         # defaulted in (caller's dicts never aliased — Items #8 / 131).
         metadata = self._apply_domain_default(metadata, len(ids))
 
-        # Add to collection
+        # Add to collection. chromadb 1.x rejects empty dict / empty-list
+        # metadata; encode per row (decoded back on read).
         self.collection.add(
             embeddings=vectors,
             ids=ids,
-            metadatas=metadata
+            metadatas=[self._encode_metadata(m) for m in metadata],
         )
 
         return ids
@@ -180,25 +239,34 @@ class ChromaVectorStore(VectorStore):
         import numpy as np
 
         # Get from collection
-        result = self.collection.get(
-            ids=ids,
-            include=["embeddings", "metadatas"] if include_metadata else ["embeddings"]
+        include = (
+            ["embeddings", "metadatas"]
+            if include_metadata
+            else ["embeddings"]
         )
+        result = self.collection.get(ids=ids, include=include)
 
-        # Convert to expected format
-        vectors = []
+        # chromadb 1.x returns ndarrays — coerce before truthiness/index.
+        result_ids = self._as_list(result.get("ids"))
+        embeddings = self._as_list(result.get("embeddings"))
+        metadatas = self._as_list(result.get("metadatas"))
+        index_of = {rid: i for i, rid in enumerate(result_ids)}
+
+        vectors: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         for id_val in ids:
-            try:
-                idx = result["ids"].index(id_val)
-                embedding = result["embeddings"][idx] if result["embeddings"] else None
-                metadata = result["metadatas"][idx] if include_metadata and result.get("metadatas") else None
-
-                if embedding is not None:
-                    embedding = np.array(embedding, dtype=np.float32)
-
-                vectors.append((embedding, metadata))
-            except (ValueError, IndexError):
+            idx = index_of.get(id_val)
+            if idx is None:
                 vectors.append((None, None))
+                continue
+            emb = embeddings[idx] if idx < len(embeddings) else None
+            if emb is not None:
+                emb = np.array(emb, dtype=np.float32)
+            meta = (
+                self._decode_metadata(metadatas[idx])
+                if include_metadata and idx < len(metadatas)
+                else None
+            )
+            vectors.append((emb, meta))
 
         return vectors
 
@@ -209,7 +277,7 @@ class ChromaVectorStore(VectorStore):
 
         # Check which IDs exist
         existing = self.collection.get(ids=ids, include=[])
-        existing_ids = existing["ids"]
+        existing_ids = self._as_list(existing.get("ids"))
 
         if existing_ids:
             self.collection.delete(ids=existing_ids)
@@ -257,10 +325,12 @@ class ChromaVectorStore(VectorStore):
           The consumer's declaration is the contract: stored values
           for these keys are always scalar, so ``$eq`` is correct
           and no post-filter is needed.
-        * List filter values: pushed as ``$in`` (correct for both
-          scalar and list metadata on Chroma's side — returns a
-          superset that post-filter narrows to non-empty-intersection
-          semantics).
+        * List filter values: pushed as ``$in`` ONLY for keys declared
+          in ``scalar_metadata_keys``. chromadb's where-engine returns
+          zero rows for any predicate against list-valued metadata, so
+          for undeclared (possibly list-valued) keys the list filter is
+          post-filter only — ``_match_metadata_filter`` applies the
+          non-empty-intersection four-quadrant semantics.
 
         An empty/``None`` filter returns ``(None, {})``.
         """
@@ -271,10 +341,16 @@ class ChromaVectorStore(VectorStore):
         for key, value in filter.items():
             if isinstance(value, list):
                 # Empty-list filter never matches under four-quadrant
-                # semantics. Drop the native predicate (Chroma's $in
-                # rejects empty lists) and let the post-filter — which
-                # also rejects empty-list filters — narrow to nothing.
-                if value:
+                # semantics (the unsatisfiable short-circuit handles it
+                # upstream). For a non-empty list filter, push a native
+                # ``$in`` ONLY when the consumer declared the key
+                # always-scalar: chromadb's where-engine returns zero
+                # rows for ANY predicate against list-valued metadata
+                # (verified on chromadb 1.x), so pushing ``$in`` for a
+                # possibly list-valued key over-restricts to nothing.
+                # Undeclared keys post-filter only — correctness via
+                # ``_match_metadata_filter``.
+                if value and key in self.scalar_metadata_keys:
                     native[key] = {"$in": value}
                 post[key] = value
             else:
@@ -329,40 +405,50 @@ class ChromaVectorStore(VectorStore):
             include=include,
         )
 
+        # chromadb 1.x returns nested ndarrays — coerce before any
+        # truthiness/index, then decode metadata for parity with
+        # Memory/FAISS (sentinel → [], no-metadata → {}).
+        ids_groups = self._as_list(results.get("ids"))
+        if not ids_groups:
+            return []
+        ids = self._as_list(ids_groups[0])
+        if not ids:
+            return []
+        dist_groups = self._as_list(results.get("distances"))
+        distances = (
+            self._as_list(dist_groups[0])
+            if dist_groups
+            else [0.0] * len(ids)
+        )
+        meta_groups = self._as_list(results.get("metadatas"))
+        metadatas = (
+            self._as_list(meta_groups[0])
+            if need_metadata and meta_groups
+            else [None] * len(ids)
+        )
+
         search_results: list[tuple[str, float, dict[str, Any] | None]] = []
-        if results["ids"] and len(results["ids"]) > 0:
-            ids = results["ids"][0]
-            distances = (
-                results["distances"][0]
-                if results.get("distances")
-                else [0] * len(ids)
-            )
-            metadatas = (
-                results["metadatas"][0]
-                if need_metadata and results.get("metadatas")
-                else [None] * len(ids)
-            )
-
-            for id_val, distance, metadata in zip(
-                ids, distances, metadatas, strict=False
+        for id_val, distance, raw_meta in zip(
+            ids, distances, metadatas, strict=False
+        ):
+            metadata = self._decode_metadata(raw_meta)
+            if post_filter and not self._match_metadata_filter(
+                metadata, post_filter
             ):
-                if post_filter and not self._match_metadata_filter(
-                    metadata, post_filter
-                ):
-                    continue
+                continue
 
-                if self.metric == DistanceMetric.COSINE:
-                    score = 1.0 - distance
-                elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-                    score = 1.0 / (1.0 + distance)
-                else:
-                    score = float(distance)
+            if self.metric == DistanceMetric.COSINE:
+                score = 1.0 - distance
+            elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+                score = 1.0 / (1.0 + distance)
+            else:
+                score = float(distance)
 
-                search_results.append(
-                    (id_val, score, metadata if include_metadata else None)
-                )
-                if len(search_results) >= k:
-                    break
+            search_results.append(
+                (id_val, score, metadata if include_metadata else None)
+            )
+            if len(search_results) >= k:
+                break
 
         return search_results
 
@@ -377,7 +463,7 @@ class ChromaVectorStore(VectorStore):
 
         # Check which IDs exist
         existing = self.collection.get(ids=ids, include=[])
-        existing_ids = existing["ids"]
+        existing_ids = set(self._as_list(existing.get("ids")))
 
         if existing_ids:
             # Filter metadata to only update existing vectors
@@ -386,7 +472,7 @@ class ChromaVectorStore(VectorStore):
             for id_val, meta in zip(ids, metadata, strict=False):
                 if id_val in existing_ids:
                     filtered_ids.append(id_val)
-                    filtered_metadata.append(meta)
+                    filtered_metadata.append(self._encode_metadata(meta))
 
             if filtered_ids:
                 self.collection.update(
@@ -424,20 +510,20 @@ class ChromaVectorStore(VectorStore):
             where=where if where else None,
             include=["metadatas"],
         )
-        ids = result.get("ids") or []
-        metadatas = result.get("metadatas") or []
+        ids = self._as_list(result.get("ids"))
+        metadatas = self._as_list(result.get("metadatas"))
 
         update_ids: list[str] = []
-        update_metadatas: list[dict[str, Any]] = []
-        for cid, meta in zip(ids, metadatas, strict=False):
-            existing = dict(meta or {})
+        update_metadatas: list[dict[str, Any] | None] = []
+        for cid, raw_meta in zip(ids, metadatas, strict=False):
+            existing = self._decode_metadata(raw_meta)
             if post_filter and not self._match_metadata_filter(
                 existing, post_filter
             ):
                 continue
             existing.update(set_)
             update_ids.append(cid)
-            update_metadatas.append(existing)
+            update_metadatas.append(self._encode_metadata(existing))
 
         if update_ids:
             self.collection.update(
@@ -488,14 +574,16 @@ class ChromaVectorStore(VectorStore):
             # Filter fully pushed down. Skip metadata materialization
             # — IDs are sufficient for the count.
             result = self.collection.get(where=where, include=[])
-            return len(result.get("ids") or [])
+            return len(self._as_list(result.get("ids")))
 
         result = self.collection.get(where=where, include=["metadatas"])
-        metadatas = result.get("metadatas") or []
+        metadatas = self._as_list(result.get("metadatas"))
         return sum(
             1
             for m in metadatas
-            if self._match_metadata_filter(m, post_filter)
+            if self._match_metadata_filter(
+                self._decode_metadata(m), post_filter
+            )
         )
 
     async def metadata_fields(self) -> set[str]:
@@ -506,10 +594,8 @@ class ChromaVectorStore(VectorStore):
         # Fetch all metadata from the collection
         result = self.collection.get(include=["metadatas"])
         fields: set[str] = set()
-        if result.get("metadatas"):
-            for meta in result["metadatas"]:
-                if meta:
-                    fields.update(meta.keys())
+        for meta in self._as_list(result.get("metadatas")):
+            fields.update(self._decode_metadata(meta).keys())
         return fields
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:
@@ -550,12 +636,14 @@ class ChromaVectorStore(VectorStore):
             where=where if where else None,
             include=["metadatas"],
         )
-        ids = result.get("ids") or []
-        metadatas = result.get("metadatas") or []
+        ids = self._as_list(result.get("ids"))
+        metadatas = self._as_list(result.get("metadatas"))
         ids_to_delete = [
             cid
             for cid, meta in zip(ids, metadatas, strict=False)
-            if self._match_metadata_filter(meta or {}, post_filter)
+            if self._match_metadata_filter(
+                self._decode_metadata(meta), post_filter
+            )
         ]
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
@@ -582,7 +670,7 @@ class ChromaVectorStore(VectorStore):
         self.collection.add(
             documents=documents,
             ids=ids,
-            metadatas=metadata
+            metadatas=[self._encode_metadata(m) for m in metadata],
         )
 
         return ids
@@ -618,32 +706,44 @@ class ChromaVectorStore(VectorStore):
         )
 
         search_results: list[tuple[str, float, str, dict[str, Any] | None]] = []
-        if results["ids"] and len(results["ids"]) > 0:
-            ids = results["ids"][0]
-            distances = results["distances"][0]
-            documents = (
-                results["documents"][0]
-                if results.get("documents")
-                else [None] * len(ids)
-            )
-            metadatas = (
-                results["metadatas"][0]
-                if results.get("metadatas")
-                else [None] * len(ids)
-            )
+        ids_groups = self._as_list(results.get("ids"))
+        if not ids_groups:
+            return []
+        ids = self._as_list(ids_groups[0])
+        if not ids:
+            return []
+        dist_groups = self._as_list(results.get("distances"))
+        distances = (
+            self._as_list(dist_groups[0])
+            if dist_groups
+            else [0.0] * len(ids)
+        )
+        doc_groups = self._as_list(results.get("documents"))
+        documents = (
+            self._as_list(doc_groups[0])
+            if doc_groups
+            else [None] * len(ids)
+        )
+        meta_groups = self._as_list(results.get("metadatas"))
+        metadatas = (
+            self._as_list(meta_groups[0])
+            if meta_groups
+            else [None] * len(ids)
+        )
 
-            for id_val, distance, doc, metadata in zip(
-                ids, distances, documents, metadatas, strict=False
+        for id_val, distance, doc, raw_meta in zip(
+            ids, distances, documents, metadatas, strict=False
+        ):
+            metadata = self._decode_metadata(raw_meta)
+            if post_filter and not self._match_metadata_filter(
+                metadata, post_filter
             ):
-                if post_filter and not self._match_metadata_filter(
-                    metadata, post_filter
-                ):
-                    continue
-                score = 1.0 - distance  # Cosine distance to similarity
-                search_results.append(
-                    (id_val, score, doc, metadata if include_metadata else None)
-                )
-                if len(search_results) >= k:
-                    break
+                continue
+            score = 1.0 - distance  # Cosine distance to similarity
+            search_results.append(
+                (id_val, score, doc, metadata if include_metadata else None)
+            )
+            if len(search_results) >= k:
+                break
 
         return search_results

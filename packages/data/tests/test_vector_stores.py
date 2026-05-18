@@ -1,6 +1,7 @@
 """Tests for specialized vector stores."""
 
 import asyncio
+import logging
 import os
 import pickle
 import tempfile
@@ -14,6 +15,8 @@ import pytest
 from dataknobs_data.vector.stores import VectorStore, VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
+
+logger = logging.getLogger(__name__)
 
 
 class TestMemoryVectorStore:
@@ -604,13 +607,33 @@ try:
             
             @pytest.fixture
             def store(self):
-                """Create a Chroma vector store."""
+                """Create a Chroma vector store.
+
+                Unique per-test collection name + teardown drop:
+                chromadb 1.x's in-process client makes a fixed
+                collection name leak state across tests. Mirrors the
+                isolation pattern already used by the filter-semantics
+                and update-metadata-where conformance suites.
+                """
                 config = {
                     "dimensions": 384,
                     "metric": "cosine",
-                    "collection_name": "test_vectors",
+                    "collection_name": f"test_vectors_{uuid4().hex[:8]}",
                 }
-                return ChromaVectorStore(config)
+                s = ChromaVectorStore(config)
+                yield s
+                if s.client is not None:
+                    try:
+                        s.client.delete_collection(
+                            name=s.collection_name
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Chroma teardown failed for collection "
+                            "%r: %s",
+                            s.collection_name,
+                            exc,
+                        )
             
             @pytest.mark.asyncio
             async def test_initialize(self, store):

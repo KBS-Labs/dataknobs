@@ -52,7 +52,7 @@ parquet = [
 vector = [
     "pgvector>=0.2.0",  # PostgreSQL vector extension
     "faiss-cpu>=1.7.4",  # Optional for Faiss backend
-    "chromadb>=0.4.0",  # Optional for Chroma backend
+    "chromadb>=1.0.0",  # Optional for Chroma backend; ChromaVectorStore targets the 1.x API
     "asyncpg>=0.29.0",  # Required for PgVectorStore backend
 ]
 all = [
