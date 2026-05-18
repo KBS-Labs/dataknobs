@@ -358,6 +358,31 @@ async def safe_handler(event: Event) -> None:
         ))
 ```
 
+### Connection Resilience
+
+The poll- and push-based backends recover from transient backend
+failures automatically; no consumer code is required.
+
+- **SQS and Redis** run their listener loops under a shared supervised
+  loop. A transient failure is logged and retried after an
+  exponential back-off **with jitter** that **escalates** under
+  sustained failure (capped) and **resets** to the base delay after a
+  clean iteration. This avoids a thundering herd — listeners across
+  replicas do not all wake on the same 1-second boundary and re-hammer
+  a degraded backend in lockstep.
+- **Redis** additionally re-establishes its pub/sub connection on
+  connection loss (rebuilding it and re-subscribing every active
+  channel and pattern) rather than retrying a dead connection.
+- **PostgreSQL** delivery is push-based via a dedicated `LISTEN`
+  connection. A supervised watchdog probes that connection's liveness
+  and, if it drops, re-opens it and re-registers every active channel,
+  so delivery resumes instead of stopping silently.
+
+A listener never gives up: it backs off and keeps retrying until the
+backend recovers or the bus is closed. Handlers must still be
+idempotent — SQS delivery is at-least-once, and a reconnect can replay
+the redelivery window.
+
 ### Graceful Shutdown
 
 Always clean up subscriptions and close the bus:
