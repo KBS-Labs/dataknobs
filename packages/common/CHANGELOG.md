@@ -79,8 +79,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the exact structural mirror of `event_bus_backends`. Exported from
   `dataknobs_common.locks` and re-exported at the top-level
   `dataknobs_common` namespace along with the `LockFactory` type alias.
-  Only the `memory` backend is registered; an unknown backend raises
-  `ValueError` listing the registered backends.
+  Two backends are built in: `memory` (`InProcessLock`) and `postgres`
+  (`PostgresAdvisoryLock` — session-scoped `pg_advisory_lock` on a
+  dedicated connection per held key, cross-replica mutual exclusion for
+  every process on the same database). The Postgres backend resolves
+  its DSN through the shared `normalize_postgres_connection_config`
+  (same path as `PostgresEventBus`: `connection_string`, individual
+  keys, `DATABASE_URL`, `POSTGRES_*` env), maps the opaque key to a
+  signed 64-bit id via `blake2b` (upgrade-stable, unlike Postgres
+  `hashtext`), is liveness-safe (a crashed holder's session death frees
+  the lock) and explicitly not a fencing token. `asyncpg` is the
+  existing optional `postgres` extra, lazily imported, so
+  importing `dataknobs_common.locks` stays dependency-free and the base
+  install remains `dependencies = []`. An unknown backend raises
+  `ValueError` listing the registered backends (including
+  consumer-registered ones).
 
 ### Changed
 - `compute_backoff_delay()` is now a public pure function in

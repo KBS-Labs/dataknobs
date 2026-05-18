@@ -32,6 +32,7 @@ from __future__ import annotations
 from .factory import LockFactory, create_lock, lock_backends
 from .lock import DistributedLock
 from .memory import InProcessLock
+from .postgres import PostgresAdvisoryLock
 
 __all__ = [
     # Protocol
@@ -43,4 +44,6 @@ __all__ = [
     "LockFactory",
     # Default / testing implementation
     "InProcessLock",
+    # Cross-replica implementation
+    "PostgresAdvisoryLock",
 ]
