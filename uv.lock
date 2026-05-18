@@ -1189,6 +1189,7 @@ s3 = [
 ]
 server = [
     { name = "fastapi" },
+    { name = "starlette" },
 ]
 
 [package.dev-dependencies]
@@ -1203,6 +1204,7 @@ dev = [
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "starlette" },
 ]
 
 [package.metadata]
@@ -1215,18 +1217,19 @@ requires-dist = [
     { name = "dataknobs-llm", editable = "packages/llm" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "dataknobs-xization", editable = "packages/xization" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.120.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jsonschema", specifier = ">=4.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "starlette", marker = "extra == 'server'", specifier = ">=0.49.1" },
 ]
 provides-extras = ["s3", "server"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "aioresponses", specifier = ">=0.7.8" },
-    { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "fastapi", specifier = ">=0.120.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "moto", specifier = ">=5.1.10" },
     { name = "mypy", specifier = ">=1.0.0" },
@@ -1235,6 +1238,7 @@ dev = [
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
     { name = "pytest-cov", specifier = ">=4.0.0" },
     { name = "ruff", specifier = ">=0.8.0" },
+    { name = "starlette", specifier = ">=0.49.1" },
 ]
 
 [[package]]
