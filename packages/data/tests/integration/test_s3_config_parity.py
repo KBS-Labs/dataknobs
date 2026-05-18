@@ -26,6 +26,10 @@ def _isolate_aws_env(isolate_aws_env: None) -> None:
     conftest fixture (see its docstring for the botocore-1.34
     rationale).
     """
+    # Intentionally no body: this fixture exists only to make pytest
+    # request ``isolate_aws_env`` (autouse) for every test in this
+    # module. Do not "tidy up" by deleting it — the scrub would stop
+    # being applied.
 
 
 @pytest.mark.parametrize(

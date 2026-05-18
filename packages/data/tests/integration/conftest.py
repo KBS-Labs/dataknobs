@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 def isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scrub ambient AWS env so ``moto.mock_aws()`` is truly hermetic.
 

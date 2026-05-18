@@ -5,6 +5,7 @@ import pytest
 from datetime import datetime
 from typing import Generator
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from moto import mock_aws
 
 from dataknobs_data import Record, Query
@@ -67,7 +68,10 @@ def localstack_s3_backend(s3_config):
             aws_secret_access_key="test"
         )
         test_client.list_buckets()
-    except Exception:
+    except (BotoCoreError, ClientError):
+        # Connection refused / endpoint unreachable / auth rejected ->
+        # LocalStack isn't up for this run. Narrow to botocore errors so
+        # unrelated failures (e.g. bugs in fixture setup) still surface.
         pytest.skip("LocalStack not available")
     
     # Create backend with LocalStack endpoint
@@ -537,6 +541,10 @@ class TestS3RegionFallback:
         the scrub logic lives once in the ``isolate_aws_env`` conftest
         fixture (see its docstring for the botocore-1.34 rationale).
         """
+        # Intentionally no body: this fixture exists only to make
+        # pytest request ``isolate_aws_env`` (autouse) for every test
+        # in this class. Do not "tidy up" by deleting it — the scrub
+        # would stop being applied.
 
     def test_bucket_create_uses_resolved_region_when_region_unset(
         self, monkeypatch
