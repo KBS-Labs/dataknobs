@@ -584,6 +584,71 @@ class TestPostgresEventBusIntegration:
             await bus.close()
 
     @pytest.mark.asyncio
+    async def test_listen_connection_reconnects_after_drop(self):
+        """A dropped LISTEN connection must be re-established (P2).
+
+        Reproduce-first against a real server (no fakes — a
+        sync/async-mismatched fake would hide exactly the missing-await
+        class this path touches): before this fix nothing detected or
+        recovered a dropped ``_listen_conn``; the callback simply stopped
+        firing and the bus silently stopped delivering events. Now the
+        supervised watchdog re-opens the connection and re-registers
+        every active channel, so delivery resumes.
+        """
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        try:
+            # The push-based bus now has a supervisory task.
+            assert bus._listen_task is not None
+
+            received: list[Event] = []
+
+            async def handler(event: Event) -> None:
+                received.append(event)
+
+            await bus.subscribe("test:reconnect", handler)
+
+            # Forcibly drop the dedicated LISTEN connection.
+            original = bus._listen_conn
+            assert original is not None
+            await original.close()
+            assert original.is_closed()
+
+            # The watchdog detects the dead connection (next liveness
+            # poll), re-opens it, and re-registers the channel. Swap of
+            # self._listen_conn happens only after re-LISTEN succeeds.
+            deadline = asyncio.get_event_loop().time() + 25.0
+            while asyncio.get_event_loop().time() < deadline:
+                conn = bus._listen_conn
+                if conn is not None and conn is not original and not conn.is_closed():
+                    break
+                await asyncio.sleep(0.2)
+            assert (
+                bus._listen_conn is not None
+                and bus._listen_conn is not original
+                and not bus._listen_conn.is_closed()
+            ), "LISTEN connection was not re-established after the drop"
+
+            # Delivery resumes on the rebuilt + re-registered connection.
+            await bus.publish(
+                "test:reconnect",
+                Event(
+                    type=EventType.UPDATED,
+                    topic="test:reconnect",
+                    payload={"resumed": True},
+                ),
+            )
+            for _ in range(100):
+                if received:
+                    break
+                await asyncio.sleep(0.05)
+
+            assert len(received) == 1, "delivery did not resume after reconnect"
+            assert received[0].payload == {"resumed": True}
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
     async def test_close_then_publish_raises(self):
         """After close(), publish raises RuntimeError."""
         bus = PostgresEventBus(connection_string=PG_DSN)
