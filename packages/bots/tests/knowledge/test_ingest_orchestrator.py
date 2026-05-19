@@ -1015,6 +1015,33 @@ async def test_missing_tenant_id_passes_none_to_resolver() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_string_tenant_id_is_skipped_not_routed() -> None:
+    """A non-string ``tenant_id`` fails closed: the trigger is skipped.
+
+    Routing a malformed tenant to the wrong (or a string-coerced)
+    tenant would be a cross-tenant data leak, so the orchestrator must
+    not call the resolver or ingest anything for such a payload.
+    """
+    bus = await _make_bus()
+    manager = _StubManager()
+    resolver = _RecordingResolver({"acme": manager})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": 42}),
+    )
+    await asyncio.sleep(0.05)  # let a (wrongly) routed event land
+
+    assert resolver.calls == []
+    assert manager.calls == []
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_lock_key_is_tenant_scoped() -> None:
     """Two tenants sharing a domain → distinct, tenant-scoped lock keys."""
     from dataknobs_common.locks import InProcessLock

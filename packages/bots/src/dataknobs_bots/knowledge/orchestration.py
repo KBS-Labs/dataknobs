@@ -336,6 +336,18 @@ class IngestOrchestrator:
             )
             return
         tenant_id = payload.get("tenant_id")
+        if tenant_id is not None and not isinstance(tenant_id, str):
+            # Fail closed: a non-string tenant_id means we cannot
+            # safely identify the tenant, and routing it to the wrong
+            # (or a coerced) tenant is a cross-tenant data leak. Skip
+            # rather than guess — mirrors the domain_id guard above.
+            logger.warning(
+                "IngestOrchestrator received trigger with non-string "
+                "tenant_id (type=%s); skipping (event_id=%s)",
+                type(tenant_id).__name__,
+                event.event_id,
+            )
+            return
         since_version = payload.get("since_version")
         force_full = payload.get("force_full")
         last_version = payload.get("last_version")

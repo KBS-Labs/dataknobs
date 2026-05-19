@@ -20,7 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-`ingestion_manager` path is unchanged. `IngestionManagerResolver`
   is a `@runtime_checkable` `Protocol` exported from
   `dataknobs_bots.knowledge`. The trigger payload gains an optional
-  `tenant_id` (absent ⇒ `None` passed to the resolver).
+  `tenant_id` (absent ⇒ `None` passed to the resolver); a present
+  non-string `tenant_id` fails closed (logged + trigger skipped)
+  rather than being routed or coerced, since a misidentified tenant
+  is a cross-tenant data leak.
 
 ### Changed
 

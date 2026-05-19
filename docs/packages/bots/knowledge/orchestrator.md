@@ -64,7 +64,10 @@ Both `start()` and `stop()` are idempotent — repeated calls are safe.
   single-tenant path; when a `manager_resolver` is configured it is
   passed to the resolver to select the per-tenant manager and it scopes
   the serialization lock key (see
-  [Multi-tenant routing](#multi-tenant-routing)).
+  [Multi-tenant routing](#multi-tenant-routing)). A present-but-non-string
+  `tenant_id` fails closed: the trigger is skipped with a WARNING rather
+  than routed or coerced, since a misidentified tenant is a cross-tenant
+  data leak.
 - The remaining keys select the ingest entry point, checked in this
   order (so a `since_version` present alongside `force_full` takes the
   delta path — the more specific intent wins):
