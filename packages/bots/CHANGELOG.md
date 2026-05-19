@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.22 - 2026-05-19
+
 ### Added
 
 - **`IngestOrchestrator(manager_resolver=...)` + `IngestionManagerResolver`.**
