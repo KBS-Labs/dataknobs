@@ -22,7 +22,10 @@ from dataknobs_bots.knowledge import (
     KnowledgeIngestionManager,
     RAGKnowledgeBase,
 )
-from dataknobs_bots.knowledge.orchestration import IngestOrchestrator
+from dataknobs_bots.knowledge.orchestration import (
+    IngestionManagerResolver,
+    IngestOrchestrator,
+)
 from dataknobs_bots.knowledge.storage import InMemoryKnowledgeBackend
 from dataknobs_common.events import Event, EventType, InMemoryEventBus
 from dataknobs_common.testing import requires_real_postgres
@@ -482,7 +485,7 @@ async def test_concurrent_triggers_different_domains_run_in_parallel() -> None:
 
 @pytest.mark.asyncio
 async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
-    """A passed-in ``DistributedLock`` is used, keyed ``ingest:<domain>``.
+    """A passed-in ``DistributedLock`` is used, keyed ``ingest:-:<domain>``.
 
     Verifies the injection seam: the orchestrator delegates
     serialization to the injected lock rather than an internal
@@ -510,7 +513,9 @@ async def test_injected_lock_is_used_and_keyed_per_domain() -> None:
     await _wait_for(lambda: len(manager.calls) >= 1)
 
     assert manager.calls == [("d1", None)]
-    assert lock.held_keys == ["ingest:d1"]
+    # No-tenant path degrades to a stable ``ingest:-:<domain>`` (one
+    # key per domain — serialization behaviour unchanged).
+    assert lock.held_keys == ["ingest:-:d1"]
     # Default construction must NOT reuse the injected instance.
     default_orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
     assert isinstance(default_orch.lock, InProcessLock)
@@ -804,7 +809,8 @@ class TestDispatchMatrix:
         )
         await _wait_for(lambda: len(manager.change_calls) >= 1)
 
-        assert lock.held_keys == ["ingest:d9"]
+        # No-tenant path degrades to ``ingest:-:<domain>``.
+        assert lock.held_keys == ["ingest:-:d9"]
 
         await orch.stop()
         await bus.close()
@@ -835,6 +841,480 @@ async def test_custom_trigger_topic() -> None:
     assert manager.calls == [("d1", None)]
 
     assert orch.trigger_topic == "my_topic"
+
+    await orch.stop()
+    await bus.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant manager-resolution seam (``manager_resolver=``).
+#
+# Resolver-path tests use TWO real KnowledgeIngestionManagers, each over
+# its own InMemoryKnowledgeBackend + its own RAGKnowledgeBase (memory
+# vector store, echo embedder) — the same wiring as
+# test_end_to_end_with_real_manager, duplicated per tenant. This proves
+# real per-tenant isolation, not just that a resolver callable fired.
+# No mocks anywhere; the resolver is a real async class implementing
+# the IngestionManagerResolver protocol.
+#
+# Echo embeddings carry no semantic similarity, so content-isolation
+# assertions query with ``min_similarity=-1.0`` (the cosine floor) to
+# return every stored chunk deterministically rather than relying on
+# topical relevance.
+# ---------------------------------------------------------------------------
+
+
+async def _make_real_manager(
+    bus: InMemoryEventBus,
+    domain_id: str,
+    filename: str,
+    body: bytes,
+) -> tuple[KnowledgeIngestionManager, RAGKnowledgeBase]:
+    """Build one tenant's real manager + its own backend/RAG KB."""
+    backend = InMemoryKnowledgeBackend()
+    await backend.initialize()
+    await backend.create_kb(domain_id)
+    await backend.put_file(domain_id, filename, body)
+    rag = await RAGKnowledgeBase.from_config(
+        {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+    )
+    manager = KnowledgeIngestionManager(
+        source=backend, destination=rag, event_bus=bus
+    )
+    return manager, rag
+
+
+class _RecordingResolver:
+    """Real async IngestionManagerResolver (not a mock).
+
+    Maps ``tenant_id`` to a pre-built manager and records every call so
+    tests can assert the orchestrator parsed ``tenant_id``/``domain_id``
+    from the payload and awaited the resolver per event.
+    """
+
+    def __init__(self, mapping: dict[str | None, Any]) -> None:
+        self._mapping = mapping
+        self.calls: list[tuple[str | None, str]] = []
+
+    async def __call__(
+        self, *, tenant_id: str | None, domain_id: str
+    ) -> Any:
+        self.calls.append((tenant_id, domain_id))
+        return self._mapping[tenant_id]
+
+
+class _RaisingResolver:
+    """Resolver that always raises — exercises the log-don't-raise guard."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str | None, str]] = []
+
+    async def __call__(
+        self, *, tenant_id: str | None, domain_id: str
+    ) -> Any:
+        self.calls.append((tenant_id, domain_id))
+        raise RuntimeError("resolver boom")
+
+
+@pytest.mark.asyncio
+async def test_resolver_routes_each_tenant_to_its_own_manager() -> None:
+    """Each tenant's trigger ingests into ITS OWN vector store only.
+
+    The exact cross-tenant-leak the brief exists to prevent: with the
+    single static manager both triggers would land in one KB. With the
+    resolver, ``acme``'s content is only in ``acme``'s RAG KB and
+    ``umbrella``'s only in ``umbrella``'s — same ``domain_id`` for both.
+    """
+    bus = await _make_bus()
+    acme_mgr, acme_rag = await _make_real_manager(
+        bus, "shared", "doc.md", b"# ACME\n\nACME secret alpha.\n"
+    )
+    umb_mgr, umb_rag = await _make_real_manager(
+        bus, "shared", "doc.md", b"# UMBRELLA\n\nUMBRELLA secret beta.\n"
+    )
+    completions: list[Event] = []
+
+    async def completion_handler(event: Event) -> None:
+        completions.append(event)
+
+    await bus.subscribe("knowledge:ingestion", completion_handler)
+
+    resolver = _RecordingResolver({"acme": acme_mgr, "umbrella": umb_mgr})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "shared", "tenant_id": "acme"}),
+    )
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "shared", "tenant_id": "umbrella"}),
+    )
+    await _wait_for(lambda: len(completions) >= 2, timeout=3.0)
+
+    assert sorted(c for c, _ in resolver.calls) == ["acme", "umbrella"]
+
+    acme_hits = await acme_rag.query("secret", k=50, min_similarity=-1.0)
+    umb_hits = await umb_rag.query("secret", k=50, min_similarity=-1.0)
+    acme_text = " ".join(h["text"] for h in acme_hits)
+    umb_text = " ".join(h["text"] for h in umb_hits)
+
+    assert "ACME" in acme_text and "UMBRELLA" not in acme_text
+    assert "UMBRELLA" in umb_text and "ACME" not in umb_text
+    # Each KB holds only its own one-file ingest — no cross-leak.
+    assert await acme_rag.count() >= 1
+    assert await umb_rag.count() >= 1
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_resolver_called_with_payload_tenant_and_domain() -> None:
+    """Resolver is awaited with tenant_id/domain_id parsed from payload."""
+    bus = await _make_bus()
+    manager = _StubManager()
+    resolver = _RecordingResolver({"acme": manager})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+    )
+    await _wait_for(lambda: len(manager.calls) >= 1)
+
+    assert resolver.calls == [("acme", "d1")]
+    assert manager.calls == [("d1", None)]
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_tenant_id_passes_none_to_resolver() -> None:
+    """No ``tenant_id`` in payload → resolver receives ``tenant_id=None``."""
+    bus = await _make_bus()
+    manager = _StubManager()
+    resolver = _RecordingResolver({None: manager})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(TRIGGER_TOPIC, _trigger_event({"domain_id": "d1"}))
+    await _wait_for(lambda: len(manager.calls) >= 1)
+
+    assert resolver.calls == [(None, "d1")]
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_non_string_tenant_id_is_skipped_not_routed() -> None:
+    """A non-string ``tenant_id`` fails closed: the trigger is skipped.
+
+    Routing a malformed tenant to the wrong (or a string-coerced)
+    tenant would be a cross-tenant data leak, so the orchestrator must
+    not call the resolver or ingest anything for such a payload.
+    """
+    bus = await _make_bus()
+    manager = _StubManager()
+    resolver = _RecordingResolver({"acme": manager})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": 42}),
+    )
+    await asyncio.sleep(0.05)  # let a (wrongly) routed event land
+
+    assert resolver.calls == []
+    assert manager.calls == []
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_lock_key_is_tenant_scoped() -> None:
+    """Two tenants sharing a domain → distinct, tenant-scoped lock keys."""
+    from dataknobs_common.locks import InProcessLock
+
+    class RecordingLock(InProcessLock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.held_keys: list[str] = []
+
+        def hold(  # type: ignore[override]
+            self, key: str, *, timeout: float | None = None
+        ):
+            self.held_keys.append(key)
+            return super().hold(key, timeout=timeout)
+
+    bus = await _make_bus()
+    manager = _StubManager()
+    resolver = _RecordingResolver({"acme": manager, "umbrella": manager})
+    lock = RecordingLock()
+    orch = IngestOrchestrator(
+        None, bus, lock=lock, manager_resolver=resolver
+    )
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+    )
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": "umbrella"}),
+    )
+    await _wait_for(lambda: len(manager.calls) >= 2)
+
+    assert sorted(lock.held_keys) == ["ingest:acme:d1", "ingest:umbrella:d1"]
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_two_tenants_same_domain_run_in_parallel() -> None:
+    """Distinct lock keys let two tenants ingest one domain concurrently.
+
+    Positive proof that the tenant-scoped lock key avoids the
+    cross-tenant stall a single per-domain key would cause under a
+    cross-replica lock.
+    """
+    bus = await _make_bus()
+    gm_a = _GatedManager()
+    gm_b = _GatedManager()
+    resolver = _RecordingResolver({"acme": gm_a, "umbrella": gm_b})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    pub1 = asyncio.create_task(
+        bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+        )
+    )
+    pub2 = asyncio.create_task(
+        bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "tenant_id": "umbrella"}),
+        )
+    )
+
+    # Both enter their critical section before either is released —
+    # only possible if the lock keys differ.
+    await _wait_for(
+        lambda: gm_a.started and gm_b.started, timeout=1.0
+    )
+    assert gm_a.started == ["d1"]
+    assert gm_b.started == ["d1"]
+    assert gm_a.finished == [] and gm_b.finished == []
+
+    gm_a.gate_for("d1").set()
+    gm_b.gate_for("d1").set()
+    await _wait_for(
+        lambda: gm_a.finished and gm_b.finished, timeout=1.0
+    )
+
+    await asyncio.gather(pub1, pub2)
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_same_domain_still_serialized() -> None:
+    """Same (tenant, domain) → same key → still serialized.
+
+    The tenant-scoped key did not loosen same-key serialization.
+    """
+    bus = await _make_bus()
+    gm = _GatedManager()
+    resolver = _RecordingResolver({"acme": gm})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    pub1 = asyncio.create_task(
+        bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+        )
+    )
+    pub2 = asyncio.create_task(
+        bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+        )
+    )
+
+    await _wait_for(lambda: len(gm.started) >= 1, timeout=1.0)
+    await asyncio.sleep(0.05)  # give the 2nd a chance to (wrongly) race
+    assert gm.peak_concurrency.get("d1", 0) == 1
+    assert len(gm.started) == 1
+
+    gm.gate_for("d1").set()
+    await _wait_for(lambda: len(gm.finished) >= 2, timeout=1.0)
+    assert gm.peak_concurrency["d1"] == 1
+
+    await asyncio.gather(pub1, pub2)
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_constructor_rejects_both_manager_and_resolver() -> None:
+    """``ingestion_manager`` and ``manager_resolver`` are mutually exclusive."""
+    bus = await _make_bus()
+    resolver = _RecordingResolver({})
+    with pytest.raises(
+        ValueError, match=r"ingestion_manager.*manager_resolver"
+    ):
+        IngestOrchestrator(
+            _StubManager(),  # type: ignore[arg-type]
+            bus,
+            manager_resolver=resolver,
+        )
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_constructor_rejects_neither_manager_nor_resolver() -> None:
+    """Exactly one of manager/resolver is required."""
+    bus = await _make_bus()
+    with pytest.raises(ValueError, match=r"one of ingestion_manager"):
+        IngestOrchestrator(None, bus)
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_resolver_exception_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A resolver that raises is caught by the existing guard.
+
+    Same posture as ``test_manager_failure_does_not_break_subscription``:
+    logged at ERROR, subscription survives, a subsequent good event for
+    another tenant still dispatches.
+    """
+    bus = await _make_bus()
+    good_mgr = _StubManager()
+    raising = _RaisingResolver()
+    # First tenant raises; second resolves fine — same resolver object
+    # would need both behaviours, so compose: raise for "bad", route
+    # "good" to a stub via a small dispatching resolver.
+
+    class _MixedResolver:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str | None, str]] = []
+
+        async def __call__(
+            self, *, tenant_id: str | None, domain_id: str
+        ) -> Any:
+            self.calls.append((tenant_id, domain_id))
+            if tenant_id == "bad":
+                raise RuntimeError("resolver boom")
+            return good_mgr
+
+    resolver = _MixedResolver()
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    with caplog.at_level(
+        "ERROR", logger="dataknobs_bots.knowledge.orchestration"
+    ):
+        await bus.publish(
+            TRIGGER_TOPIC,
+            _trigger_event({"domain_id": "d1", "tenant_id": "bad"}),
+        )
+        await _wait_for(lambda: len(resolver.calls) >= 1)
+
+    assert any(
+        "failed to process trigger" in record.message
+        for record in caplog.records
+    )
+    # Subscription still alive — a good event for another tenant works.
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d2", "tenant_id": "good"}),
+    )
+    await _wait_for(lambda: len(good_mgr.calls) >= 1)
+    assert good_mgr.calls == [("d2", None)]
+
+    # Sanity: _RaisingResolver is a valid protocol impl too.
+    assert isinstance(raising, IngestionManagerResolver)
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_static_path_unchanged_when_no_resolver() -> None:
+    """No ``manager_resolver`` → dispatch to the static manager as before.
+
+    The single-tenant path is byte-for-byte unchanged; ``tenant_id``
+    (if present) is read but unused.
+    """
+    bus = await _make_bus()
+    manager = _StubManager()
+    orch = IngestOrchestrator(manager, bus)  # type: ignore[arg-type]
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event(
+            {"domain_id": "d1", "tenant_id": "ignored", "last_version": "v1"}
+        ),
+    )
+    await _wait_for(lambda: len(manager.calls) >= 1)
+    assert manager.calls == [("d1", "v1")]
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_resolver_path_end_to_end_publishes_completion_event() -> None:
+    """A resolver-built real manager still publishes its completion event.
+
+    The manager contract holds under per-event resolution — mirrors
+    ``test_end_to_end_with_real_manager`` through the resolver seam.
+    """
+    bus = await _make_bus()
+    manager, _rag = await _make_real_manager(
+        bus, "d1", "intro.md", b"# Intro\n\nHello.\n"
+    )
+    completion_events: list[Event] = []
+
+    async def completion_handler(event: Event) -> None:
+        completion_events.append(event)
+
+    await bus.subscribe("knowledge:ingestion", completion_handler)
+
+    resolver = _RecordingResolver({"acme": manager})
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger_event({"domain_id": "d1", "tenant_id": "acme"}),
+    )
+    await _wait_for(lambda: len(completion_events) >= 1, timeout=2.0)
+
+    assert len(completion_events) == 1
+    payload = completion_events[0].payload
+    assert payload["domain_id"] == "d1"
+    assert payload["status"] == "ready"
+    assert payload["files_processed"] >= 1
+    assert payload["chunks_created"] >= 1
+    assert resolver.calls == [("acme", "d1")]
 
     await orch.stop()
     await bus.close()
