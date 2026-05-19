@@ -23,7 +23,7 @@ from .ingestion import (
     IngestSwapMode,
     KnowledgeIngestionManager,
 )
-from .orchestration import IngestOrchestrator
+from .orchestration import IngestionManagerResolver, IngestOrchestrator
 from .query import (
     ContextualExpander,
     Message,
@@ -96,6 +96,7 @@ __all__ = [
     "IngestSwapMode",
     # Event-driven orchestration
     "IngestOrchestrator",
+    "IngestionManagerResolver",
     # High-level ingestion service
     "KnowledgeIngestionService",
     "EnsureIngestionResult",

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`IngestOrchestrator(manager_resolver=...)` + `IngestionManagerResolver`.**
+  An injectable async resolver seam for multi-tenant deployments:
+  the orchestrator calls `manager_resolver(tenant_id=..., domain_id=...)`
+  once per trigger event (tenant/domain parsed from the payload) and
+  dispatches to the returned per-tenant `KnowledgeIngestionManager`
+  (its own KB backend prefix / `vector_partition` / embedder).
+  `ingestion_manager=` and `manager_resolver=` are mutually exclusive
+  and exactly one is required (`ValueError` otherwise); the static
+  single-`ingestion_manager` path is unchanged. `IngestionManagerResolver`
+  is a `@runtime_checkable` `Protocol` exported from
+  `dataknobs_bots.knowledge`. The trigger payload gains an optional
+  `tenant_id` (absent ⇒ `None` passed to the resolver).
+
+### Changed
+
+- **`IngestOrchestrator` per-domain lock key is now tenant-scoped:**
+  `f"ingest:{tenant_id or '-'}:{domain_id}"` (was `f"ingest:{domain_id}"`)
+  so two tenants sharing a `domain_id` do not false-share one lock
+  under a cross-replica backend. Single-tenant triggers (no `tenant_id`)
+  degrade to the stable key `ingest:-:<domain_id>`. With the default
+  process-local `InProcessLock` this is invisible. Deployments using a
+  cross-replica lock (`{"backend": "postgres", ...}`) should note that
+  during a rolling upgrade old and new replicas briefly compute
+  different keys for the same single-tenant domain, momentarily
+  relaxing cross-replica serialization for that domain until all
+  replicas are upgraded.
+
 ## v0.6.21 - 2026-05-18
 
 ### Added
