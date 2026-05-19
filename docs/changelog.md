@@ -5,6 +5,24 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-19
+
+### dataknobs-bots [0.6.22]
+
+#### Added
+- added an ingestion manager resolver for the ingest orchestrator
+
+### dataknobs-structures [1.0.10]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-utils [1.2.12]
+
+#### Changed
+- bumped versions, updated release notes
+
+
 ## Release - 2026-05-18
 
 ### dataknobs-common [1.3.13]
