@@ -190,17 +190,96 @@ def is_postgres_available(
         return False
 
 
+def get_localstack_endpoint(
+    host: str | None = None, port: int | None = None
+) -> str:
+    """Resolve the LocalStack edge endpoint URL.
+
+    Returns the URL form (e.g. ``"http://localhost:4566"``) suitable
+    for passing as ``endpoint_url=`` to ``boto3`` / ``aioboto3``
+    clients. Pairs with :func:`is_localstack_available`, which uses
+    the same resolution chain for its TCP probe.
+
+    Resolution order — highest priority first:
+
+    1. Explicit ``host``/``port`` args (each independent — one may be
+       passed without the other).
+    2. ``LOCALSTACK_ENDPOINT`` (full URL; scheme optional, normalized
+       to ``http://`` if absent).
+    3. ``AWS_ENDPOINT_URL`` (full URL; same scheme handling).
+    4. ``LOCALSTACK_HOST`` + ``LOCALSTACK_PORT`` env vars.
+    5. Default: ``http://localhost:4566``, or
+       ``http://localstack:4566`` when running inside a Docker
+       container (detected via ``/.dockerenv`` or ``DOCKER_CONTAINER``
+       env var — same precedent as
+       :func:`postgres_connection_params` and
+       :func:`elasticsearch_connection_params`).
+
+    A scheme-less ``LOCALSTACK_ENDPOINT`` / ``AWS_ENDPOINT_URL``
+    (e.g. ``host:4566``) fails ``urlparse`` host/port extraction and
+    falls through to the env / default arms, so the returned URL is
+    always well-formed.
+
+    Args:
+        host: Override LocalStack host (skips env resolution for the
+            host component).
+        port: Override LocalStack edge port (skips env resolution for
+            the port component).
+
+    Returns:
+        Fully-qualified endpoint URL, scheme included.
+    """
+    from urllib.parse import urlparse
+
+    scheme = "http"
+
+    if host is None or port is None:
+        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
+            "AWS_ENDPOINT_URL"
+        )
+        if endpoint:
+            parsed = urlparse(endpoint)
+            # Only honor the env-supplied scheme when the URL parses as
+            # a proper URL (i.e. a hostname is recoverable). For a
+            # scheme-less value like ``host:4566`` urlparse returns
+            # ``scheme="host"`` / ``hostname=None`` — fall through to
+            # the defaults rather than emit a malformed URL.
+            if parsed.hostname:
+                if host is None:
+                    host = parsed.hostname
+                if port is None and parsed.port:
+                    port = parsed.port
+                if parsed.scheme:
+                    scheme = parsed.scheme
+
+        if host is None:
+            env_host = os.environ.get("LOCALSTACK_HOST")
+            if env_host:
+                host = env_host
+            elif os.path.exists("/.dockerenv") or os.environ.get(
+                "DOCKER_CONTAINER"
+            ):
+                host = "localstack"
+            else:
+                host = "localhost"
+
+        if port is None:
+            port = int(os.environ.get("LOCALSTACK_PORT", "4566"))
+
+    return f"{scheme}://{host}:{port}"
+
+
 def is_localstack_available(
     host: str | None = None, port: int | None = None
 ) -> bool:
     """Check if a LocalStack edge endpoint is reachable.
 
-    Resolution order for the endpoint, highest priority first:
-    explicit ``host``/``port`` args, then ``LOCALSTACK_ENDPOINT`` /
-    ``AWS_ENDPOINT_URL`` (a full URL), then ``LOCALSTACK_HOST`` /
-    ``LOCALSTACK_PORT``, finally ``localhost:4566``. This mirrors
-    :func:`is_redis_available` so the check works both on the host and
-    inside Docker where LocalStack runs on a network hostname.
+    Uses :func:`get_localstack_endpoint` to resolve the
+    ``(host, port)`` pair so the probe and the URL form share a
+    single source of truth. See that function's docstring for the
+    resolution chain — including the Docker-aware default that picks
+    ``localstack:4566`` inside a container and ``localhost:4566``
+    elsewhere.
 
     Any connection error returns ``False`` (skip, never fail) — the
     same fail-soft contract as the other service probes.
@@ -212,34 +291,17 @@ def is_localstack_available(
     Returns:
         True if the LocalStack edge port accepts a TCP connection.
     """
-    import os
     from urllib.parse import urlparse
 
-    if host is None or port is None:
-        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
-            "AWS_ENDPOINT_URL"
-        )
-        if endpoint:
-            parsed = urlparse(endpoint)
-            host = host if host is not None else (parsed.hostname or "localhost")
-            port = port if port is not None else (parsed.port or 4566)
-        else:
-            host = (
-                host
-                if host is not None
-                else os.environ.get("LOCALSTACK_HOST", "localhost")
-            )
-            port = (
-                port
-                if port is not None
-                else int(os.environ.get("LOCALSTACK_PORT", "4566"))
-            )
+    parsed = urlparse(get_localstack_endpoint(host, port))
+    probe_host = parsed.hostname or "localhost"
+    probe_port = parsed.port or 4566
     try:
         import socket
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
-        result = sock.connect_ex((host, port))
+        result = sock.connect_ex((probe_host, probe_port))
         sock.close()
         return result == 0
     except OSError:

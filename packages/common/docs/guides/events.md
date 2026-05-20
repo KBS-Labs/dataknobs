@@ -240,6 +240,8 @@ bus = create_event_bus({
     "wait_time_seconds": 20,                    # ReceiveMessage long-poll
     "visibility_timeout": 60,                   # at-least-once retry window
     "topic_attribute": "topic",                 # routing attribute name
+    "require_topic_attribute": True,            # default — see "Single-topic
+                                                # bridge mode" below
     # "aws_access_key_id" / "aws_secret_access_key" optional —
     # default credential chain is used when omitted.
 })
@@ -263,6 +265,45 @@ A `queue_url` ending in `.fifo` is treated as a FIFO queue:
   expires
 - Wildcard `pattern` subscriptions are unsupported and raise
   `NotImplementedError` (loud rather than silent mis-routing)
+
+#### Single-topic bridge mode
+
+AWS-native event sources that bridge into SQS — `EventBridge → SQS`
+targets, S3 → SQS bucket notifications, raw SNS → SQS delivery —
+cannot set arbitrary SQS message attributes. A message produced by
+such a source arrives without a `topic` attribute, and under the
+default routing model it gets released back to the queue and
+recirculates forever.
+
+Set `require_topic_attribute=False` to dispatch attribute-less
+messages to every active subscription on the bus instead. This mode
+assumes the queue is **dedicated to a single topic** (your CDK or
+infrastructure wires it that way).
+
+```python
+bus = create_event_bus({
+    "backend": "sqs",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123/knowledge-trigger",
+    "region": "us-east-1",
+    "require_topic_attribute": False,   # accept attribute-less messages
+})
+await bus.subscribe("knowledge:trigger", handler)
+```
+
+Behaviour matrix:
+
+| Topic attribute | `require_topic_attribute=True` (default) | `require_topic_attribute=False` |
+|---|---|---|
+| Present + matches sub | Dispatch to that sub | Dispatch to that sub |
+| Present + mismatched  | Release back to queue (other sub may pick it up) | Release back to queue |
+| Absent                | Release back to queue                            | Fan out to every active sub |
+
+When the body is valid JSON but not `Event.to_dict()`-shaped (e.g. a
+raw EventBridge envelope), it is delivered as a synthesised
+`Event(type=EventType.CUSTOM, topic=<receiving poll task's topic>,
+payload=<decoded body>)` event with one WARNING log per synthesis.
+When the body is not valid JSON, it is discarded as poison (same as
+the default mode).
 
 **Note:** Import directly for type hints (lazy — does not pull
 `aioboto3` until first access):

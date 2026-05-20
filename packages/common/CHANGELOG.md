@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `dataknobs_common.testing.get_localstack_endpoint(host=None, port=None) -> str` —
+  public helper that resolves the LocalStack edge endpoint URL
+  (e.g. `http://localhost:4566`) suitable for `endpoint_url=` in
+  `boto3` / `aioboto3` clients. Pairs with `is_localstack_available`:
+  both share a single resolution chain (explicit args →
+  `LOCALSTACK_ENDPOINT` → `AWS_ENDPOINT_URL` →
+  `LOCALSTACK_HOST` / `LOCALSTACK_PORT` → Docker-aware default).
+  Scheme-less env values fall through to defaults rather than emit a
+  malformed URL. Consumer copies of the resolution helper can now
+  delete in favour of this one.
+- `SqsEventBus.require_topic_attribute` constructor parameter
+  (single-topic bridge mode). When set to `False`, messages arriving
+  on the queue without the configured topic attribute are dispatched
+  to every active subscription on the bus instead of being released
+  back to the queue. Use this mode for queues fed by AWS-native event
+  sources that cannot set arbitrary SQS message attributes
+  (EventBridge → SQS targets, S3 → SQS bucket notifications, raw
+  SNS → SQS delivery). The queue must be dedicated to a single topic
+  when this mode is enabled. Default remains `True` — existing
+  consumers see no behaviour change. Message bodies that are valid
+  JSON but not `Event.to_dict()`-shaped are delivered as synthesised
+  `Event(type=EventType.CUSTOM, topic=<receiving poll task's topic>,
+  payload=<decoded body>)` events with one WARNING log per synthesis.
+
+### Changed
+- `is_localstack_available()` now delegates endpoint resolution to
+  `get_localstack_endpoint` and gains Docker-aware host detection.
+  Inside a container (`/.dockerenv` or `DOCKER_CONTAINER` set), with
+  no `LOCALSTACK_*` / `AWS_ENDPOINT_URL` env var configured, the
+  probe targets `localstack:4566` instead of `localhost:4566`.
+  Matches the existing precedent in `postgres_connection_params` /
+  `elasticsearch_connection_params`. All other env-driven paths are
+  unchanged.
+
 ## v1.3.13 - 2026-05-18
 
 ### Added

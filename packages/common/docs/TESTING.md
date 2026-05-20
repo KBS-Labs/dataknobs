@@ -65,6 +65,43 @@ if is_redis_available(host="localhost", port=6379):
     print("Redis is available")
 ```
 
+### LocalStack
+
+`get_localstack_endpoint()` resolves the LocalStack edge endpoint as
+a fully-qualified URL — suitable for `endpoint_url=` in `boto3` /
+`aioboto3` clients — and shares the resolution chain with
+`is_localstack_available()` so the probe and the URL form cannot
+drift.
+
+```python
+from dataknobs_common.testing import (
+    get_localstack_endpoint,
+    is_localstack_available,
+    requires_localstack,
+)
+
+# URL form for SDK clients
+endpoint = get_localstack_endpoint()  # "http://localhost:4566"
+
+# Skip a test when LocalStack is not running
+@requires_localstack
+async def test_against_localstack():
+    import aioboto3
+    session = aioboto3.Session(region_name="us-east-1")
+    async with session.client("sqs", endpoint_url=endpoint) as sqs:
+        ...
+```
+
+Resolution order — highest priority first:
+
+1. Explicit `host` / `port` arguments (each independent).
+2. `LOCALSTACK_ENDPOINT` (full URL; scheme optional).
+3. `AWS_ENDPOINT_URL` (full URL; same scheme handling).
+4. `LOCALSTACK_HOST` + `LOCALSTACK_PORT` env vars.
+5. Default: `http://localhost:4566`, or `http://localstack:4566`
+   when running inside a Docker container (detected via
+   `/.dockerenv` or `DOCKER_CONTAINER`).
+
 ---
 
 ## Pytest Markers
@@ -274,6 +311,14 @@ Elasticsearch fixtures read:
 - `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
 - `ELASTICSEARCH_PORT` — `9200`
 - `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+
+`get_localstack_endpoint` and `is_localstack_available` read:
+
+- `LOCALSTACK_ENDPOINT` — full URL; overrides host/port
+- `AWS_ENDPOINT_URL` — full URL fallback when `LOCALSTACK_ENDPOINT` is unset
+- `LOCALSTACK_HOST` — `localstack` in Docker, `localhost` otherwise
+- `LOCALSTACK_PORT` — `4566`
+- `DOCKER_CONTAINER` — any truthy value forces the `localstack` host default
 
 Docker detection also checks for `/.dockerenv`.
 

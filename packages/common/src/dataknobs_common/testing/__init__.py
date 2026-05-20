@@ -43,6 +43,7 @@ Example:
 from dataknobs_common.testing._core import (
     create_test_json_files,
     create_test_markdown_files,
+    get_localstack_endpoint,
     get_test_bot_config,
     get_test_rag_config,
     is_chromadb_available,
@@ -83,6 +84,7 @@ __all__ = [
     "elasticsearch_connection_params",
     "ensure_elasticsearch_ready",
     "ensure_postgres_ready",
+    "get_localstack_endpoint",
     "get_test_bot_config",
     "get_test_rag_config",
     "is_chromadb_available",

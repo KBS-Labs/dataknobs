@@ -28,7 +28,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ._resilient_loop import run_supervised_loop
-from .types import Event, Subscription
+from .types import Event, EventType, Subscription
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -59,6 +59,22 @@ class SqsEventBus:
       retention expires
     - Wildcard ``pattern`` subscriptions are unsupported (raise
       ``NotImplementedError`` — loud rather than silently mis-routing)
+
+    Single-topic bridge mode:
+        When ``require_topic_attribute=False`` is set, messages without
+        a ``topic_attribute`` are dispatched to every active
+        subscription on the bus. Use this mode for queues fed by
+        AWS-native event sources (EventBridge → SQS targets, S3 → SQS
+        bucket notifications, raw SNS → SQS delivery) that cannot set
+        arbitrary SQS message attributes. Such a queue must be
+        dedicated to a single topic; mixing topics on an
+        attribute-less queue would cross-deliver. Bodies that are
+        valid JSON but not ``Event.to_dict()``-shaped are delivered
+        as synthesised ``Event(type=EventType.CUSTOM, topic=<receiving
+        poll task's topic>, payload=<decoded-body>)`` events.
+        Messages with a matching attribute continue to dispatch by
+        attribute; messages with a mismatched attribute are still
+        released back to the queue.
 
     Example:
         ```python
@@ -93,6 +109,7 @@ class SqsEventBus:
         wait_time_seconds: int = 20,
         visibility_timeout: int = 60,
         topic_attribute: str = "topic",
+        require_topic_attribute: bool = True,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
     ) -> None:
@@ -115,6 +132,26 @@ class SqsEventBus:
                 before redelivery if not deleted (the at-least-once
                 retry window).
             topic_attribute: Message-attribute name carrying the topic.
+            require_topic_attribute: When ``True`` (default), messages
+                without the configured ``topic_attribute`` are released
+                back to the queue — the existing safety behaviour,
+                which assumes the queue may carry multiple topics and
+                a future subscriber may want them. When ``False``,
+                attribute-less messages are dispatched to every active
+                subscription on this bus.
+
+                Set ``False`` only when the queue is **dedicated to a
+                single topic** and is fed by an AWS-native event
+                source that cannot set arbitrary SQS message
+                attributes — EventBridge → SQS targets, S3 → SQS
+                bucket notifications, raw SNS → SQS delivery.
+                Messages that *do* carry a matching attribute continue
+                to dispatch by attribute; messages with a *mismatched*
+                attribute continue to be released. Synthesised events
+                (i.e. message bodies that are valid JSON but not
+                ``Event.to_dict()``-shaped) carry the receiving poll
+                task's topic in the ``topic`` field, the decoded body
+                as ``payload``, and ``type=EventType.CUSTOM``.
             aws_access_key_id: Explicit access key. When ``None``,
                 boto's default credential chain is used.
             aws_secret_access_key: Explicit secret key (paired with
@@ -131,6 +168,7 @@ class SqsEventBus:
         self._wait_time_seconds = wait_time_seconds
         self._visibility_timeout = visibility_timeout
         self._topic_attribute = topic_attribute
+        self._require_topic_attribute = require_topic_attribute
         self._aws_access_key_id = aws_access_key_id
         self._aws_secret_access_key = aws_secret_access_key
         self._is_fifo = queue_url.endswith(".fifo")
@@ -382,6 +420,40 @@ class SqsEventBus:
             name=f"SqsEventBus poll {subscription_id[:8]}",
         )
 
+    def _extract_topic_attribute(
+        self, message: dict[str, Any]
+    ) -> str | None:
+        """Pull the topic attribute's ``StringValue`` from an SQS message.
+
+        Returns ``None`` when the attribute is absent (the message was
+        published without it, or the source is an AWS-native bridge
+        that cannot set arbitrary attributes — EventBridge target, S3
+        bucket notification, raw SNS → SQS delivery).
+        """
+        attrs = message.get("MessageAttributes") or {}
+        topic_attr = attrs.get(self._topic_attribute) or {}
+        value = topic_attr.get("StringValue")
+        return value if isinstance(value, str) else None
+
+    async def _release_visibility(
+        self, receipt_handle: str | None
+    ) -> None:
+        """Return a message to the queue immediately (visibility 0).
+
+        Best-effort: a benign expired / invalid-receipt-handle race
+        with another subscriber's delete is suppressed so a transient
+        SQS error never propagates into the supervised poll loop as a
+        failure.
+        """
+        if not receipt_handle:
+            return
+        with contextlib.suppress(Exception):
+            await self._client.change_message_visibility(
+                QueueUrl=self._queue_url,
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=0,
+            )
+
     async def _handle_message(
         self,
         message: dict[str, Any],
@@ -389,39 +461,59 @@ class SqsEventBus:
         topic: str,
         handler: Callable[[Event], Any],
     ) -> None:
-        """Filter by topic attribute, invoke handler, delete on success.
+        """Filter / dispatch a single SQS message.
 
-        A message whose topic attribute does not equal this
-        subscription's topic is left in the queue (no delete) so a
-        subscriber on that other topic can consume it after the
-        visibility timeout. A handler that raises also leaves the
-        message — it is redelivered (at-least-once).
+        Three structural cases on the configured topic attribute:
+
+        - Attribute present and matches this subscription's topic →
+          parse + dispatch + delete on success (at-least-once retains
+          the message on handler failure).
+        - Attribute present but does NOT match → release the message
+          back to the queue with visibility 0 so another subscriber
+          picks it up.
+        - Attribute absent → when ``require_topic_attribute`` is
+          ``True`` (default), behave as "mismatched" and release. When
+          ``False`` (single-topic bridge mode), dispatch to every
+          active subscription on the bus.
         """
-        attrs = message.get("MessageAttributes") or {}
-        topic_attr = attrs.get(self._topic_attribute) or {}
-        msg_topic = topic_attr.get("StringValue")
+        msg_topic = self._extract_topic_attribute(message)
         receipt_handle = message.get("ReceiptHandle")
-        if msg_topic != topic:
-            # Another topic's message. Return it to the queue
-            # *immediately* (visibility 0) rather than letting it sit
-            # invisible for the full visibility timeout: on a shared
-            # single queue, parking it lets a subscriber on a different
-            # topic repeatedly "steal and hold" the message and starve
-            # the subscriber that actually handles this topic. Resetting
-            # visibility makes it instantly available for the right
-            # consumer's next poll. Best-effort: the matching subscriber
-            # may have already received+deleted it (benign expired/
-            # invalid receipt handle race) — never propagate that into
-            # the supervised poll loop as a failure.
-            if receipt_handle:
-                with contextlib.suppress(Exception):
-                    await self._client.change_message_visibility(
-                        QueueUrl=self._queue_url,
-                        ReceiptHandle=receipt_handle,
-                        VisibilityTimeout=0,
-                    )
+
+        if msg_topic is None:
+            if not self._require_topic_attribute:
+                await self._dispatch_to_all(
+                    message, subscription_id, topic, receipt_handle
+                )
+                return
+            # Default mode: absent attribute is "not for this
+            # subscription" → release (same outcome as a mismatched
+            # attribute under the existing single-queue routing model).
+            await self._release_visibility(receipt_handle)
             return
 
+        if msg_topic != topic:
+            # Another topic's message; let the matching subscriber
+            # grab it on its next poll.
+            await self._release_visibility(receipt_handle)
+            return
+
+        await self._dispatch_single(
+            message, subscription_id, topic, handler, receipt_handle
+        )
+
+    async def _dispatch_single(
+        self,
+        message: dict[str, Any],
+        subscription_id: str,
+        topic: str,
+        handler: Callable[[Event], Any],
+        receipt_handle: str | None,
+    ) -> None:
+        """Parse, invoke handler, delete-on-success for one matching message.
+
+        Behaviour identical to the body of pre-refactor
+        ``_handle_message`` after the topic-filter check.
+        """
         message_id = message.get("MessageId", "")
 
         try:
@@ -466,6 +558,109 @@ class SqsEventBus:
             message_id,
             subscription_id[:8],
             topic,
+        )
+
+    async def _dispatch_to_all(
+        self,
+        message: dict[str, Any],
+        receiving_subscription_id: str,
+        receiving_topic: str,
+        receipt_handle: str | None,
+    ) -> None:
+        """Dispatch an attribute-less message to every active subscription.
+
+        Reached only when ``require_topic_attribute=False`` AND the
+        message has no topic attribute. The receiving subscription's
+        poll task owns the receipt handle and decides delete-vs-retain
+        based on the aggregate handler outcome:
+
+        - All handlers succeed → ``delete_message``.
+        - Any handler raises → no delete → message redelivered after
+          the visibility timeout (at-least-once preserved; idempotent
+          handlers re-receive it).
+
+        Subscriptions are snapshotted at entry so a concurrent
+        ``subscribe`` / ``unsubscribe`` cannot mutate the iteration
+        target. The lock is NOT held during handler invocation — a
+        handler that initiates a subscribe / unsubscribe would
+        otherwise deadlock.
+        """
+        message_id = message.get("MessageId", "")
+        body = message.get("Body", "")
+
+        try:
+            decoded = json.loads(body)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "Discarding unparseable SQS message %s (fanout): %s",
+                message_id,
+                e,
+            )
+            if receipt_handle:
+                await self._client.delete_message(
+                    QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                )
+            return
+
+        try:
+            event = Event.from_dict(decoded)
+        except (KeyError, ValueError, TypeError):
+            # Valid JSON but not Event.to_dict()-shaped. Synthesise a
+            # CUSTOM event carrying the receiving poll task's topic
+            # and the decoded body as payload.
+            payload = (
+                decoded
+                if isinstance(decoded, dict)
+                else {"body": decoded}
+            )
+            event = Event(
+                type=EventType.CUSTOM,
+                topic=receiving_topic,
+                payload=payload,
+            )
+            logger.warning(
+                "Synthesised CUSTOM event for non-Event SQS body "
+                "(message_id=%s, topic=%s, body_shape=%s)",
+                message_id,
+                receiving_topic,
+                type(decoded).__name__,
+            )
+
+        subscriptions = list(self._subscriptions.values())
+        any_failed = False
+        for sub in subscriptions:
+            try:
+                result = sub.handler(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                any_failed = True
+                logger.exception(
+                    "SqsEventBus fanout handler failed for "
+                    "subscription %s (target_topic=%s, message_id=%s); "
+                    "message will be redelivered to all subscribers",
+                    sub.subscription_id[:8],
+                    sub.topic,
+                    message_id,
+                )
+
+        if any_failed:
+            # At-least-once: do not delete. Visibility timeout will
+            # expire and the message will be redelivered to whichever
+            # subscriber polls next. All idempotent handlers re-run.
+            return
+
+        if receipt_handle:
+            await self._client.delete_message(
+                QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+            )
+        logger.debug(
+            "Fanout-dispatched SQS message %s to %d subscriptions "
+            "(receiving=%s, receiving_topic=%s)",
+            message_id,
+            len(subscriptions),
+            receiving_subscription_id[:8],
+            receiving_topic,
         )
 
     @property

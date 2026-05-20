@@ -13,7 +13,7 @@ Start the service with ``bin/dk up`` (LocalStack runs ``SERVICES=s3,sqs``).
 from __future__ import annotations
 
 import asyncio
-import os
+import json
 import uuid
 
 import pytest
@@ -21,23 +21,15 @@ import pytest_asyncio
 
 from dataknobs_common.events import Event, EventType, create_event_bus
 from dataknobs_common.events.sqs import SqsEventBus
-from dataknobs_common.testing import requires_localstack
+from dataknobs_common.testing import (
+    get_localstack_endpoint,
+    requires_localstack,
+)
 
 pytestmark = requires_localstack
 
 
-def _localstack_endpoint() -> str:
-    """Resolve the LocalStack edge endpoint (Docker- and host-aware)."""
-    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-        default_host = "localstack"
-    else:
-        default_host = "localhost"
-    return os.environ.get(
-        "LOCALSTACK_ENDPOINT", f"http://{default_host}:4566"
-    )
-
-
-ENDPOINT = _localstack_endpoint()
+ENDPOINT = get_localstack_endpoint()
 REGION = "us-east-1"
 
 
@@ -368,3 +360,369 @@ class TestSqsEventBus:
                 await bus.subscribe("x", lambda e: None, pattern="x:*")
         finally:
             await bus.close()
+
+
+async def _send_raw(
+    queue_url: str,
+    body: str,
+    attributes: dict[str, dict[str, str]] | None = None,
+) -> None:
+    """Send a raw SQS message via a one-shot aioboto3 client.
+
+    Bypasses ``SqsEventBus.publish`` so a test can put a message on
+    the queue *without* the topic attribute (the AWS-native bridge
+    case) or with an arbitrary attribute value.
+    """
+    import aioboto3
+
+    session = aioboto3.Session(
+        region_name=REGION,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    async with session.client("sqs", endpoint_url=ENDPOINT) as client:
+        params: dict[str, object] = {
+            "QueueUrl": queue_url,
+            "MessageBody": body,
+        }
+        if attributes:
+            params["MessageAttributes"] = attributes
+        await client.send_message(**params)
+
+
+async def _receive_one(queue_url: str, wait_seconds: int = 2) -> dict | None:
+    """Single ``ReceiveMessage`` call for assertions about released messages."""
+    import aioboto3
+
+    session = aioboto3.Session(
+        region_name=REGION,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    async with session.client("sqs", endpoint_url=ENDPOINT) as client:
+        resp = await client.receive_message(
+            QueueUrl=queue_url,
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=wait_seconds,
+            MessageAttributeNames=["All"],
+        )
+        messages = resp.get("Messages", [])
+        return messages[0] if messages else None
+
+
+class TestSqsEventBusSingleTopicMode:
+    """Real-LocalStack behaviour for ``require_topic_attribute=False``."""
+
+    @pytest.mark.asyncio
+    async def test_default_is_require_topic_attribute_true(self, make_queue):
+        """Regression guard: the new param defaults to today's behaviour."""
+        url = await make_queue()
+        bus = _make_bus(url)
+        assert bus._require_topic_attribute is True
+
+    @pytest.mark.asyncio
+    async def test_attribute_required_default_drops_attribute_less_message(
+        self, make_queue
+    ):
+        """Default mode: attribute-less message returns to queue."""
+        url = await make_queue()
+        bus = _make_bus(url)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("knowledge:trigger", handler)
+            await _send_raw(
+                url,
+                json.dumps(
+                    Event(
+                        type=EventType.CUSTOM,
+                        topic="knowledge:trigger",
+                        payload={"k": 1},
+                    ).to_dict()
+                ),
+                attributes=None,
+            )
+            # The poll loop receives, sees no attribute, and (in default
+            # mode) releases visibility. Give it time to make that call.
+            await asyncio.sleep(2.0)
+        finally:
+            await bus.close()
+
+        assert received == [], (
+            "default mode must NOT dispatch attribute-less messages"
+        )
+        # Message should be released back to the queue.
+        msg = await _receive_one(url, wait_seconds=3)
+        assert msg is not None, (
+            "released message must reappear on the queue"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_dispatches_attribute_less_message(
+        self, make_queue
+    ):
+        """New mode: attribute-less Event-shaped body dispatches once."""
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("knowledge:trigger", handler)
+            event_payload = {
+                "tenant_id": "acme",
+                "domain_id": "support",
+            }
+            event = Event(
+                type=EventType.CUSTOM,
+                topic="knowledge:trigger",
+                payload=event_payload,
+            )
+            await _send_raw(url, json.dumps(event.to_dict()), attributes=None)
+            await _wait_for(lambda: len(received) >= 1)
+            await asyncio.sleep(1.0)  # guard against double-delivery
+        finally:
+            await bus.close()
+
+        assert len(received) == 1
+        assert received[0].topic == "knowledge:trigger"
+        assert received[0].payload == event_payload
+        # Message should be deleted — a follow-up receive returns nothing.
+        msg = await _receive_one(url, wait_seconds=2)
+        assert msg is None, "successful dispatch must delete the message"
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_dispatches_non_event_shaped_body(
+        self, make_queue, caplog
+    ):
+        """New mode: non-Event JSON body → synthesised CUSTOM event."""
+        import logging as _logging
+
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("knowledge:trigger", handler)
+            with caplog.at_level(
+                _logging.WARNING,
+                logger="dataknobs_common.events.sqs",
+            ):
+                await _send_raw(
+                    url,
+                    json.dumps({"some": "payload"}),
+                    attributes=None,
+                )
+                await _wait_for(lambda: len(received) >= 1)
+                await asyncio.sleep(1.0)
+        finally:
+            await bus.close()
+
+        assert len(received) == 1
+        assert received[0].type is EventType.CUSTOM
+        assert received[0].topic == "knowledge:trigger"
+        assert received[0].payload == {"some": "payload"}
+        synth_warnings = [
+            r
+            for r in caplog.records
+            if "Synthesised CUSTOM event" in r.getMessage()
+        ]
+        assert len(synth_warnings) == 1, (
+            "expected exactly one synthesis warning"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_with_matching_attribute_still_filters(
+        self, make_queue
+    ):
+        """New mode: matching attribute still routes only to that sub."""
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        a_events: list[Event] = []
+        b_events: list[Event] = []
+
+        async def a_handler(event: Event) -> None:
+            a_events.append(event)
+
+        async def b_handler(event: Event) -> None:
+            b_events.append(event)
+
+        try:
+            await bus.subscribe("topic-a", a_handler)
+            await bus.subscribe("topic-b", b_handler)
+            await bus.publish(
+                "topic-a",
+                Event(
+                    type=EventType.CUSTOM,
+                    topic="topic-a",
+                    payload={"n": 1},
+                ),
+            )
+            await _wait_for(lambda: len(a_events) >= 1)
+            await asyncio.sleep(2.0)  # give b_handler a chance to wrongly fire
+        finally:
+            await bus.close()
+
+        assert len(a_events) == 1
+        assert a_events[0].payload == {"n": 1}
+        assert b_events == [], (
+            "matching-attribute messages must not fan out to other subs"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_with_mismatched_attribute_still_releases(
+        self, make_queue
+    ):
+        """New mode: mismatched attribute → release back to queue."""
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("topic-a", handler)
+            await _send_raw(
+                url,
+                json.dumps(
+                    Event(
+                        type=EventType.CUSTOM,
+                        topic="other-topic",
+                        payload={},
+                    ).to_dict()
+                ),
+                attributes={
+                    "topic": {
+                        "StringValue": "other-topic",
+                        "DataType": "String",
+                    }
+                },
+            )
+            await asyncio.sleep(2.0)
+        finally:
+            await bus.close()
+
+        assert received == [], (
+            "mismatched-attribute messages must not dispatch"
+        )
+        msg = await _receive_one(url, wait_seconds=3)
+        assert msg is not None, (
+            "mismatched message must be released back to the queue"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_fanout_to_multiple_subscriptions(
+        self, make_queue
+    ):
+        """New mode: attribute-less message → every active sub receives it."""
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        a_events: list[Event] = []
+        b_events: list[Event] = []
+
+        async def a_handler(event: Event) -> None:
+            a_events.append(event)
+
+        async def b_handler(event: Event) -> None:
+            b_events.append(event)
+
+        try:
+            await bus.subscribe("topic-a", a_handler)
+            await bus.subscribe("topic-b", b_handler)
+            await _send_raw(
+                url,
+                json.dumps(
+                    Event(
+                        type=EventType.CUSTOM,
+                        topic="knowledge:trigger",
+                        payload={"shared": True},
+                    ).to_dict()
+                ),
+                attributes=None,
+            )
+            await _wait_for(
+                lambda: len(a_events) >= 1 and len(b_events) >= 1
+            )
+            await asyncio.sleep(1.0)
+        finally:
+            await bus.close()
+
+        assert len(a_events) == 1
+        assert len(b_events) == 1
+        assert a_events[0].payload == {"shared": True}
+        assert b_events[0].payload == {"shared": True}
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_fanout_handler_error_redelivers(
+        self, make_queue
+    ):
+        """New mode: a handler raising → message not deleted → redelivered.
+
+        Two subscribers, one raises once and then succeeds. The
+        message must be redelivered to BOTH (at-least-once preserved
+        across the fanout set) — idempotent handlers re-receive it.
+        """
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        a_calls: list[Event] = []
+        b_calls: list[Event] = []
+        b_state = {"raised": False}
+
+        async def a_handler(event: Event) -> None:
+            a_calls.append(event)
+
+        async def b_handler(event: Event) -> None:
+            b_calls.append(event)
+            if not b_state["raised"]:
+                b_state["raised"] = True
+                raise RuntimeError("transient failure on first delivery")
+
+        try:
+            await bus.subscribe("topic-a", a_handler)
+            await bus.subscribe("topic-b", b_handler)
+            await _send_raw(
+                url,
+                json.dumps(
+                    Event(
+                        type=EventType.CUSTOM,
+                        topic="knowledge:trigger",
+                        payload={"retry": True},
+                    ).to_dict()
+                ),
+                attributes=None,
+            )
+            # Wait for both initial deliveries, then for redelivery
+            # past the visibility timeout (2s + jitter).
+            await _wait_for(
+                lambda: len(a_calls) >= 2 and len(b_calls) >= 2,
+                timeout=20.0,
+            )
+        finally:
+            await bus.close()
+
+        # Both handlers must have been called twice: once on initial
+        # delivery (where b raised, blocking the delete) and again on
+        # redelivery (where b succeeds, allowing the delete).
+        assert len(a_calls) >= 2, (
+            f"a_handler must be redelivered (calls={len(a_calls)})"
+        )
+        assert len(b_calls) >= 2, (
+            f"b_handler must retry after raising (calls={len(b_calls)})"
+        )
+        assert b_state["raised"] is True
