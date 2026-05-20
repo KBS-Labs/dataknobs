@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-19T17:31:34Z",
+  "timestamp": "2026-05-20T23:10:35Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.15 (Homebrew 2026-05-18 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/fix-multi-tenant-orchestrator-gap",
-  "git_commit": "fc634af5e2d7b6a5725435188fe8c27e84c1fc83",
+  "git_branch": "sbk/expose-localstack-endpoint-resolver",
+  "git_commit": "633b4357692ea9879b88bdfc395470513fff2de0",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
