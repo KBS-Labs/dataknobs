@@ -34,6 +34,7 @@ sqs = ["aioboto3>=12.0.0"]
 [project.entry-points.pytest11]
 dataknobs_common_postgres = "dataknobs_common.testing.postgres_fixtures"
 dataknobs_common_elasticsearch = "dataknobs_common.testing.elasticsearch_fixtures"
+dataknobs_common_localstack = "dataknobs_common.testing.localstack_fixtures"
 
 [build-system]
 requires = ["hatchling"]

@@ -43,6 +43,8 @@ Example:
 from dataknobs_common.testing._core import (
     create_test_json_files,
     create_test_markdown_files,
+    ensure_localstack_s3_bucket,
+    get_localstack_endpoint,
     get_test_bot_config,
     get_test_rag_config,
     is_chromadb_available,
@@ -70,6 +72,10 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
     make_elasticsearch_test_index,
     wait_for_elasticsearch,
 )
+from dataknobs_common.testing.localstack_fixtures import (
+    localstack_endpoint,
+    make_localstack_s3_bucket,
+)
 from dataknobs_common.testing.postgres_fixtures import (
     ensure_postgres_ready,
     make_postgres_test_db,
@@ -82,7 +88,9 @@ __all__ = [
     "create_test_markdown_files",
     "elasticsearch_connection_params",
     "ensure_elasticsearch_ready",
+    "ensure_localstack_s3_bucket",
     "ensure_postgres_ready",
+    "get_localstack_endpoint",
     "get_test_bot_config",
     "get_test_rag_config",
     "is_chromadb_available",
@@ -93,7 +101,9 @@ __all__ = [
     "is_package_available",
     "is_postgres_available",
     "is_redis_available",
+    "localstack_endpoint",
     "make_elasticsearch_test_index",
+    "make_localstack_s3_bucket",
     "make_postgres_test_db",
     "postgres_connection_params",
     "requires_chromadb",

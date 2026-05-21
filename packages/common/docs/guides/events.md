@@ -240,6 +240,8 @@ bus = create_event_bus({
     "wait_time_seconds": 20,                    # ReceiveMessage long-poll
     "visibility_timeout": 60,                   # at-least-once retry window
     "topic_attribute": "topic",                 # routing attribute name
+    "require_topic_attribute": True,            # default — see "Single-topic
+                                                # bridge mode" below
     # "aws_access_key_id" / "aws_secret_access_key" optional —
     # default credential chain is used when omitted.
 })
@@ -263,6 +265,50 @@ A `queue_url` ending in `.fifo` is treated as a FIFO queue:
   expires
 - Wildcard `pattern` subscriptions are unsupported and raise
   `NotImplementedError` (loud rather than silent mis-routing)
+
+#### Single-topic bridge mode
+
+AWS-native event sources that bridge into SQS — `EventBridge → SQS`
+targets, S3 → SQS bucket notifications, raw SNS → SQS delivery —
+cannot set arbitrary SQS message attributes. A message produced by
+such a source arrives without a `topic` attribute, and under the
+default routing model it gets released back to the queue and
+recirculates forever.
+
+Set `require_topic_attribute=False` to dispatch attribute-less
+messages to the bus's single subscription. The bus is
+**dedicated to a single topic** — `subscribe()` raises `ValueError`
+if you try to register a second subscription in this mode. Open a
+separate bus per bridge queue when you need multiple topics.
+
+```python
+bus = create_event_bus({
+    "backend": "sqs",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123/events-bridge",
+    "region": "us-east-1",
+    "require_topic_attribute": False,   # accept attribute-less messages
+})
+await bus.subscribe("events:created", handler)
+# await bus.subscribe("other:topic", handler2)  # raises ValueError
+```
+
+Behaviour matrix:
+
+| Topic attribute | `require_topic_attribute=True` (default) | `require_topic_attribute=False` |
+|---|---|---|
+| Present + matches sub | Dispatch to that sub | Dispatch to the sub |
+| Present + mismatched  | Release back to queue (other sub may pick it up) | Release back to queue |
+| Absent                | Release back to queue                            | Dispatch to the sub |
+
+When the body is valid JSON but not `Event.to_dict()`-shaped (e.g. a
+raw EventBridge envelope), it is delivered as a synthesised
+`Event(type=EventType.CUSTOM, topic=<the subscription's topic>,
+payload=<decoded body>, event_id="sqs:<MessageId>",
+metadata={"sqs_message_id": ..., "sqs_synthesised": True})` with one
+WARNING log per synthesis. The `event_id` is derived from the stable
+SQS `MessageId` so handlers can key idempotency on it across
+at-least-once redeliveries. When the body is not valid JSON, it is
+discarded as poison (same as the default mode).
 
 **Note:** Import directly for type hints (lazy — does not pull
 `aioboto3` until first access):

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `dataknobs_common.testing.get_localstack_endpoint(host=None, port=None) -> str` —
+  public helper that resolves the LocalStack edge endpoint URL
+  (e.g. `http://localhost:4566`) suitable for `endpoint_url=` in
+  `boto3` / `aioboto3` clients. Pairs with `is_localstack_available`:
+  both share a single resolution chain (explicit args →
+  `LOCALSTACK_ENDPOINT` → `AWS_ENDPOINT_URL` →
+  `LOCALSTACK_HOST` / `LOCALSTACK_PORT` → Docker-aware default).
+  Scheme-less env values fall through to defaults rather than emit a
+  malformed URL. Consumer copies of the resolution helper can now
+  delete in favour of this one.
+- `dataknobs_common.testing.ensure_localstack_s3_bucket(bucket, endpoint=None, *, region="us-east-1")` —
+  async helper that idempotently creates an S3 bucket on a LocalStack
+  edge endpoint (head-then-create; swallows the
+  `BucketAlreadyOwnedByYou` / `BucketAlreadyExists` race a concurrent
+  setup may produce). Lazy-imports `aioboto3`; install the `sqs`
+  extra to pull it in.
+- `dataknobs_common.testing.localstack_fixtures` pytest11 plugin
+  (auto-discovered by any package depending on `dataknobs-common`):
+  `localstack_endpoint` (session-scoped str) and
+  `make_localstack_s3_bucket` (factory fixture). Consumers wire a
+  per-test bucket with
+  `yield from make_localstack_s3_bucket("my-bucket")`. The fixture
+  ensures the bucket exists before the test runs and yields a config
+  dict (`bucket`, `endpoint_url`, `region`, `access_key_id`,
+  `secret_access_key`) shaped for spread into a dataknobs S3 backend
+  constructor. No teardown — LocalStack persistence handles the
+  bucket's lifetime; tests still wipe object contents themselves.
+- `SqsEventBus.require_topic_attribute` constructor parameter
+  (single-topic bridge mode). When set to `False`, messages arriving
+  on the queue without the configured topic attribute are dispatched
+  to the bus's single subscription instead of being released back to
+  the queue. Use this mode for queues fed by AWS-native event sources
+  that cannot set arbitrary SQS message attributes (EventBridge → SQS
+  targets, S3 → SQS bucket notifications, raw SNS → SQS delivery).
+  The bus is dedicated to a single topic — `subscribe()` raises
+  `ValueError` if a second subscription is attempted in this mode.
+  Default remains `True` — existing consumers see no behaviour
+  change. Message bodies that are valid JSON but not
+  `Event.to_dict()`-shaped are delivered as synthesised
+  `Event(type=EventType.CUSTOM, topic=<the subscription's topic>,
+  payload=<decoded body>, event_id="sqs:<MessageId>",
+  metadata={"sqs_message_id": ..., "sqs_synthesised": True})` events
+  with one WARNING log per synthesis. The `event_id` is derived from
+  the stable SQS `MessageId` so handlers can key idempotency on it
+  across at-least-once redeliveries.
+
+### Changed
+- `is_localstack_available()` now delegates endpoint resolution to
+  `get_localstack_endpoint` and gains Docker-aware host detection.
+  Inside a container (`/.dockerenv` or `DOCKER_CONTAINER` set), with
+  no `LOCALSTACK_*` / `AWS_ENDPOINT_URL` env var configured, the
+  probe targets `localstack:4566` instead of `localhost:4566`.
+  Matches the existing precedent in `postgres_connection_params` /
+  `elasticsearch_connection_params`. All other env-driven paths are
+  unchanged.
+
 ## v1.3.13 - 2026-05-18
 
 ### Added

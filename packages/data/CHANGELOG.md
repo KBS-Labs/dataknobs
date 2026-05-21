@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+- **`TestS3Backend` LocalStack bucket provisioning** —
+  `tests/examples/test_vector_multi_backend.py::TestS3Backend` no
+  longer assumes `test-bucket` pre-exists on the LocalStack volume.
+  Both `test_s3_sync_backend` and `test_s3_async_backend` now depend
+  on the shared `make_localstack_s3_bucket` fixture from
+  `dataknobs_common.testing.localstack_fixtures`, which idempotently
+  creates the bucket on session entry. Inlined `localstack_host`
+  detection blocks removed in favour of the resolved
+  `endpoint_url` the fixture provides. Only affects opt-in
+  (`TEST_S3=true`) test runs.
+
 ## v0.4.19 - 2026-05-18
 
 ### Added

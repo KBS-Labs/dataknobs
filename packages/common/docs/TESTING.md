@@ -65,6 +65,97 @@ if is_redis_available(host="localhost", port=6379):
     print("Redis is available")
 ```
 
+### LocalStack
+
+`get_localstack_endpoint()` resolves the LocalStack edge endpoint as
+a fully-qualified URL — suitable for `endpoint_url=` in `boto3` /
+`aioboto3` clients — and shares the resolution chain with
+`is_localstack_available()` so the probe and the URL form cannot
+drift.
+
+```python
+from dataknobs_common.testing import (
+    get_localstack_endpoint,
+    is_localstack_available,
+    requires_localstack,
+)
+
+# URL form for SDK clients
+endpoint = get_localstack_endpoint()  # "http://localhost:4566"
+
+# Skip a test when LocalStack is not running
+@requires_localstack
+async def test_against_localstack():
+    import aioboto3
+    session = aioboto3.Session(region_name="us-east-1")
+    async with session.client("sqs", endpoint_url=endpoint) as sqs:
+        ...
+```
+
+Resolution order — highest priority first:
+
+1. Explicit `host` / `port` arguments (each independent).
+2. `LOCALSTACK_ENDPOINT` (full URL; scheme optional).
+3. `AWS_ENDPOINT_URL` (full URL; same scheme handling).
+4. `LOCALSTACK_HOST` + `LOCALSTACK_PORT` env vars.
+5. Default: `http://localhost:4566`, or `http://localstack:4566`
+   when running inside a Docker container (detected via
+   `/.dockerenv` or `DOCKER_CONTAINER`).
+
+#### S3 Bucket Provisioning Fixture
+
+For LocalStack S3 tests, the `make_localstack_s3_bucket` pytest11
+fixture idempotently ensures a named bucket exists before the test
+runs and yields a config dict shaped for the dataknobs S3 backends.
+Auto-discovered from `dataknobs-common` — no `conftest.py` import
+required.
+
+```python
+import pytest
+from dataknobs_common.testing import requires_localstack
+from dataknobs_data import AsyncDatabaseFactory
+
+
+@pytest.fixture
+def s3_test_bucket(make_localstack_s3_bucket):
+    """Ensure ``my-test-bucket`` exists on LocalStack for this test."""
+    yield from make_localstack_s3_bucket("my-test-bucket")
+
+
+@requires_localstack
+@pytest.mark.asyncio
+async def test_s3_roundtrip(s3_test_bucket):
+    db = AsyncDatabaseFactory().create(
+        backend="s3",
+        bucket=s3_test_bucket["bucket"],
+        endpoint_url=s3_test_bucket["endpoint_url"],
+    )
+    await db.connect()
+    try:
+        ...  # Use the database
+    finally:
+        await db.clear()  # Wipe object contents; bucket persists
+```
+
+The fixture does **not** delete the bucket on teardown — LocalStack
+persists it across the session and tests are expected to wipe their
+own object contents (typically via `db.clear()`). The factory pattern
+keeps the bucket name caller-controlled and works for both sync and
+async test bodies (the `asyncio.run` wrapping happens in the fixture
+setup phase, outside any per-test event loop).
+
+For a one-off, non-fixture flow, call the underlying async helper
+directly:
+
+```python
+from dataknobs_common.testing import ensure_localstack_s3_bucket
+
+await ensure_localstack_s3_bucket("my-bucket")  # idempotent
+```
+
+The helper lazy-imports `aioboto3`; install the `sqs` extra to pull
+it in.
+
 ---
 
 ## Pytest Markers
@@ -274,6 +365,14 @@ Elasticsearch fixtures read:
 - `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
 - `ELASTICSEARCH_PORT` — `9200`
 - `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+
+`get_localstack_endpoint` and `is_localstack_available` read:
+
+- `LOCALSTACK_ENDPOINT` — full URL; overrides host/port
+- `AWS_ENDPOINT_URL` — full URL fallback when `LOCALSTACK_ENDPOINT` is unset
+- `LOCALSTACK_HOST` — `localstack` in Docker, `localhost` otherwise
+- `LOCALSTACK_PORT` — `4566`
+- `DOCKER_CONTAINER` — any truthy value forces the `localstack` host default
 
 Docker detection also checks for `/.dockerenv`.
 

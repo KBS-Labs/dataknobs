@@ -190,17 +190,96 @@ def is_postgres_available(
         return False
 
 
+def get_localstack_endpoint(
+    host: str | None = None, port: int | None = None
+) -> str:
+    """Resolve the LocalStack edge endpoint URL.
+
+    Returns the URL form (e.g. ``"http://localhost:4566"``) suitable
+    for passing as ``endpoint_url=`` to ``boto3`` / ``aioboto3``
+    clients. Pairs with :func:`is_localstack_available`, which uses
+    the same resolution chain for its TCP probe.
+
+    Resolution order — highest priority first:
+
+    1. Explicit ``host``/``port`` args (each independent — one may be
+       passed without the other).
+    2. ``LOCALSTACK_ENDPOINT`` (full URL; scheme optional, normalized
+       to ``http://`` if absent).
+    3. ``AWS_ENDPOINT_URL`` (full URL; same scheme handling).
+    4. ``LOCALSTACK_HOST`` + ``LOCALSTACK_PORT`` env vars.
+    5. Default: ``http://localhost:4566``, or
+       ``http://localstack:4566`` when running inside a Docker
+       container (detected via ``/.dockerenv`` or ``DOCKER_CONTAINER``
+       env var — same precedent as
+       :func:`postgres_connection_params` and
+       :func:`elasticsearch_connection_params`).
+
+    A scheme-less ``LOCALSTACK_ENDPOINT`` / ``AWS_ENDPOINT_URL``
+    (e.g. ``host:4566``) fails ``urlparse`` host/port extraction and
+    falls through to the env / default arms, so the returned URL is
+    always well-formed.
+
+    Args:
+        host: Override LocalStack host (skips env resolution for the
+            host component).
+        port: Override LocalStack edge port (skips env resolution for
+            the port component).
+
+    Returns:
+        Fully-qualified endpoint URL, scheme included.
+    """
+    from urllib.parse import urlparse
+
+    scheme = "http"
+
+    if host is None or port is None:
+        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
+            "AWS_ENDPOINT_URL"
+        )
+        if endpoint:
+            parsed = urlparse(endpoint)
+            # Only honor the env-supplied scheme when the URL parses as
+            # a proper URL (i.e. a hostname is recoverable). For a
+            # scheme-less value like ``host:4566`` urlparse returns
+            # ``scheme="host"`` / ``hostname=None`` — fall through to
+            # the defaults rather than emit a malformed URL.
+            if parsed.hostname:
+                if host is None:
+                    host = parsed.hostname
+                if port is None and parsed.port:
+                    port = parsed.port
+                if parsed.scheme:
+                    scheme = parsed.scheme
+
+        if host is None:
+            env_host = os.environ.get("LOCALSTACK_HOST")
+            if env_host:
+                host = env_host
+            elif os.path.exists("/.dockerenv") or os.environ.get(
+                "DOCKER_CONTAINER"
+            ):
+                host = "localstack"
+            else:
+                host = "localhost"
+
+        if port is None:
+            port = int(os.environ.get("LOCALSTACK_PORT", "4566"))
+
+    return f"{scheme}://{host}:{port}"
+
+
 def is_localstack_available(
     host: str | None = None, port: int | None = None
 ) -> bool:
     """Check if a LocalStack edge endpoint is reachable.
 
-    Resolution order for the endpoint, highest priority first:
-    explicit ``host``/``port`` args, then ``LOCALSTACK_ENDPOINT`` /
-    ``AWS_ENDPOINT_URL`` (a full URL), then ``LOCALSTACK_HOST`` /
-    ``LOCALSTACK_PORT``, finally ``localhost:4566``. This mirrors
-    :func:`is_redis_available` so the check works both on the host and
-    inside Docker where LocalStack runs on a network hostname.
+    Uses :func:`get_localstack_endpoint` to resolve the
+    ``(host, port)`` pair so the probe and the URL form share a
+    single source of truth. See that function's docstring for the
+    resolution chain — including the Docker-aware default that picks
+    ``localstack:4566`` inside a container and ``localhost:4566``
+    elsewhere.
 
     Any connection error returns ``False`` (skip, never fail) — the
     same fail-soft contract as the other service probes.
@@ -212,38 +291,99 @@ def is_localstack_available(
     Returns:
         True if the LocalStack edge port accepts a TCP connection.
     """
-    import os
     from urllib.parse import urlparse
 
-    if host is None or port is None:
-        endpoint = os.environ.get("LOCALSTACK_ENDPOINT") or os.environ.get(
-            "AWS_ENDPOINT_URL"
-        )
-        if endpoint:
-            parsed = urlparse(endpoint)
-            host = host if host is not None else (parsed.hostname or "localhost")
-            port = port if port is not None else (parsed.port or 4566)
-        else:
-            host = (
-                host
-                if host is not None
-                else os.environ.get("LOCALSTACK_HOST", "localhost")
-            )
-            port = (
-                port
-                if port is not None
-                else int(os.environ.get("LOCALSTACK_PORT", "4566"))
-            )
+    parsed = urlparse(get_localstack_endpoint(host, port))
+    probe_host = parsed.hostname or "localhost"
+    probe_port = parsed.port or 4566
     try:
         import socket
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1)
-        result = sock.connect_ex((host, port))
+        result = sock.connect_ex((probe_host, probe_port))
         sock.close()
         return result == 0
     except OSError:
         return False
+
+
+async def ensure_localstack_s3_bucket(
+    bucket: str,
+    endpoint: str | None = None,
+    *,
+    region: str = "us-east-1",
+) -> None:
+    """Idempotently create an S3 bucket on LocalStack.
+
+    Designed for integration tests that target the dataknobs dev
+    LocalStack container. ``aioboto3`` is lazy-imported so the base
+    install of ``dataknobs-common`` stays lean (same pattern as
+    :class:`~dataknobs_common.events.SqsEventBus`); install the ``sqs``
+    extra to pull it in.
+
+    The helper is safe to call from any test setup:
+
+    - ``head_bucket`` is attempted first; on success the bucket already
+      exists and the helper returns immediately.
+    - ``NoSuchBucket`` / ``404`` triggers ``create_bucket``.
+    - ``BucketAlreadyOwnedByYou`` and ``BucketAlreadyExists`` raised by
+      the create call (e.g. a concurrent setup racing this one) are
+      swallowed — by the time the call returns, the bucket exists.
+
+    Args:
+        bucket: Bucket name to ensure exists.
+        endpoint: LocalStack endpoint URL. Defaults to
+            :func:`get_localstack_endpoint` (the same resolution chain
+            used by :func:`is_localstack_available`).
+        region: AWS region to create the bucket in. ``us-east-1`` is
+            the LocalStack default and the only region that does NOT
+            require a ``CreateBucketConfiguration`` block.
+
+    Raises:
+        ClientError: For unexpected S3 errors (network failures,
+            permission denied on configured non-LocalStack endpoints).
+            ``NoSuchBucket`` and the two "already exists" variants are
+            handled internally.
+    """
+    import aioboto3
+    from botocore.exceptions import ClientError
+
+    if endpoint is None:
+        endpoint = get_localstack_endpoint()
+
+    session = aioboto3.Session()
+    async with session.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    ) as s3:
+        try:
+            await s3.head_bucket(Bucket=bucket)
+            return
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            # head_bucket reports a missing bucket as 404 / NoSuchBucket
+            # depending on credentials and the S3 implementation. Treat
+            # both as "create needed". Any other ClientError propagates.
+            if code not in {"404", "NoSuchBucket", "NotFound"}:
+                raise
+
+        try:
+            await s3.create_bucket(Bucket=bucket)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            # A concurrent setup may have won the race between the
+            # head_bucket above and our create_bucket here. Both
+            # variants mean the bucket exists and is usable, which is
+            # the contract this helper provides.
+            if code not in {
+                "BucketAlreadyOwnedByYou",
+                "BucketAlreadyExists",
+            }:
+                raise
 
 
 def is_package_available(package_name: str) -> bool:
