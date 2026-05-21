@@ -626,7 +626,8 @@ class SqsEventBus:
                 type(decoded).__name__,
             )
 
-        subscriptions = list(self._subscriptions.values())
+        async with self._lock:
+            subscriptions = list(self._subscriptions.values())
         any_failed = False
         for sub in subscriptions:
             try:

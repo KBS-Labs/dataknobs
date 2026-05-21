@@ -283,11 +283,11 @@ infrastructure wires it that way).
 ```python
 bus = create_event_bus({
     "backend": "sqs",
-    "queue_url": "https://sqs.us-east-1.amazonaws.com/123/knowledge-trigger",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123/events-bridge",
     "region": "us-east-1",
     "require_topic_attribute": False,   # accept attribute-less messages
 })
-await bus.subscribe("knowledge:trigger", handler)
+await bus.subscribe("events:created", handler)
 ```
 
 Behaviour matrix:

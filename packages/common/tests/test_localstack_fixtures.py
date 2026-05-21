@@ -299,9 +299,14 @@ async def test_explicit_region_is_forwarded(monkeypatch: Any) -> None:
 
 
 def test_localstack_endpoint_fixture_resolves(localstack_endpoint: str) -> None:
-    """Session fixture returns a well-formed endpoint URL."""
+    """Session fixture returns a well-formed endpoint URL.
+
+    Only checks the scheme — the port may be overridden via env
+    (``LOCALSTACK_ENDPOINT`` / ``LOCALSTACK_PORT``), so this test stays
+    portable across CI environments. Default-port behaviour is covered
+    by the env-controlled unit tests in ``test_testing_localstack.py``.
+    """
     assert localstack_endpoint.startswith(("http://", "https://"))
-    assert localstack_endpoint.endswith((":4566", ":4566/"))  # default port
 
 
 def test_make_localstack_s3_bucket_yields_config(
@@ -328,8 +333,8 @@ def test_make_localstack_s3_bucket_yields_config(
         assert config["bucket"] == "test-bucket"
         assert config["endpoint_url"].startswith("http")
         assert config["region"] == "us-east-1"
-        assert config["access_key_id"] == "test"
-        assert config["secret_access_key"] == "test"
+        assert config["aws_access_key_id"] == "test"
+        assert config["aws_secret_access_key"] == "test"
         assert len(calls) == 1
         assert calls[0][0] == "test-bucket"
         assert calls[0][1] == config["endpoint_url"]

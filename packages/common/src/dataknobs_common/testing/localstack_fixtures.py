@@ -79,8 +79,10 @@ try:
         - ``bucket``: the bucket name (as passed)
         - ``endpoint_url``: the LocalStack edge URL
         - ``region``: ``"us-east-1"`` (LocalStack default)
-        - ``access_key_id`` / ``secret_access_key``: ``"test"`` /
-          ``"test"`` (LocalStack accepts any credentials)
+        - ``aws_access_key_id`` / ``aws_secret_access_key``: ``"test"``
+          / ``"test"`` (LocalStack accepts any credentials). Canonical
+          boto form — ``S3SessionConfig.from_dict`` also accepts the
+          legacy short aliases ``access_key_id`` / ``secret_access_key``.
 
         No teardown — the bucket persists for the LocalStack session.
         Tests should wipe their own object contents on teardown (e.g.
@@ -105,8 +107,8 @@ try:
                 "bucket": bucket,
                 "endpoint_url": localstack_endpoint,
                 "region": "us-east-1",
-                "access_key_id": "test",
-                "secret_access_key": "test",
+                "aws_access_key_id": "test",
+                "aws_secret_access_key": "test",
             }
 
         return factory
