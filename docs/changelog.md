@@ -5,6 +5,46 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-20
+
+### dataknobs-common [1.3.14]
+
+#### Added
+- add ensure_localstack_s3_bucket helper and pytest11 fixture plugin
+- add SqsEventBus single-topic bridge mode
+
+#### Fixed
+- expose LocalStack endpoint resolver
+
+### dataknobs-xization [1.3.7]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-data [0.4.20]
+
+#### Added
+- add ensure_localstack_s3_bucket helper and pytest11 fixture plugin
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-fsm [0.1.21]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-legacy [0.1.6]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-llm [0.5.14]
+
+#### Changed
+- bumped versions, updated release notes
+
+
 ## Release - 2026-05-19
 
 ### dataknobs-bots [0.6.22]

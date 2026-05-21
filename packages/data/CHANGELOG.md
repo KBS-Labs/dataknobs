@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.4.20 - 2026-05-20
+
 ### Fixed
 - **`TestS3Backend` LocalStack bucket provisioning** —
   `tests/examples/test_vector_multi_backend.py::TestS3Backend` no

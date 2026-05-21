@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.3.14 - 2026-05-20
+
 ### Added
 - `dataknobs_common.testing.get_localstack_endpoint(host=None, port=None) -> str` —
   public helper that resolves the LocalStack edge endpoint URL
