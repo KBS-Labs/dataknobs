@@ -61,6 +61,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .bus import EventBus, create_event_bus
+from .config import (
+    EventBusConfig,
+    MemoryEventBusConfig,
+    PostgresEventBusConfig,
+    RedisEventBusConfig,
+    SqsEventBusConfig,
+)
 from .memory import InMemoryEventBus
 from .registry import EventBusFactory, event_bus_backends
 from .types import Event, EventType, Subscription
@@ -80,6 +87,12 @@ __all__ = [
     "Event",
     "EventType",
     "Subscription",
+    # Structured config dataclasses
+    "EventBusConfig",
+    "MemoryEventBusConfig",
+    "PostgresEventBusConfig",
+    "RedisEventBusConfig",
+    "SqsEventBusConfig",
     # Implementations
     "InMemoryEventBus",
     "SqsEventBus",

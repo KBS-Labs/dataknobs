@@ -8,6 +8,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from .config import MemoryEventBusConfig
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
@@ -61,13 +62,37 @@ class InMemoryEventBus:
         ```
     """
 
-    def __init__(self) -> None:
-        """Initialize the in-memory event bus."""
+    def __init__(
+        self, config: MemoryEventBusConfig | None = None
+    ) -> None:
+        """Initialize the in-memory event bus.
+
+        Args:
+            config: Optional typed configuration. Today
+                :class:`MemoryEventBusConfig` has no fields; the
+                parameter exists for structural symmetry with the other
+                event-bus implementations.
+        """
+        self._config = config if config is not None else MemoryEventBusConfig()
         self._subscriptions: dict[str, Subscription] = {}
         self._topic_subscribers: dict[str, set[str]] = {}  # topic -> subscription_ids
         self._pattern_subscribers: list[tuple[str, str]] = []  # (pattern, sub_id)
         self._lock = asyncio.Lock()
         self._connected = False
+
+    @classmethod
+    def from_config(
+        cls, config: dict[str, Any] | MemoryEventBusConfig
+    ) -> InMemoryEventBus:
+        """Construct from a config dict or typed config."""
+        if isinstance(config, dict):
+            config = MemoryEventBusConfig.from_dict(config)
+        return cls(config)
+
+    @property
+    def config(self) -> MemoryEventBusConfig:
+        """Read-only view of the construction parameters."""
+        return self._config
 
     async def connect(self) -> None:
         """Initialize the event bus.

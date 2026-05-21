@@ -317,6 +317,53 @@ discarded as poison (same as the default mode).
 from dataknobs_common.events import SqsEventBus
 ```
 
+### Structured config (advanced)
+
+Every event bus accepts a typed `<Backend>EventBusConfig` dataclass
+alongside the dict-based factory path. The two shapes are
+equivalent; choose based on call site:
+
+| Use case | Shape |
+|---|---|
+| YAML/JSON config files, environment-driven setup | `create_event_bus({"backend": "sqs", ...})` (dict) |
+| Type-checked construction in Python code | `SqsEventBus(SqsEventBusConfig(...))` (typed) |
+| Mixed (test fixtures, programmatic edits) | `SqsEventBus.from_config({...})` (factory classmethod) |
+
+```python
+from dataknobs_common.events import (
+    SqsEventBus,
+    SqsEventBusConfig,
+)
+
+# Typed construction — mypy/IDE-checked.
+config = SqsEventBusConfig(
+    queue_url="https://sqs.us-east-1.amazonaws.com/123/events",
+    region="us-east-1",
+    require_topic_attribute=False,
+)
+bus = SqsEventBus(config)
+assert bus.require_topic_attribute is False
+assert bus.config is config  # frozen dataclass — read-only view
+
+# from_config — accepts either a dict or a typed config.
+bus = SqsEventBus.from_config({
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123/events",
+    "require_topic_attribute": False,
+})
+
+# Loose-kwarg path remains for backward compatibility.
+bus = SqsEventBus(queue_url="...", require_topic_attribute=False)
+```
+
+Available dataclasses: `MemoryEventBusConfig`, `RedisEventBusConfig`,
+`PostgresEventBusConfig`, `SqsEventBusConfig` (all exported from
+`dataknobs_common.events`). Each ships a `from_dict(config_dict)`
+classmethod so consumer code that already builds dicts can convert
+without losing typing downstream.
+
+Mixing a typed config with loose kwargs in the same call raises
+`TypeError` — pass one shape per construction.
+
 ### Custom Backends (Plugin Registry)
 
 `create_event_bus()` resolves the `backend` key through the

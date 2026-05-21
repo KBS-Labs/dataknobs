@@ -3,11 +3,12 @@
 
 Planning identifiers (``Item NNN``, ``RCN``, ``Change C``, ``Bug BNN``,
 ``PR #NNN``, ``review #XN``, ``consumer-gaps``, plan ``Phase 0``,
-plan-document section refs like ``02b §5.2`` / ``02b P5a``, etc.)
-must never appear in committed package source or tests: they render into
-published API docs and IDE hovers and mean nothing to consumers.  Item 134
-performed the one-time cleanup; this script is the recurring guard that
-prevents reintroduction.
+plan-document section refs like ``02b §5.2`` / ``02b P5a``, bare-number
+tracker references like ``pre-141`` / ``the 141 failure`` / ``as 141``,
+etc.) must never appear in committed package source or tests: they render
+into published API docs and IDE hovers and mean nothing to consumers.
+A prior one-time cleanup scrubbed the pre-existing leakage; this script
+is the recurring guard that prevents reintroduction.
 
 Scope: ``packages/*/src/**/*.py`` and ``packages/*/tests/**/*.py``.
 
@@ -57,6 +58,18 @@ LABEL_PATTERN = re.compile(
     # Unambiguous: the ``§``/``P<digit>`` suffix never collides with
     # format specs like ``{i:03d}`` (no space + section marker).
     r"|\b0[0-9][a-z] (?:§|P[0-9])"
+    # Bare-number tracker references that slipped past the ``Item NN``
+    # form: ``pre-141`` / ``post-141`` (hyphenated qualifier),
+    # ``the 141 failure`` / ``the 141 drift`` (definite article + tracker
+    # noun), and the trailing form ``... drift mode as 141`` (tracker
+    # noun + ``as``/``like`` + number).  The tracker-noun set is closed
+    # (failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug) to avoid
+    # false-positives like ``reports a missing bucket as 404`` (HTTP
+    # status), ``the 200 response``, or ``the 30-second timeout``.
+    r"|\b(?:pre|post)-[0-9]{2,3}\b"
+    r"|\b[Tt]he [0-9]{2,3} (?:failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug)\b"
+    r"|\b(?:failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug)s? (?:as|like) [0-9]{2,3}\b"
+    r"|\bPre-[0-9]{2,3} (?:call|ctor)\b"
 )
 
 

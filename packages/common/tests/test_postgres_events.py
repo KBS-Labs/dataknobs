@@ -108,7 +108,7 @@ class TestChannelPrefixSanitization:
             connection_string="postgresql://unused",
             channel_prefix="myapp",
         )
-        assert bus._channel_prefix == "myapp"
+        assert bus.config.channel_prefix == "myapp"
 
     def test_prefix_with_underscores(self):
         """Test prefix with underscores is accepted."""
@@ -116,7 +116,7 @@ class TestChannelPrefixSanitization:
             connection_string="postgresql://unused",
             channel_prefix="my_app_events",
         )
-        assert bus._channel_prefix == "my_app_events"
+        assert bus.config.channel_prefix == "my_app_events"
 
     def test_sql_injection_in_prefix_stripped(self):
         """Bug: SQL injection via channel_prefix was not prevented.
@@ -128,9 +128,9 @@ class TestChannelPrefixSanitization:
             connection_string="postgresql://unused",
             channel_prefix="foo'; DROP TABLE users --",
         )
-        assert "'" not in bus._channel_prefix
-        assert ";" not in bus._channel_prefix
-        assert " " not in bus._channel_prefix
+        assert "'" not in bus.config.channel_prefix
+        assert ";" not in bus.config.channel_prefix
+        assert " " not in bus.config.channel_prefix
 
     def test_empty_prefix_after_sanitization_raises(self):
         """Test that a prefix producing an empty result raises ValueError."""
@@ -173,7 +173,7 @@ class TestConfigShapeSupport:
 
     def test_accepts_positional_connection_string(self):
         bus = PostgresEventBus("postgresql://u:p@h/db")
-        assert bus._connection_string == "postgresql://u:p@h/db"
+        assert bus.config.connection_string == "postgresql://u:p@h/db"
 
     def test_accepts_individual_keys_via_config(self):
         bus = PostgresEventBus(
@@ -186,7 +186,7 @@ class TestConfigShapeSupport:
             }
         )
         assert (
-            bus._connection_string
+            bus.config.connection_string
             == "postgresql://u:p@h:5433/db"
         )
 
@@ -196,7 +196,7 @@ class TestConfigShapeSupport:
         )
         bus = PostgresEventBus(config={})
         assert (
-            bus._connection_string == "postgresql://u:p@env-h/env-db"
+            bus.config.connection_string == "postgresql://u:p@env-h/env-db"
         )
 
     def test_accepts_postgres_env_vars(self, monkeypatch):
@@ -205,8 +205,8 @@ class TestConfigShapeSupport:
         monkeypatch.setenv("POSTGRES_USER", "env-u")
         monkeypatch.setenv("POSTGRES_PASSWORD", "env-p")
         bus = PostgresEventBus(config={})
-        assert "env-h" in bus._connection_string
-        assert "env-db" in bus._connection_string
+        assert "env-h" in bus.config.connection_string
+        assert "env-db" in bus.config.connection_string
 
     def test_raises_when_nothing_configured(self):
         from dataknobs_common.exceptions import ConfigurationError
@@ -228,8 +228,8 @@ class TestConfigShapeSupport:
                 "channel_prefix": "myapp",
             }
         )
-        assert bus._connection_string == "postgresql://u:p@h:5432/db"
-        assert bus._channel_prefix == "myapp"
+        assert bus.config.connection_string == "postgresql://u:p@h:5432/db"
+        assert bus.config.channel_prefix == "myapp"
 
 
 class TestPublishSqlConstruction:

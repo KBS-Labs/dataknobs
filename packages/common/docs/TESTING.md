@@ -8,6 +8,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Pytest Markers](#pytest-markers)
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
+- [Factory Parity Helpers](#factory-parity-helpers)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
 
@@ -324,6 +325,101 @@ def test_json_processing(tmp_path):
     # files contains paths to two JSON documents
     assert len(files) == 2
 ```
+
+---
+
+## Factory Parity Helpers
+
+AST-based drift guards that pin the parity between a registry's factory
+function and its target class's constructor. Use them in a per-registry
+parity test to catch the original failure mode that motivated the
+helpers: a factory that enumerates a fixed allowlist of kwargs and
+silently drops the next ctor knob added to the target class.
+
+All three helpers are import-only — they read source via `inspect` and
+parse it with `ast`, so backends with optional runtime dependencies
+(asyncpg, aioboto3, ...) can be parity-tested without those
+dependencies installed.
+
+### `assert_dataclass_config_matches_ctor`
+
+Use when the ctor consumes a typed `@dataclass` config. Asserts every
+dataclass field is a ctor `__init__` parameter, and every ctor
+parameter (minus `self`/`config`/`*args`/`**kwargs`) is a dataclass
+field.
+
+```python
+from dataknobs_common.testing import assert_dataclass_config_matches_ctor
+from dataknobs_common.events import RedisEventBusConfig
+from dataknobs_common.events.redis import RedisEventBus
+
+def test_redis_dataclass_matches_ctor() -> None:
+    assert_dataclass_config_matches_ctor(RedisEventBusConfig, RedisEventBus)
+```
+
+Pass `ignore_params={...}` for ctor params that are intentionally not
+config fields (internal-only kwargs).
+
+### `assert_factory_kwargs_match_ctor`
+
+Use when a registry entry is a free-function factory that names its
+kwargs. AST-walks the factory body for `Target(...)` or
+`Target.from_config(...)` call sites and asserts:
+
+1. Every kwarg the factory passes is a valid parameter of `Target.__init__`
+2. Every `Target.__init__` parameter is forwarded by the factory (or
+   explicitly ignored)
+
+The check is symmetric — it catches both directions of drift (factory
+passing an unknown kwarg, factory missing a known kwarg). When the
+factory delegates to `from_config`, the "missing kwargs" check is
+satisfied automatically (the dataclass is the kwarg-coverage source of
+truth) — pair it with `assert_dataclass_config_matches_ctor`.
+
+```python
+from dataknobs_common.testing import assert_factory_kwargs_match_ctor
+from dataknobs_common.events.registry import _create_redis_bus
+from dataknobs_common.events.redis import RedisEventBus
+
+def test_redis_factory_kwargs_match_ctor() -> None:
+    assert_factory_kwargs_match_ctor(_create_redis_bus, RedisEventBus)
+```
+
+Pass `ignore_kwargs={...}` for required positionals the consumer is
+expected to supply, or knobs without a sensible config-dict default.
+
+### `assert_ctor_reads_documented_keys`
+
+Use when the ctor takes a config dict and reads keys via
+`config.get("X")`, `config["X"]`, or `config.pop("X")` inside its body
+(vector stores, postgres lock, data backends post-merge-into-base-init).
+Asserts every documented key is read somewhere in the ctor body.
+
+```python
+from dataknobs_common.testing import assert_ctor_reads_documented_keys
+from dataknobs_data.vector.stores.pgvector import PgVectorStore
+
+def test_pgvector_reads_documented_keys() -> None:
+    assert_ctor_reads_documented_keys(
+        PgVectorStore,
+        documented_keys={"connection_string", "table", "dimensions"},
+    )
+```
+
+Pass `config_param="..."` to name the dict parameter when it isn't the
+default `"config"`.
+
+### When to Use Which
+
+| Factory pattern | Helper |
+|---|---|
+| Ctor consumes a typed `@dataclass` config | `assert_dataclass_config_matches_ctor` |
+| Factory names kwargs in its body — `cls(k=cfg.get("k"))` or `cls.from_config(cfg)` | `assert_factory_kwargs_match_ctor` |
+| Ctor reads `config.get("X")` / `config["X"]` directly | `assert_ctor_reads_documented_keys` |
+
+When a registry uses the dataclass + `from_config` pattern, pair the
+first two — together they pin both the dataclass↔ctor parity and the
+factory↔ctor parity, so drift in either direction fails the test.
 
 ---
 

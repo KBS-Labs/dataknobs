@@ -418,7 +418,7 @@ class TestSqsEventBusSingleTopicMode:
         """Regression guard: the new param defaults to today's behaviour."""
         url = await make_queue()
         bus = _make_bus(url)
-        assert bus._require_topic_attribute is True
+        assert bus.require_topic_attribute is True
 
     @pytest.mark.asyncio
     async def test_attribute_required_default_drops_attribute_less_message(

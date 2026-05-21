@@ -28,12 +28,25 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ._resilient_loop import run_supervised_loop
+from .config import SqsEventBusConfig
 from .types import Event, EventType, Subscription
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_UNSET: Any = object()
+"""Sentinel for kwarg-vs-config arbitration in ``SqsEventBus.__init__``.
+
+The per-kwarg annotations widen to ``T | Any`` so the sentinel default
+is valid for the type checker. This intentionally trades narrow mypy
+coverage on the loose-kwarg path for a single ctor that accepts both
+the typed-config and legacy-kwarg shapes; the typed-config path
+(``from_config(SqsEventBusConfig(...))``) keeps full type narrowing.
+``@overload`` stubs presenting the two clean shapes are a future
+improvement for IDE discoverability.
+"""
 
 
 class SqsEventBus:
@@ -108,19 +121,35 @@ class SqsEventBus:
 
     def __init__(
         self,
-        queue_url: str,
-        region: str | None = None,
-        endpoint_url: str | None = None,
-        wait_time_seconds: int = 20,
-        visibility_timeout: int = 60,
-        topic_attribute: str = "topic",
-        require_topic_attribute: bool = True,
-        aws_access_key_id: str | None = None,
-        aws_secret_access_key: str | None = None,
+        config: SqsEventBusConfig | None = None,
+        *,
+        queue_url: str | Any = _UNSET,
+        region: str | None | Any = _UNSET,
+        endpoint_url: str | None | Any = _UNSET,
+        wait_time_seconds: int | Any = _UNSET,
+        visibility_timeout: int | Any = _UNSET,
+        topic_attribute: str | Any = _UNSET,
+        require_topic_attribute: bool | Any = _UNSET,
+        aws_access_key_id: str | None | Any = _UNSET,
+        aws_secret_access_key: str | None | Any = _UNSET,
     ) -> None:
         """Initialize the SQS event bus.
 
+        Two construction shapes are supported:
+
+        - **Typed config** (recommended): pass a
+          :class:`SqsEventBusConfig` instance positionally. Loose kwargs
+          must not be supplied alongside it.
+        - **Loose kwargs** (backward-compatible): pass each parameter
+          as a keyword (``queue_url=...``, etc.). Internally constructed
+          into a :class:`SqsEventBusConfig`.
+
+        Mixing the two shapes raises ``TypeError`` rather than letting
+        precedence be implicit.
+
         Args:
+            config: Optional pre-built typed configuration. When
+                provided, loose kwargs must NOT be passed.
             queue_url: Full SQS queue URL (required, non-empty). A URL
                 ending in ``.fifo`` is treated as a FIFO queue —
                 ``MessageGroupId``/``MessageDeduplicationId`` are set on
@@ -172,19 +201,40 @@ class SqsEventBus:
 
         Raises:
             ValueError: If ``queue_url`` is empty.
+            TypeError: If ``config`` and loose kwargs are both
+                supplied — the call shape is ambiguous.
         """
-        if not queue_url:
-            raise ValueError("SqsEventBus requires a non-empty queue_url")
-        self._queue_url = queue_url
-        self._region = region
-        self._endpoint_url = endpoint_url
-        self._wait_time_seconds = wait_time_seconds
-        self._visibility_timeout = visibility_timeout
-        self._topic_attribute = topic_attribute
-        self._require_topic_attribute = require_topic_attribute
-        self._aws_access_key_id = aws_access_key_id
-        self._aws_secret_access_key = aws_secret_access_key
-        self._is_fifo = queue_url.endswith(".fifo")
+        loose_kwargs = {
+            "queue_url": queue_url,
+            "region": region,
+            "endpoint_url": endpoint_url,
+            "wait_time_seconds": wait_time_seconds,
+            "visibility_timeout": visibility_timeout,
+            "topic_attribute": topic_attribute,
+            "require_topic_attribute": require_topic_attribute,
+            "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key,
+        }
+        supplied_kwargs = {
+            k: v for k, v in loose_kwargs.items() if v is not _UNSET
+        }
+
+        if config is not None:
+            if supplied_kwargs:
+                raise TypeError(
+                    "SqsEventBus: cannot mix `config` with loose kwargs "
+                    f"(also supplied: {sorted(supplied_kwargs)}). Pass "
+                    "either a SqsEventBusConfig or the individual kwargs."
+                )
+            self._config = config
+        else:
+            # Route loose kwargs through ``from_dict`` so that classmethod
+            # is the single source of truth for kwarg/dict → typed
+            # translation (defaults live in one place, structurally).
+            self._config = SqsEventBusConfig.from_dict(supplied_kwargs)
+        # __post_init__ has already validated queue_url; mirror the
+        # historical error class for direct construction without config.
+        self._is_fifo = self._config.queue_url.endswith(".fifo")
 
         self._session: Any = None  # aioboto3.Session
         self._client: Any = None  # aiobotocore SQS client
@@ -194,6 +244,46 @@ class SqsEventBus:
         self._lock = asyncio.Lock()
         self._connected = False
         self._running = False
+
+    @classmethod
+    def from_config(
+        cls, config: dict[str, Any] | SqsEventBusConfig
+    ) -> SqsEventBus:
+        """Construct from a config dict or typed :class:`SqsEventBusConfig`.
+
+        The recommended programmatic-construction entry point alongside
+        the typed-config and loose-kwarg ``__init__`` shapes.
+        :func:`create_event_bus` is implemented in terms of this method
+        so every config-dict path runs through the dataclass.
+        """
+        if isinstance(config, dict):
+            config = SqsEventBusConfig.from_dict(config)
+        return cls(config)
+
+    @property
+    def config(self) -> SqsEventBusConfig:
+        """Read-only view of the construction parameters.
+
+        ``SqsEventBusConfig`` is a frozen dataclass — runtime mutation
+        is intentionally unsupported. Use this for full-surface
+        introspection; use :attr:`require_topic_attribute` for the
+        single most commonly inspected knob.
+        """
+        return self._config
+
+    @property
+    def require_topic_attribute(self) -> bool:
+        """Whether attribute-less messages release back to the queue.
+
+        ``True`` (default): attribute-less messages are released back to
+        the queue (multi-topic safety mode). ``False`` (single-topic
+        bridge mode): they are dispatched to the bus's single
+        subscription instead. See :meth:`__init__` for the full
+        behaviour matrix.
+
+        Shortcut for ``bus.config.require_topic_attribute``.
+        """
+        return self._config.require_topic_attribute
 
     def _session_kwargs(self) -> dict[str, Any]:
         """Build ``aioboto3.Session`` kwargs.
@@ -205,11 +295,11 @@ class SqsEventBus:
         depend on a higher one.
         """
         kwargs: dict[str, Any] = {}
-        if self._region:
-            kwargs["region_name"] = self._region
-        if self._aws_access_key_id and self._aws_secret_access_key:
-            kwargs["aws_access_key_id"] = self._aws_access_key_id
-            kwargs["aws_secret_access_key"] = self._aws_secret_access_key
+        if self._config.region:
+            kwargs["region_name"] = self._config.region
+        if self._config.aws_access_key_id and self._config.aws_secret_access_key:
+            kwargs["aws_access_key_id"] = self._config.aws_access_key_id
+            kwargs["aws_secret_access_key"] = self._config.aws_secret_access_key
         return kwargs
 
     def _client_kwargs(self) -> dict[str, Any]:
@@ -224,12 +314,12 @@ class SqsEventBus:
         kwargs: dict[str, Any] = {
             "config": Config(
                 connect_timeout=10,
-                read_timeout=self._wait_time_seconds + 10,
+                read_timeout=self._config.wait_time_seconds + 10,
                 retries={"max_attempts": 3, "mode": "standard"},
             )
         }
-        if self._endpoint_url:
-            kwargs["endpoint_url"] = self._endpoint_url
+        if self._config.endpoint_url:
+            kwargs["endpoint_url"] = self._config.endpoint_url
         return kwargs
 
     async def connect(self) -> None:
@@ -262,7 +352,7 @@ class SqsEventBus:
             self._running = True
             logger.info(
                 "SqsEventBus connected to queue %s (fifo=%s)",
-                self._queue_url,
+                self._config.queue_url,
                 self._is_fifo,
             )
 
@@ -287,7 +377,7 @@ class SqsEventBus:
             self._session = None
             self._subscriptions.clear()
             self._connected = False
-            logger.info("SqsEventBus closed for queue %s", self._queue_url)
+            logger.info("SqsEventBus closed for queue %s", self._config.queue_url)
 
     async def publish(self, topic: str, event: Event) -> None:
         """Publish an event via ``SendMessage``.
@@ -308,10 +398,10 @@ class SqsEventBus:
             raise RuntimeError("SqsEventBus not connected")
 
         params: dict[str, Any] = {
-            "QueueUrl": self._queue_url,
+            "QueueUrl": self._config.queue_url,
             "MessageBody": json.dumps(event.to_dict()),
             "MessageAttributes": {
-                self._topic_attribute: {
+                self._config.topic_attribute: {
                     "StringValue": topic,
                     "DataType": "String",
                 }
@@ -326,7 +416,7 @@ class SqsEventBus:
             "Published event %s to topic %s (queue=%s)",
             event.event_id[:8],
             topic,
-            self._queue_url,
+            self._config.queue_url,
         )
 
     async def subscribe(
@@ -383,7 +473,7 @@ class SqsEventBus:
 
         async with self._lock:
             if (
-                not self._require_topic_attribute
+                not self._config.require_topic_attribute
                 and self._subscriptions
             ):
                 existing_topics = sorted(
@@ -406,7 +496,7 @@ class SqsEventBus:
             "Subscribed %s to topic %s (queue=%s)",
             subscription_id[:8],
             topic,
-            self._queue_url,
+            self._config.queue_url,
         )
         return subscription
 
@@ -438,11 +528,11 @@ class SqsEventBus:
 
         async def _one() -> None:
             response = await self._client.receive_message(
-                QueueUrl=self._queue_url,
+                QueueUrl=self._config.queue_url,
                 MaxNumberOfMessages=10,
-                WaitTimeSeconds=self._wait_time_seconds,
-                VisibilityTimeout=self._visibility_timeout,
-                MessageAttributeNames=[self._topic_attribute],
+                WaitTimeSeconds=self._config.wait_time_seconds,
+                VisibilityTimeout=self._config.visibility_timeout,
+                MessageAttributeNames=[self._config.topic_attribute],
             )
             for message in response.get("Messages", []):
                 await self._handle_message(
@@ -466,7 +556,7 @@ class SqsEventBus:
         bucket notification, raw SNS → SQS delivery).
         """
         attrs = message.get("MessageAttributes") or {}
-        topic_attr = attrs.get(self._topic_attribute) or {}
+        topic_attr = attrs.get(self._config.topic_attribute) or {}
         value = topic_attr.get("StringValue")
         return value if isinstance(value, str) else None
 
@@ -484,7 +574,7 @@ class SqsEventBus:
             return
         with contextlib.suppress(Exception):
             await self._client.change_message_visibility(
-                QueueUrl=self._queue_url,
+                QueueUrl=self._config.queue_url,
                 ReceiptHandle=receipt_handle,
                 VisibilityTimeout=0,
             )
@@ -515,7 +605,7 @@ class SqsEventBus:
         receipt_handle = message.get("ReceiptHandle")
 
         if msg_topic is None:
-            if not self._require_topic_attribute:
+            if not self._config.require_topic_attribute:
                 await self._dispatch_to_all(
                     message, subscription_id, topic, receipt_handle
                 )
@@ -564,7 +654,7 @@ class SqsEventBus:
             )
             if receipt_handle:
                 await self._client.delete_message(
-                    QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                    QueueUrl=self._config.queue_url, ReceiptHandle=receipt_handle
                 )
             return
 
@@ -586,7 +676,7 @@ class SqsEventBus:
 
         if receipt_handle:
             await self._client.delete_message(
-                QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                QueueUrl=self._config.queue_url, ReceiptHandle=receipt_handle
             )
         logger.debug(
             "Dispatched SQS message %s to subscription %s (topic=%s)",
@@ -638,7 +728,7 @@ class SqsEventBus:
             )
             if receipt_handle:
                 await self._client.delete_message(
-                    QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                    QueueUrl=self._config.queue_url, ReceiptHandle=receipt_handle
                 )
             return
 
@@ -692,7 +782,7 @@ class SqsEventBus:
             )
             if receipt_handle:
                 await self._client.delete_message(
-                    QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                    QueueUrl=self._config.queue_url, ReceiptHandle=receipt_handle
                 )
             return
         any_failed = False
@@ -720,7 +810,7 @@ class SqsEventBus:
 
         if receipt_handle:
             await self._client.delete_message(
-                QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                QueueUrl=self._config.queue_url, ReceiptHandle=receipt_handle
             )
         logger.debug(
             "Fanout-dispatched SQS message %s to %d subscriptions "

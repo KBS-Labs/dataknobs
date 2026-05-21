@@ -9,12 +9,23 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ._resilient_loop import run_supervised_loop
+from .config import RedisEventBusConfig
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_UNSET: Any = object()
+"""Sentinel for kwarg-vs-config arbitration in ``RedisEventBus.__init__``.
+
+The per-kwarg annotations widen to ``T | Any`` so the sentinel default
+is valid for the type checker. This trades narrow mypy coverage on the
+loose-kwarg path for a single ctor that accepts both the typed-config
+and legacy-kwarg shapes; the typed-config path
+(``from_config(RedisEventBusConfig(...))``) keeps full type narrowing.
+"""
 
 
 class RedisEventBus:
@@ -68,26 +79,62 @@ class RedisEventBus:
 
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 6379,
-        password: str | None = None,
-        ssl: bool = False,
-        channel_prefix: str = "events",
+        config: RedisEventBusConfig | None = None,
+        *,
+        host: str | Any = _UNSET,
+        port: int | Any = _UNSET,
+        password: str | None | Any = _UNSET,
+        ssl: bool | Any = _UNSET,
+        channel_prefix: str | Any = _UNSET,
     ) -> None:
         """Initialize the Redis event bus.
 
+        Two construction shapes are supported:
+
+        - **Typed config** (recommended): pass a
+          :class:`RedisEventBusConfig` instance positionally. Loose
+          kwargs must not be supplied alongside it.
+        - **Loose kwargs** (backward-compatible): pass each parameter as
+          a keyword (``host=...``, etc.). Internally constructed into a
+          :class:`RedisEventBusConfig`.
+
+        Mixing the two shapes raises ``TypeError``.
+
         Args:
+            config: Optional pre-built typed configuration. When
+                provided, loose kwargs must NOT be passed.
             host: Redis host
             port: Redis port (default: 6379)
             password: Redis password (optional)
             ssl: Whether to use SSL/TLS (for ElastiCache)
             channel_prefix: Prefix for channels (default: "events")
+
+        Raises:
+            TypeError: If ``config`` and loose kwargs are both supplied.
         """
-        self._host = host
-        self._port = port
-        self._password = password
-        self._ssl = ssl
-        self._channel_prefix = channel_prefix
+        loose_kwargs = {
+            "host": host,
+            "port": port,
+            "password": password,
+            "ssl": ssl,
+            "channel_prefix": channel_prefix,
+        }
+        supplied_kwargs = {
+            k: v for k, v in loose_kwargs.items() if v is not _UNSET
+        }
+        if config is not None:
+            if supplied_kwargs:
+                raise TypeError(
+                    "RedisEventBus: cannot mix `config` with loose kwargs "
+                    f"(also supplied: {sorted(supplied_kwargs)}). Pass "
+                    "either a RedisEventBusConfig or the individual kwargs."
+                )
+            self._config = config
+        else:
+            # Route loose kwargs through ``from_dict`` so that classmethod
+            # is the single source of truth for kwarg/dict → typed
+            # translation (defaults live in one place, structurally).
+            self._config = RedisEventBusConfig.from_dict(supplied_kwargs)
         self._redis: Any = None  # redis.asyncio.Redis
         self._pubsub: Any = None  # redis.asyncio.PubSub
         self._subscriptions: dict[str, Subscription] = {}
@@ -98,6 +145,24 @@ class RedisEventBus:
         self._connected = False
         self._running = False
 
+    @classmethod
+    def from_config(
+        cls, config: dict[str, Any] | RedisEventBusConfig
+    ) -> RedisEventBus:
+        """Construct from a config dict or typed :class:`RedisEventBusConfig`.
+
+        The recommended programmatic-construction entry point alongside
+        the typed-config and loose-kwarg ``__init__`` shapes.
+        """
+        if isinstance(config, dict):
+            config = RedisEventBusConfig.from_dict(config)
+        return cls(config)
+
+    @property
+    def config(self) -> RedisEventBusConfig:
+        """Read-only view of the construction parameters."""
+        return self._config
+
     def _topic_to_channel(self, topic: str) -> str:
         """Convert a topic name to a Redis channel name.
 
@@ -107,7 +172,7 @@ class RedisEventBus:
         Returns:
             Redis channel name
         """
-        return f"{self._channel_prefix}:{topic}"
+        return f"{self._config.channel_prefix}:{topic}"
 
     def _channel_to_topic(self, channel: str) -> str:
         """Convert a Redis channel name back to a topic.
@@ -118,7 +183,7 @@ class RedisEventBus:
         Returns:
             Original topic name
         """
-        prefix = f"{self._channel_prefix}:"
+        prefix = f"{self._config.channel_prefix}:"
         if channel.startswith(prefix):
             return channel[len(prefix) :]
         return channel
@@ -137,12 +202,12 @@ class RedisEventBus:
             ) from e
 
         async with self._lock:
-            ssl_context = True if self._ssl else None
+            ssl_context = True if self._config.ssl else None
 
             self._redis = redis.Redis(
-                host=self._host,
-                port=self._port,
-                password=self._password,
+                host=self._config.host,
+                port=self._config.port,
+                password=self._config.password,
                 ssl=ssl_context,
                 decode_responses=True,
             )
@@ -161,8 +226,8 @@ class RedisEventBus:
 
             logger.info(
                 "RedisEventBus connected to %s:%d",
-                self._host,
-                self._port,
+                self._config.host,
+                self._config.port,
             )
 
     async def close(self) -> None:

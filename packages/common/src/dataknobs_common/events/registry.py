@@ -51,53 +51,37 @@ Register a custom backend with
 def _create_memory_bus(config: dict[str, Any]) -> EventBus:
     from .memory import InMemoryEventBus
 
-    return InMemoryEventBus()
+    return InMemoryEventBus.from_config(config)
 
 
 def _create_postgres_bus(config: dict[str, Any]) -> EventBus:
+    # Delegating to ``from_config`` routes the config dict through the
+    # typed ``PostgresEventBusConfig``, so every backend kwarg is a
+    # dataclass field rather than a per-factory allowlist entry — and
+    # the dataclass internally normalizes via
+    # ``normalize_postgres_connection_config`` (supports
+    # ``connection_string``, individual host/port/... keys, DATABASE_URL,
+    # POSTGRES_* env-var fallbacks).
     from .postgres import PostgresEventBus
 
-    # Pass the full config through so the bus can accept any input shape
-    # supported by ``normalize_postgres_connection_config`` (connection_string,
-    # individual host/port/... keys, DATABASE_URL env var, or POSTGRES_* env
-    # vars).
-    return PostgresEventBus(
-        config=config,
-        channel_prefix=config.get("channel_prefix", "events"),
-    )
+    return PostgresEventBus.from_config(config)
 
 
 def _create_redis_bus(config: dict[str, Any]) -> EventBus:
     from .redis import RedisEventBus
 
-    return RedisEventBus(
-        host=config.get("host", "localhost"),
-        port=config.get("port", 6379),
-        password=config.get("password"),
-        ssl=config.get("ssl", False),
-        channel_prefix=config.get("channel_prefix", "events"),
-    )
+    return RedisEventBus.from_config(config)
 
 
 def _create_sqs_bus(config: dict[str, Any]) -> EventBus:
     # Lazy: aioboto3 (optional [sqs] extra) is imported only here, so a
-    # consumer that never selects "sqs" needs no AWS dependency.
+    # consumer that never selects "sqs" needs no AWS dependency. The
+    # config dict flows through ``SqsEventBusConfig.from_dict``, so a
+    # missing ``queue_url`` surfaces as the dataclass's ``ValueError``
+    # — same error class as the legacy direct-kwarg path.
     from .sqs import SqsEventBus
 
-    # Use ``.get(... , "")`` rather than a bare ``config["queue_url"]``: a
-    # missing key should surface as ``SqsEventBus.__init__``'s clean
-    # ``ValueError`` (consistent with every other validation error in this
-    # layer), not a raw ``KeyError`` leaking out of ``create_event_bus()``.
-    return SqsEventBus(
-        queue_url=config.get("queue_url", ""),
-        region=config.get("region"),
-        endpoint_url=config.get("endpoint_url"),
-        wait_time_seconds=config.get("wait_time_seconds", 20),
-        visibility_timeout=config.get("visibility_timeout", 60),
-        topic_attribute=config.get("topic_attribute", "topic"),
-        aws_access_key_id=config.get("aws_access_key_id"),
-        aws_secret_access_key=config.get("aws_secret_access_key"),
-    )
+    return SqsEventBus.from_config(config)
 
 
 event_bus_backends.register("memory", _create_memory_bus)
