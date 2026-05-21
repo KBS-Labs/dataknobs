@@ -505,7 +505,7 @@ class TestEventBusRegistry:
         )
         assert isinstance(bus, SqsEventBus)
         assert bus._is_fifo is True
-        assert bus._topic_attribute == "dk_topic"
+        assert bus.config.topic_attribute == "dk_topic"
 
     def test_events_import_does_not_pull_aioboto3(self):
         """The headline contract: the base install stays aioboto3-free.

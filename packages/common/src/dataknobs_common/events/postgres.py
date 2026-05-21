@@ -9,12 +9,16 @@ import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from ._resilient_loop import run_supervised_loop
+from .config import PostgresEventBusConfig
 from .types import Event, Subscription
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_UNSET: Any = object()
+"""Sentinel for kwarg-vs-config arbitration in ``PostgresEventBus.__init__``."""
 
 _LISTEN_POLL_INTERVAL = 2.0
 """Seconds between dedicated-LISTEN-connection liveness probes."""
@@ -75,28 +79,45 @@ class PostgresEventBus:
 
     def __init__(
         self,
-        connection_string: str | None = None,
-        channel_prefix: str = "events",
+        connection_string: str | None | Any = _UNSET,
+        channel_prefix: str | Any = _UNSET,
         *,
-        config: dict[str, Any] | None = None,
+        config: dict[str, Any] | PostgresEventBusConfig | None = None,
     ) -> None:
         """Initialize the Postgres event bus.
+
+        Three construction shapes are supported:
+
+        - **Typed config** (recommended): pass a
+          :class:`PostgresEventBusConfig` instance via ``config=``.
+          Loose positional kwargs must not be supplied alongside it.
+        - **Loose dict config** (existing pattern): pass a dict via
+          ``config=``. The dict is normalized through
+          :func:`normalize_postgres_connection_config`, supporting every
+          input shape (individual host/port/... keys, ``DATABASE_URL``,
+          ``POSTGRES_*`` env fallbacks). May be combined with the
+          legacy ``connection_string`` / ``channel_prefix`` positionals
+          for back-compat — those take precedence over the dict.
+        - **Loose positionals** (backward-compatible): pass
+          ``connection_string`` and/or ``channel_prefix`` directly.
+
+        Mixing a typed :class:`PostgresEventBusConfig` with loose
+        positionals raises ``TypeError``.
 
         Args:
             connection_string: PostgreSQL connection string. Retained
                 for backward compatibility — new callers should prefer
-                ``config`` for the unified shape (individual keys +
-                env-var fallbacks).
+                ``config`` (dict or :class:`PostgresEventBusConfig`).
             channel_prefix: Prefix for NOTIFY channels (default: "events").
-            config: Optional config dict accepted by
-                ``normalize_postgres_connection_config`` — supports
-                ``connection_string``, individual host/port/database/
-                user/password keys, ``DATABASE_URL`` env var, and
-                ``POSTGRES_*`` env-var fallbacks.
+            config: Optional typed :class:`PostgresEventBusConfig` or
+                dict accepted by
+                :func:`normalize_postgres_connection_config`.
 
         Raises:
             ConfigurationError: If no postgres connection is resolvable
                 from ``config``, ``connection_string``, or env vars.
+            TypeError: If a typed :class:`PostgresEventBusConfig` is
+                passed alongside the legacy positional kwargs.
         """
         import re
 
@@ -104,28 +125,62 @@ class PostgresEventBus:
             normalize_postgres_connection_config,
         )
 
-        merged: dict[str, Any] = dict(config or {})
-        if connection_string is not None:
-            # Explicit arg wins over any value inside ``config`` so the
-            # legacy positional shape keeps behaving as callers expect.
-            merged["connection_string"] = connection_string
-        # ``require=True`` raises ``ConfigurationError`` when nothing is
-        # resolvable; the cast narrows the return type for the type
-        # checker without the runtime-stripped ``assert`` idiom.
-        normalized = cast(
-            "dict[str, Any]",
-            normalize_postgres_connection_config(merged, require=True),
-        )
-        self._connection_string = normalized["connection_string"]
+        loose_positionals = {
+            "connection_string": connection_string,
+            "channel_prefix": channel_prefix,
+        }
+        supplied_positionals = {
+            k: v for k, v in loose_positionals.items() if v is not _UNSET
+        }
+
+        if isinstance(config, PostgresEventBusConfig):
+            if supplied_positionals:
+                raise TypeError(
+                    "PostgresEventBus: cannot mix typed "
+                    "`PostgresEventBusConfig` with loose positional "
+                    f"kwargs (also supplied: {sorted(supplied_positionals)})."
+                )
+            self._config = config
+        else:
+            # Dict config (legacy shape) — merge legacy positional kwargs,
+            # normalize, then build the typed dataclass for storage.
+            merged: dict[str, Any] = dict(config or {})
+            if "connection_string" in supplied_positionals:
+                merged["connection_string"] = supplied_positionals[
+                    "connection_string"
+                ]
+            # ``require=True`` raises ConfigurationError when nothing is
+            # resolvable; the cast narrows the return type without an
+            # ``assert`` that gets stripped under -O.
+            normalized = cast(
+                "dict[str, Any]",
+                normalize_postgres_connection_config(merged, require=True),
+            )
+            resolved_prefix = supplied_positionals.get(
+                "channel_prefix", merged.get("channel_prefix", "events")
+            )
+            self._config = PostgresEventBusConfig(
+                connection_string=normalized["connection_string"],
+                channel_prefix=resolved_prefix,
+            )
+
         # Sanitize prefix the same way we sanitize topics — it is
         # interpolated into LISTEN/UNLISTEN SQL statements which do
         # not support parameterized queries.
-        safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", channel_prefix)
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", self._config.channel_prefix)
         if not safe_prefix:
             raise ValueError(
-                f"channel_prefix {channel_prefix!r} is empty after sanitization"
+                f"channel_prefix {self._config.channel_prefix!r} is empty "
+                "after sanitization"
             )
-        self._channel_prefix = safe_prefix
+        # Sanitized prefix is the version actually used in SQL; preserve
+        # the typed-config invariant by replacing the dataclass with the
+        # sanitized value when sanitization changed it.
+        if safe_prefix != self._config.channel_prefix:
+            self._config = PostgresEventBusConfig(
+                connection_string=self._config.connection_string,
+                channel_prefix=safe_prefix,
+            )
         self._conn: Any = None  # asyncpg.Connection
         self._listen_conn: Any = None  # Separate connection for LISTEN
         self._subscriptions: dict[str, Subscription] = {}
@@ -134,6 +189,25 @@ class PostgresEventBus:
         self._lock = asyncio.Lock()
         self._listen_task: asyncio.Task[Any] | None = None
         self._connected = False
+
+    @classmethod
+    def from_config(
+        cls, config: dict[str, Any] | PostgresEventBusConfig
+    ) -> PostgresEventBus:
+        """Construct from a config dict or typed config.
+
+        The recommended programmatic-construction entry point.
+        :func:`create_event_bus` is implemented in terms of this method
+        so every config-dict path runs through the dataclass.
+        """
+        if isinstance(config, dict):
+            config = PostgresEventBusConfig.from_dict(config)
+        return cls(config=config)
+
+    @property
+    def config(self) -> PostgresEventBusConfig:
+        """Read-only view of the resolved construction parameters."""
+        return self._config
 
     def _topic_to_channel(self, topic: str) -> str:
         """Convert a topic name to a safe Postgres channel name.
@@ -162,7 +236,7 @@ class PostgresEventBus:
             raise ValueError(
                 f"Topic {topic!r} produces an empty channel name after sanitization"
             )
-        return f"{self._channel_prefix}_{safe_topic}"
+        return f"{self._config.channel_prefix}_{safe_topic}"
 
     async def connect(self) -> None:
         """Initialize database connections.
@@ -184,10 +258,10 @@ class PostgresEventBus:
 
         async with self._lock:
             # Main connection for publishing
-            self._conn = await asyncpg.connect(self._connection_string)
+            self._conn = await asyncpg.connect(self._config.connection_string)
 
             # Listener connection (separate to avoid blocking)
-            self._listen_conn = await asyncpg.connect(self._connection_string)
+            self._listen_conn = await asyncpg.connect(self._config.connection_string)
 
             self._connected = True
 
@@ -406,7 +480,7 @@ class PostgresEventBus:
         import asyncpg
 
         new_conn = await asyncpg.connect(
-            self._connection_string,
+            self._config.connection_string,
             timeout=_LISTEN_RECONNECT_TIMEOUT,
         )
         try:

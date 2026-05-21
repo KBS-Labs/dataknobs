@@ -98,6 +98,8 @@ class TestLLMProviderFactory:
 
     def test_factory_register_custom_provider(self):
         """Test registering a custom provider class."""
+        from dataknobs_llm.llm.providers import _provider_registry
+
         # Create a simple custom provider for testing
         class CustomTestProvider(AsyncLLMProvider):
             async def complete(self, messages, **kwargs):
@@ -118,15 +120,18 @@ class TestLLMProviderFactory:
             def _detect_capabilities(self):
                 return []
 
-        # Register the custom provider
+        # Register the custom provider — guarded so the module-level
+        # singleton registry isn't polluted across test runs (the
+        # parity audit in test_provider_factory_parity.py asserts the
+        # registry contains only built-ins).
         LLMProviderFactory.register_provider('custom', CustomTestProvider)
-
-        # Create provider using factory
-        factory = LLMProviderFactory(is_async=True)
-        config = LLMConfig(provider="custom", model="test")
-        provider = factory.create(config)
-
-        assert isinstance(provider, CustomTestProvider)
+        try:
+            factory = LLMProviderFactory(is_async=True)
+            config = LLMConfig(provider="custom", model="test")
+            provider = factory.create(config)
+            assert isinstance(provider, CustomTestProvider)
+        finally:
+            _provider_registry.unregister('custom')
 
     def test_factory_case_insensitive_provider_name(self):
         """Test factory handles case-insensitive provider names."""

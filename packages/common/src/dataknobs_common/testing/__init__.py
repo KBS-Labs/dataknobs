@@ -72,6 +72,11 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
     make_elasticsearch_test_index,
     wait_for_elasticsearch,
 )
+from dataknobs_common.testing.factory_parity import (
+    assert_ctor_reads_documented_keys,
+    assert_dataclass_config_matches_ctor,
+    assert_factory_kwargs_match_ctor,
+)
 from dataknobs_common.testing.localstack_fixtures import (
     localstack_endpoint,
     make_localstack_s3_bucket,
@@ -84,6 +89,9 @@ from dataknobs_common.testing.postgres_fixtures import (
 )
 
 __all__ = [
+    "assert_ctor_reads_documented_keys",
+    "assert_dataclass_config_matches_ctor",
+    "assert_factory_kwargs_match_ctor",
     "create_test_json_files",
     "create_test_markdown_files",
     "elasticsearch_connection_params",

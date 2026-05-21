@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `dataknobs_common.events.config` module — structured config
+  dataclasses for every event bus backend: `MemoryEventBusConfig`,
+  `RedisEventBusConfig`, `PostgresEventBusConfig`,
+  `SqsEventBusConfig`. Each is a frozen `@dataclass` with a
+  `from_dict(config: dict)` classmethod and is the single source of
+  truth for available kwargs on its backend. Mirrors the
+  `LLMConfig` / `RateLimiterConfig` / `RetryConfig` /
+  `VectorConfig` pattern used elsewhere in dataknobs. Adding a new
+  ctor knob is a dataclass-field addition; the registry factory
+  consumes the dict wholesale via `from_dict`, eliminating the
+  per-factory allowlist edits that previously caused silent drift.
+- `<EventBus>.from_config(config: dict | <EventBus>Config)`
+  classmethod on every event bus — the recommended programmatic
+  construction path alongside the existing kwarg-positional and
+  typed-config init shapes.
+- `<EventBus>.config` property on every event bus — read-only access
+  to the underlying typed config dataclass. Pairs with the new
+  `SqsEventBus.require_topic_attribute` shortcut property that maps
+  to `bus.config.require_topic_attribute` (kwarg name = config-dict
+  key = property name = CHANGELOG vocabulary, single token across
+  the public API).
+- `dataknobs_common.testing.assert_dataclass_config_matches_ctor`,
+  `assert_factory_kwargs_match_ctor`,
+  `assert_ctor_reads_documented_keys` — structural drift-guard
+  helpers, one per factory-pattern shape used in dataknobs
+  registries. Per-registry parity tests in `dataknobs-common`,
+  `dataknobs-data`, and `dataknobs-llm` import these to assert that
+  every registered factory's ctor surface is reachable from the
+  documented config dict.
+
+### Fixed
+- `create_event_bus({"backend": "sqs", "require_topic_attribute":
+  False, ...})` now forwards the flag to `SqsEventBus`. Previously
+  the registry factory's explicit-allowlist enumeration dropped the
+  parameter, so the config-driven entry point silently received the
+  constructor default `True` regardless of the config dict. Direct
+  `SqsEventBus(...)` callers were unaffected. The new
+  structured-config refactor removes this drift mode entirely:
+  every kwarg is a dataclass field consumed wholesale by
+  `from_dict`, so future ctor additions propagate through the
+  registry without per-knob factory edits.
+
+### Changed
+- The four `_create_*_bus` registry factories collapse to one-line
+  `cls.from_config(config)` wrappers. Behaviour is unchanged for
+  every existing caller; the public `create_event_bus(...)` entry
+  point is unmodified. Every existing call shape continues to work:
+  `SqsEventBus(queue_url=...)` (loose kwargs),
+  `SqsEventBus(SqsEventBusConfig(...))` (typed),
+  `SqsEventBus.from_config({...})` (factory classmethod),
+  `create_event_bus({"backend": "sqs", ...})` (registry factory).
+  Mixing a typed config with loose kwargs raises `TypeError` —
+  ambiguity is surfaced loudly rather than resolved by implicit
+  precedence.
+
 ## v1.3.14 - 2026-05-20
 
 ### Added
