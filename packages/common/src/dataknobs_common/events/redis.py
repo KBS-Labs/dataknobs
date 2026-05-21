@@ -131,13 +131,10 @@ class RedisEventBus:
                 )
             self._config = config
         else:
-            self._config = RedisEventBusConfig(
-                host=supplied_kwargs.get("host", "localhost"),
-                port=supplied_kwargs.get("port", 6379),
-                password=supplied_kwargs.get("password"),
-                ssl=supplied_kwargs.get("ssl", False),
-                channel_prefix=supplied_kwargs.get("channel_prefix", "events"),
-            )
+            # Route loose kwargs through ``from_dict`` so that classmethod
+            # is the single source of truth for kwarg/dict → typed
+            # translation (defaults live in one place, structurally).
+            self._config = RedisEventBusConfig.from_dict(supplied_kwargs)
         self._redis: Any = None  # redis.asyncio.Redis
         self._pubsub: Any = None  # redis.asyncio.PubSub
         self._subscriptions: dict[str, Subscription] = {}

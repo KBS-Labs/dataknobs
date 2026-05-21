@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ._resilient_loop import run_supervised_loop
 from .config import PostgresEventBusConfig
@@ -129,10 +129,6 @@ class PostgresEventBus:
         """
         import re
 
-        from dataknobs_common.postgres_config import (
-            normalize_postgres_connection_config,
-        )
-
         loose_positionals = {
             "connection_string": connection_string,
             "channel_prefix": channel_prefix,
@@ -150,27 +146,15 @@ class PostgresEventBus:
                 )
             self._config = config
         else:
-            # Dict config (legacy shape) — merge legacy positional kwargs,
-            # normalize, then build the typed dataclass for storage.
+            # Dict config (legacy shape) — fold legacy positional kwargs
+            # into the dict and route through ``PostgresEventBusConfig.from_dict``
+            # so that classmethod is the single source of truth for
+            # dict→typed translation (matches the module docstring's
+            # structural-drift-impossible claim).
             merged: dict[str, Any] = dict(config or {})
-            if "connection_string" in supplied_positionals:
-                merged["connection_string"] = supplied_positionals[
-                    "connection_string"
-                ]
-            # ``require=True`` raises ConfigurationError when nothing is
-            # resolvable; the cast narrows the return type without an
-            # ``assert`` that gets stripped under -O.
-            normalized = cast(
-                "dict[str, Any]",
-                normalize_postgres_connection_config(merged, require=True),
-            )
-            resolved_prefix = supplied_positionals.get(
-                "channel_prefix", merged.get("channel_prefix", "events")
-            )
-            self._config = PostgresEventBusConfig(
-                connection_string=normalized["connection_string"],
-                channel_prefix=resolved_prefix,
-            )
+            for key, value in supplied_positionals.items():
+                merged[key] = value
+            self._config = PostgresEventBusConfig.from_dict(merged)
 
         # Sanitize prefix the same way we sanitize topics — it is
         # interpolated into LISTEN/UNLISTEN SQL statements which do

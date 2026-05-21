@@ -25,7 +25,7 @@ import contextlib
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ._resilient_loop import run_supervised_loop
 from .config import SqsEventBusConfig
@@ -228,29 +228,10 @@ class SqsEventBus:
                 )
             self._config = config
         else:
-            # Loose-kwarg path: defaults match SqsEventBusConfig's defaults
-            # so an omitted kwarg behaves identically pre- and post-refactor.
-            self._config = SqsEventBusConfig(
-                queue_url=cast("str", supplied_kwargs.get("queue_url", "")),
-                region=supplied_kwargs.get("region"),
-                endpoint_url=supplied_kwargs.get("endpoint_url"),
-                wait_time_seconds=supplied_kwargs.get(
-                    "wait_time_seconds", 20
-                ),
-                visibility_timeout=supplied_kwargs.get(
-                    "visibility_timeout", 60
-                ),
-                topic_attribute=supplied_kwargs.get(
-                    "topic_attribute", "topic"
-                ),
-                require_topic_attribute=supplied_kwargs.get(
-                    "require_topic_attribute", True
-                ),
-                aws_access_key_id=supplied_kwargs.get("aws_access_key_id"),
-                aws_secret_access_key=supplied_kwargs.get(
-                    "aws_secret_access_key"
-                ),
-            )
+            # Route loose kwargs through ``from_dict`` so that classmethod
+            # is the single source of truth for kwarg/dict → typed
+            # translation (defaults live in one place, structurally).
+            self._config = SqsEventBusConfig.from_dict(supplied_kwargs)
         # __post_init__ has already validated queue_url; mirror the
         # historical error class for direct construction without config.
         self._is_fifo = self._config.queue_url.endswith(".fifo")
