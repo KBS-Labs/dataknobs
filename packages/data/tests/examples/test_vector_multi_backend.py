@@ -354,35 +354,40 @@ async def test_async_operations():
 
 
 class TestS3Backend:
-    """Tests specific to S3 backend (requires TEST_S3 environment variable)."""
-    
+    """Tests specific to S3 backend (requires TEST_S3 environment variable).
+
+    Uses the shared ``make_localstack_s3_bucket`` fixture from
+    ``dataknobs-common`` to idempotently provision ``test-bucket`` on
+    LocalStack before each test — avoiding the prior failure mode
+    where a fresh LocalStack volume meant the bucket didn't exist.
+    """
+
+    @pytest.fixture
+    def s3_test_bucket(self, make_localstack_s3_bucket):
+        """Ensure ``test-bucket`` exists on LocalStack for this test."""
+        yield from make_localstack_s3_bucket("test-bucket")
+
     @pytest.mark.skipif(
         os.getenv("TEST_S3") != "true",
         reason="S3 tests require TEST_S3=true and localstack/AWS setup"
     )
-    def test_s3_sync_backend(self):
+    def test_s3_sync_backend(self, s3_test_bucket):
         """Test S3 backend with vector support."""
         from dataknobs_data import DatabaseFactory
-        
-        # Detect if we're running in Docker container
-        if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
-            localstack_host = 'localstack'
-        else:
-            localstack_host = os.getenv('LOCALSTACK_HOST', 'localhost')
-        
+
         factory = DatabaseFactory()
         db = factory.create(
             backend="s3",
-            bucket="test-bucket",
+            bucket=s3_test_bucket["bucket"],
             prefix="test-vectors/",
-            endpoint_url=f"http://{localstack_host}:4566",  # LocalStack
+            endpoint_url=s3_test_bucket["endpoint_url"],
             vector_enabled=True,
             vector_metric="cosine"
         )
-        
+
         try:
             db.connect()
-            
+
             # Create a test record with vector
             record = Record(
                 data={
@@ -394,68 +399,62 @@ class TestS3Backend:
                     )
                 }
             )
-            
+
             record_id = db.create(record)
             assert record_id is not None
-            
+
             # Perform vector search
             results = db.vector_search(
                 query_vector=np.array([1.0, 0.0, 0.0]),
                 vector_field="embedding",
                 k=1
             )
-            
+
             assert len(results) == 1
             assert results[0].record.get_field('name').value == 'test'
-            
+
         finally:
             db.clear()
-    
+
     @pytest.mark.skipif(
         os.getenv("TEST_S3") != "true",
         reason="S3 tests require TEST_S3=true and localstack/AWS setup"
     )
     @pytest.mark.asyncio
-    async def test_s3_async_backend(self):
+    async def test_s3_async_backend(self, s3_test_bucket):
         """Test async S3 backend with vector support."""
         from dataknobs_data import AsyncDatabaseFactory
-        
-        # Detect if we're running in Docker container
-        if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
-            localstack_host = 'localstack'
-        else:
-            localstack_host = os.getenv('LOCALSTACK_HOST', 'localhost')
-        
+
         factory = AsyncDatabaseFactory()
         db = factory.create(
             backend="s3",
-            bucket="test-bucket",
+            bucket=s3_test_bucket["bucket"],
             prefix="test-vectors-async/",
-            endpoint_url=f"http://{localstack_host}:4566",  # LocalStack
+            endpoint_url=s3_test_bucket["endpoint_url"],
             vector_enabled=True,
             vector_metric="euclidean"
         )
-        
+
         try:
             await db.connect()
-            
+
             # Create test records
             example = MultiBackendVectorExample(verbose=False)
             records = example.create_records()
-            
+
             for record in records:
                 await db.create(record)
-            
+
             # Perform vector search
             results = await db.vector_search(
                 query_vector=np.array([0.0, 1.0, 0.0]),  # Y-axis
                 vector_field="embedding",
                 k=2
             )
-            
+
             assert len(results) <= 2
             # First result should be Y-axis
             assert results[0].record.get_field('name').value == 'Y-axis'
-            
+
         finally:
             await db.clear()

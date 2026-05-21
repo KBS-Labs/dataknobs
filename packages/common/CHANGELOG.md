@@ -18,6 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Scheme-less env values fall through to defaults rather than emit a
   malformed URL. Consumer copies of the resolution helper can now
   delete in favour of this one.
+- `dataknobs_common.testing.ensure_localstack_s3_bucket(bucket, endpoint=None, *, region="us-east-1")` —
+  async helper that idempotently creates an S3 bucket on a LocalStack
+  edge endpoint (head-then-create; swallows the
+  `BucketAlreadyOwnedByYou` / `BucketAlreadyExists` race a concurrent
+  setup may produce). Lazy-imports `aioboto3`; install the `sqs`
+  extra to pull it in.
+- `dataknobs_common.testing.localstack_fixtures` pytest11 plugin
+  (auto-discovered by any package depending on `dataknobs-common`):
+  `localstack_endpoint` (session-scoped str) and
+  `make_localstack_s3_bucket` (factory fixture). Consumers wire a
+  per-test bucket with
+  `yield from make_localstack_s3_bucket("my-bucket")`. The fixture
+  ensures the bucket exists before the test runs and yields a config
+  dict (`bucket`, `endpoint_url`, `region`, `access_key_id`,
+  `secret_access_key`) shaped for spread into a dataknobs S3 backend
+  constructor. No teardown — LocalStack persistence handles the
+  bucket's lifetime; tests still wipe object contents themselves.
 - `SqsEventBus.require_topic_attribute` constructor parameter
   (single-topic bridge mode). When set to `False`, messages arriving
   on the queue without the configured topic attribute are dispatched

@@ -102,6 +102,60 @@ Resolution order — highest priority first:
    when running inside a Docker container (detected via
    `/.dockerenv` or `DOCKER_CONTAINER`).
 
+#### S3 Bucket Provisioning Fixture
+
+For LocalStack S3 tests, the `make_localstack_s3_bucket` pytest11
+fixture idempotently ensures a named bucket exists before the test
+runs and yields a config dict shaped for the dataknobs S3 backends.
+Auto-discovered from `dataknobs-common` — no `conftest.py` import
+required.
+
+```python
+import pytest
+from dataknobs_common.testing import requires_localstack
+from dataknobs_data import AsyncDatabaseFactory
+
+
+@pytest.fixture
+def s3_test_bucket(make_localstack_s3_bucket):
+    """Ensure ``my-test-bucket`` exists on LocalStack for this test."""
+    yield from make_localstack_s3_bucket("my-test-bucket")
+
+
+@requires_localstack
+@pytest.mark.asyncio
+async def test_s3_roundtrip(s3_test_bucket):
+    db = AsyncDatabaseFactory().create(
+        backend="s3",
+        bucket=s3_test_bucket["bucket"],
+        endpoint_url=s3_test_bucket["endpoint_url"],
+    )
+    await db.connect()
+    try:
+        ...  # Use the database
+    finally:
+        await db.clear()  # Wipe object contents; bucket persists
+```
+
+The fixture does **not** delete the bucket on teardown — LocalStack
+persists it across the session and tests are expected to wipe their
+own object contents (typically via `db.clear()`). The factory pattern
+keeps the bucket name caller-controlled and works for both sync and
+async test bodies (the `asyncio.run` wrapping happens in the fixture
+setup phase, outside any per-test event loop).
+
+For a one-off, non-fixture flow, call the underlying async helper
+directly:
+
+```python
+from dataknobs_common.testing import ensure_localstack_s3_bucket
+
+await ensure_localstack_s3_bucket("my-bucket")  # idempotent
+```
+
+The helper lazy-imports `aioboto3`; install the `sqs` extra to pull
+it in.
+
 ---
 
 ## Pytest Markers

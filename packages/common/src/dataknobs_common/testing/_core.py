@@ -308,6 +308,84 @@ def is_localstack_available(
         return False
 
 
+async def ensure_localstack_s3_bucket(
+    bucket: str,
+    endpoint: str | None = None,
+    *,
+    region: str = "us-east-1",
+) -> None:
+    """Idempotently create an S3 bucket on LocalStack.
+
+    Designed for integration tests that target the dataknobs dev
+    LocalStack container. ``aioboto3`` is lazy-imported so the base
+    install of ``dataknobs-common`` stays lean (same pattern as
+    :class:`~dataknobs_common.events.SqsEventBus`); install the ``sqs``
+    extra to pull it in.
+
+    The helper is safe to call from any test setup:
+
+    - ``head_bucket`` is attempted first; on success the bucket already
+      exists and the helper returns immediately.
+    - ``NoSuchBucket`` / ``404`` triggers ``create_bucket``.
+    - ``BucketAlreadyOwnedByYou`` and ``BucketAlreadyExists`` raised by
+      the create call (e.g. a concurrent setup racing this one) are
+      swallowed — by the time the call returns, the bucket exists.
+
+    Args:
+        bucket: Bucket name to ensure exists.
+        endpoint: LocalStack endpoint URL. Defaults to
+            :func:`get_localstack_endpoint` (the same resolution chain
+            used by :func:`is_localstack_available`).
+        region: AWS region to create the bucket in. ``us-east-1`` is
+            the LocalStack default and the only region that does NOT
+            require a ``CreateBucketConfiguration`` block.
+
+    Raises:
+        ClientError: For unexpected S3 errors (network failures,
+            permission denied on configured non-LocalStack endpoints).
+            ``NoSuchBucket`` and the two "already exists" variants are
+            handled internally.
+    """
+    import aioboto3
+    from botocore.exceptions import ClientError
+
+    if endpoint is None:
+        endpoint = get_localstack_endpoint()
+
+    session = aioboto3.Session()
+    async with session.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    ) as s3:
+        try:
+            await s3.head_bucket(Bucket=bucket)
+            return
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            # head_bucket reports a missing bucket as 404 / NoSuchBucket
+            # depending on credentials and the S3 implementation. Treat
+            # both as "create needed". Any other ClientError propagates.
+            if code not in {"404", "NoSuchBucket", "NotFound"}:
+                raise
+
+        try:
+            await s3.create_bucket(Bucket=bucket)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            # A concurrent setup may have won the race between the
+            # head_bucket above and our create_bucket here. Both
+            # variants mean the bucket exists and is usable, which is
+            # the contract this helper provides.
+            if code not in {
+                "BucketAlreadyOwnedByYou",
+                "BucketAlreadyExists",
+            }:
+                raise
+
+
 def is_package_available(package_name: str) -> bool:
     """Check if a Python package is available.
 
