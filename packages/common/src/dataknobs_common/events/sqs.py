@@ -45,7 +45,9 @@ class SqsEventBus:
     queue and dispatches only messages whose attribute equals its
     topic; non-matching messages are left untouched (not deleted) so a
     subscriber on a different topic can still receive them after the
-    visibility timeout.
+    visibility timeout. See **Single-topic bridge mode** below for the
+    opt-in handling of messages that arrive *without* a topic
+    attribute (AWS-native bridges).
 
     Advantages:
     - AWS-native, fully managed; no broker to operate
@@ -61,20 +63,23 @@ class SqsEventBus:
       ``NotImplementedError`` — loud rather than silently mis-routing)
 
     Single-topic bridge mode:
-        When ``require_topic_attribute=False`` is set, messages without
-        a ``topic_attribute`` are dispatched to every active
-        subscription on the bus. Use this mode for queues fed by
-        AWS-native event sources (EventBridge → SQS targets, S3 → SQS
-        bucket notifications, raw SNS → SQS delivery) that cannot set
-        arbitrary SQS message attributes. Such a queue must be
-        dedicated to a single topic; mixing topics on an
-        attribute-less queue would cross-deliver. Bodies that are
-        valid JSON but not ``Event.to_dict()``-shaped are delivered
-        as synthesised ``Event(type=EventType.CUSTOM, topic=<receiving
-        poll task's topic>, payload=<decoded-body>)`` events.
-        Messages with a matching attribute continue to dispatch by
-        attribute; messages with a mismatched attribute are still
-        released back to the queue.
+        When ``require_topic_attribute=False`` is set, the bus is
+        dedicated to a single topic — ``subscribe`` enforces this by
+        raising ``ValueError`` if a second subscription is attempted.
+        Use this mode for queues fed by AWS-native event sources
+        (EventBridge → SQS targets, S3 → SQS bucket notifications,
+        raw SNS → SQS delivery) that cannot set arbitrary SQS message
+        attributes. Attribute-less messages are dispatched to the one
+        subscription; bodies that are valid JSON but not
+        ``Event.to_dict()``-shaped are delivered as synthesised
+        ``Event(type=EventType.CUSTOM, topic=<the subscription's
+        topic>, payload=<decoded-body>)`` events with
+        ``event_id="sqs:<MessageId>"`` and
+        ``metadata={"sqs_message_id": ..., "sqs_synthesised": True}``
+        — stable across redeliveries so handler idempotency keyed on
+        ``event_id`` works. Messages with a matching attribute
+        continue to dispatch by attribute; messages with a mismatched
+        attribute are still released back to the queue.
 
     Example:
         ```python
@@ -131,14 +136,18 @@ class SqsEventBus:
             visibility_timeout: Seconds a received message is hidden
                 before redelivery if not deleted (the at-least-once
                 retry window).
-            topic_attribute: Message-attribute name carrying the topic.
+            topic_attribute: Message-attribute name carrying the
+                topic. Handling of messages where this attribute is
+                absent is controlled by ``require_topic_attribute``.
             require_topic_attribute: When ``True`` (default), messages
                 without the configured ``topic_attribute`` are released
                 back to the queue — the existing safety behaviour,
                 which assumes the queue may carry multiple topics and
-                a future subscriber may want them. When ``False``,
-                attribute-less messages are dispatched to every active
-                subscription on this bus.
+                a future subscriber may want them. When ``False``
+                (single-topic bridge mode), attribute-less messages
+                are dispatched to the one subscription on this bus;
+                :meth:`subscribe` raises ``ValueError`` if a second
+                subscription is attempted in this mode.
 
                 Set ``False`` only when the queue is **dedicated to a
                 single topic** and is fed by an AWS-native event
@@ -149,9 +158,13 @@ class SqsEventBus:
                 to dispatch by attribute; messages with a *mismatched*
                 attribute continue to be released. Synthesised events
                 (i.e. message bodies that are valid JSON but not
-                ``Event.to_dict()``-shaped) carry the receiving poll
-                task's topic in the ``topic`` field, the decoded body
-                as ``payload``, and ``type=EventType.CUSTOM``.
+                ``Event.to_dict()``-shaped) carry the subscription's
+                topic in the ``topic`` field, the decoded body as
+                ``payload``, ``type=EventType.CUSTOM``,
+                ``event_id="sqs:<MessageId>"`` (stable across
+                redeliveries for idempotency keying), and
+                ``metadata`` with ``sqs_message_id`` /
+                ``sqs_synthesised``.
             aws_access_key_id: Explicit access key. When ``None``,
                 boto's default credential chain is used.
             aws_secret_access_key: Explicit secret key (paired with
@@ -342,6 +355,13 @@ class SqsEventBus:
 
         Raises:
             NotImplementedError: If ``pattern`` is not ``None``.
+            ValueError: When ``require_topic_attribute=False`` (bridge
+                mode) and a subscription already exists on this bus.
+                Bridge mode is dedicated-to-a-single-topic by contract;
+                a second subscription would make synthesised events'
+                ``topic`` field non-deterministic (it carries the
+                receiving poll task's topic) and would silently
+                cross-deliver attribute-less messages.
         """
         if pattern is not None:
             raise NotImplementedError(
@@ -362,6 +382,21 @@ class SqsEventBus:
         )
 
         async with self._lock:
+            if (
+                not self._require_topic_attribute
+                and self._subscriptions
+            ):
+                existing_topics = sorted(
+                    {sub.topic for sub in self._subscriptions.values()}
+                )
+                raise ValueError(
+                    "SqsEventBus is in single-topic bridge mode "
+                    "(require_topic_attribute=False) and already has a "
+                    f"subscription on topic(s) {existing_topics}; a "
+                    "second subscription is not allowed because the "
+                    "queue is dedicated to one topic. Open a separate "
+                    "bus per bridge queue."
+                )
             self._subscriptions[subscription_id] = subscription
             self._poll_tasks[subscription_id] = asyncio.create_task(
                 self._poll_loop(subscription_id, topic, handler)
@@ -567,17 +602,22 @@ class SqsEventBus:
         receiving_topic: str,
         receipt_handle: str | None,
     ) -> None:
-        """Dispatch an attribute-less message to every active subscription.
+        """Dispatch an attribute-less message to the active subscription.
 
         Reached only when ``require_topic_attribute=False`` AND the
-        message has no topic attribute. The receiving subscription's
-        poll task owns the receipt handle and decides delete-vs-retain
-        based on the aggregate handler outcome:
+        message has no topic attribute. By the single-topic bridge
+        mode contract (enforced at :meth:`subscribe`), at most one
+        subscription is active. The snapshot is iterated defensively
+        — a concurrent ``unsubscribe`` between message receipt and
+        snapshot may leave it empty, in which case the message is
+        deleted (no handler available; debug-logged for visibility).
 
-        - All handlers succeed → ``delete_message``.
-        - Any handler raises → no delete → message redelivered after
-          the visibility timeout (at-least-once preserved; idempotent
-          handlers re-receive it).
+        - Handler succeeds → ``delete_message``.
+        - Handler raises → no delete → message redelivered after the
+          visibility timeout (at-least-once preserved; the idempotent
+          handler re-receives it).
+        - Snapshot is empty (concurrent unsubscribe race) → delete
+          + debug log so operators can correlate the disappearance.
 
         Subscriptions are snapshotted at entry so a concurrent
         ``subscribe`` / ``unsubscribe`` cannot mutate the iteration
@@ -608,16 +648,28 @@ class SqsEventBus:
             # Valid JSON but not Event.to_dict()-shaped. Synthesise a
             # CUSTOM event carrying the receiving poll task's topic
             # and the decoded body as payload.
+            #
+            # event_id is derived from the SQS MessageId (stable across
+            # redeliveries) rather than auto-generated, so handlers can
+            # use event.event_id for idempotency keys without breaking
+            # on at-least-once redelivery of the same logical message.
             payload = (
                 decoded
                 if isinstance(decoded, dict)
                 else {"body": decoded}
             )
-            event = Event(
-                type=EventType.CUSTOM,
-                topic=receiving_topic,
-                payload=payload,
-            )
+            event_kwargs: dict[str, Any] = {
+                "type": EventType.CUSTOM,
+                "topic": receiving_topic,
+                "payload": payload,
+                "metadata": {
+                    "sqs_message_id": message_id,
+                    "sqs_synthesised": True,
+                },
+            }
+            if message_id:
+                event_kwargs["event_id"] = f"sqs:{message_id}"
+            event = Event(**event_kwargs)
             logger.warning(
                 "Synthesised CUSTOM event for non-Event SQS body "
                 "(message_id=%s, topic=%s, body_shape=%s)",
@@ -628,6 +680,21 @@ class SqsEventBus:
 
         async with self._lock:
             subscriptions = list(self._subscriptions.values())
+        if not subscriptions:
+            # Concurrent unsubscribe race: receiving poll task popped
+            # its own subscription between message receipt and the
+            # snapshot. No handler available — delete the message so
+            # it doesn't recirculate, and log for operator visibility.
+            logger.debug(
+                "Fanout snapshot empty for SQS message %s "
+                "(concurrent unsubscribe race); deleting",
+                message_id,
+            )
+            if receipt_handle:
+                await self._client.delete_message(
+                    QueueUrl=self._queue_url, ReceiptHandle=receipt_handle
+                )
+            return
         any_failed = False
         for sub in subscriptions:
             try:

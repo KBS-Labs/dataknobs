@@ -38,16 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SqsEventBus.require_topic_attribute` constructor parameter
   (single-topic bridge mode). When set to `False`, messages arriving
   on the queue without the configured topic attribute are dispatched
-  to every active subscription on the bus instead of being released
-  back to the queue. Use this mode for queues fed by AWS-native event
-  sources that cannot set arbitrary SQS message attributes
-  (EventBridge → SQS targets, S3 → SQS bucket notifications, raw
-  SNS → SQS delivery). The queue must be dedicated to a single topic
-  when this mode is enabled. Default remains `True` — existing
-  consumers see no behaviour change. Message bodies that are valid
-  JSON but not `Event.to_dict()`-shaped are delivered as synthesised
-  `Event(type=EventType.CUSTOM, topic=<receiving poll task's topic>,
-  payload=<decoded body>)` events with one WARNING log per synthesis.
+  to the bus's single subscription instead of being released back to
+  the queue. Use this mode for queues fed by AWS-native event sources
+  that cannot set arbitrary SQS message attributes (EventBridge → SQS
+  targets, S3 → SQS bucket notifications, raw SNS → SQS delivery).
+  The bus is dedicated to a single topic — `subscribe()` raises
+  `ValueError` if a second subscription is attempted in this mode.
+  Default remains `True` — existing consumers see no behaviour
+  change. Message bodies that are valid JSON but not
+  `Event.to_dict()`-shaped are delivered as synthesised
+  `Event(type=EventType.CUSTOM, topic=<the subscription's topic>,
+  payload=<decoded body>, event_id="sqs:<MessageId>",
+  metadata={"sqs_message_id": ..., "sqs_synthesised": True})` events
+  with one WARNING log per synthesis. The `event_id` is derived from
+  the stable SQS `MessageId` so handlers can key idempotency on it
+  across at-least-once redeliveries.
 
 ### Changed
 - `is_localstack_available()` now delegates endpoint resolution to

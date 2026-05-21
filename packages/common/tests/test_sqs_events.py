@@ -434,13 +434,13 @@ class TestSqsEventBusSingleTopicMode:
             received.append(event)
 
         try:
-            await bus.subscribe("knowledge:trigger", handler)
+            await bus.subscribe("events:created", handler)
             await _send_raw(
                 url,
                 json.dumps(
                     Event(
                         type=EventType.CUSTOM,
-                        topic="knowledge:trigger",
+                        topic="events:created",
                         payload={"k": 1},
                     ).to_dict()
                 ),
@@ -475,14 +475,14 @@ class TestSqsEventBusSingleTopicMode:
             received.append(event)
 
         try:
-            await bus.subscribe("knowledge:trigger", handler)
+            await bus.subscribe("events:created", handler)
             event_payload = {
                 "tenant_id": "acme",
                 "domain_id": "support",
             }
             event = Event(
                 type=EventType.CUSTOM,
-                topic="knowledge:trigger",
+                topic="events:created",
                 payload=event_payload,
             )
             await _send_raw(url, json.dumps(event.to_dict()), attributes=None)
@@ -492,7 +492,7 @@ class TestSqsEventBusSingleTopicMode:
             await bus.close()
 
         assert len(received) == 1
-        assert received[0].topic == "knowledge:trigger"
+        assert received[0].topic == "events:created"
         assert received[0].payload == event_payload
         # Message should be deleted — a follow-up receive returns nothing.
         msg = await _receive_one(url, wait_seconds=2)
@@ -514,7 +514,7 @@ class TestSqsEventBusSingleTopicMode:
             received.append(event)
 
         try:
-            await bus.subscribe("knowledge:trigger", handler)
+            await bus.subscribe("events:created", handler)
             with caplog.at_level(
                 _logging.WARNING,
                 logger="dataknobs_common.events.sqs",
@@ -531,8 +531,15 @@ class TestSqsEventBusSingleTopicMode:
 
         assert len(received) == 1
         assert received[0].type is EventType.CUSTOM
-        assert received[0].topic == "knowledge:trigger"
+        assert received[0].topic == "events:created"
         assert received[0].payload == {"some": "payload"}
+        # Synthesised events derive event_id from SQS MessageId so
+        # idempotency keying survives at-least-once redelivery.
+        assert received[0].event_id.startswith("sqs:")
+        assert received[0].event_id[len("sqs:"):] == (
+            received[0].metadata["sqs_message_id"]
+        )
+        assert received[0].metadata["sqs_synthesised"] is True
         synth_warnings = [
             r
             for r in caplog.records
@@ -543,25 +550,112 @@ class TestSqsEventBusSingleTopicMode:
         )
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_with_matching_attribute_still_filters(
-        self, make_queue
+    async def test_attribute_optional_unparseable_body_is_discarded(
+        self, make_queue, caplog
     ):
-        """New mode: matching attribute still routes only to that sub."""
+        """New mode: non-JSON body is discarded (poison) and deleted.
+
+        Locks in the ``json.JSONDecodeError`` branch of
+        ``_dispatch_to_all`` — no handler fires AND the message is
+        deleted from the queue so it does not recirculate forever.
+        """
+        import logging as _logging
+
         url = await make_queue()
         bus = _make_bus(url, require_topic_attribute=False)
         await bus.connect()
-        a_events: list[Event] = []
-        b_events: list[Event] = []
+        received: list[Event] = []
 
-        async def a_handler(event: Event) -> None:
-            a_events.append(event)
-
-        async def b_handler(event: Event) -> None:
-            b_events.append(event)
+        async def handler(event: Event) -> None:
+            received.append(event)
 
         try:
-            await bus.subscribe("topic-a", a_handler)
-            await bus.subscribe("topic-b", b_handler)
+            await bus.subscribe("topic-a", handler)
+            with caplog.at_level(
+                _logging.WARNING,
+                logger="dataknobs_common.events.sqs",
+            ):
+                # Send a body that is NOT valid JSON. Bypass publish()
+                # since publish always emits JSON.
+                await _send_raw(url, "this is not json {", attributes=None)
+                # Give the poll loop time to receive + reject.
+                await asyncio.sleep(2.0)
+        finally:
+            await bus.close()
+
+        assert received == [], (
+            "unparseable body must not produce a handler invocation"
+        )
+        # Message must be deleted (poison) — no redelivery.
+        msg = await _receive_one(url, wait_seconds=2)
+        assert msg is None, "unparseable bridge-mode message must be deleted"
+        poison_warnings = [
+            r
+            for r in caplog.records
+            if "Discarding unparseable SQS message" in r.getMessage()
+            and "(fanout)" in r.getMessage()
+        ]
+        assert len(poison_warnings) >= 1, (
+            "expected at least one poison-discard warning"
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_non_dict_json_body_wrapped(
+        self, make_queue
+    ):
+        """New mode: non-dict JSON body wraps into ``{'body': ...}``.
+
+        Locks in the ``else`` arm of the
+        ``payload = decoded if isinstance(decoded, dict) else {'body': decoded}``
+        branch. Handlers receive a synthesised CUSTOM event whose
+        payload is dict-shaped regardless of the on-wire JSON kind.
+        """
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("topic-a", handler)
+            # JSON array — Event.from_dict would TypeError on this;
+            # the synthesis branch must wrap it as {"body": [1, 2, 3]}.
+            await _send_raw(url, json.dumps([1, 2, 3]), attributes=None)
+            await _wait_for(lambda: len(received) >= 1)
+            await asyncio.sleep(1.0)
+        finally:
+            await bus.close()
+
+        assert len(received) == 1
+        assert received[0].type is EventType.CUSTOM
+        assert received[0].payload == {"body": [1, 2, 3]}
+        # Stable event_id contract still applies.
+        assert received[0].event_id.startswith("sqs:")
+        assert received[0].metadata["sqs_synthesised"] is True
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_with_matching_attribute_dispatches(
+        self, make_queue
+    ):
+        """New mode: messages with a matching topic attribute still route.
+
+        Bridge mode only changes attribute-*less* routing; messages
+        that DO carry the topic attribute follow the standard path.
+        Under single-sub enforcement only one sub exists, so this also
+        confirms publish→subscribe round-trip works in bridge mode.
+        """
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        received: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            received.append(event)
+
+        try:
+            await bus.subscribe("topic-a", handler)
             await bus.publish(
                 "topic-a",
                 Event(
@@ -570,16 +664,13 @@ class TestSqsEventBusSingleTopicMode:
                     payload={"n": 1},
                 ),
             )
-            await _wait_for(lambda: len(a_events) >= 1)
-            await asyncio.sleep(2.0)  # give b_handler a chance to wrongly fire
+            await _wait_for(lambda: len(received) >= 1)
+            await asyncio.sleep(1.0)
         finally:
             await bus.close()
 
-        assert len(a_events) == 1
-        assert a_events[0].payload == {"n": 1}
-        assert b_events == [], (
-            "matching-attribute messages must not fan out to other subs"
-        )
+        assert len(received) == 1
+        assert received[0].payload == {"n": 1}
 
     @pytest.mark.asyncio
     async def test_attribute_optional_with_mismatched_attribute_still_releases(
@@ -625,104 +716,79 @@ class TestSqsEventBusSingleTopicMode:
         )
 
     @pytest.mark.asyncio
-    async def test_attribute_optional_fanout_to_multiple_subscriptions(
+    async def test_attribute_optional_rejects_second_subscription(
         self, make_queue
     ):
-        """New mode: attribute-less message → every active sub receives it."""
-        url = await make_queue()
-        bus = _make_bus(url, require_topic_attribute=False)
-        await bus.connect()
-        a_events: list[Event] = []
-        b_events: list[Event] = []
+        """New mode is single-topic by contract: second subscribe raises.
 
-        async def a_handler(event: Event) -> None:
-            a_events.append(event)
-
-        async def b_handler(event: Event) -> None:
-            b_events.append(event)
-
-        try:
-            await bus.subscribe("topic-a", a_handler)
-            await bus.subscribe("topic-b", b_handler)
-            await _send_raw(
-                url,
-                json.dumps(
-                    Event(
-                        type=EventType.CUSTOM,
-                        topic="knowledge:trigger",
-                        payload={"shared": True},
-                    ).to_dict()
-                ),
-                attributes=None,
-            )
-            await _wait_for(
-                lambda: len(a_events) >= 1 and len(b_events) >= 1
-            )
-            await asyncio.sleep(1.0)
-        finally:
-            await bus.close()
-
-        assert len(a_events) == 1
-        assert len(b_events) == 1
-        assert a_events[0].payload == {"shared": True}
-        assert b_events[0].payload == {"shared": True}
-
-    @pytest.mark.asyncio
-    async def test_attribute_optional_fanout_handler_error_redelivers(
-        self, make_queue
-    ):
-        """New mode: a handler raising → message not deleted → redelivered.
-
-        Two subscribers, one raises once and then succeeds. The
-        message must be redelivered to BOTH (at-least-once preserved
-        across the fanout set) — idempotent handlers re-receive it.
+        Bridge mode dispatches attribute-less messages to *the* sub;
+        a second subscription would make synthesised events' ``topic``
+        non-deterministic and cross-deliver. ``subscribe()`` enforces
+        the contract loudly rather than silently mis-routing.
         """
         url = await make_queue()
         bus = _make_bus(url, require_topic_attribute=False)
         await bus.connect()
-        a_calls: list[Event] = []
-        b_calls: list[Event] = []
-        b_state = {"raised": False}
 
-        async def a_handler(event: Event) -> None:
-            a_calls.append(event)
+        async def handler(event: Event) -> None:
+            pass
 
-        async def b_handler(event: Event) -> None:
-            b_calls.append(event)
-            if not b_state["raised"]:
-                b_state["raised"] = True
+        try:
+            await bus.subscribe("topic-a", handler)
+            with pytest.raises(ValueError, match="single-topic bridge mode"):
+                await bus.subscribe("topic-b", handler)
+            # The original sub is still healthy — error path must not
+            # have corrupted bus state.
+            assert bus.subscription_count == 1
+        finally:
+            await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_attribute_optional_handler_error_redelivers(
+        self, make_queue
+    ):
+        """New mode: handler raising → message not deleted → redelivered.
+
+        Single subscriber (bridge mode is single-topic by contract).
+        Handler raises on first delivery then succeeds on the
+        at-least-once redelivery, so the same logical message reaches
+        the handler twice — idempotency contract demonstrated.
+        """
+        url = await make_queue()
+        bus = _make_bus(url, require_topic_attribute=False)
+        await bus.connect()
+        calls: list[Event] = []
+        state = {"raised": False}
+
+        async def handler(event: Event) -> None:
+            calls.append(event)
+            if not state["raised"]:
+                state["raised"] = True
                 raise RuntimeError("transient failure on first delivery")
 
         try:
-            await bus.subscribe("topic-a", a_handler)
-            await bus.subscribe("topic-b", b_handler)
+            await bus.subscribe("events:created", handler)
             await _send_raw(
                 url,
                 json.dumps(
                     Event(
                         type=EventType.CUSTOM,
-                        topic="knowledge:trigger",
+                        topic="events:created",
                         payload={"retry": True},
                     ).to_dict()
                 ),
                 attributes=None,
             )
-            # Wait for both initial deliveries, then for redelivery
-            # past the visibility timeout (2s + jitter).
+            # Initial delivery (raises), then redelivery past
+            # visibility timeout (2s + jitter).
             await _wait_for(
-                lambda: len(a_calls) >= 2 and len(b_calls) >= 2,
+                lambda: len(calls) >= 2,
                 timeout=20.0,
             )
         finally:
             await bus.close()
 
-        # Both handlers must have been called twice: once on initial
-        # delivery (where b raised, blocking the delete) and again on
-        # redelivery (where b succeeds, allowing the delete).
-        assert len(a_calls) >= 2, (
-            f"a_handler must be redelivered (calls={len(a_calls)})"
+        assert len(calls) >= 2, (
+            f"handler must retry after raising (calls={len(calls)})"
         )
-        assert len(b_calls) >= 2, (
-            f"b_handler must retry after raising (calls={len(b_calls)})"
-        )
-        assert b_state["raised"] is True
+        assert state["raised"] is True

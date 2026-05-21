@@ -276,9 +276,10 @@ default routing model it gets released back to the queue and
 recirculates forever.
 
 Set `require_topic_attribute=False` to dispatch attribute-less
-messages to every active subscription on the bus instead. This mode
-assumes the queue is **dedicated to a single topic** (your CDK or
-infrastructure wires it that way).
+messages to the bus's single subscription. The bus is
+**dedicated to a single topic** — `subscribe()` raises `ValueError`
+if you try to register a second subscription in this mode. Open a
+separate bus per bridge queue when you need multiple topics.
 
 ```python
 bus = create_event_bus({
@@ -288,22 +289,26 @@ bus = create_event_bus({
     "require_topic_attribute": False,   # accept attribute-less messages
 })
 await bus.subscribe("events:created", handler)
+# await bus.subscribe("other:topic", handler2)  # raises ValueError
 ```
 
 Behaviour matrix:
 
 | Topic attribute | `require_topic_attribute=True` (default) | `require_topic_attribute=False` |
 |---|---|---|
-| Present + matches sub | Dispatch to that sub | Dispatch to that sub |
+| Present + matches sub | Dispatch to that sub | Dispatch to the sub |
 | Present + mismatched  | Release back to queue (other sub may pick it up) | Release back to queue |
-| Absent                | Release back to queue                            | Fan out to every active sub |
+| Absent                | Release back to queue                            | Dispatch to the sub |
 
 When the body is valid JSON but not `Event.to_dict()`-shaped (e.g. a
 raw EventBridge envelope), it is delivered as a synthesised
-`Event(type=EventType.CUSTOM, topic=<receiving poll task's topic>,
-payload=<decoded body>)` event with one WARNING log per synthesis.
-When the body is not valid JSON, it is discarded as poison (same as
-the default mode).
+`Event(type=EventType.CUSTOM, topic=<the subscription's topic>,
+payload=<decoded body>, event_id="sqs:<MessageId>",
+metadata={"sqs_message_id": ..., "sqs_synthesised": True})` with one
+WARNING log per synthesis. The `event_id` is derived from the stable
+SQS `MessageId` so handlers can key idempotency on it across
+at-least-once redeliveries. When the body is not valid JSON, it is
+discarded as poison (same as the default mode).
 
 **Note:** Import directly for type hints (lazy — does not pull
 `aioboto3` until first access):
