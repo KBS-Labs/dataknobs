@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-21T00:35:59Z",
+  "timestamp": "2026-05-21T01:47:24Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.15 (Homebrew 2026-05-18 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/expose-localstack-endpoint-resolver",
-  "git_commit": "97789935c79b99dd9445e6d36cfc1fbcaf977cbd",
+  "git_commit": "752985ed311f85b2b58c822e7e594ea56fe21984",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
