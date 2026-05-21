@@ -47,8 +47,8 @@ def assert_dataclass_config_matches_ctor(
     """Assert ``config_cls`` fields match ``target_cls.__init__`` params.
 
     Use for registries where the ctor consumes a typed dataclass
-    (events buses post-141, LLM providers, future structured-config
-    consumers).
+    (event buses with structured configs, LLM providers, future
+    structured-config consumers).
 
     Args:
         config_cls: A frozen ``@dataclass`` config class. Its
@@ -101,8 +101,8 @@ def assert_factory_kwargs_match_ctor(
     AST-walks the factory function body for ``target_cls(...)`` or
     ``target_cls.from_config(...)`` call sites and asserts every keyword
     argument is a valid parameter of ``target_cls.__init__``. Catches
-    the 141 failure mode in any registry: a factory adds (or drops) a
-    kwarg without a matching ctor change.
+    the allowlist-drift failure mode in any registry: a factory adds (or
+    drops) a kwarg without a matching ctor change.
 
     This is the only helper that *catches* an allowlist factory dropping
     a ctor kwarg — by walking the factory body and noting which kwargs
@@ -135,6 +135,13 @@ def assert_factory_kwargs_match_ctor(
     tree = ast.parse(src)
 
     factory_kwargs: set[str] = set()
+    # ``"cls"`` is the conventional alias for the target class inside a
+    # classmethod, so the walker treats ``cls(...)`` / ``cls.from_config(...)``
+    # as equivalent to ``Target(...)`` / ``Target.from_config(...)``. This
+    # assumes factory functions do not also use a *local* identifier named
+    # ``cls`` for an unrelated callable — a convention the registry
+    # factories in this codebase follow, but worth documenting because a
+    # future factory that violates it would yield false positives.
     target_names = {target_cls.__name__, "cls"}
     delegates_to_from_config = False
 

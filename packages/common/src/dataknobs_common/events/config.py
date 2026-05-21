@@ -19,7 +19,7 @@ intentionally unsupported.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 
@@ -156,8 +156,14 @@ class SqsEventBusConfig(EventBusConfig):
     visibility_timeout: int = 60
     topic_attribute: str = "topic"
     require_topic_attribute: bool = True
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    # AWS credential fields use ``repr=False`` so they are omitted from
+    # the auto-generated ``__repr__`` — the new ``bus.config`` accessor
+    # makes it much easier to accidentally log the full config (pytest
+    # failure output, debug logging, exception formatting) than the
+    # legacy kwarg-only construction shape, and an IAM access/secret key
+    # pair must not appear in those streams.
+    aws_access_key_id: str | None = field(default=None, repr=False)
+    aws_secret_access_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not self.queue_url:

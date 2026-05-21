@@ -89,7 +89,7 @@ class TestCreateSqsBusThreadsKnobs:
         """All nine ``SqsEventBus`` ctor kwargs reach the bus.
 
         Catches a future allowlist regression for any of the other
-        documented knobs — the same drift mode as 141.
+        documented knobs — the same allowlist-drops-a-knob drift mode.
         """
         config = self._base_config(
             region="us-west-2",
@@ -147,7 +147,7 @@ class TestSqsEventBusConstructionShapes:
         assert bus.config is cfg
 
     def test_kwarg_construction_back_compat(self) -> None:
-        """Pre-141 call shape — ``SqsEventBus(queue_url=...)`` — still works."""
+        """Legacy kwarg call shape — ``SqsEventBus(queue_url=...)`` — still works."""
         bus = SqsEventBus(
             queue_url="https://sqs/q",
             region="us-east-1",
@@ -158,7 +158,7 @@ class TestSqsEventBusConstructionShapes:
         assert bus.require_topic_attribute is False
 
     def test_kwarg_construction_defaults_unchanged(self) -> None:
-        """Omitted kwargs match the dataclass defaults (== pre-141 ctor defaults)."""
+        """Omitted kwargs match the dataclass defaults (== legacy ctor defaults)."""
         bus = SqsEventBus(queue_url="https://sqs/q")
         assert bus.config.wait_time_seconds == 20
         assert bus.config.visibility_timeout == 60

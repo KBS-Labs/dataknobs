@@ -60,10 +60,11 @@ def test_event_bus_dataclass_matches_ctor(
 ) -> None:
     """Every config dataclass field is a ctor kwarg on its bus.
 
-    The 141 drift mode was the inverse — a ctor kwarg missing from
-    the factory allowlist. Now that the factory consumes the dataclass
-    via ``from_dict``, the dataclass IS the allowlist; this parity
-    check makes the allowlist-vs-ctor symmetry structurally enforced.
+    The original drift mode was the inverse — a ctor kwarg missing
+    from the factory allowlist. Now that the factory consumes the
+    dataclass via ``from_dict``, the dataclass IS the allowlist; this
+    parity check makes the allowlist-vs-ctor symmetry structurally
+    enforced.
     """
     # PostgresEventBus.__init__ takes ``connection_string``,
     # ``channel_prefix`` as positionals for legacy compat; both are

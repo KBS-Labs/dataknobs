@@ -37,7 +37,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _UNSET: Any = object()
-"""Sentinel for kwarg-vs-config arbitration in ``SqsEventBus.__init__``."""
+"""Sentinel for kwarg-vs-config arbitration in ``SqsEventBus.__init__``.
+
+The per-kwarg annotations widen to ``T | Any`` so the sentinel default
+is valid for the type checker. This intentionally trades narrow mypy
+coverage on the loose-kwarg path for a single ctor that accepts both
+the typed-config and legacy-kwarg shapes; the typed-config path
+(``from_config(SqsEventBusConfig(...))``) keeps full type narrowing.
+``@overload`` stubs presenting the two clean shapes are a future
+improvement for IDE discoverability.
+"""
 
 
 class SqsEventBus:

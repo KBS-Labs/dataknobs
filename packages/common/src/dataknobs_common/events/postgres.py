@@ -18,7 +18,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _UNSET: Any = object()
-"""Sentinel for kwarg-vs-config arbitration in ``PostgresEventBus.__init__``."""
+"""Sentinel for kwarg-vs-config arbitration in ``PostgresEventBus.__init__``.
+
+The per-kwarg annotations widen to ``T | Any`` so the sentinel default
+is valid for the type checker. This trades narrow mypy coverage on the
+loose-kwarg path for a single ctor that accepts both the typed-config
+and legacy-kwarg shapes; the typed-config path
+(``from_config(PostgresEventBusConfig(...))``) keeps full type
+narrowing.
+"""
 
 _LISTEN_POLL_INTERVAL = 2.0
 """Seconds between dedicated-LISTEN-connection liveness probes."""
