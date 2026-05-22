@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Deprecated
+- `ConfigurableBase` (`dataknobs_config.builders`) — soft-deprecated
+  in favor of `StructuredConfigConsumer[ConfigT]` from
+  `dataknobs_common.structured_config`. `ConfigurableBase` performs
+  kwarg-splat construction (`cls(**config)`); the successor provides
+  typed-dispatch construction with auto-derived `from_dict`, a
+  `_normalize_dict` override hook, and a unified parity guard.
+  Existing consumers continue to work; no runtime warning is raised
+  so the transition stays quiet across the multi-cycle migration.
+  Removal is scheduled for a future release once the in-tree
+  migration is complete. See `packages/config/docs/configurable-base.md`
+  for the migration sketch.
+
 ## v0.3.14 - 2026-05-18
 
 ## v0.3.13 - 2026-05-13

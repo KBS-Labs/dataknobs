@@ -11,6 +11,13 @@ superset ``${VAR}`` / ``${VAR:default}`` / ``${VAR:-default}`` /
 ``substitute_env_vars(data, type_coerce=True, expand_user_paths=False,
 substitute_keys=False)`` and emits ``DeprecationWarning`` on
 construction; new code should use ``substitute_env_vars`` directly.
+
+:class:`ConfigurableBase` is soft-deprecated in favor of
+:class:`dataknobs_common.structured_config.StructuredConfigConsumer`.
+New code should adopt the typed-dispatch successor; existing
+``ConfigurableBase`` consumers continue to work, and no runtime
+warning is raised so the migration can proceed quietly across
+multiple release cycles.
 """
 
 from .binding_resolver import (

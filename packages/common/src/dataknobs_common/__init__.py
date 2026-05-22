@@ -114,6 +114,10 @@ from dataknobs_common.serialization import (
     serialize,
     serialize_list,
 )
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 from dataknobs_common.testing import (
     create_test_json_files,
     create_test_markdown_files,
@@ -210,6 +214,9 @@ __all__ = [
     "deserialize_list",
     "is_serializable",
     "is_deserializable",
+    # Structured configuration
+    "StructuredConfig",
+    "StructuredConfigConsumer",
     # Testing - Availability Checks
     "is_ollama_available",
     "is_ollama_model_available",

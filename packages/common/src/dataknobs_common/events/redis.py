@@ -6,7 +6,9 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ._resilient_loop import run_supervised_loop
 from .config import RedisEventBusConfig
@@ -17,18 +19,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_UNSET: Any = object()
-"""Sentinel for kwarg-vs-config arbitration in ``RedisEventBus.__init__``.
 
-The per-kwarg annotations widen to ``T | Any`` so the sentinel default
-is valid for the type checker. This trades narrow mypy coverage on the
-loose-kwarg path for a single ctor that accepts both the typed-config
-and legacy-kwarg shapes; the typed-config path
-(``from_config(RedisEventBusConfig(...))``) keeps full type narrowing.
-"""
-
-
-class RedisEventBus:
+class RedisEventBus(StructuredConfigConsumer[RedisEventBusConfig]):
     """Event bus using Redis pub/sub.
 
     This implementation uses Redis PUBLISH/SUBSCRIBE for messaging,
@@ -72,69 +64,20 @@ class RedisEventBus:
         await bus.close()
         ```
 
+    Construction shapes are provided by
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`:
+    a typed :class:`RedisEventBusConfig`, a dict via ``config=``, or
+    loose ``**kwargs`` (``host=...``, etc.). Mixing typed ``config=``
+    with loose kwargs raises ``TypeError``.
+
     Requires:
         redis: Async Redis client
             (``pip install 'dataknobs-common[redis]'``)
     """
 
-    def __init__(
-        self,
-        config: RedisEventBusConfig | None = None,
-        *,
-        host: str | Any = _UNSET,
-        port: int | Any = _UNSET,
-        password: str | None | Any = _UNSET,
-        ssl: bool | Any = _UNSET,
-        channel_prefix: str | Any = _UNSET,
-    ) -> None:
-        """Initialize the Redis event bus.
+    CONFIG_CLS: ClassVar[type[RedisEventBusConfig]] = RedisEventBusConfig
 
-        Two construction shapes are supported:
-
-        - **Typed config** (recommended): pass a
-          :class:`RedisEventBusConfig` instance positionally. Loose
-          kwargs must not be supplied alongside it.
-        - **Loose kwargs** (backward-compatible): pass each parameter as
-          a keyword (``host=...``, etc.). Internally constructed into a
-          :class:`RedisEventBusConfig`.
-
-        Mixing the two shapes raises ``TypeError``.
-
-        Args:
-            config: Optional pre-built typed configuration. When
-                provided, loose kwargs must NOT be passed.
-            host: Redis host
-            port: Redis port (default: 6379)
-            password: Redis password (optional)
-            ssl: Whether to use SSL/TLS (for ElastiCache)
-            channel_prefix: Prefix for channels (default: "events")
-
-        Raises:
-            TypeError: If ``config`` and loose kwargs are both supplied.
-        """
-        loose_kwargs = {
-            "host": host,
-            "port": port,
-            "password": password,
-            "ssl": ssl,
-            "channel_prefix": channel_prefix,
-        }
-        supplied_kwargs = {
-            k: v for k, v in loose_kwargs.items() if v is not _UNSET
-        }
-        if config is not None:
-            if supplied_kwargs:
-                raise TypeError(
-                    "RedisEventBus: cannot mix `config` with loose kwargs "
-                    f"(also supplied: {sorted(supplied_kwargs)}). Pass "
-                    "either a RedisEventBusConfig or the individual kwargs."
-                )
-            self._config = config
-        else:
-            # Route loose kwargs through ``from_dict`` so that classmethod
-            # is the single source of truth for kwarg/dict → typed
-            # translation (defaults live in one place, structurally).
-            self._config = RedisEventBusConfig.from_dict(supplied_kwargs)
+    def _setup(self) -> None:
         self._redis: Any = None  # redis.asyncio.Redis
         self._pubsub: Any = None  # redis.asyncio.PubSub
         self._subscriptions: dict[str, Subscription] = {}
@@ -144,24 +87,6 @@ class RedisEventBus:
         self._listener_task: asyncio.Task[Any] | None = None
         self._connected = False
         self._running = False
-
-    @classmethod
-    def from_config(
-        cls, config: dict[str, Any] | RedisEventBusConfig
-    ) -> RedisEventBus:
-        """Construct from a config dict or typed :class:`RedisEventBusConfig`.
-
-        The recommended programmatic-construction entry point alongside
-        the typed-config and loose-kwarg ``__init__`` shapes.
-        """
-        if isinstance(config, dict):
-            config = RedisEventBusConfig.from_dict(config)
-        return cls(config)
-
-    @property
-    def config(self) -> RedisEventBusConfig:
-        """Read-only view of the construction parameters."""
-        return self._config
 
     def _topic_to_channel(self, topic: str) -> str:
         """Convert a topic name to a Redis channel name.

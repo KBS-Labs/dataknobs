@@ -42,6 +42,7 @@ from dataknobs_common.events.sqs import SqsEventBus
 from dataknobs_common.testing import (
     assert_dataclass_config_matches_ctor,
     assert_factory_kwargs_match_ctor,
+    assert_structured_config_consumer,
 )
 
 
@@ -105,6 +106,29 @@ def test_factory_uses_from_config(
         # config dict flows through.
         ignore_kwargs={"connection_string", "channel_prefix"},
     )
+
+
+@pytest.mark.parametrize(
+    "consumer_cls",
+    [InMemoryEventBus, RedisEventBus, PostgresEventBus, SqsEventBus],
+    ids=["memory", "redis", "postgres", "sqs"],
+)
+def test_event_bus_uses_structured_config_consumer(
+    consumer_cls: type,
+) -> None:
+    """Each event bus correctly applies the structured-config pattern.
+
+    Unified guard combining the dataclass-vs-ctor and CONFIG_CLS
+    declaration checks. Each bus mixes in
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`
+    and declares ``CONFIG_CLS`` pointing at the matching
+    ``<Backend>EventBusConfig``.
+    """
+    # ``PostgresEventBus`` keeps a thin ``__init__`` override that
+    # accepts ``connection_string`` / ``channel_prefix`` positionally
+    # for back-compat. Both ARE dataclass fields, so they match the
+    # mixin's contract without an ignore.
+    assert_structured_config_consumer(consumer_cls)
 
 
 def test_registered_backends_are_audited() -> None:

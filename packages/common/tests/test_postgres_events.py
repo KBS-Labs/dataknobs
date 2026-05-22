@@ -11,11 +11,10 @@ import asyncio
 import json
 import os
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
-from dataknobs_common.events import Event, EventType
+from dataknobs_common.events import Event, EventType, PostgresEventBusConfig
 from dataknobs_common.events.postgres import PostgresEventBus
 from dataknobs_common.testing import is_postgres_available
 
@@ -136,6 +135,30 @@ class TestChannelPrefixSanitization:
         """Test that a prefix producing an empty result raises ValueError."""
         with pytest.raises(ValueError, match="empty after sanitization"):
             PostgresEventBus(
+                connection_string="postgresql://unused",
+                channel_prefix="!@#$%^&*()",
+            )
+
+    def test_directly_constructed_config_is_sanitized(self):
+        """A directly-built typed config sanitizes its own prefix.
+
+        Sanitization lives on ``PostgresEventBusConfig.__post_init__``,
+        so every construction path — not just the bus ctor — produces a
+        SQL-safe prefix. This guards the typed-config path that bypasses
+        ``PostgresEventBus.__init__`` (e.g. ``from_config(typed_cfg)``).
+        """
+        cfg = PostgresEventBusConfig(
+            connection_string="postgresql://unused",
+            channel_prefix="foo'; DROP TABLE users --",
+        )
+        assert cfg.channel_prefix == "fooDROPTABLEusers"
+        bus = PostgresEventBus.from_config(cfg)
+        assert bus.config.channel_prefix == "fooDROPTABLEusers"
+
+    def test_directly_constructed_config_empty_prefix_raises(self):
+        """Empty-after-sanitization raises at config construction."""
+        with pytest.raises(ValueError, match="empty after sanitization"):
+            PostgresEventBusConfig(
                 connection_string="postgresql://unused",
                 channel_prefix="!@#$%^&*()",
             )
@@ -345,22 +368,27 @@ class TestListenerRegistration:
 
         registered_listeners: list[tuple[str, Any]] = []
 
-        async def fake_connect(dsn: str) -> Any:
-            async def _add_listener(ch: str, cb: Any) -> None:
+        class _FakeListenConn:
+            """Hand-rolled stand-in for an asyncpg connection.
+
+            asyncpg cannot run in a unit test, so this fake stubs the
+            connection methods ``connect()``/``close()`` touch. The
+            methods are ``async`` to match asyncpg's real coroutine
+            interface — a sync stub would silently mask a missing
+            ``await`` in the code under test.
+            """
+
+            async def add_listener(self, ch: str, cb: Any) -> None:
                 registered_listeners.append((ch, cb))
 
-            async def _remove_listener(ch: str, cb: Any) -> None:
+            async def remove_listener(self, ch: str, cb: Any) -> None:
                 pass
 
-            return type(
-                "FakeConn",
-                (),
-                {
-                    "add_listener": _add_listener,
-                    "remove_listener": _remove_listener,
-                    "close": AsyncMock(),
-                },
-            )()
+            async def close(self) -> None:
+                pass
+
+        async def fake_connect(dsn: str) -> Any:
+            return _FakeListenConn()
 
         # Patch asyncpg import
         import types
@@ -410,9 +438,6 @@ class TestNotificationHandlerParsesPayload:
         bus._channel_topics["events_test"] = "test"
 
         dispatched_events: list[Event] = []
-
-        # Track dispatched events
-        original_dispatch = bus._dispatch_event
 
         async def tracking_dispatch(topic: str, event: Event) -> None:
             dispatched_events.append(event)

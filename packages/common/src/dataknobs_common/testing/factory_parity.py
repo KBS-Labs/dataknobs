@@ -5,7 +5,7 @@ These helpers exist because the SQS event bus shipped with a ctor knob
 The specific gap was closed; these helpers prevent the *class* of bug
 from recurring.
 
-Three structural patterns exist across the dataknobs registries:
+Four structural patterns exist across the dataknobs registries:
 
 1. **Typed dataclass + ctor.** The bus (or provider) ctor consumes a
    frozen dataclass. Drift = the dataclass has a field the ctor doesn't
@@ -23,9 +23,21 @@ Three structural patterns exist across the dataknobs registries:
    Drift = a documented key is no longer read. Guard:
    :func:`assert_ctor_reads_documented_keys`.
 
-All three helpers are AST-based — no class instantiation is required,
+4. **``StructuredConfigConsumer[ConfigT]`` adopter.** The class mixes
+   in
+   :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`
+   and declares ``CONFIG_CLS``. Drift = the declaration is missing,
+   ``CONFIG_CLS`` is not a ``StructuredConfig`` subclass, or the
+   dataclass field set drifts from the consumer ctor surface. Guard:
+   :func:`assert_structured_config_consumer`. Bundles patterns 1 and
+   2 for adopters of the structured-config primitives.
+
+The AST-walking helpers (1, 2, 3) do not instantiate the target class,
 so backends with optional dependencies (asyncpg, aioboto3, ...) can be
 parity-tested without those dependencies installed.
+:func:`assert_structured_config_roundtrip` exercises a config instance
+directly — it asserts a serialization property, not a structural
+contract.
 """
 
 from __future__ import annotations
@@ -67,13 +79,27 @@ def assert_dataclass_config_matches_ctor(
     """
     ignore_params = ignore_params or set()
     config_fields = {f.name for f in dataclasses.fields(config_cls)}
+    sig = inspect.signature(target_cls.__init__)
+    accepts_var_kwargs = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in sig.parameters.values()
+    )
     ctor_params = {
         name
-        for name in inspect.signature(target_cls.__init__).parameters
-        if name not in {"self", "config", "kwargs", "args"} | ignore_params
+        for name, p in sig.parameters.items()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD
+        and p.kind is not inspect.Parameter.VAR_POSITIONAL
+        and name not in {"self", "config"} | ignore_params
     }
     missing_in_config = ctor_params - config_fields
-    missing_in_ctor = config_fields - ctor_params
+    # When the ctor accepts ``**kwargs`` (the
+    # ``StructuredConfigConsumer`` pattern), every dataclass field is
+    # accepted by construction — the variadic forwards into
+    # ``from_dict`` for field projection. Drift in the
+    # ctor-missing-field direction is structurally impossible.
+    missing_in_ctor: set[str] = (
+        set() if accepts_var_kwargs else config_fields - ctor_params
+    )
     failures: list[str] = []
     if missing_in_config:
         failures.append(
@@ -170,12 +196,28 @@ def assert_factory_kwargs_match_ctor(
                     continue
                 factory_kwargs.add(kw.arg)
 
+    sig = inspect.signature(target_cls.__init__)
+    accepts_var_kwargs = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in sig.parameters.values()
+    )
     ctor_params = {
         name
-        for name in inspect.signature(target_cls.__init__).parameters
-        if name not in {"self", "args", "kwargs"}
+        for name, p in sig.parameters.items()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD
+        and p.kind is not inspect.Parameter.VAR_POSITIONAL
+        and name != "self"
     }
-    unknown_in_factory = factory_kwargs - ctor_params
+    # When the ctor declares ``**kwargs`` (the
+    # ``StructuredConfigConsumer`` pattern), every named kwarg the
+    # factory passes is structurally accepted — drift in the
+    # unknown-to-ctor direction is impossible. The
+    # missing-from-factory direction stays meaningful only when the
+    # factory hand-rolls calls; ``from_config`` delegation covers
+    # that orthogonally.
+    unknown_in_factory: set[str] = (
+        set() if accepts_var_kwargs else factory_kwargs - ctor_params
+    )
     missing_in_factory = (
         ctor_params - factory_kwargs - ignore_kwargs - {"config"}
     )
@@ -278,8 +320,109 @@ def assert_ctor_reads_documented_keys(
         )
 
 
+def assert_structured_config_consumer(
+    consumer_cls: type,
+    *,
+    expected_factory: Callable[..., Any] | None = None,
+    ignore_params: set[str] | None = None,
+) -> None:
+    """Assert ``consumer_cls`` correctly applies the structured-config pattern.
+
+    Combines four checks for adopters of
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`:
+
+    1. ``consumer_cls`` declares a ``CONFIG_CLS`` ClassVar.
+    2. ``CONFIG_CLS`` is a ``StructuredConfig`` subclass.
+    3. ``CONFIG_CLS`` field set matches ``consumer_cls.__init__``
+       parameter set (delegates to
+       :func:`assert_dataclass_config_matches_ctor`). The implicit
+       ``self`` and ``config`` kwarg are ignored; the variadic
+       ``**kwargs`` channel that the mixin provides is also ignored.
+    4. (Optional) If ``expected_factory`` is supplied, its body
+       delegates to ``consumer_cls.from_config(config)`` (delegates to
+       :func:`assert_factory_kwargs_match_ctor`) — proves the registry
+       factory hasn't regressed to a per-kwarg allowlist.
+
+    Args:
+        consumer_cls: A class mixing in
+            :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`.
+        expected_factory: Optional registry-factory callable; when
+            supplied, asserts it delegates to ``from_config``.
+        ignore_params: Additional ctor params to ignore (forwarded to
+            :func:`assert_dataclass_config_matches_ctor`). Use for
+            back-compat positional shortcuts that intentionally live
+            outside the dataclass surface.
+
+    Raises:
+        AssertionError: If any of the four checks fails.
+    """
+    # Lazy import to keep ``testing.factory_parity`` from transitively
+    # importing the abstraction it helps test.
+    from dataknobs_common.structured_config import StructuredConfig
+
+    config_cls = getattr(consumer_cls, "CONFIG_CLS", None)
+    if config_cls is None:
+        raise AssertionError(
+            f"{consumer_cls.__name__} does not declare CONFIG_CLS "
+            "(required by StructuredConfigConsumer)."
+        )
+    if not (
+        isinstance(config_cls, type)
+        and issubclass(config_cls, StructuredConfig)
+    ):
+        raise AssertionError(
+            f"{consumer_cls.__name__}.CONFIG_CLS is {config_cls!r}, "
+            "not a StructuredConfig subclass."
+        )
+
+    assert_dataclass_config_matches_ctor(
+        config_cls,
+        consumer_cls,
+        ignore_params=ignore_params or set(),
+    )
+
+    if expected_factory is not None:
+        assert_factory_kwargs_match_ctor(
+            expected_factory,
+            consumer_cls,
+            ignore_kwargs=ignore_params or set(),
+        )
+
+
+def assert_structured_config_roundtrip(config: Any) -> None:
+    """Assert ``type(cfg).from_dict(cfg.to_dict()) == cfg``.
+
+    Property assertion for a
+    :class:`~dataknobs_common.structured_config.StructuredConfig`
+    instance. Eliminates the per-consumer round-trip boilerplate that
+    every adopter of the abstraction would otherwise duplicate.
+
+    The property holds for flat configs and for nested configs whose
+    ``_normalize_dict`` rebuilds each nested ``StructuredConfig`` field
+    from its dict. A nested field left as a raw dict fails the assertion
+    (``asdict`` recurses; ``from_dict`` does not) — so pass this helper a
+    config whose nesting is handled by ``_normalize_dict``, or a flat
+    config.
+
+    Args:
+        config: A ``StructuredConfig`` instance to round-trip.
+
+    Raises:
+        AssertionError: If the recovered config is not equal to the
+            original. The mismatch is included in the failure message.
+    """
+    recovered = type(config).from_dict(config.to_dict())
+    if recovered != config:
+        raise AssertionError(
+            f"Round-trip mismatch for {type(config).__name__}:\n"
+            f"  original={config!r}\n  recovered={recovered!r}"
+        )
+
+
 __all__ = [
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
+    "assert_structured_config_consumer",
+    "assert_structured_config_roundtrip",
 ]
