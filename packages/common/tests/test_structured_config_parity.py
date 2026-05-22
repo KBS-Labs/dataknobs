@@ -1,0 +1,111 @@
+"""Tests for ``assert_structured_config_consumer``.
+
+The helper combines four structural checks for adopters of
+``StructuredConfigConsumer[ConfigT]``:
+
+1. ``CONFIG_CLS`` declared.
+2. ``CONFIG_CLS`` is a ``StructuredConfig`` subclass.
+3. Dataclass field set matches consumer ctor surface.
+4. (Optional) Registry factory delegates to ``from_config``.
+
+These tests exercise each failure mode against synthetic
+``Consumer``/``Cfg`` pairs so the helper's diagnostic output stays
+deterministic.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import ClassVar
+
+import pytest
+
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
+from dataknobs_common.testing import assert_structured_config_consumer
+
+
+@dataclass(frozen=True)
+class _GoodCfg(StructuredConfig):
+    x: int = 0
+
+
+class _GoodConsumer(StructuredConfigConsumer[_GoodCfg]):
+    CONFIG_CLS: ClassVar[type[_GoodCfg]] = _GoodCfg
+
+
+class _NoConfigCls(StructuredConfigConsumer[_GoodCfg]):
+    """Adopter that forgets to declare ``CONFIG_CLS``."""
+
+
+class _PlainBase:
+    """A plain class — not a ``StructuredConfig`` subclass."""
+
+
+class _WrongConfigCls(StructuredConfigConsumer[_GoodCfg]):
+    CONFIG_CLS = _PlainBase  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class _CfgWithExtra(StructuredConfig):
+    x: int = 0
+    extra: str = "default"
+
+
+class _ConsumerMissingExtra(StructuredConfigConsumer[_CfgWithExtra]):
+    """``CONFIG_CLS`` has ``extra`` field but ctor doesn't accept it."""
+
+    CONFIG_CLS: ClassVar[type[_CfgWithExtra]] = _CfgWithExtra
+
+    def __init__(self, *, x: int = 0) -> None:
+        self._config = _CfgWithExtra(x=x)
+
+
+def _good_factory(config: dict) -> _GoodConsumer:
+    """Factory that delegates to ``from_config`` — the structured path."""
+    return _GoodConsumer.from_config(config)
+
+
+def _allowlist_factory(config: dict) -> _GoodConsumer:
+    """Factory that hand-rolls kwargs from a config dict (drift mode)."""
+    return _GoodConsumer(x=config.get("x", 0))
+
+
+class TestAssertStructuredConfigConsumer:
+    def test_well_formed_consumer_passes(self) -> None:
+        assert_structured_config_consumer(_GoodConsumer)
+
+    def test_missing_config_cls_raises(self) -> None:
+        with pytest.raises(AssertionError, match="CONFIG_CLS"):
+            assert_structured_config_consumer(_NoConfigCls)
+
+    def test_wrong_config_cls_type_raises(self) -> None:
+        with pytest.raises(
+            AssertionError, match="not a StructuredConfig subclass"
+        ):
+            assert_structured_config_consumer(_WrongConfigCls)
+
+    def test_field_drift_raises(self) -> None:
+        """Dataclass has a field the ctor doesn't accept."""
+        with pytest.raises(AssertionError):
+            assert_structured_config_consumer(_ConsumerMissingExtra)
+
+    def test_factory_delegation_passes(self) -> None:
+        """``expected_factory`` arg accepts a from_config-delegating factory."""
+        assert_structured_config_consumer(
+            _GoodConsumer, expected_factory=_good_factory
+        )
+
+    def test_factory_allowlist_drift_passes_when_kwargs_valid(self) -> None:
+        """Allowlist factory only flagged when it passes invalid kwargs.
+
+        ``_allowlist_factory`` passes ``x=...`` (a valid ctor kwarg)
+        and therefore does not trigger the helper. The drift-detection
+        contract is "factories that pass kwargs unknown to the ctor"
+        — not "factories that don't use ``from_config``."
+        """
+        assert_structured_config_consumer(
+            _GoodConsumer, expected_factory=_allowlist_factory
+        )

@@ -216,8 +216,22 @@ class ObjectBuilder:
 class ConfigurableBase:
     """Base class for objects that can be configured.
 
-    Classes that inherit from this can implement custom
-    configuration loading logic.
+    .. deprecated::
+        Prefer
+        :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`
+        for new code. ``ConfigurableBase`` performs kwarg-splat
+        construction (``cls(**config)``);
+        ``StructuredConfigConsumer[ConfigT]`` provides typed-dispatch
+        construction with auto-derived ``from_dict``, a
+        ``_normalize_dict`` override hook, and a unified parity guard.
+
+        Existing consumers continue to work; no runtime warning is
+        raised so the transition stays quiet across the multi-cycle
+        migration. Removal is scheduled for a future release once the
+        in-tree migration is complete.
+
+    Classes that inherit from this can implement custom configuration
+    loading logic.
     """
 
     @classmethod

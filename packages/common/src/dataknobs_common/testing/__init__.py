@@ -76,6 +76,8 @@ from dataknobs_common.testing.factory_parity import (
     assert_ctor_reads_documented_keys,
     assert_dataclass_config_matches_ctor,
     assert_factory_kwargs_match_ctor,
+    assert_structured_config_consumer,
+    assert_structured_config_roundtrip,
 )
 from dataknobs_common.testing.localstack_fixtures import (
     localstack_endpoint,
@@ -92,6 +94,8 @@ __all__ = [
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
+    "assert_structured_config_consumer",
+    "assert_structured_config_roundtrip",
     "create_test_json_files",
     "create_test_markdown_files",
     "elasticsearch_connection_params",

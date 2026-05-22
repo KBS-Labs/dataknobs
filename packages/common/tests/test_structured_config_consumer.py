@@ -1,0 +1,188 @@
+"""Dispatch + lifecycle tests for ``StructuredConfigConsumer``.
+
+Three construction shapes must all reach the same internal state:
+
+- ``Consumer(typed_cfg)``
+- ``Consumer({...})`` / ``Consumer(config={...})``
+- ``Consumer(**kwargs)``
+
+Mixing typed ``config=`` with loose kwargs raises ``TypeError``.
+Non-Mapping non-``ConfigT`` ``config`` argument raises ``TypeError``.
+``_setup()`` runs exactly once after ``self._config`` is established.
+``from_config`` dispatches dict or typed config identically to
+direct construction.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any, ClassVar
+
+import pytest
+
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
+
+
+@dataclass(frozen=True)
+class _TestCfg(StructuredConfig):
+    x: int = 0
+    y: str = "default"
+
+
+class _Consumer(StructuredConfigConsumer[_TestCfg]):
+    CONFIG_CLS: ClassVar[type[_TestCfg]] = _TestCfg
+
+    def _setup(self) -> None:
+        # Track invocation count so tests can assert single-shot setup.
+        self._setup_calls = getattr(self, "_setup_calls", 0) + 1
+
+
+class _NoCfgClsConsumer(StructuredConfigConsumer[_TestCfg]):
+    """Consumer that *forgets* to declare ``CONFIG_CLS``.
+
+    Used to assert the parity-guard fires; also ensures a clear
+    runtime error at construction time.
+    """
+
+
+class TestConstructionShapes:
+    """All three construction shapes reach the same state."""
+
+    def test_typed_config_construction(self) -> None:
+        cfg = _TestCfg(x=1, y="hello")
+        c = _Consumer(cfg)
+        assert c.config is cfg
+
+    def test_dict_only_construction(self) -> None:
+        c = _Consumer({"x": 1, "y": "hello"})
+        assert c.config == _TestCfg(x=1, y="hello")
+
+    def test_kwargs_only_construction(self) -> None:
+        c = _Consumer(x=1, y="hello")
+        assert c.config == _TestCfg(x=1, y="hello")
+
+    def test_none_and_kwargs_construction(self) -> None:
+        c = _Consumer(None, x=1)
+        assert c.config == _TestCfg(x=1, y="default")
+
+    def test_no_arguments_uses_defaults(self) -> None:
+        c = _Consumer()
+        assert c.config == _TestCfg()
+
+    def test_partial_dict_uses_field_defaults(self) -> None:
+        c = _Consumer({"x": 7})
+        assert c.config == _TestCfg(x=7, y="default")
+
+    def test_dict_via_keyword_arg(self) -> None:
+        c = _Consumer(config={"x": 2})
+        assert c.config.x == 2
+
+    def test_typed_via_keyword_arg(self) -> None:
+        cfg = _TestCfg(x=3)
+        c = _Consumer(config=cfg)
+        assert c.config is cfg
+
+
+class TestDispatchTypeErrors:
+    """Ambiguous call shapes raise ``TypeError`` rather than guess."""
+
+    def test_mixed_typed_and_kwargs_raises(self) -> None:
+        cfg = _TestCfg(x=1)
+        with pytest.raises(TypeError, match="cannot mix"):
+            _Consumer(cfg, x=2)
+
+    def test_non_mapping_non_config_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be"):
+            _Consumer(42)  # type: ignore[arg-type]
+
+    def test_string_config_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be"):
+            _Consumer("not a config")  # type: ignore[arg-type]
+
+
+class TestSetupLifecycle:
+    """``_setup`` runs exactly once and after ``self._config``."""
+
+    def test_setup_called_once_typed(self) -> None:
+        c = _Consumer(_TestCfg())
+        assert c._setup_calls == 1
+
+    def test_setup_called_once_dict(self) -> None:
+        c = _Consumer({"x": 1})
+        assert c._setup_calls == 1
+
+    def test_setup_called_once_kwargs(self) -> None:
+        c = _Consumer(x=1)
+        assert c._setup_calls == 1
+
+    def test_setup_can_read_self_config(self) -> None:
+        """``_setup`` runs after ``self._config`` is assigned."""
+
+        class _ReadsConfig(StructuredConfigConsumer[_TestCfg]):
+            CONFIG_CLS: ClassVar[type[_TestCfg]] = _TestCfg
+
+            def _setup(self) -> None:
+                self.derived = self._config.x * 2
+
+        c = _ReadsConfig(x=5)
+        assert c.derived == 10
+
+
+class TestConfigProperty:
+    """``config`` property returns the typed ``ConfigT`` instance."""
+
+    def test_property_returns_typed_config(self) -> None:
+        c = _Consumer(x=1, y="hello")
+        assert isinstance(c.config, _TestCfg)
+        assert c.config.x == 1
+        assert c.config.y == "hello"
+
+
+class TestFromConfig:
+    """``from_config`` classmethod accepts dicts and typed configs."""
+
+    def test_from_config_with_dict(self) -> None:
+        c = _Consumer.from_config({"x": 1, "y": "z"})
+        assert c.config == _TestCfg(x=1, y="z")
+
+    def test_from_config_with_typed(self) -> None:
+        cfg = _TestCfg(x=2)
+        c = _Consumer.from_config(cfg)
+        assert c.config is cfg
+
+    def test_from_config_with_empty_dict(self) -> None:
+        c = _Consumer.from_config({})
+        assert c.config == _TestCfg()
+
+
+class TestMissingConfigCls:
+    """Forgetting ``CONFIG_CLS`` surfaces immediately."""
+
+    def test_no_config_cls_raises_at_construction(self) -> None:
+        with pytest.raises(AttributeError):
+            _NoCfgClsConsumer({})
+
+
+class TestMappingSubtypes:
+    """``__init__`` accepts any ``Mapping``, not just ``dict``."""
+
+    def test_custom_mapping_accepted(self) -> None:
+        class _CustomMap(Mapping):  # type: ignore[type-arg]
+            def __init__(self, data: dict[str, Any]) -> None:
+                self._data = data
+
+            def __getitem__(self, key: str) -> Any:
+                return self._data[key]
+
+            def __iter__(self):  # type: ignore[no-untyped-def]
+                return iter(self._data)
+
+            def __len__(self) -> int:
+                return len(self._data)
+
+        c = _Consumer(_CustomMap({"x": 9}))
+        assert c.config.x == 9

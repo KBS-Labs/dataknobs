@@ -25,7 +25,9 @@ import contextlib
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ._resilient_loop import run_supervised_loop
 from .config import SqsEventBusConfig
@@ -36,20 +38,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_UNSET: Any = object()
-"""Sentinel for kwarg-vs-config arbitration in ``SqsEventBus.__init__``.
 
-The per-kwarg annotations widen to ``T | Any`` so the sentinel default
-is valid for the type checker. This intentionally trades narrow mypy
-coverage on the loose-kwarg path for a single ctor that accepts both
-the typed-config and legacy-kwarg shapes; the typed-config path
-(``from_config(SqsEventBusConfig(...))``) keeps full type narrowing.
-``@overload`` stubs presenting the two clean shapes are a future
-improvement for IDE discoverability.
-"""
-
-
-class SqsEventBus:
+class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
     """Event bus backed by a single AWS SQS queue.
 
     Topic routing: every :class:`Event` is sent to the one
@@ -115,125 +105,21 @@ class SqsEventBus:
         await bus.close()
         ```
 
+    Construction shapes are provided by
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`:
+    a typed :class:`SqsEventBusConfig`, a dict via ``config=``, or
+    loose ``**kwargs`` (``queue_url=...``, ``region=...``, etc.).
+    Mixing typed ``config=`` with loose kwargs raises ``TypeError``.
+
     Requires:
         aioboto3: ``pip install 'dataknobs-common[sqs]'``
     """
 
-    def __init__(
-        self,
-        config: SqsEventBusConfig | None = None,
-        *,
-        queue_url: str | Any = _UNSET,
-        region: str | None | Any = _UNSET,
-        endpoint_url: str | None | Any = _UNSET,
-        wait_time_seconds: int | Any = _UNSET,
-        visibility_timeout: int | Any = _UNSET,
-        topic_attribute: str | Any = _UNSET,
-        require_topic_attribute: bool | Any = _UNSET,
-        aws_access_key_id: str | None | Any = _UNSET,
-        aws_secret_access_key: str | None | Any = _UNSET,
-    ) -> None:
-        """Initialize the SQS event bus.
+    CONFIG_CLS: ClassVar[type[SqsEventBusConfig]] = SqsEventBusConfig
 
-        Two construction shapes are supported:
-
-        - **Typed config** (recommended): pass a
-          :class:`SqsEventBusConfig` instance positionally. Loose kwargs
-          must not be supplied alongside it.
-        - **Loose kwargs** (backward-compatible): pass each parameter
-          as a keyword (``queue_url=...``, etc.). Internally constructed
-          into a :class:`SqsEventBusConfig`.
-
-        Mixing the two shapes raises ``TypeError`` rather than letting
-        precedence be implicit.
-
-        Args:
-            config: Optional pre-built typed configuration. When
-                provided, loose kwargs must NOT be passed.
-            queue_url: Full SQS queue URL (required, non-empty). A URL
-                ending in ``.fifo`` is treated as a FIFO queue —
-                ``MessageGroupId``/``MessageDeduplicationId`` are set on
-                publish.
-            region: AWS region. When ``None``, boto's default region
-                chain is used (``AWS_DEFAULT_REGION``, ``~/.aws/config``,
-                instance metadata).
-            endpoint_url: Override the SQS endpoint (LocalStack, a VPC
-                endpoint). When ``None``, the AWS public endpoint for the
-                resolved region is used.
-            wait_time_seconds: ``ReceiveMessage`` long-poll wait
-                (0-20). Also drives the client read timeout.
-            visibility_timeout: Seconds a received message is hidden
-                before redelivery if not deleted (the at-least-once
-                retry window).
-            topic_attribute: Message-attribute name carrying the
-                topic. Handling of messages where this attribute is
-                absent is controlled by ``require_topic_attribute``.
-            require_topic_attribute: When ``True`` (default), messages
-                without the configured ``topic_attribute`` are released
-                back to the queue — the existing safety behaviour,
-                which assumes the queue may carry multiple topics and
-                a future subscriber may want them. When ``False``
-                (single-topic bridge mode), attribute-less messages
-                are dispatched to the one subscription on this bus;
-                :meth:`subscribe` raises ``ValueError`` if a second
-                subscription is attempted in this mode.
-
-                Set ``False`` only when the queue is **dedicated to a
-                single topic** and is fed by an AWS-native event
-                source that cannot set arbitrary SQS message
-                attributes — EventBridge → SQS targets, S3 → SQS
-                bucket notifications, raw SNS → SQS delivery.
-                Messages that *do* carry a matching attribute continue
-                to dispatch by attribute; messages with a *mismatched*
-                attribute continue to be released. Synthesised events
-                (i.e. message bodies that are valid JSON but not
-                ``Event.to_dict()``-shaped) carry the subscription's
-                topic in the ``topic`` field, the decoded body as
-                ``payload``, ``type=EventType.CUSTOM``,
-                ``event_id="sqs:<MessageId>"`` (stable across
-                redeliveries for idempotency keying), and
-                ``metadata`` with ``sqs_message_id`` /
-                ``sqs_synthesised``.
-            aws_access_key_id: Explicit access key. When ``None``,
-                boto's default credential chain is used.
-            aws_secret_access_key: Explicit secret key (paired with
-                ``aws_access_key_id``).
-
-        Raises:
-            ValueError: If ``queue_url`` is empty.
-            TypeError: If ``config`` and loose kwargs are both
-                supplied — the call shape is ambiguous.
-        """
-        loose_kwargs = {
-            "queue_url": queue_url,
-            "region": region,
-            "endpoint_url": endpoint_url,
-            "wait_time_seconds": wait_time_seconds,
-            "visibility_timeout": visibility_timeout,
-            "topic_attribute": topic_attribute,
-            "require_topic_attribute": require_topic_attribute,
-            "aws_access_key_id": aws_access_key_id,
-            "aws_secret_access_key": aws_secret_access_key,
-        }
-        supplied_kwargs = {
-            k: v for k, v in loose_kwargs.items() if v is not _UNSET
-        }
-
-        if config is not None:
-            if supplied_kwargs:
-                raise TypeError(
-                    "SqsEventBus: cannot mix `config` with loose kwargs "
-                    f"(also supplied: {sorted(supplied_kwargs)}). Pass "
-                    "either a SqsEventBusConfig or the individual kwargs."
-                )
-            self._config = config
-        else:
-            # Route loose kwargs through ``from_dict`` so that classmethod
-            # is the single source of truth for kwarg/dict → typed
-            # translation (defaults live in one place, structurally).
-            self._config = SqsEventBusConfig.from_dict(supplied_kwargs)
-        # __post_init__ has already validated queue_url; mirror the
-        # historical error class for direct construction without config.
+    def _setup(self) -> None:
+        # ``__post_init__`` has already validated queue_url; derived
+        # attribute follows directly from the typed config.
         self._is_fifo = self._config.queue_url.endswith(".fifo")
 
         self._session: Any = None  # aioboto3.Session
@@ -244,32 +130,6 @@ class SqsEventBus:
         self._lock = asyncio.Lock()
         self._connected = False
         self._running = False
-
-    @classmethod
-    def from_config(
-        cls, config: dict[str, Any] | SqsEventBusConfig
-    ) -> SqsEventBus:
-        """Construct from a config dict or typed :class:`SqsEventBusConfig`.
-
-        The recommended programmatic-construction entry point alongside
-        the typed-config and loose-kwarg ``__init__`` shapes.
-        :func:`create_event_bus` is implemented in terms of this method
-        so every config-dict path runs through the dataclass.
-        """
-        if isinstance(config, dict):
-            config = SqsEventBusConfig.from_dict(config)
-        return cls(config)
-
-    @property
-    def config(self) -> SqsEventBusConfig:
-        """Read-only view of the construction parameters.
-
-        ``SqsEventBusConfig`` is a frozen dataclass — runtime mutation
-        is intentionally unsupported. Use this for full-surface
-        introspection; use :attr:`require_topic_attribute` for the
-        single most commonly inspected knob.
-        """
-        return self._config
 
     @property
     def require_topic_attribute(self) -> bool:

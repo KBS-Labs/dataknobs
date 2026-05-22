@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `dataknobs_common.structured_config` module — typed configuration
+  meta-abstraction. `StructuredConfig` is a frozen-dataclass base with
+  auto-derived `from_dict()` / `to_dict()` via `dataclasses.fields()`
+  introspection; override `_normalize_dict(cls, raw)` for pre-projection
+  dict-shape normalization (e.g., `normalize_postgres_connection_config`
+  routing). Per-class invariants live in `__post_init__`; per-class
+  normalization in `_normalize_dict` — never override `from_dict`
+  directly. `StructuredConfigConsumer[ConfigT]` is the generic mixin
+  for classes constructed from a `StructuredConfig` subclass: it
+  provides `__init__(config: ConfigT | Mapping | None, **kwargs)`
+  typed/dict/loose dispatch (mixing typed `config=` with loose kwargs
+  raises `TypeError`), a typed `self.config` property, a
+  `cls.from_config(config)` one-liner, and a `_setup()` subclass hook
+  for derived-attribute computation. The four event-bus backends are
+  the first adopters; downstream packages (data, vector stores, bots)
+  follow over subsequent releases.
+- `dataknobs_common.testing.assert_structured_config_consumer(cls)` —
+  unified parity guard combining four structural checks: `CONFIG_CLS`
+  declared, is a `StructuredConfig` subclass, dataclass field set
+  matches the consumer ctor surface, and (optional) registry factory
+  delegates to `from_config`. Bundles the
+  `assert_dataclass_config_matches_ctor` /
+  `assert_factory_kwargs_match_ctor` checks for adopters of the
+  structured-config primitives.
+- `dataknobs_common.testing.assert_structured_config_roundtrip(cfg)`
+  — property assertion that `type(cfg).from_dict(cfg.to_dict()) == cfg`
+  for any `StructuredConfig` instance. Eliminates per-consumer
+  round-trip boilerplate.
 - `dataknobs_common.events.config` module — structured config
   dataclasses for every event bus backend: `MemoryEventBusConfig`,
   `RedisEventBusConfig`, `PostgresEventBusConfig`,
@@ -51,6 +79,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registry without per-knob factory edits.
 
 ### Changed
+- Event-bus backends (`InMemoryEventBus`, `RedisEventBus`,
+  `PostgresEventBus`, `SqsEventBus`) now inherit from
+  `StructuredConfigConsumer[<Backend>EventBusConfig]` and declare
+  `CONFIG_CLS`. Each backend's typed config dataclass inherits from
+  `StructuredConfig`, so its `from_dict` is auto-derived rather than
+  hand-rolled; `PostgresEventBusConfig` keeps a `_normalize_dict`
+  override that routes through
+  `normalize_postgres_connection_config`. All documented construction
+  shapes are preserved byte-for-byte (typed config, dict via
+  `config=`, `from_config`, loose kwargs, `PostgresEventBus`'s legacy
+  positional `connection_string` / `channel_prefix`); the per-backend
+  sentinel-based dispatch that previously appeared inside each bus's
+  `__init__` collapses into one inherited mixin implementation.
+- `dataknobs_common.testing.assert_dataclass_config_matches_ctor` and
+  `assert_factory_kwargs_match_ctor` now recognise a ctor that
+  declares `**kwargs` (the `StructuredConfigConsumer` pattern) and
+  treat all dataclass fields as accepted by construction. This
+  prevents false-positive drift reports against consumers that route
+  every field through the variadic into `from_dict`. Behaviour
+  against hand-rolled ctors that enumerate each kwarg is unchanged.
 - The four `_create_*_bus` registry factories collapse to one-line
   `cls.from_config(config)` wrappers. Behaviour is unchanged for
   every existing caller; the public `create_event_bus(...)` entry

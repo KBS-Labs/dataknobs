@@ -71,6 +71,7 @@ nav:
       - packages/common/postgres-config.md
       - packages/common/ratelimit.md
       - packages/common/locks.md
+      - packages/common/structured-config.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:
@@ -81,6 +82,7 @@ nav:
       - packages/config/factory-registration.md
       - packages/config/inheritance.md
       - packages/config/template_vars.md
+      - packages/config/configurable-base.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
