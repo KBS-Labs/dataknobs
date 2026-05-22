@@ -174,6 +174,7 @@ The main configuration management class:
 - `set(type_name, name_or_index, value)` - Set a configuration value
 - `resolve_reference(ref)` - Resolve a string reference
 - `build_object(ref)` - Build an object from configuration
+- `build_object_async(ref)` - Async build; prefers a target's `from_config_async` / a factory's `create_async`, falling back to the sync path
 - `to_dict()` - Export as dictionary
 - `to_file(path)` - Save to file
 

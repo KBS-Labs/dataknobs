@@ -17,11 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalization in `_normalize_dict` — never override `from_dict`
   directly. `from_dict` recurses into fields whose declared type is (or
   contains) a `StructuredConfig` subclass — `SubCfg`, `SubCfg | None`,
-  `list[SubCfg]`, `dict[K, SubCfg]`, and `dict[K, list[SubCfg]]` are all
-  rebuilt from their raw dict shape (recursion is bounded by the static
-  field-type graph; values already typed pass through; polymorphic
-  selection by a discriminator key stays in the subsystem registry /
-  object-graph layer). `StructuredConfigConsumer[ConfigT]` is the generic
+  `list[SubCfg]`, `tuple[SubCfg, ...]`, `set[SubCfg]`,
+  `frozenset[SubCfg]`, `dict[K, SubCfg]`, and `dict[K, list[SubCfg]]` are
+  all rebuilt from their raw dict shape (recursion is bounded by the
+  static field-type graph; values already typed pass through;
+  polymorphic selection — a discriminator key, or a union of several
+  concrete sub-configs — stays in the subsystem registry / object-graph
+  layer and passes through uncoerced). `StructuredConfigConsumer[ConfigT]` is the generic
   mixin for classes constructed from a `StructuredConfig` subclass: it
   provides `__init__(config: ConfigT | Mapping | None, **kwargs)`
   typed/dict/loose dispatch (mixing typed `config=` with loose kwargs

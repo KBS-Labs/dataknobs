@@ -414,13 +414,23 @@ default `"config"`.
 ### `assert_structured_config_consumer`
 
 Use for a class that mixes in `StructuredConfigConsumer`. Bundles the
-structural checks into one call: asserts the class declares `CONFIG_CLS`,
-that it is a `StructuredConfig` subclass, that the dataclass field set
-matches the consumer ctor surface (via
-`assert_dataclass_config_matches_ctor`, ignoring the implicit `self` /
-`config` / `**kwargs`), and — when `expected_factory` is passed — that
-the registry factory delegates to `from_config` (via
-`assert_factory_kwargs_match_ctor`).
+structural checks into one call:
+
+1. The class declares a `CONFIG_CLS` ClassVar.
+2. `CONFIG_CLS` is a `StructuredConfig` subclass.
+3. The dataclass field set matches the consumer ctor surface (via
+   `assert_dataclass_config_matches_ctor`, ignoring the implicit `self` /
+   `config` / `**kwargs`).
+4. **MRO ordering** — when the consumer relies on the mixin's `__init__`
+   (does not define its own), the resolved `__init__` must be
+   `StructuredConfigConsumer.__init__`, proving the mixin precedes any
+   other base with a competing `__init__`. A consumer that overrides
+   `__init__` (the back-compat positional shortcut) is exempt.
+5. **Async-entry symmetry** — when the consumer overrides
+   `from_config_async`, the override must route through `_coerce_config`
+   (the same guard `from_config` uses).
+6. (Optional) when `expected_factory` is passed, the registry factory
+   delegates to `from_config` (via `assert_factory_kwargs_match_ctor`).
 
 ```python
 from dataknobs_common.testing import assert_structured_config_consumer
@@ -440,9 +450,11 @@ intentionally live outside the dataclass surface.
 
 Use to pin the serialization round-trip of a `StructuredConfig`
 instance: asserts `type(cfg).from_dict(cfg.to_dict()) == cfg`. Holds for
-flat configs and for nested configs whose `_normalize_dict` rebuilds
-each nested `StructuredConfig` field; a nested field left as a raw dict
-fails (`asdict` recurses, `from_dict` does not).
+flat configs and for nested configs alike — `from_dict` recurses into
+fields typed as a `StructuredConfig` subclass (or a `list`/`tuple`/`set`/
+`frozenset`/`dict` of one), so `to_dict`/`from_dict` are symmetric for
+every statically-typed nesting shape with no `_normalize_dict` override
+required.
 
 ```python
 from dataknobs_common.testing import assert_structured_config_roundtrip

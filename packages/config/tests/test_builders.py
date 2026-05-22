@@ -319,3 +319,42 @@ class TestAsyncObjectConstruction:
         obj = config.build_object("xref:widget[w]")
         assert isinstance(obj, AsyncWidget)
         assert obj.warmed is False
+
+    @pytest.mark.asyncio
+    async def test_factory_path_runs_consumer_async_init(self) -> None:
+        """A consumer referenced via ``factory:`` runs ``_ainit`` (async).
+
+        A genuine factory's ``create``/``build``/``__call__`` is preferred;
+        the consumer protocol (``from_config_async``) is the last-resort
+        path, so a consumer class used as a factory builds correctly
+        instead of erroring.
+        """
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "factory": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = await config.build_object_async("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        assert obj.warmed is True
+
+    def test_factory_path_builds_consumer_sync(self) -> None:
+        """Sync ``factory:`` path builds a consumer via ``from_config``."""
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "factory": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = config.build_object("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        assert obj.warmed is False

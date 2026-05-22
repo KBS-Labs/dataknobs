@@ -163,9 +163,16 @@ class ObjectBuilder:
             return factory.build(**config)
         elif callable(factory):
             return factory(**config)
+        # A StructuredConfigConsumer (or any class) referenced via
+        # ``factory:`` exposes the consumer protocol (``from_config``)
+        # rather than ``create``/``build``. Checked last so a genuine
+        # factory's ``create``/``build``/``__call__`` always wins.
+        elif hasattr(factory, "from_config"):
+            return factory.from_config(config)
         else:
             raise ConfigError(
-                f"Factory {factory_path} must have 'create', 'build' method or be callable"
+                f"Factory {factory_path} must have 'create', 'build', "
+                "'from_config' method or be callable"
             )
 
     async def build_async(
@@ -241,7 +248,11 @@ class ObjectBuilder:
         """Async counterpart of :meth:`_build_with_factory`.
 
         Prefers ``factory.create_async`` (awaited) when present, then
-        falls back to the synchronous factory methods.
+        falls back to the synchronous factory methods. A consumer class
+        referenced via ``factory:`` (exposing ``from_config_async`` /
+        ``from_config`` rather than ``create``/``build``) is supported as
+        a last resort so the async factory path stays symmetric with the
+        sync one and with :class:`ConfigBindingResolver`.
         """
         factory_path = config.pop("factory")
 
@@ -258,9 +269,15 @@ class ObjectBuilder:
             return factory.build(**config)
         if callable(factory):
             return factory(**config)
+        # Consumer protocol, checked after the factory protocol so a
+        # genuine factory is never diverted (see sync counterpart).
+        if hasattr(factory, "from_config_async"):
+            return await factory.from_config_async(config)
+        if hasattr(factory, "from_config"):
+            return factory.from_config(config)
         raise ConfigError(
             f"Factory {factory_path} must have 'create', 'build', "
-            "'create_async' method or be callable"
+            "'create_async', 'from_config' method or be callable"
         )
 
     def _load_class(self, class_path: str) -> Type[Any]:

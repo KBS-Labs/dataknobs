@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import logging
 import types
 from collections.abc import Mapping
 from typing import (
@@ -69,6 +70,8 @@ if TYPE_CHECKING:
     # ``typing.Self``; mypy resolves the guarded import regardless.
     from typing_extensions import Self
 
+logger = logging.getLogger(__name__)
+
 # ``X | None`` (PEP 604) yields ``types.UnionType``; ``Optional[X]`` /
 # ``Union[...]`` yield ``typing.Union``. Both must be recognised as unions
 # when decomposing field annotations.
@@ -92,7 +95,20 @@ def _resolved_hints(cls: type) -> Mapping[str, Any]:
     """
     try:
         return get_type_hints(cls)
-    except Exception:
+    except (NameError, TypeError, AttributeError) as exc:
+        # An annotation that can't be resolved at runtime — typically a
+        # name available only under ``TYPE_CHECKING`` — surfaces as
+        # ``NameError``; malformed/incompatible annotations as
+        # ``TypeError`` / ``AttributeError``. Degrade to ``{}`` so
+        # ``from_dict`` falls back to the pre-146b pass-through behaviour
+        # rather than crashing, and log at debug so the dropped coercion
+        # is diagnosable.
+        logger.debug(
+            "Could not resolve type hints for %s (%s); nested-config "
+            "coercion will be skipped for its fields.",
+            getattr(cls, "__qualname__", cls),
+            exc,
+        )
         return {}
 
 
@@ -141,17 +157,25 @@ def _coerce_field(declared: Any, value: Any) -> Any:
 
     args = get_args(declared)
 
-    # ``Optional[SubCfg]`` / ``SubCfg | None`` (and wider unions).
+    # ``Optional[SubCfg]`` / ``SubCfg | None``. Only auto-coerce when
+    # exactly one non-``None`` arm is (or contains) a ``StructuredConfig``.
+    # A union with several config arms is a discriminated/polymorphic
+    # shape — selecting among them by inspecting the data is deliberately
+    # out of scope here (it belongs in the subsystem registry /
+    # object-graph layer), so the value passes through untouched rather
+    # than silently binding to whichever arm happens to be declared first.
     if origin in _UNION_ORIGINS:
         if value is None:
             return value
-        for arg in args:
-            if arg is type(None):
-                continue
-            coerced = _coerce_field(arg, value)
-            if coerced is not value:
-                return coerced
-        return value
+        config_arms = [
+            arg
+            for arg in args
+            if arg is not type(None)
+            and _type_contains_structured_config(arg)
+        ]
+        if len(config_arms) != 1:
+            return value
+        return _coerce_field(config_arms[0], value)
 
     # ``list``/``tuple``/``set``/``frozenset`` of configs.
     if origin in _SEQUENCE_ORIGINS:
@@ -199,16 +223,20 @@ class StructuredConfig:
 
     Nested-config composition: ``from_dict`` recurses into a field whose
     declared type is (or contains) a ``StructuredConfig`` subclass —
-    ``SubCfg``, ``SubCfg | None``, ``list[SubCfg]``, ``dict[K, SubCfg]``,
-    and ``dict[K, list[SubCfg]]`` are all rebuilt from their raw dict
-    shape. Recursion is bounded by the static field-type graph (not by
-    runtime data), so a config whose fields are all scalars terminates
-    immediately. A field already holding a typed instance passes through
-    unchanged. Polymorphic/discriminated selection (a section whose
-    concrete type is chosen by a discriminator key) is deliberately NOT
-    handled here — that stays in the subsystem registry / object-graph
-    layer; type a polymorphic field as its abstract sub-config and
-    dispatch in the consumer's factory.
+    ``SubCfg``, ``SubCfg | None``, ``list[SubCfg]``,
+    ``tuple[SubCfg, ...]``, ``set[SubCfg]``, ``frozenset[SubCfg]``,
+    ``dict[K, SubCfg]``, and ``dict[K, list[SubCfg]]`` are all rebuilt
+    from their raw dict shape. Recursion is bounded by the static
+    field-type graph (not by runtime data), so a config whose fields are
+    all scalars terminates immediately. A field already holding a typed
+    instance passes through unchanged. Polymorphic/discriminated
+    selection (a section whose concrete type is chosen by a discriminator
+    key) is deliberately NOT handled here — that stays in the subsystem
+    registry / object-graph layer; type a polymorphic field as its
+    abstract sub-config and dispatch in the consumer's factory. A union
+    of several concrete sub-configs (``A | B`` where both are
+    ``StructuredConfig`` subclasses) is likewise left untouched — only a
+    single-config ``SubCfg | None`` is auto-coerced.
     """
 
     @classmethod

@@ -364,7 +364,7 @@ def assert_structured_config_consumer(
             outside the dataclass surface.
 
     Raises:
-        AssertionError: If any of the four checks fails.
+        AssertionError: If any of the checks above fails.
     """
     # Lazy import to keep ``testing.factory_parity`` from transitively
     # importing the abstraction it helps test.
@@ -455,8 +455,10 @@ def assert_structured_config_roundtrip(config: Any) -> None:
     ``to_dict`` recurses via ``asdict`` and ``from_dict`` recurses back
     into the matching field types, so the two are symmetric for every
     statically-typed nesting shape (``SubCfg``, ``SubCfg | None``,
-    ``list[SubCfg]``, ``dict[K, SubCfg]``, ``dict[K, list[SubCfg]]``). No
-    ``_normalize_dict`` override is required for nesting alone.
+    ``list[SubCfg]``, ``tuple[SubCfg, ...]``, ``set[SubCfg]``,
+    ``frozenset[SubCfg]``, ``dict[K, SubCfg]``,
+    ``dict[K, list[SubCfg]]``). No ``_normalize_dict`` override is
+    required for nesting alone.
 
     Args:
         config: A ``StructuredConfig`` instance to round-trip.

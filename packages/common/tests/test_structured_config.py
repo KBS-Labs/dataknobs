@@ -212,8 +212,20 @@ class _DictNested(StructuredConfig):
 
 
 @dataclass(frozen=True)
+class _LeafB(StructuredConfig):
+    other: int = 0
+
+
+@dataclass(frozen=True)
 class _DictListNested(StructuredConfig):
     groups: dict[str, list[_Leaf]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _MultiUnionNested(StructuredConfig):
+    """A union of *two* config subclasses — a polymorphic shape."""
+
+    leaf: _Leaf | _LeafB = field(default_factory=_Leaf)
 
 
 class TestNestedComposition:
@@ -275,6 +287,25 @@ class TestNestedComposition:
         leaf = _Leaf(value=9)
         cfg = _ListNested.from_dict({"leaves": [leaf]})
         assert cfg.leaves[0] is leaf
+
+    def test_multi_config_union_dict_passes_through(self) -> None:
+        """A union of several config arms is NOT auto-coerced.
+
+        Selecting among ``_Leaf`` / ``_LeafB`` from the data is a
+        discriminated/polymorphic decision that stays in the object-graph
+        layer, so ``from_dict`` leaves the raw dict for the consumer's
+        factory to dispatch — it must not silently bind the first arm.
+        """
+        raw = {"value": 3}
+        cfg = _MultiUnionNested.from_dict({"leaf": raw})
+        assert cfg.leaf is raw
+        assert not isinstance(cfg.leaf, (_Leaf, _LeafB))
+
+    def test_multi_config_union_pretyped_passes_through(self) -> None:
+        """A value already typed as one arm is preserved as-is."""
+        leaf = _LeafB(other=7)
+        cfg = _MultiUnionNested.from_dict({"leaf": leaf})
+        assert cfg.leaf is leaf
 
 
 class TestNestedRoundTrip:

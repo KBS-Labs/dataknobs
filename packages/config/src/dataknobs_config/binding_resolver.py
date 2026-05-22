@@ -235,8 +235,10 @@ class ConfigBindingResolver:
     ) -> Any:
         """Async version of resolve for async factories.
 
-        If the factory has a create_async method, it will be used.
-        Otherwise, falls back to synchronous create.
+        Construction precedence (see :meth:`_create_instance_async`):
+        a registered consumer class's ``from_config_async`` is preferred,
+        then a factory's ``create_async``, then the synchronous create
+        path.
 
         Args:
             resource_type: Type of resource
