@@ -377,6 +377,12 @@ class ConfigBindingResolver:
         Returns:
             Created instance
         """
+        # Prefer the StructuredConfigConsumer async entry point when the
+        # target is a consumer class (it takes the whole config, not a
+        # kwarg splat), then fall back to a factory ``create_async``.
+        if hasattr(factory, "from_config_async"):
+            return await factory.from_config_async(config)
+
         # Try async create method first
         if hasattr(factory, "create_async"):
             return await factory.create_async(**config)

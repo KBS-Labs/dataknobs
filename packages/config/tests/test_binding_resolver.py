@@ -1,7 +1,14 @@
 """Tests for ConfigBindingResolver class."""
 
+from dataclasses import dataclass
+from typing import ClassVar
+
 import pytest
 
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 from dataknobs_config.binding_resolver import (
     AsyncCallableFactory,
     BindingResolverError,
@@ -11,6 +18,24 @@ from dataknobs_config.binding_resolver import (
     SimpleFactory,
 )
 from dataknobs_config.environment_config import EnvironmentConfig
+
+
+@dataclass(frozen=True)
+class _WidgetConfig(StructuredConfig):
+    backend: str = "memory"
+    host: str = "localhost"
+
+
+class _AsyncWidget(StructuredConfigConsumer[_WidgetConfig]):
+    """StructuredConfig consumer used as a resolver target class."""
+
+    CONFIG_CLS: ClassVar[type[_WidgetConfig]] = _WidgetConfig
+
+    def _setup(self) -> None:
+        self.warmed = False
+
+    async def _ainit(self) -> None:
+        self.warmed = True
 
 
 class MockDatabase:
@@ -260,6 +285,25 @@ class TestAsyncResolution:
         db2 = await resolver.resolve_async("databases", "primary")
 
         assert db1 is db2
+
+    @pytest.mark.asyncio
+    async def test_resolve_async_prefers_from_config_async(
+        self, env_config
+    ) -> None:
+        """A StructuredConfigConsumer target builds via from_config_async.
+
+        The consumer's ``_ainit`` (async-only) runs, and the typed config
+        is projected from the resource dict — proving the resolver prefers
+        ``from_config_async`` over the kwarg-splat factory paths.
+        """
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _AsyncWidget)
+
+        widget = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(widget, _AsyncWidget)
+        assert widget.warmed is True
+        assert widget.config.backend == "postgres"
 
 
 class TestEnvVarResolution:

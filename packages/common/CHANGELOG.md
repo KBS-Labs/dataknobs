@@ -15,28 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dict-shape normalization (e.g., `normalize_postgres_connection_config`
   routing). Per-class invariants live in `__post_init__`; per-class
   normalization in `_normalize_dict` — never override `from_dict`
-  directly. `StructuredConfigConsumer[ConfigT]` is the generic mixin
-  for classes constructed from a `StructuredConfig` subclass: it
+  directly. `from_dict` recurses into fields whose declared type is (or
+  contains) a `StructuredConfig` subclass — `SubCfg`, `SubCfg | None`,
+  `list[SubCfg]`, `dict[K, SubCfg]`, and `dict[K, list[SubCfg]]` are all
+  rebuilt from their raw dict shape (recursion is bounded by the static
+  field-type graph; values already typed pass through; polymorphic
+  selection by a discriminator key stays in the subsystem registry /
+  object-graph layer). `StructuredConfigConsumer[ConfigT]` is the generic
+  mixin for classes constructed from a `StructuredConfig` subclass: it
   provides `__init__(config: ConfigT | Mapping | None, **kwargs)`
   typed/dict/loose dispatch (mixing typed `config=` with loose kwargs
   raises `TypeError`), a typed `self.config` property, a
-  `cls.from_config(config)` one-liner, and a `_setup()` subclass hook
-  for derived-attribute computation. The four event-bus backends are
-  the first adopters; downstream packages (data, vector stores, bots)
-  follow over subsequent releases.
+  `cls.from_config(config)` one-liner, a `cls.from_config_async(config)`
+  async entry point (sync assemble + `await _ainit()`), and `_setup()`
+  (sync) / `_ainit()` (async) subclass hooks. `__init__` calls
+  `super().__init__()` so the mixin composes into a cooperative
+  multiple-inheritance hierarchy — list it first among the bases so its
+  `__init__` is the construction entry point. The four event-bus
+  backends are the first adopters; downstream packages (data, vector
+  stores, bots) follow over subsequent releases.
 - `dataknobs_common.testing.assert_structured_config_consumer(cls)` —
-  unified parity guard combining four structural checks: `CONFIG_CLS`
+  unified parity guard combining structural checks: `CONFIG_CLS`
   declared, is a `StructuredConfig` subclass, dataclass field set
-  matches the consumer ctor surface, and (optional) registry factory
-  delegates to `from_config`. Bundles the
+  matches the consumer ctor surface, the mixin precedes other bases in
+  the MRO (so its `__init__` is the entry point), an overridden
+  `from_config_async` routes through `_coerce_config`, and (optional)
+  the registry factory delegates to `from_config`. Bundles the
   `assert_dataclass_config_matches_ctor` /
   `assert_factory_kwargs_match_ctor` checks for adopters of the
   structured-config primitives.
 - `dataknobs_common.testing.assert_structured_config_roundtrip(cfg)`
   — property assertion that `type(cfg).from_dict(cfg.to_dict()) == cfg`.
-  Holds for flat configs and for nested configs whose `_normalize_dict`
-  rebuilds each nested `StructuredConfig` field (a nested field left as
-  a raw dict fails, since `asdict` recurses but `from_dict` does not).
+  Holds for flat configs and for nested configs alike: `to_dict`
+  recurses via `asdict` and `from_dict` recurses back into the matching
+  field types, so the two are symmetric for every statically-typed
+  nesting shape (no `_normalize_dict` override required for nesting).
   Eliminates per-consumer round-trip boilerplate.
 - `dataknobs_common.events.config` module — structured config
   dataclasses for every event bus backend: `MemoryEventBusConfig`,

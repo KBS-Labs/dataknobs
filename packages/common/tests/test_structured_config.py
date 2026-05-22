@@ -177,3 +177,141 @@ class TestStructuredConfigSerializable:
 
     def test_empty_subclass_is_serializable_protocol(self) -> None:
         assert isinstance(_Empty(), Serializable)
+
+
+@dataclass(frozen=True)
+class _Leaf(StructuredConfig):
+    value: int = 0
+    label: str = "leaf"
+
+
+@dataclass(frozen=True)
+class _Nested(StructuredConfig):
+    name: str = ""
+    leaf: _Leaf = field(default_factory=_Leaf)
+
+
+@dataclass(frozen=True)
+class _OptionalNested(StructuredConfig):
+    leaf: _Leaf | None = None
+
+
+@dataclass(frozen=True)
+class _ListNested(StructuredConfig):
+    leaves: list[_Leaf] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _TupleNested(StructuredConfig):
+    leaves: tuple[_Leaf, ...] = ()
+
+
+@dataclass(frozen=True)
+class _DictNested(StructuredConfig):
+    leaves: dict[str, _Leaf] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _DictListNested(StructuredConfig):
+    groups: dict[str, list[_Leaf]] = field(default_factory=dict)
+
+
+class TestNestedComposition:
+    """``from_dict`` recurses into ``StructuredConfig`` field types (146b C)."""
+
+    def test_single_nested_dict_becomes_typed(self) -> None:
+        cfg = _Nested.from_dict({"name": "n", "leaf": {"value": 3}})
+        assert isinstance(cfg.leaf, _Leaf)
+        assert cfg.leaf.value == 3
+        assert cfg.leaf.label == "leaf"
+
+    def test_nested_default_factory_when_absent(self) -> None:
+        cfg = _Nested.from_dict({"name": "n"})
+        assert cfg.leaf == _Leaf()
+
+    def test_optional_none_stays_none(self) -> None:
+        cfg = _OptionalNested.from_dict({"leaf": None})
+        assert cfg.leaf is None
+
+    def test_optional_dict_becomes_typed(self) -> None:
+        cfg = _OptionalNested.from_dict({"leaf": {"value": 7}})
+        assert isinstance(cfg.leaf, _Leaf)
+        assert cfg.leaf.value == 7
+
+    def test_list_of_dicts_becomes_list_of_typed(self) -> None:
+        cfg = _ListNested.from_dict(
+            {"leaves": [{"value": 1}, {"value": 2}]}
+        )
+        assert cfg.leaves == [_Leaf(value=1), _Leaf(value=2)]
+        assert all(isinstance(item, _Leaf) for item in cfg.leaves)
+
+    def test_tuple_of_dicts_becomes_tuple_of_typed(self) -> None:
+        cfg = _TupleNested.from_dict({"leaves": [{"value": 5}]})
+        assert isinstance(cfg.leaves, tuple)
+        assert cfg.leaves == (_Leaf(value=5),)
+
+    def test_dict_of_dicts_becomes_dict_of_typed(self) -> None:
+        cfg = _DictNested.from_dict(
+            {"leaves": {"a": {"value": 1}, "b": {"value": 2}}}
+        )
+        assert cfg.leaves == {"a": _Leaf(value=1), "b": _Leaf(value=2)}
+
+    def test_dict_of_lists_recurses_both_levels(self) -> None:
+        cfg = _DictListNested.from_dict(
+            {"groups": {"g": [{"value": 1}, {"value": 2}]}}
+        )
+        assert cfg.groups == {"g": [_Leaf(value=1), _Leaf(value=2)]}
+        assert all(
+            isinstance(item, _Leaf) for item in cfg.groups["g"]
+        )
+
+    def test_pretyped_value_passes_through(self) -> None:
+        """A field already holding a typed instance is left untouched."""
+        leaf = _Leaf(value=9)
+        cfg = _Nested.from_dict({"name": "n", "leaf": leaf})
+        assert cfg.leaf is leaf
+
+    def test_pretyped_list_elements_pass_through(self) -> None:
+        leaf = _Leaf(value=9)
+        cfg = _ListNested.from_dict({"leaves": [leaf]})
+        assert cfg.leaves[0] is leaf
+
+
+class TestNestedRoundTrip:
+    """Round-trip now holds for nested configs without ``_normalize_dict``."""
+
+    def test_single_nested_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(
+            _Nested(name="n", leaf=_Leaf(value=3))
+        )
+
+    def test_optional_nested_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(_OptionalNested(leaf=_Leaf(value=1)))
+        assert_structured_config_roundtrip(_OptionalNested(leaf=None))
+
+    def test_list_nested_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(
+            _ListNested(leaves=[_Leaf(value=1), _Leaf(value=2)])
+        )
+
+    def test_dict_list_nested_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(
+            _DictListNested(groups={"g": [_Leaf(value=1)]})
+        )
+
+
+class TestFlatConfigUnchanged:
+    """Flat / non-config fields project verbatim, without recursion (regression)."""
+
+    def test_flat_scalar_projection_unchanged(self) -> None:
+        cfg = _Simple.from_dict({"required": "x", "optional_default": 9})
+        assert cfg == _Simple(required="x", optional_default=9)
+
+    def test_plain_list_field_not_transformed(self) -> None:
+        """A ``list[str]`` field (no nested config) is assigned verbatim."""
+        original = ["a", "b"]
+        cfg = _WithFactory.from_dict({"items": original})
+        assert cfg.items == ["a", "b"]
+        # The non-config gate avoids the coercion path entirely, so the
+        # value is the same object the caller supplied (no rebuild).
+        assert cfg.items is original

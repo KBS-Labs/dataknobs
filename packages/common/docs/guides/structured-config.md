@@ -4,11 +4,14 @@
 together replace the kwarg-splat pattern of `ConfigurableBase`:
 
 1. **`StructuredConfig`** — a frozen-dataclass base with auto-derived
-   `from_dict()` / `to_dict()` via `dataclasses.fields()` introspection.
+   `from_dict()` / `to_dict()` via `dataclasses.fields()` introspection,
+   including recursion into nested/collection `StructuredConfig` fields.
 2. **`StructuredConfigConsumer[ConfigT]`** — a generic mixin providing
    typed/dict/loose-kwarg dispatch in a single `__init__`, a typed
-   `self.config` property, a one-line `from_config()` classmethod, and
-   a `_setup()` hook for subclass initialization.
+   `self.config` property, sync (`from_config`) and async
+   (`from_config_async`) entry points, `_setup()` / `_ainit()` hooks,
+   and cooperative `super().__init__()` so it composes into a
+   multiple-inheritance hierarchy.
 
 These primitives generalize the per-backend hand-rolled pattern in
 `dataknobs_common.events` so every future "object configured by a
@@ -74,6 +77,11 @@ by name; absent fields use their declared default (or
 registry-routing keys like `"backend"`. The caller's dict is
 shallow-copied before normalization, so it isn't mutated.
 
+A field whose declared type is (or contains) a `StructuredConfig`
+subclass is rebuilt recursively from its raw dict shape — see
+[Nested-config composition](#nested-config-composition). All other
+fields are assigned verbatim.
+
 ### `_normalize_dict(cls, raw)` (classmethod, override hook)
 
 Default identity. Override when the input dict's shape differs from
@@ -97,13 +105,12 @@ class RenamedConfig(StructuredConfig):
 ### `to_dict()`
 
 Symmetric serialization via `dataclasses.asdict`. Round-trip property —
-`type(cfg).from_dict(cfg.to_dict()) == cfg` — holds for flat configs,
-and for nested configs whose `_normalize_dict` rebuilds each nested
-`StructuredConfig` field from its dict (see [Nested-config
-composition](#nested-config-composition)). It does **not** hold for a
-nested field left as a raw dict: `asdict` recurses into nested
-dataclasses but `from_dict` does not, so without the `_normalize_dict`
-override the recovered field is a `dict`, not the typed sub-config.
+`type(cfg).from_dict(cfg.to_dict()) == cfg` — holds for flat configs
+and for nested configs alike: `asdict` recurses into nested dataclasses
+and `from_dict` recurses back into the matching field types, so the two
+are symmetric for every statically-typed nesting shape (see
+[Nested-config composition](#nested-config-composition)). No
+`_normalize_dict` override is required for nesting.
 
 ### `__post_init__` validation
 
@@ -155,18 +162,50 @@ def _create_widget(config: dict) -> Widget:
     return Widget.from_config(config)
 ```
 
+### `from_config_async(config)` (classmethod)
+
+Async construction entry point: the same sync assembly as `from_config`
+(typed/dict dispatch through `_coerce_config`), followed by
+`await obj._ainit()`. Use it for consumers whose initialization is
+asynchronous — databases that connect eagerly, LLM-backed bots,
+knowledge-base warmup. Synchronous consumers ignore it and use
+`from_config`.
+
+```python
+widget = await Widget.from_config_async({"name": "x", "size": 4})
+```
+
 ### `self.config` (property)
 
 Read-only typed view. Backed by the frozen `ConfigT` so runtime
 mutation is rejected.
 
-### `_setup()` (override hook)
+### `_setup()` (sync override hook)
 
 Default no-op. Override to initialize derived attributes computed
 from `self.config.*` — connection placeholders, lock/handle
 initialization, etc. Field normalization belongs in the config
 dataclass (`_normalize_dict` / `__post_init__`), not here. Called once
-during `__init__` after `self._config` is established.
+during `__init__` (both the sync and async construction paths) after
+`self._config` is established.
+
+### `_ainit()` (async override hook)
+
+Default no-op. Override for awaitable setup that cannot run in the
+synchronous `_setup` — connection establishment, provider warmup, async
+collaborator construction. Runs exactly once, after `_setup`, **only**
+on the `from_config_async` path; the synchronous `__init__` /
+`from_config` path does not run it.
+
+### Cooperative multiple inheritance
+
+`__init__` calls `super().__init__()` after building `self._config` and
+before `_setup()`. For a single-base consumer `super()` is `object` and
+this is a no-op. When mixing the consumer in alongside other bases, list
+`StructuredConfigConsumer` **first** so its `__init__` is the entry
+point, and ensure the remaining bases accept `__init__()` with no
+required args (they should expose `_setup`, not a competing config
+ctor). `assert_structured_config_consumer` pins this ordering.
 
 ## Patterns
 
@@ -209,26 +248,48 @@ def from_config(cls, config):
 
 ### Nested-config composition
 
-`from_dict` does NOT automatically recurse into fields whose declared
-type is a `StructuredConfig` subclass. For nested configs, override
-`_normalize_dict` to call the sub-config's `from_dict`:
+`from_dict` recurses automatically into fields whose declared type is
+(or contains) a `StructuredConfig` subclass — no `_normalize_dict`
+override is needed:
 
 ```python
 @dataclass(frozen=True)
 class OuterConfig(StructuredConfig):
     inner: InnerConfig = dataclasses.field(default_factory=InnerConfig)
+    optional: InnerConfig | None = None
+    many: list[InnerConfig] = dataclasses.field(default_factory=list)
+    by_name: dict[str, InnerConfig] = dataclasses.field(default_factory=dict)
+    grouped: dict[str, list[InnerConfig]] = dataclasses.field(
+        default_factory=dict
+    )
 
-    @classmethod
-    def _normalize_dict(cls, raw):
-        if isinstance(raw.get("inner"), Mapping):
-            raw["inner"] = InnerConfig.from_dict(raw["inner"])
-        return raw
+
+cfg = OuterConfig.from_dict({
+    "inner": {"value": 1},
+    "optional": None,
+    "many": [{"value": 2}, {"value": 3}],
+    "by_name": {"a": {"value": 4}},
+    "grouped": {"g": [{"value": 5}]},
+})
+# cfg.inner is an InnerConfig; cfg.many is list[InnerConfig]; etc.
 ```
 
-This deliberate scoping keeps type introspection bounded — generic
-auto-projection of `T | None`, `list[T]`, `dict[K, T]` would require
-careful handling of forward references and was kept out of the base
-to avoid drift modes.
+The supported shapes are `SubCfg`, `SubCfg | None`, `list[SubCfg]`,
+`tuple[SubCfg, ...]`, `set[SubCfg]`, `dict[K, SubCfg]`, and
+`dict[K, list[SubCfg]]`. Recursion is bounded by the static field-type
+graph (not by runtime data), and a value that is already a typed
+instance passes through untouched. Use `_normalize_dict` only for
+genuine shape massaging (key renames, connection-string assembly) — not
+for nesting.
+
+**Polymorphic selection is out of scope here.** When a section's
+concrete type is chosen by a discriminator key (a `memory` block that is
+a *buffer* vs *vector* vs *summary* strategy), type the field as the
+abstract sub-config and dispatch the discriminator in the consuming
+subsystem's factory / registry. Keeping a subclass registry out of
+`from_dict` avoids dragging a registry into this zero-dependency
+primitive and duplicating the `class`/`factory`/`type` dispatch that the
+`dataknobs-config` object-graph layer already owns.
 
 ### Environment-variable substitution
 
@@ -248,12 +309,16 @@ cfg = WidgetConfig.from_dict(substitute_env_vars(raw, type_coerce=True))
 
 ### `assert_structured_config_consumer(consumer_cls)`
 
-Unified parity guard combining four structural checks:
+Unified parity guard combining structural checks:
 
 1. `consumer_cls` declares `CONFIG_CLS`.
 2. `CONFIG_CLS` is a `StructuredConfig` subclass.
 3. The dataclass field set matches the consumer's ctor surface.
-4. (Optional) A registry factory passed via `expected_factory=`
+4. The mixin precedes other bases in the MRO (so its `__init__` is the
+   construction entry point) — unless the consumer defines its own
+   `__init__` (the documented back-compat shortcut).
+5. An overridden `from_config_async` routes through `_coerce_config`.
+6. (Optional) A registry factory passed via `expected_factory=`
    delegates to `from_config`.
 
 ```python
@@ -266,10 +331,10 @@ def test_widget_uses_structured_config_consumer():
 ### `assert_structured_config_roundtrip(cfg)`
 
 Property assertion: `type(cfg).from_dict(cfg.to_dict()) == cfg`. Holds
-for flat configs and for nested configs whose `_normalize_dict` rebuilds
-each nested `StructuredConfig` field (see [Nested-config
-composition](#nested-config-composition)); a nested field left as a raw
-dict will fail the assertion.
+for flat configs and for nested configs alike (see [Nested-config
+composition](#nested-config-composition)) — `to_dict`/`from_dict`
+recurse symmetrically, so no `_normalize_dict` override is required for
+nesting.
 
 ```python
 from dataknobs_common.testing import assert_structured_config_roundtrip
@@ -277,6 +342,31 @@ from dataknobs_common.testing import assert_structured_config_roundtrip
 def test_widget_config_roundtrips():
     assert_structured_config_roundtrip(WidgetConfig(name="x", size=4))
 ```
+
+## Construction in the object-graph layer
+
+`StructuredConfig` + `StructuredConfigConsumer` own how a **single**
+object is built from its own config. Wiring configured objects into a
+**graph** — references, environment-specific bindings, and polymorphic
+`class`/`factory`/`type` selection — is owned by the higher-layer
+`dataknobs-config` (`Config.build_object`, `ObjectBuilder`,
+`ConfigBindingResolver`). That layer calls the per-object contract:
+`build_object` prefers a target's `from_config`, and the async
+counterparts prefer `from_config_async`:
+
+```python
+# sync graph construction
+obj = config.build_object("xref:widget[primary]")
+
+# async graph construction — awaits from_config_async when defined,
+# else a factory's create_async, else falls back to the sync path.
+obj = await config.build_object_async("xref:widget[primary]")
+```
+
+`ConfigBindingResolver.resolve_async` follows the same preference. The
+dependency direction is one-way (`dataknobs-config` depends on
+`dataknobs-common`), so the primitive never imports the graph layer; the
+graph layer calls the primitive's entry points.
 
 ## Relationship to other abstractions
 

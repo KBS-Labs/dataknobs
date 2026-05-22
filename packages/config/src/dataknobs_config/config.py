@@ -496,6 +496,28 @@ class Config:
         """
         return self._object_builder.build(ref, cache=cache, **kwargs)
 
+    async def build_object_async(
+        self, ref: str, cache: bool = True, **kwargs: Any
+    ) -> Any:
+        """Build an object asynchronously from a configuration reference.
+
+        Async counterpart of :meth:`build_object`. Prefers a target's
+        ``from_config_async`` (or a factory's ``create_async``) and
+        falls back to synchronous construction otherwise, so it is safe
+        for any reference.
+
+        Args:
+            ref: String reference to configuration
+            cache: Whether to cache the built object
+            **kwargs: Additional keyword arguments for construction
+
+        Returns:
+            Built object instance
+        """
+        return await self._object_builder.build_async(
+            ref, cache=cache, **kwargs
+        )
+
     def clear_object_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.
 

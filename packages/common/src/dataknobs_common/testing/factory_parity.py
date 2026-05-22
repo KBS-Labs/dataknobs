@@ -328,7 +328,7 @@ def assert_structured_config_consumer(
 ) -> None:
     """Assert ``consumer_cls`` correctly applies the structured-config pattern.
 
-    Combines four checks for adopters of
+    Combines these checks for adopters of
     :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`:
 
     1. ``consumer_cls`` declares a ``CONFIG_CLS`` ClassVar.
@@ -338,7 +338,17 @@ def assert_structured_config_consumer(
        :func:`assert_dataclass_config_matches_ctor`). The implicit
        ``self`` and ``config`` kwarg are ignored; the variadic
        ``**kwargs`` channel that the mixin provides is also ignored.
-    4. (Optional) If ``expected_factory`` is supplied, its body
+    4. **MRO ordering.** If ``consumer_cls`` does not define its own
+       ``__init__`` (i.e. it relies on the mixin's), the inherited
+       ``__init__`` must resolve to ``StructuredConfigConsumer.__init__``
+       — proving the mixin precedes any other base that defines a
+       competing ``__init__``. A consumer that overrides ``__init__``
+       (the documented back-compat shortcut) is exempt.
+    5. **Async-entry symmetry.** If ``consumer_cls`` overrides
+       ``from_config_async``, the override must route through
+       ``_coerce_config`` (the same guard ``from_config`` uses) — catches
+       an async factory that bypasses the typed-config dispatch.
+    6. (Optional) If ``expected_factory`` is supplied, its body
        delegates to ``consumer_cls.from_config(config)`` (delegates to
        :func:`assert_factory_kwargs_match_ctor`) — proves the registry
        factory hasn't regressed to a per-kwarg allowlist.
@@ -358,7 +368,10 @@ def assert_structured_config_consumer(
     """
     # Lazy import to keep ``testing.factory_parity`` from transitively
     # importing the abstraction it helps test.
-    from dataknobs_common.structured_config import StructuredConfig
+    from dataknobs_common.structured_config import (
+        StructuredConfig,
+        StructuredConfigConsumer,
+    )
 
     config_cls = getattr(consumer_cls, "CONFIG_CLS", None)
     if config_cls is None:
@@ -381,6 +394,47 @@ def assert_structured_config_consumer(
         ignore_params=ignore_params or set(),
     )
 
+    # Check 4 — MRO ordering. When the consumer relies on the mixin's
+    # ``__init__`` (does not define its own), the resolved ``__init__``
+    # must be the mixin's. If another base precedes the mixin in the MRO
+    # and shadows it, construction never runs the typed-config dispatch.
+    if "__init__" not in consumer_cls.__dict__:
+        if consumer_cls.__init__ is not StructuredConfigConsumer.__init__:
+            resolved = getattr(
+                consumer_cls.__init__, "__qualname__", consumer_cls.__init__
+            )
+            raise AssertionError(
+                f"{consumer_cls.__name__}: StructuredConfigConsumer must "
+                "precede other bases so its __init__ is the construction "
+                f"entry point, but the resolved __init__ is {resolved}. "
+                "List StructuredConfigConsumer first among the bases."
+            )
+
+    # Check 5 — async-entry symmetry. An overridden ``from_config_async``
+    # must route through ``_coerce_config`` like ``from_config`` does.
+    if "from_config_async" in consumer_cls.__dict__:
+        raw = consumer_cls.__dict__["from_config_async"]
+        if isinstance(raw, classmethod):
+            raw = raw.__func__
+        try:
+            src = textwrap.dedent(inspect.getsource(raw))
+        except (OSError, TypeError) as e:
+            raise AssertionError(
+                f"Cannot read source of "
+                f"{consumer_cls.__name__}.from_config_async: {e}"
+            ) from e
+        routes_through_guard = any(
+            isinstance(node, ast.Attribute)
+            and node.attr == "_coerce_config"
+            for node in ast.walk(ast.parse(src))
+        )
+        if not routes_through_guard:
+            raise AssertionError(
+                f"{consumer_cls.__name__}.from_config_async does not route "
+                "through _coerce_config; it must use the same typed-config "
+                "guard as from_config so a wrong-subclass config is rejected."
+            )
+
     if expected_factory is not None:
         assert_factory_kwargs_match_ctor(
             expected_factory,
@@ -397,12 +451,12 @@ def assert_structured_config_roundtrip(config: Any) -> None:
     instance. Eliminates the per-consumer round-trip boilerplate that
     every adopter of the abstraction would otherwise duplicate.
 
-    The property holds for flat configs and for nested configs whose
-    ``_normalize_dict`` rebuilds each nested ``StructuredConfig`` field
-    from its dict. A nested field left as a raw dict fails the assertion
-    (``asdict`` recurses; ``from_dict`` does not) — so pass this helper a
-    config whose nesting is handled by ``_normalize_dict``, or a flat
-    config.
+    The property holds for flat configs and for nested configs alike:
+    ``to_dict`` recurses via ``asdict`` and ``from_dict`` recurses back
+    into the matching field types, so the two are symmetric for every
+    statically-typed nesting shape (``SubCfg``, ``SubCfg | None``,
+    ``list[SubCfg]``, ``dict[K, SubCfg]``, ``dict[K, list[SubCfg]]``). No
+    ``_normalize_dict`` override is required for nesting alone.
 
     Args:
         config: A ``StructuredConfig`` instance to round-trip.
