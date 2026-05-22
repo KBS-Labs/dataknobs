@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`config/` subcomponent dataclasses now subclass `StructuredConfig`.**
+  `ToolEntry`, `TemplateVariable`, `ConfigTemplate`, `ConfigVersion`,
+  `DraftMetadata`, `ComponentSchema`, and the wizard-builder configs
+  (`TransitionConfig`, `IntentDetectionConfig`, `ContextGenerationConfig`,
+  `StageConfig`, `WizardConfig`) inherit
+  `dataknobs_common.structured_config.StructuredConfig`, so `from_dict` is
+  derived from the dataclass fields (recursing into nested sub-configs —
+  `StageConfig`'s transitions/intent/context and `WizardConfig`'s stages
+  are rebuilt automatically, replacing the hand-walked deserialization).
+  `ComponentSchema` and `WizardConfig` gain a `from_dict` they previously
+  lacked. Serialized output is unchanged: classes whose `to_dict` omits
+  defaults or renames keys (e.g. `DraftMetadata`'s `id`) keep that
+  bespoke `to_dict`, and frozenset/tuple fields are restored on load via
+  `__post_init__`.
+- **`TemplateVariable`, `ConfigTemplate`, `ConfigVersion`, `DraftMetadata`,
+  and `ComponentSchema` are now frozen** (the wizard-builder configs
+  already were). They are immutable-by-design value objects; construct a
+  modified copy with `dataclasses.replace(...)` instead of assigning to
+  attributes.
+
 ## v0.6.22 - 2026-05-19
 
 ### Added

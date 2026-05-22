@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import copy
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_config.template_vars import substitute_template_vars
 
 from .validation import ValidationResult
@@ -32,8 +33,8 @@ from .validation import ValidationResult
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TemplateVariable:
+@dataclass(frozen=True)
+class TemplateVariable(StructuredConfig):
     """Definition of a template variable.
 
     Attributes:
@@ -71,29 +72,9 @@ class TemplateVariable:
             result["validation"] = self.validation
         return result
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TemplateVariable:
-        """Create a TemplateVariable from a dictionary.
 
-        Args:
-            data: Dictionary with variable fields.
-
-        Returns:
-            A new TemplateVariable instance.
-        """
-        return cls(
-            name=data["name"],
-            description=data.get("description", ""),
-            type=data.get("type", "string"),
-            required=data.get("required", False),
-            default=data.get("default"),
-            choices=data.get("choices"),
-            validation=data.get("validation"),
-        )
-
-
-@dataclass
-class ConfigTemplate:
+@dataclass(frozen=True)
+class ConfigTemplate(StructuredConfig):
     """A reusable DynaBot configuration template.
 
     Templates define a configuration structure with variable placeholders
@@ -106,9 +87,14 @@ class ConfigTemplate:
         tags: Tags for filtering and categorization.
         variables: List of template variables.
         structure: The config structure with {{var}} placeholders.
+
+    ``from_dict`` is inherited from :class:`StructuredConfig`; the nested
+    ``variables`` list is rebuilt from raw dicts automatically. ``to_dict``
+    is overridden so each variable serializes via its own omit-empty
+    ``to_dict``.
     """
 
-    name: str
+    name: str = ""
     description: str = ""
     version: str = "1.0.0"
     tags: list[str] = field(default_factory=list)
@@ -135,28 +121,6 @@ class ConfigTemplate:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ConfigTemplate:
-        """Create a ConfigTemplate from a dictionary.
-
-        Args:
-            data: Dictionary with template fields.
-
-        Returns:
-            A new ConfigTemplate instance.
-        """
-        variables = [
-            TemplateVariable.from_dict(v) for v in data.get("variables", [])
-        ]
-        return cls(
-            name=data.get("name", ""),
-            description=data.get("description", ""),
-            version=data.get("version", "1.0.0"),
-            tags=data.get("tags", []),
-            variables=variables,
-            structure=data.get("structure", {}),
-        )
-
-    @classmethod
     def from_yaml_file(cls, path: Path) -> ConfigTemplate:
         """Load a ConfigTemplate from a YAML file.
 
@@ -176,7 +140,7 @@ class ConfigTemplate:
             data = {}
         template = cls.from_dict(data)
         if not template.name:
-            template.name = path.stem.replace("-", "_")
+            template = replace(template, name=path.stem.replace("-", "_"))
         return template
 
 

@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 import yaml
+from dataknobs_common.structured_config import StructuredConfig
 
 from .validation import ValidationResult
 
@@ -57,8 +58,13 @@ _VALID_MODE = {"conversation"}
 
 
 @dataclass(frozen=True)
-class TransitionConfig:
-    """Configuration for a single stage transition."""
+class TransitionConfig(StructuredConfig):
+    """Configuration for a single stage transition.
+
+    ``from_dict`` is inherited from :class:`StructuredConfig` (used when a
+    :class:`StageConfig`'s ``transitions`` are rebuilt from raw dicts);
+    ``to_dict`` is overridden to omit unset optional fields.
+    """
 
     target: str
     condition: str | None = None
@@ -87,11 +93,21 @@ class TransitionConfig:
 
 
 @dataclass(frozen=True)
-class IntentDetectionConfig:
-    """Configuration for intent detection on a stage."""
+class IntentDetectionConfig(StructuredConfig):
+    """Configuration for intent detection on a stage.
 
-    method: str
+    ``from_dict`` is inherited; ``__post_init__`` coerces ``intents`` to a
+    tuple so a raw ``list`` round-trips faithfully. ``to_dict`` is
+    overridden to omit empty ``intents`` and emit it as a list.
+    """
+
+    method: str = "keyword"
     intents: tuple[dict[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Coerce ``intents`` to a tuple (raw dicts arrive as a list)."""
+        if not isinstance(self.intents, tuple):
+            object.__setattr__(self, "intents", tuple(self.intents))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader."""
@@ -102,25 +118,28 @@ class IntentDetectionConfig:
 
 
 @dataclass(frozen=True)
-class ContextGenerationConfig:
-    """Configuration for LLM-generated context variables."""
+class ContextGenerationConfig(StructuredConfig):
+    """Configuration for LLM-generated context variables.
 
-    variables: dict[str, str]
+    ``from_dict``/``to_dict`` are inherited from :class:`StructuredConfig`
+    — the single ``variables`` field is the dict shape.
+    """
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dict compatible with WizardConfigLoader."""
-        return {"variables": dict(self.variables)}
+    variables: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 # ── StageConfig field classifications for serialization ──────────────
 #
-# Shared by StageConfig.to_dict() and StageConfig.from_dict() so that
-# adding a tuple or nested field only requires updating one place.
+# Shared by StageConfig.to_dict() (serialization) and StageConfig.__post_init__()
+# (the tuple coercion of deserialized values) so that adding a tuple or nested
+# field only requires updating one place. Deserialization itself is the
+# inherited StructuredConfig.from_dict(); these sets do not drive it.
 #
 # See the "HOW TO ADD A NEW STAGE FIELD" guide in
 # reasoning/wizard_loader.py for the full checklist.
 
-# Nested dataclass fields — need .to_dict() / constructor deserialization
+# Nested dataclass fields — rebuilt by the inherited from_dict; to_dict()
+# serializes them explicitly via .to_dict() and skips them in the generic loop
 _NESTED_FIELDS: frozenset[str] = frozenset({
     "transitions", "intent_detection", "context_generation",
 })
@@ -139,8 +158,16 @@ _REQUIRED_FIELDS: frozenset[str] = frozenset({"name", "prompt"})
 
 
 @dataclass(frozen=True)
-class StageConfig:
-    """Configuration for a single wizard stage."""
+class StageConfig(StructuredConfig):
+    """Configuration for a single wizard stage.
+
+    ``from_dict`` is inherited from :class:`StructuredConfig`: the nested
+    ``transitions``/``intent_detection``/``context_generation`` fields are
+    rebuilt from their raw dict shapes automatically, and ``__post_init__``
+    coerces the primitive/dict tuple fields (``suggestions``, ``tools``,
+    ``tasks``, ...) from the lists they arrive as. ``to_dict`` is
+    overridden to omit defaults and emit tuples as lists.
+    """
 
     name: str
     prompt: str
@@ -199,6 +226,19 @@ class StageConfig:
     store_trace: bool | None = None
     verbose: bool | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce the primitive/dict tuple fields from lists to tuples.
+
+        Nested-dataclass fields (``transitions``, ``intent_detection``,
+        ``context_generation``) are rebuilt by the inherited ``from_dict``;
+        these tuple fields hold no nested config and therefore arrive as
+        the raw lists they were serialized to.
+        """
+        for fname in _TUPLE_FIELDS:
+            value = getattr(self, fname)
+            if not isinstance(value, tuple):
+                object.__setattr__(self, fname, tuple(value))
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader.
 
@@ -232,87 +272,37 @@ class StageConfig:
             d["intent_detection"] = self.intent_detection.to_dict()
         return d
 
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> StageConfig:
-        """Construct a StageConfig from a raw config dict.
-
-        Iterates :func:`dataclasses.fields` to extract every field,
-        so new fields added to the dataclass are picked up
-        automatically.  Only fields with non-trivial deserialization
-        (nested dataclasses, list→tuple coercion) need explicit
-        handling.
-
-        Args:
-            d: Raw stage config dict (e.g. from YAML).
-
-        Returns:
-            Populated ``StageConfig`` instance.
-        """
-        kwargs: dict[str, Any] = {}
-        for f in dataclass_fields(cls):
-            if f.name in _NESTED_FIELDS:
-                continue
-            if f.name in _TUPLE_FIELDS:
-                kwargs[f.name] = tuple(d.get(f.name, []))
-            elif f.name == "name":
-                kwargs["name"] = d["name"]
-            else:
-                # Use the dataclass field's default as fallback
-                if f.default is not dataclasses.MISSING:
-                    kwargs[f.name] = d.get(f.name, f.default)
-                else:
-                    # No default — field is required or has default_factory
-                    kwargs[f.name] = d.get(f.name)
-
-        # Nested dataclass: transitions
-        kwargs["transitions"] = tuple(
-            TransitionConfig(
-                target=t["target"],
-                condition=t.get("condition"),
-                transform=t.get("transform"),
-                priority=t.get("priority"),
-                derive=t.get("derive"),
-                metadata=t.get("metadata"),
-                subflow=t.get("subflow"),
-            )
-            for t in d.get("transitions", [])
-        )
-
-        # Nested dataclass: intent_detection
-        raw_intent = d.get("intent_detection")
-        if raw_intent:
-            kwargs["intent_detection"] = IntentDetectionConfig(
-                method=raw_intent.get("method", "keyword"),
-                intents=tuple(raw_intent.get("intents", [])),
-            )
-
-        # Nested dataclass: context_generation
-        raw_ctx = d.get("context_generation")
-        if raw_ctx:
-            kwargs["context_generation"] = ContextGenerationConfig(
-                variables=raw_ctx.get("variables", {}),
-            )
-
-        return cls(**kwargs)
-
 
 @dataclass(frozen=True)
-class WizardConfig:
+class WizardConfig(StructuredConfig):
     """Immutable wizard configuration produced by WizardConfigBuilder.
 
     This is the validated output of the builder. Use ``to_dict()`` to
     get a dict compatible with ``WizardConfigLoader.load_from_dict()``,
     ``to_yaml()`` for YAML serialization, or ``to_file()`` to write
     directly to disk.
+
+    ``from_dict`` is inherited from :class:`StructuredConfig`: the nested
+    ``stages`` are rebuilt from raw dicts automatically and
+    ``__post_init__`` coerces ``stages``/``global_tasks`` to tuples. The
+    optional fields carry defaults so a ``to_dict`` that omits them
+    round-trips. ``to_dict`` is overridden to omit empty sections.
     """
 
     name: str
     version: str
-    description: str
-    settings: dict[str, Any]
-    stages: tuple[StageConfig, ...]
+    description: str = ""
+    settings: dict[str, Any] = dataclasses.field(default_factory=dict)
+    stages: tuple[StageConfig, ...] = ()
     global_tasks: tuple[dict[str, Any], ...] = ()
     subflows: dict[str, list[dict[str, Any]]] | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce ``stages``/``global_tasks`` to tuples (lists when loaded)."""
+        if not isinstance(self.stages, tuple):
+            object.__setattr__(self, "stages", tuple(self.stages))
+        if not isinstance(self.global_tasks, tuple):
+            object.__setattr__(self, "global_tasks", tuple(self.global_tasks))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader.load_from_dict()."""

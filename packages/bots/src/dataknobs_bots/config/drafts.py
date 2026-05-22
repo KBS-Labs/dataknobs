@@ -36,12 +36,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class DraftMetadata:
+@dataclass(frozen=True)
+class DraftMetadata(StructuredConfig):
     """Metadata for a configuration draft.
 
     Attributes:
@@ -51,17 +52,37 @@ class DraftMetadata:
         stage: Current wizard stage when draft was saved.
         complete: Whether the draft represents a complete config.
         config_name: Optional name for the final config file.
+
+    The serialized form keys ``draft_id`` as ``id`` and omits unset
+    ``stage``/``config_name`` — so ``to_dict`` is overridden. ``from_dict``
+    is inherited; :meth:`_normalize_dict` maps the serialized ``id`` key
+    back onto ``draft_id``.
     """
 
-    draft_id: str
-    created_at: str
-    last_updated: str
+    draft_id: str = ""
+    created_at: str = ""
+    last_updated: str = ""
     stage: str | None = None
     complete: bool = False
     config_name: str | None = None
 
+    @classmethod
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Map the serialized ``id`` key onto the ``draft_id`` field.
+
+        ``id`` takes precedence over an explicit ``draft_id`` (matching the
+        prior hand-rolled lookup order).
+        """
+        if "id" in raw:
+            raw["draft_id"] = raw.pop("id")
+        return raw
+
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary representation."""
+        """Convert to dictionary representation.
+
+        Emits ``id`` for ``draft_id`` and omits unset
+        ``stage``/``config_name`` for clean output.
+        """
         result: dict[str, Any] = {
             "id": self.draft_id,
             "created_at": self.created_at,
@@ -73,25 +94,6 @@ class DraftMetadata:
         if self.config_name is not None:
             result["config_name"] = self.config_name
         return result
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> DraftMetadata:
-        """Create DraftMetadata from a dictionary.
-
-        Args:
-            data: Dictionary with metadata fields.
-
-        Returns:
-            A new DraftMetadata instance.
-        """
-        return cls(
-            draft_id=data.get("id", data.get("draft_id", "")),
-            created_at=data.get("created_at", ""),
-            last_updated=data.get("last_updated", ""),
-            stage=data.get("stage"),
-            complete=data.get("complete", False),
-            config_name=data.get("config_name"),
-        )
 
 
 class ConfigDraftManager:

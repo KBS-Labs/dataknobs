@@ -41,6 +41,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from dataknobs_common.structured_config import StructuredConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,12 +67,17 @@ class VersionConflictError(Exception):
         self.actual_version = actual_version
 
 
-@dataclass
-class ConfigVersion:
+@dataclass(frozen=True, eq=False)
+class ConfigVersion(StructuredConfig):
     """A single version record for a configuration.
 
     Each ConfigVersion is immutable once created. Updates create new versions
     rather than modifying existing ones.
+
+    Identity is the version number alone (custom ``__eq__``/``__hash__``),
+    so ``eq=False`` keeps the dataclass from generating field-wise
+    comparisons. ``from_dict``/``to_dict`` are inherited from
+    :class:`StructuredConfig` — the field set is the dict shape.
 
     Attributes:
         version: Version number (1-indexed)
@@ -89,42 +96,6 @@ class ConfigVersion:
     previous_version: int | None = None
     created_by: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization.
-
-        Returns:
-            Dictionary representation
-        """
-        return {
-            "version": self.version,
-            "config": self.config,
-            "timestamp": self.timestamp,
-            "reason": self.reason,
-            "previous_version": self.previous_version,
-            "created_by": self.created_by,
-            "metadata": self.metadata,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ConfigVersion:
-        """Create from dictionary.
-
-        Args:
-            data: Dictionary containing version data
-
-        Returns:
-            ConfigVersion instance
-        """
-        return cls(
-            version=data["version"],
-            config=data["config"],
-            timestamp=data.get("timestamp", time.time()),
-            reason=data.get("reason", ""),
-            previous_version=data.get("previous_version"),
-            created_by=data.get("created_by"),
-            metadata=data.get("metadata", {}),
-        )
 
     def __eq__(self, other: object) -> bool:
         """Check equality based on version number."""
