@@ -8,9 +8,9 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TYPE_CHECKING, cast, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
@@ -21,11 +21,13 @@ from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fal
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import AsyncS3DatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import ClassVar
 
 
 logger = logging.getLogger(__name__)
@@ -35,24 +37,43 @@ _session_manager = ConnectionPoolManager()
 
 
 class AsyncS3Database(  # type: ignore[misc]
+    StructuredConfigConsumer[AsyncS3DatabaseConfig],
     AsyncDatabase,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
     VectorOperationsMixin
 ):
-    """Native async S3 database backend with aioboto3 and session pooling."""
+    """Native async S3 database backend with aioboto3 and session pooling.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async S3 database."""
-        super().__init__(config)
+    Constructed through :class:`AsyncS3DatabaseConfig` — every documented
+    config key is a typed field on that dataclass, so ``self.config`` is
+    the typed config (not a dict). The ``S3PoolConfig`` is derived from it
+    in :meth:`_setup`.
+    """
 
-        if not config or "bucket" not in config:
-            raise ValueError("S3 backend requires 'bucket' in configuration")
+    CONFIG_CLS: ClassVar[type[AsyncS3DatabaseConfig]] = AsyncS3DatabaseConfig
 
-        self._pool_config = S3PoolConfig.from_dict(config)
+    def _setup(self) -> None:
+        """Derive the pool config and connection state from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op — connection setup is deferred to
+        :meth:`connect`). ``bucket`` validation and credential-alias
+        normalization already happened in the config dataclass.
+        """
+        cfg = self.config
+
+        self._pool_config = S3PoolConfig(
+            bucket=cast("str", cfg.bucket),
+            prefix=cfg.prefix,
+            region_name=cfg.region_name,
+            aws_access_key_id=cfg.aws_access_key_id,
+            aws_secret_access_key=cfg.aws_secret_access_key,
+            aws_session_token=cfg.aws_session_token,
+            endpoint_url=cfg.endpoint_url,
+        )
         # Public, symmetric with ``SyncS3Database.region``: the resolved
         # region (``None`` when config relies on the boto default chain).
         # Lets callers/tests inspect region resolution without reaching
@@ -62,13 +83,8 @@ class AsyncS3Database(  # type: ignore[misc]
         self._connected = False
 
         # Initialize vector support
-        self._parse_vector_config(config or {})
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()  # From SQLiteVectorSupport
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncS3Database:
-        """Create from config dictionary."""
-        return cls(config)
 
     async def connect(self) -> None:
         """Connect to S3 service."""

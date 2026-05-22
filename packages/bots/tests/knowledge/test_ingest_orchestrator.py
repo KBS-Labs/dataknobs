@@ -603,13 +603,13 @@ async def test_two_replicas_serialized_by_postgres_lock(
 
 class TestLockConfigConstruction:
     """``lock_config=`` builds the lock via ``create_lock`` at the
-    orchestrator construction site (125/126 Phase 4).
+    orchestrator construction site.
 
-    The lock primitive + ``lock=`` injection seam are owned by Item
-    128 (already shipped). Phase 4 makes the orchestrator
-    *configuration-driven*: a multi-replica deployment selects a
-    cross-replica backend via a config dict — no lock logic in bots,
-    it delegates to ``dataknobs_common.locks.create_lock``.
+    The lock primitive + ``lock=`` injection seam already exist; this
+    makes the orchestrator *configuration-driven*: a multi-replica
+    deployment selects a cross-replica backend via a config dict — no
+    lock logic in bots, it delegates to
+    ``dataknobs_common.locks.create_lock``.
     """
 
     @pytest.mark.asyncio

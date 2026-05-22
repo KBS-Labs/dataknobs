@@ -2,8 +2,7 @@
 
 This module contains all data types, constants, and standalone helper
 functions used across the wizard reasoning subsystem.  Extracted from
-``wizard.py`` (item 77a) to reduce monolith size and provide clean
-import paths.
+``wizard.py`` to reduce monolith size and provide clean import paths.
 
 Types defined here:
 - :class:`TurnContext` — per-turn transient values

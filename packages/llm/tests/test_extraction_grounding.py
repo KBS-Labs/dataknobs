@@ -193,7 +193,7 @@ class TestIsFieldGrounded:
         assert result.grounded is True
         assert result.strategy == "unknown"
 
-    # -- Type-mismatch rejection (item 91) --
+    # -- Type-mismatch rejection --
 
     def test_type_mismatch_bool_for_string(self) -> None:
         prop = _string_prop()

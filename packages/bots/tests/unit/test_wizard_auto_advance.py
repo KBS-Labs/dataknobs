@@ -474,7 +474,7 @@ stages:
 
 
 class TestSkipExtraction:
-    """Tests for skip_extraction flag on WizardState (item 19).
+    """Tests for skip_extraction flag on WizardState.
 
     When auto-advance lands on a new stage, the next generate() call
     should skip extraction because the user hasn't responded to the

@@ -1,4 +1,4 @@
-"""Tests for the phased reasoning protocol (item 78).
+"""Tests for the phased reasoning protocol.
 
 Verifies:
 - Protocol types (TurnHandle, ProcessResult, PhasedReasoningProtocol)

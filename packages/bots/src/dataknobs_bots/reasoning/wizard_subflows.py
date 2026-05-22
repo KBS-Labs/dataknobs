@@ -2,7 +2,7 @@
 
 Manages nested wizard subflows — push/pop lifecycle, data mapping
 between parent and child flows, and subflow completion detection.
-Extracted from ``wizard.py`` (item 77a).
+Extracted from ``wizard.py``.
 """
 
 from __future__ import annotations

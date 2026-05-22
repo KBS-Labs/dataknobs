@@ -1,9 +1,9 @@
-"""Embedder rate-limit seam (125/126 Phase 4, decision 13).
+"""Embedder rate-limit seam.
 
 The production consumer ingests through an OpenAI-rate-limited
 embedder; unbounded per-chunk embed calls fail the whole ingest. The
 infra (:class:`dataknobs_common.ratelimit.RateLimiter` +
-``InMemoryRateLimiter``) already exists — Phase 4 only wires an
+``InMemoryRateLimiter``) already exists — this seam only wires an
 optional, injected ``rate_limiter`` through the ingest path
 (:meth:`KnowledgeIngestionManager.__init__` /
 :meth:`RAGKnowledgeBase.ingest_from_backend` →

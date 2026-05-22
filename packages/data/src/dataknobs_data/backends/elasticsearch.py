@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
@@ -16,6 +16,7 @@ from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector.types import DistanceMetric, VectorSearchResult
+from .config import SyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
     ElasticsearchErrorHandler,
@@ -27,17 +28,20 @@ from .elasticsearch_mixins import (
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
-    import numpy as np
     from collections.abc import Iterator
+    from typing import ClassVar
+
+    import numpy as np
+
     from ..records import Record
 
 logger = logging.getLogger(__name__)
 
 
 class SyncElasticsearchDatabase(
+    StructuredConfigConsumer[SyncElasticsearchDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
-    ConfigurableBase,
     VectorConfigMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
@@ -46,69 +50,58 @@ class SyncElasticsearchDatabase(
     ElasticsearchRecordSerializer,
     ElasticsearchQueryBuilder,
 ):
-    """Synchronous Elasticsearch database backend."""
+    """Synchronous Elasticsearch database backend.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize Elasticsearch database.
+    Constructed through :class:`SyncElasticsearchDatabaseConfig` — every
+    documented config key is a typed field on that dataclass, so
+    ``self.config`` is the typed config (not a dict) and the
+    ``from_config`` / factory paths share one construction route.
+    """
 
-        Args:
-            config: Configuration with the following optional keys:
-                - host: Elasticsearch host (default: localhost)
-                - port: Elasticsearch port (default: 9200)
-                - index: Index name (default: "records")
-                - refresh: Whether to refresh after write operations (default: True)
-                - settings: Index settings dict
-                - mappings: Index mappings dict
+    CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = (
+        SyncElasticsearchDatabaseConfig
+    )
+
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op for Elasticsearch — connection setup
+        is deferred to :meth:`connect`).
         """
-        super().__init__(config)
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
 
-        # Parse vector configuration using the mixin
-        self._parse_vector_config(config)
+        # Observed vector fields (field_name -> dimensions).
+        self.vector_fields: dict[str, int] = {}
 
-        # Initialize vector support
-        self.vector_fields = {}  # field_name -> dimensions
+        self.host = cfg.host
+        self.port = cfg.port
+        self.index_name = cfg.index
+        self.refresh = cfg.refresh
 
         self.es_index = None  # Will be initialized in connect()
         self._connected = False
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncElasticsearchDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def connect(self) -> None:
         """Connect to the Elasticsearch database."""
         if self._connected:
             return  # Already connected
 
-        # Initialize the Elasticsearch connection and index
-        config = self.config.copy()
-
-        # Extract configuration
-        self.host = config.pop("host", "localhost")
-        self.port = config.pop("port", 9200)
-        self.index_name = config.pop("index", "records")
-        self.refresh = config.pop("refresh", True)
+        cfg = self.config
 
         # If vector is enabled but no vector fields defined yet, set up default
         if self._vector_enabled and not self.vector_fields:
-            # Set a default embedding field with configurable dimensions
-            default_dimensions = config.pop("vector_dimensions", 1536)  # Common default
-            default_field = config.pop("default_vector_field", "embedding")
-            self.vector_fields[default_field] = default_dimensions
+            self.vector_fields[cfg.default_vector_field] = cfg.vector_dimensions
 
         # Get mappings with vector field support
         base_mappings = self.get_index_mappings(self.vector_fields)
 
         # Allow custom mappings to override
-        custom_mappings = config.pop("mappings", None)
-        if custom_mappings:
-            mappings = custom_mappings
-        else:
-            mappings = base_mappings
+        mappings = cfg.mappings if cfg.mappings else base_mappings
 
         # Get settings optimized for KNN if we have vector fields
-        settings = config.pop("settings", None)
+        settings = cfg.settings
         if not settings:
             settings = self.get_knn_index_settings() if (self.vector_fields or self._vector_enabled) else {
                 "number_of_shards": 1,

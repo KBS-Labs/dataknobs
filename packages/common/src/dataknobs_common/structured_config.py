@@ -91,7 +91,8 @@ def _resolved_hints(cls: type) -> Mapping[str, Any]:
     them against the class's module globals. If resolution fails (an
     annotation referencing a name unavailable at runtime — e.g. a
     ``TYPE_CHECKING``-only import), we degrade to ``{}`` so ``from_dict``
-    falls back to the pre-146b pass-through behaviour rather than crashing.
+    falls back to the pre-coercion pass-through behaviour rather than
+    crashing.
     """
     try:
         return get_type_hints(cls)
@@ -100,9 +101,9 @@ def _resolved_hints(cls: type) -> Mapping[str, Any]:
         # name available only under ``TYPE_CHECKING`` — surfaces as
         # ``NameError``; malformed/incompatible annotations as
         # ``TypeError`` / ``AttributeError``. Degrade to ``{}`` so
-        # ``from_dict`` falls back to the pre-146b pass-through behaviour
-        # rather than crashing, and log at debug so the dropped coercion
-        # is diagnosable.
+        # ``from_dict`` falls back to the pre-coercion pass-through
+        # behaviour rather than crashing, and log at debug so the dropped
+        # coercion is diagnosable.
         logger.debug(
             "Could not resolve type hints for %s (%s); nested-config "
             "coercion will be skipped for its fields.",

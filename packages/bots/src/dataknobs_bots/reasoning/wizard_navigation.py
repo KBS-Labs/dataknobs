@@ -1,6 +1,6 @@
 """Navigation commands, amendments, and conversation tree branching.
 
-Extracted from :mod:`wizard` (item 77b).  Contains the
+Extracted from :mod:`wizard`.  Contains the
 :class:`WizardNavigator` class which handles back/skip/restart commands,
 post-completion amendment detection, and conversation tree branching for
 revisited stages.

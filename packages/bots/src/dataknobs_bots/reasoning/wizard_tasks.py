@@ -2,7 +2,7 @@
 
 Functions for building and updating the wizard task list based on
 extracted fields, tool invocations, and stage transitions.  Extracted
-from ``wizard.py`` (item 77a).
+from ``wizard.py``.
 """
 
 from __future__ import annotations

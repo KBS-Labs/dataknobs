@@ -1,6 +1,6 @@
 """Response generation, context building, and auto-advance for wizard flows.
 
-Extracted from ``wizard.py`` in item 77d.  This module owns all
+Extracted from ``wizard.py``.  This module owns all
 response-generation code paths — template rendering, LLM-based responses,
 clarification prompts, validation errors, restart offers, auto-advance
 logic, condition evaluation, and strategy delegation.
@@ -70,7 +70,7 @@ class WizardResponder:
     """Response generation, context building, and auto-advance logic.
 
     Constructed by :class:`WizardReasoning` and wired via shared
-    references and callable callbacks.  Extracted in item 77d.
+    references and callable callbacks.  Extracted from ``wizard.py``.
     """
 
     def __init__(

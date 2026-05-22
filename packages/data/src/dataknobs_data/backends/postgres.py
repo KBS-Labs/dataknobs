@@ -8,7 +8,8 @@ import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
 
@@ -24,6 +25,7 @@ from ..streaming import (
     process_batch_with_fallback,
 )
 from ..vector.mixins import VectorOperationsMixin
+from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
     PostgresBaseConfig,
     PostgresConnectionValidator,
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from collections.abc import AsyncIterator, Iterator, Callable, Awaitable
+    from typing import ClassVar
     from ..fields import VectorField
     from ..records import Record
     from ..vector.types import VectorSearchResult
@@ -45,9 +48,33 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _ssl_to_sslmode(ssl: Any) -> str | None:
+    """Translate the asyncpg-native ``ssl`` config to a psycopg2 ``sslmode``.
+
+    The unified :class:`PostgresDatabaseConfig` ``ssl`` field keeps asyncpg
+    semantics; the sync (psycopg2) backend speaks ``sslmode`` instead.
+    ``None`` → no ``sslmode`` (libpq's own default), ``str`` → that mode,
+    ``True`` → ``"require"``, ``False`` → ``"disable"``. An unsupported
+    value (e.g. an ``ssl.SSLContext``, which psycopg2's ``connect`` cannot
+    accept) raises rather than silently degrading.
+    """
+    if ssl is None:
+        return None
+    if isinstance(ssl, str):
+        return ssl
+    if isinstance(ssl, bool):
+        return "require" if ssl else "disable"
+    raise ConfigurationError(
+        f"Sync Postgres backend cannot translate ssl={ssl!r} "
+        f"({type(ssl).__name__}) to a psycopg2 sslmode. Pass an sslmode "
+        "string (e.g. 'require'), a bool, or use the async backend for "
+        "SSLContext-based configuration."
+    )
+
+
 class SyncPostgresDatabase(
+    StructuredConfigConsumer[PostgresDatabaseConfig],
     SyncDatabase,
-    ConfigurableBase,
     VectorOperationsMixin,
     SQLRecordSerializer,
     PostgresBaseConfig,
@@ -56,53 +83,58 @@ class SyncPostgresDatabase(
     PostgresConnectionValidator,
     PostgresErrorHandler,
 ):
-    """Synchronous PostgreSQL database backend with proper connection management."""
+    """Synchronous PostgreSQL database backend with proper connection management.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize PostgreSQL database configuration.
+    Constructed through the unified :class:`PostgresDatabaseConfig` (shared
+    with :class:`AsyncPostgresDatabase`), so both Postgres backends accept
+    an identical connection surface. The async-only knobs
+    (``min_pool_size``/``max_pool_size``/``command_timeout``) are inert here;
+    ``ssl`` is honored via translation to a psycopg2 ``sslmode``.
+    """
 
-        Args:
-            config: Configuration with the following optional keys:
-                - host: PostgreSQL host (default: from env/localhost)
-                - port: PostgreSQL port (default: 5432)
-                - database: Database name (default: from env/postgres)
-                - user: Username (default: from env/postgres)
-                - password: Password (default: from env)
-                - table: Table name (default: "records")
-                - schema: Schema name (default: "public")
-                - enable_vector: Enable vector support (default: False)
-                - ensure_database: Auto-create database if missing (default: True)
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool (Alembic, Flyway, etc.) owns DDL —
-                    connect() will then verify the table exists and raise
-                    RuntimeError if it doesn't.
+    CONFIG_CLS: ClassVar[type[PostgresDatabaseConfig]] = PostgresDatabaseConfig
+
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Connection setup itself is deferred to :meth:`connect` (``_initialize``
+        is a no-op); this only computes the attributes ``connect`` consumes.
         """
-        super().__init__(config)
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
 
-        # Parse configuration using mixin
-        table_name, schema_name, conn_config, ensure_database, auto_create_table = (
-            self._parse_postgres_config(config or {})
-        )
-        self._init_postgres_attributes(table_name, schema_name, ensure_database, auto_create_table)
+        self.table_name = cfg.table
+        self.schema_name = cfg.schema_name
+        self._q_table = quote_ident(self.table_name)
+        self._q_schema = quote_ident(self.schema_name)
+        self._q_qualified = f"{self._q_schema}.{self._q_table}"
+        self._connected = False
+        self._ensure_database_enabled = cfg.ensure_database
+        self.auto_create_table = cfg.auto_create_table
+        self._init_vector_state()
 
         # Table manager for parameterized existence checks (psycopg2 pyformat style)
         self.table_manager = SQLTableManager(
-            table_name,
-            schema_name=schema_name,
+            self.table_name,
+            schema_name=self.schema_name,
             dialect="postgres",
             param_style="pyformat",
         )
 
-        # Store connection config for later use
-        self._conn_config = conn_config
+        # Connection params consumed by connect()/_create_database.
+        self._conn_config = {
+            "host": cfg.host,
+            "port": cfg.port,
+            "database": cfg.database,
+            "user": cfg.user,
+            "password": cfg.password,
+        }
+        # asyncpg-native ssl translated to psycopg2 sslmode (fail-fast on
+        # an unsupported value such as an SSLContext).
+        self._sslmode = _ssl_to_sslmode(cfg.ssl)
+
         self.db = None  # Will be initialized in connect()
         self.query_builder = None  # Will be initialized in connect()
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncPostgresDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def connect(self) -> None:
         """Connect to the PostgreSQL database."""
@@ -151,6 +183,7 @@ class SyncPostgresDatabase(
             user=self._conn_config.get("user", "postgres"),
             pwd=self._conn_config.get("password"),
             port=self._conn_config.get("port", 5432),
+            sslmode=self._sslmode,
         )
 
     @staticmethod
@@ -187,14 +220,17 @@ class SyncPostgresDatabase(
         target_db = self._conn_config.get("database", "postgres")
         validate_database_name(target_db)
 
-        conn = psycopg2.connect(
-            host=self._conn_config.get("host", "localhost"),
-            port=self._conn_config.get("port", 5432),
-            user=self._conn_config.get("user", "postgres"),
-            password=self._conn_config.get("password"),
-            database="postgres",
-            connect_timeout=10,
-        )
+        conn_kwargs: dict[str, Any] = {
+            "host": self._conn_config.get("host", "localhost"),
+            "port": self._conn_config.get("port", 5432),
+            "user": self._conn_config.get("user", "postgres"),
+            "password": self._conn_config.get("password"),
+            "database": "postgres",
+            "connect_timeout": 10,
+        }
+        if self._sslmode is not None:
+            conn_kwargs["sslmode"] = self._sslmode
+        conn = psycopg2.connect(**conn_kwargs)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 
         cursor = conn.cursor()
@@ -835,66 +871,67 @@ _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 
 
 class AsyncPostgresDatabase(
+    StructuredConfigConsumer[PostgresDatabaseConfig],
     AsyncDatabase,
     VectorOperationsMixin,
-    ConfigurableBase,
     PostgresBaseConfig,
     PostgresTableManager,
     PostgresVectorSupport,
     PostgresConnectionValidator,
     PostgresErrorHandler,
 ):
-    """Native async PostgreSQL database backend with vector support and event loop-aware connection pooling."""
+    """Native async PostgreSQL database backend with vector support and event loop-aware connection pooling.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async PostgreSQL database.
+    Constructed through the unified :class:`PostgresDatabaseConfig` (shared
+    with :class:`SyncPostgresDatabase`). This backend honors the full
+    parameter set, including the pool bounds (``min_pool_size`` /
+    ``max_pool_size``), ``command_timeout``, and asyncpg-native ``ssl``.
+    """
 
-        Args:
-            config: Configuration with the following optional keys:
-                - host: PostgreSQL host (default: localhost)
-                - port: PostgreSQL port (default: 5432)
-                - database: Database name (default: postgres)
-                - user: Username (default: postgres)
-                - password: Password (default: empty)
-                - table: Table name (default: "records")
-                - schema: Schema name (default: "public")
-                - enable_vector: Enable vector support (default: False)
-                - ensure_database: Auto-create database if missing (default: True)
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool (Alembic, Flyway, etc.) owns DDL —
-                    connect() will then verify the table exists and raise
-                    RuntimeError if it doesn't.
-                - connection_string: PostgreSQL connection string (alternative to individual params)
-                - min_pool_size: Minimum pool connections (default: 2)
-                - max_pool_size: Maximum pool connections (default: 5)
-                - command_timeout: Command timeout in seconds (default: None)
-                - ssl: SSL configuration (default: None)
+    CONFIG_CLS: ClassVar[type[PostgresDatabaseConfig]] = PostgresDatabaseConfig
+
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Pool creation is deferred to :meth:`connect` (``_initialize`` is a
+        no-op); this only assembles the :class:`PostgresPoolConfig` and the
+        attributes ``connect`` consumes.
         """
-        super().__init__(config)
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
 
-        # Parse configuration using mixin
-        table_name, schema_name, conn_config, ensure_database, auto_create_table = (
-            self._parse_postgres_config(config or {})
-        )
-        self._init_postgres_attributes(table_name, schema_name, ensure_database, auto_create_table)
+        self.table_name = cfg.table
+        self.schema_name = cfg.schema_name
+        self._q_table = quote_ident(self.table_name)
+        self._q_schema = quote_ident(self.schema_name)
+        self._q_qualified = f"{self._q_schema}.{self._q_table}"
+        self._connected = False
+        self._ensure_database_enabled = cfg.ensure_database
+        self.auto_create_table = cfg.auto_create_table
+        self._init_vector_state()
 
         # Table manager for parameterized existence checks (asyncpg numeric style)
         self.table_manager = SQLTableManager(
-            table_name,
-            schema_name=schema_name,
+            self.table_name,
+            schema_name=self.schema_name,
             dialect="postgres",
             param_style="numeric",
         )
 
-        # Extract pool configuration
-        self._pool_config = PostgresPoolConfig.from_dict(conn_config)
+        # Assemble the pool config directly from the typed fields (the
+        # connection layer is already resolved in PostgresDatabaseConfig).
+        self._pool_config = PostgresPoolConfig(
+            host=cfg.host,
+            port=cfg.port,
+            database=cfg.database,
+            user=cfg.user,
+            password=cfg.password,
+            min_size=cfg.min_pool_size,
+            max_size=cfg.max_pool_size,
+            command_timeout=cfg.command_timeout,
+            ssl=cfg.ssl,
+        )
         self._pool: asyncpg.Pool | None = None
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncPostgresDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     async def connect(self) -> None:
         """Connect to the database."""

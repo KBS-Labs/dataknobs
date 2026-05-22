@@ -831,7 +831,7 @@ class RAGKnowledgeBase(KnowledgeBase):
             if not text_for_embedding:
                 continue
 
-            # Ingest-path rate-limit seam (125/126 Phase 4): pace the
+            # Ingest-path rate-limit seam: pace the
             # per-chunk embed against an injected limiter so a
             # rate-limited embedding provider cannot fail the whole
             # ingest under burst. ``None`` (default) is a no-op — the

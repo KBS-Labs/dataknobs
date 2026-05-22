@@ -1,4 +1,4 @@
-"""Tests for wizard streaming phased protocol (item 80).
+"""Tests for wizard streaming phased protocol.
 
 Validates:
 - WizardReasoning satisfies StreamingPhasedProtocol

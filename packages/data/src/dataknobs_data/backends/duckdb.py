@@ -12,18 +12,21 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import duckdb
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..query_logic import ComplexQuery
+from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
 from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+    from typing import ClassVar
+
     from ..records import Record
     from ..streaming import StreamConfig, StreamResult
 
@@ -31,7 +34,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc]
+class AsyncDuckDBDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[AsyncDuckDBDatabaseConfig],
+    AsyncDatabase,
+):
     """Asynchronous DuckDB database backend for analytical workloads.
 
     DuckDB is an embedded columnar database optimized for analytics.
@@ -61,29 +67,24 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         ```
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async DuckDB database.
+    CONFIG_CLS: ClassVar[type[AsyncDuckDBDatabaseConfig]] = (
+        AsyncDuckDBDatabaseConfig
+    )
 
-        Args:
-            config: Configuration with the following optional keys:
-                - path: Database file path (default: ":memory:")
-                - table: Table name (default: "records")
-                - timeout: Connection timeout in seconds (default: 5.0)
-                - max_workers: Number of threads in pool (default: 4)
-                - read_only: Open database in read-only mode (default: False)
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool owns DDL — connect() will then verify the
-                    table exists and raise RuntimeError if it doesn't. This
-                    option is silently a no-op when ``read_only=True``.
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op — connection setup is deferred to
+        :meth:`connect`).
         """
-        super().__init__(config)
-        config = config or {}
-        self.db_path = config.get("path", ":memory:")
-        self.table_name = config.get("table", "records")
-        self.timeout = config.get("timeout", 5.0)
-        self.max_workers = config.get("max_workers", 4)
-        self.read_only = config.get("read_only", False)
+        cfg = self.config
+        self.db_path = cfg.path
+        self.table_name = cfg.table
+        self.timeout = cfg.timeout
+        self.max_workers = cfg.max_workers
+        self.read_only = cfg.read_only
+        self.auto_create_table = cfg.auto_create_table
 
         # Thread pool for async operations (DuckDB has no native async support)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
@@ -103,14 +104,6 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
         self._lock = threading.Lock()  # Thread safety lock for DuckDB connection
-        self.auto_create_table = SQLTableManager.coerce_bool(
-            config.get("auto_create_table", True)
-        )
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncDuckDBDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     async def connect(self) -> None:
         """Connect to the DuckDB database."""
@@ -679,7 +672,10 @@ class AsyncDuckDBDatabase(AsyncDatabase, ConfigurableBase):  # type: ignore[misc
         )
 
 
-class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
+class SyncDuckDBDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[SyncDuckDBDatabaseConfig],
+    SyncDatabase,
+):
     """Synchronous DuckDB database backend for analytical workloads.
 
     DuckDB is an embedded columnar database optimized for analytics.
@@ -708,30 +704,23 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
         ```
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize sync DuckDB database.
+    CONFIG_CLS: ClassVar[type[SyncDuckDBDatabaseConfig]] = (
+        SyncDuckDBDatabaseConfig
+    )
 
-        Args:
-            config: Configuration with the following optional keys:
-                - path: Database file path (default: ":memory:")
-                - table: Table name (default: "records")
-                - timeout: Connection timeout in seconds (default: 5.0)
-                - read_only: Open database in read-only mode (default: False)
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool owns DDL — connect() will then verify the
-                    table exists and raise RuntimeError if it doesn't. This
-                    option is silently a no-op when ``read_only=True``.
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op — connection setup is deferred to
+        :meth:`connect`).
         """
-        super().__init__(config)
-        config = config or {}
-        self.db_path = config.get("path", ":memory:")
-        self.table_name = config.get("table", "records")
-        self.timeout = config.get("timeout", 5.0)
-        self.read_only = config.get("read_only", False)
-        self.auto_create_table = SQLTableManager.coerce_bool(
-            config.get("auto_create_table", True)
-        )
+        cfg = self.config
+        self.db_path = cfg.path
+        self.table_name = cfg.table
+        self.timeout = cfg.timeout
+        self.read_only = cfg.read_only
+        self.auto_create_table = cfg.auto_create_table
 
         # Reuse SQL infrastructure
         self.query_builder = SQLQueryBuilder(
@@ -747,11 +736,6 @@ class SyncDuckDBDatabase(SyncDatabase, ConfigurableBase):  # type: ignore[misc]
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncDuckDBDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def connect(self) -> None:
         """Connect to the DuckDB database."""

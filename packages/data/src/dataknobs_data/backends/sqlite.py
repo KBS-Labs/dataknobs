@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import SyncDatabase
 from ..query import Query
@@ -20,12 +20,14 @@ from ..records import Record
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import SyncSQLiteDatabaseConfig
 from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from typing import ClassVar
     from ..streaming import StreamConfig, StreamResult
     from ..vector.types import DistanceMetric, VectorSearchResult
 
@@ -34,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 class SyncSQLiteDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[SyncSQLiteDatabaseConfig],
     SyncDatabase,
-    ConfigurableBase,
     VectorConfigMixin,
     PythonVectorSearchMixin,  # Provides python_vector_search_sync
     BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
@@ -43,52 +45,40 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     SQLRecordSerializer,  # Use the standard SQL serializer
 ):
-    """Synchronous SQLite database backend."""
+    """Synchronous SQLite database backend.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize SQLite database.
-        
-        Args:
-            config: Configuration with the following optional keys:
-                - path: Database file path (default: ":memory:")
-                - table: Table name (default: "records")
-                - timeout: Connection timeout in seconds (default: 5.0)
-                - check_same_thread: Allow sharing across threads (default: False)
-                - journal_mode: Journal mode (WAL, DELETE, etc.) (default: None)
-                - synchronous: Synchronous mode (NORMAL, FULL, OFF) (default: None)
-                - vector_enabled: Enable vector support (default: False)
-                - vector_metric: Distance metric for vector search (default: "cosine")
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool owns DDL — connect() will then verify the
-                    table exists and raise RuntimeError if it doesn't.
+    Constructed through :class:`SyncSQLiteDatabaseConfig` — every
+    documented config key is a typed field on that dataclass, so
+    ``self.config`` is the typed config (not a dict) and the
+    ``from_config`` / factory paths share one construction route.
+    """
+
+    CONFIG_CLS: ClassVar[type[SyncSQLiteDatabaseConfig]] = SyncSQLiteDatabaseConfig
+
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op for SQLite — connection setup is
+        deferred to :meth:`connect`).
         """
-        super().__init__(config)
-        SQLiteVectorSupport.__init__(self)
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
+        self._init_vector_state()
 
-        # Parse vector configuration using the mixin
-        self._parse_vector_config(config)
-
-        self.db_path = self.config.get("path", ":memory:")
-        self.table_name = self.config.get("table", "records")
-        self.timeout = self.config.get("timeout", 5.0)
-        self.check_same_thread = self.config.get("check_same_thread", False)
-        self.journal_mode = self.config.get("journal_mode")
-        self.synchronous = self.config.get("synchronous")
-        self.auto_create_table = SQLTableManager.coerce_bool(
-            self.config.get("auto_create_table", True)
-        )
+        self.db_path = cfg.path
+        self.table_name = cfg.table
+        self.timeout = cfg.timeout
+        self.check_same_thread = cfg.check_same_thread
+        self.journal_mode = cfg.journal_mode
+        self.synchronous = cfg.synchronous
+        self.auto_create_table = cfg.auto_create_table
 
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
 
         self.conn: sqlite3.Connection | None = None
         self._connected = False
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncSQLiteDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def connect(self) -> None:
         """Connect to the SQLite database."""

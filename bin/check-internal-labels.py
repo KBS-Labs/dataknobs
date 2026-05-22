@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """Guard against internal-tracking-label leakage into shipped source/tests.
 
-Planning identifiers (``Item NNN``, ``RCN``, ``Change C``, ``Bug BNN``,
-``PR #NNN``, ``review #XN``, ``consumer-gaps``, plan ``Phase 0``,
-plan-document section refs like ``02b §5.2`` / ``02b P5a``, bare-number
-tracker references like ``pre-141`` / ``the 141 failure`` / ``as 141``,
-etc.) must never appear in committed package source or tests: they render
-into published API docs and IDE hovers and mean nothing to consumers.
+Planning identifiers (``Item NNN`` / ``item NNa``, ``RCN``, ``Change C``,
+``Bug BNN``, ``PR #NNN``, ``review #XN``, ``consumer-gaps``, plan-phase
+tags (``Phase N`` without a trailing ``:``), plan sub-item ids (``77a`` /
+``92b`` / ``146b``), ``decision N``, plan-document section refs like
+``02b §5.2`` / ``02b P5a``, bare-number tracker references like
+``pre-141`` / ``pre-146b`` / ``the 141 failure`` / ``as 141``, etc.) must
+never appear in committed package source or tests: they render into
+published API docs and IDE hovers and mean nothing to consumers.
 A prior one-time cleanup scrubbed the pre-existing leakage; this script
 is the recurring guard that prevents reintroduction.
 
 Scope: ``packages/*/src/**/*.py`` and ``packages/*/tests/**/*.py``.
 
-``Phase N`` for N >= 1 is intentionally NOT enforced: it has a
-high-frequency *legitimate* meaning (runtime pipeline stage, e.g.
-``# Phase 2: Deterministic retrieval``) that cannot be mechanically
-separated from the plan-reference leak meaning.  ``Phase 0`` is enforced
-because it only ever appears as the tracker label.
+``Phase N`` is enforced only in its *leak* form -- a planning-phase tag
+NOT immediately followed by ``:``.  The legitimate runtime-pipeline-stage
+usage always takes the colon form (``# Phase 2: Deterministic retrieval``)
+and is left alone, so authors documenting a real pipeline stage must keep
+the colon.  Plan sub-item ids are matched only as ``[0-9]{2,3}[a-g]`` so
+unit-bearing tokens (``200k``, ``30s``) and printf format specs
+(``{i:03d}``) do not trip the guard.
 
 False positives (fixture record values, markdown list-item test content)
 are suppressed via ``bin/internal-label-allowlist.txt``, keyed by
@@ -40,8 +44,7 @@ ALLOWLIST_FILE = Path(__file__).resolve().parent / "internal-label-allowlist.txt
 # Default scan scope (repo-relative glob roots) when no paths are passed.
 DEFAULT_GLOBS = ("packages/*/src", "packages/*/tests")
 
-# Unambiguous tracker-label classes only.  ``Phase \d`` (>=1) is
-# deliberately absent (see module docstring); ``Phase 0`` is kept.
+# Unambiguous tracker-label classes only.
 LABEL_PATTERN = re.compile(
     r"Item [0-9]{1,3}"
     r"|Items [0-9]+\+[0-9]+"
@@ -49,24 +52,47 @@ LABEL_PATTERN = re.compile(
     r"|\bRC[0-9]+\b"
     r"|pre-Item"
     r"|post-Item [0-9]"
-    r"|Phase 0"
+    # ``Phase N`` is enforced only in its *leak* form: a planning-phase
+    # tag NOT immediately followed by ``:``.  Legitimate runtime-pipeline
+    # -stage usage always takes the colon form (``# Phase 2: Deterministic
+    # retrieval``) and is left alone -- the colon is the convention that
+    # separates a stage label from a plan reference.  The ``\b`` after the
+    # digits stops ``[0-9]+`` backtracking to a partial match inside a
+    # legitimate ``Phase 10:``.
+    r"|Phase [0-9]+\b(?!\s*:)"
     r"|\bChange C\b"
     r"|\bBug B[0-9]+\b"
     r"|PR #[0-9]{2,4}"
     r"|review #X?[0-9]"
+    # Lowercase ``item NN`` plan references (the capital ``Item N`` branch
+    # above handles the other casing).  Restricted to 2-3 digits so the
+    # common-English ``item 1`` / ``item 2`` (list-position prose in
+    # markdown/error fixtures) does not trip; the optional ``[a-h]``
+    # suffix catches sub-item ids like ``item 77a``.
+    r"|\bitem [0-9]{2,3}[a-h]?\b"
     # Plan-document section refs (e.g. ``02b §5.2``, ``02b P5a``).
     # Unambiguous: the ``§``/``P<digit>`` suffix never collides with
     # format specs like ``{i:03d}`` (no space + section marker).
     r"|\b0[0-9][a-z] (?:§|P[0-9])"
+    # Plan sub-item ids: 2-3 digits + a single ``a``-``g`` suffix
+    # (``77a``, ``92b``, ``146b``, ``18a``).  The ``[a-g]`` ceiling plus
+    # the ``(?<![:>])`` lookbehind keep this off unit-bearing tokens
+    # (``200k``, ``30s``, ``100x``) and printf/format specs (``{i:03d}``,
+    # ``{i:>08b}``); UUID/hex segments (``e29b``, ``cafef00d``) have no
+    # leading word boundary so never match.
+    r"|(?<![:>])\b[0-9]{2,3}[a-g]\b"
+    # Plan ``decision N`` references.
+    r"|\bdecision [0-9]{1,3}\b"
     # Bare-number tracker references that slipped past the ``Item NN``
-    # form: ``pre-141`` / ``post-141`` (hyphenated qualifier),
-    # ``the 141 failure`` / ``the 141 drift`` (definite article + tracker
-    # noun), and the trailing form ``... drift mode as 141`` (tracker
-    # noun + ``as``/``like`` + number).  The tracker-noun set is closed
+    # form: ``pre-141`` / ``post-141`` (hyphenated qualifier, optional
+    # sub-item letter as in ``pre-146b``), ``the 141 failure`` / ``the
+    # 141 drift`` (definite article + tracker noun), and the trailing
+    # form ``... drift mode as 141`` (tracker noun + ``as``/``like`` +
+    # number).  The tracker-noun set is closed
     # (failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug) to avoid
     # false-positives like ``reports a missing bucket as 404`` (HTTP
     # status), ``the 200 response``, or ``the 30-second timeout``.
-    r"|\b(?:pre|post)-[0-9]{2,3}\b"
+    r"|\b(?:pre|post)-[0-9]{2,3}[a-z]?\b"
     r"|\b[Tt]he [0-9]{2,3} (?:failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug)\b"
     r"|\b(?:failure|drift|ctor|call|case|fix|gap|item|mode|issue|bug)s? (?:as|like) [0-9]{2,3}\b"
     r"|\bPre-[0-9]{2,3} (?:call|ctor)\b"

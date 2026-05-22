@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import aiosqlite
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
@@ -16,12 +16,14 @@ from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import AsyncSQLiteDatabaseConfig
 from .sql_base import SQLQueryBuilder, SQLTableManager
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import ClassVar
     from ..records import Record
     from ..streaming import StreamConfig, StreamResult
 
@@ -33,43 +35,46 @@ _pool_manager = ConnectionPoolManager()
 
 
 class AsyncSQLiteDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[AsyncSQLiteDatabaseConfig],
     AsyncDatabase,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,  # Provides python_vector_search_async
     BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
     VectorOperationsMixin
 ):
-    """Asynchronous SQLite database backend using aiosqlite."""
+    """Asynchronous SQLite database backend using aiosqlite.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async SQLite database.
-        
-        Args:
-            config: Configuration with the following optional keys:
-                - path: Database file path (default: ":memory:")
-                - table: Table name (default: "records")
-                - timeout: Connection timeout in seconds (default: 5.0)
-                - journal_mode: Journal mode (WAL, DELETE, etc.) (default: WAL for file-based)
-                - synchronous: Synchronous mode (NORMAL, FULL, OFF) (default: NORMAL)
-                - pool_size: Number of connections in pool (default: 5)
-                - auto_create_table: Create the records table on connect if
-                    missing (default: True). Set to False when an external
-                    migration tool owns DDL — connect() will then verify the
-                    table exists and raise RuntimeError if it doesn't.
+    Constructed through :class:`AsyncSQLiteDatabaseConfig` — every
+    documented config key is a typed field on that dataclass, so
+    ``self.config`` is the typed config (not a dict) and the
+    ``from_config`` / factory paths share one construction route.
+    """
+
+    CONFIG_CLS: ClassVar[type[AsyncSQLiteDatabaseConfig]] = AsyncSQLiteDatabaseConfig
+
+    def _setup(self) -> None:
+        """Derive backend attributes from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op for SQLite — connection setup is
+        deferred to :meth:`connect`). ``journal_mode`` defaults to
+        ``"WAL"`` for file-based databases; that default depends on the
+        resolved ``path`` so it is computed here rather than as a static
+        config field default.
         """
-        super().__init__(config)
-        config = config or {}
-        self.db_path = config.get("path", ":memory:")
-        self.table_name = config.get("table", "records")
-        self.timeout = config.get("timeout", 5.0)
-        self.journal_mode = config.get("journal_mode", "WAL" if self.db_path != ":memory:" else None)
-        self.synchronous = config.get("synchronous", "NORMAL")
-        self.pool_size = config.get("pool_size", 5)
-        self.auto_create_table = SQLTableManager.coerce_bool(
-            config.get("auto_create_table", True)
+        cfg = self.config
+        self.db_path = cfg.path
+        self.table_name = cfg.table
+        self.timeout = cfg.timeout
+        self.journal_mode = (
+            cfg.journal_mode
+            if cfg.journal_mode is not None
+            else ("WAL" if self.db_path != ":memory:" else None)
         )
+        self.synchronous = cfg.synchronous
+        self.pool_size = cfg.pool_size
+        self.auto_create_table = cfg.auto_create_table
 
         # Start with standard query builder, will customize after mixins are initialized
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
@@ -79,13 +84,8 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         self._connected = False
 
         # Initialize vector support
-        self._parse_vector_config(config)
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncSQLiteDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     async def connect(self) -> None:
         """Connect to the SQLite database."""

@@ -1,11 +1,16 @@
 """Config-parsing tests for the PostgreSQL backends.
 
-These tests exercise ``PostgresBaseConfig._parse_postgres_config`` and
-``SyncPostgresDatabase`` / ``AsyncPostgresDatabase`` config plumbing
-without requiring a running postgres server. They verify that the
-shared normalizer is wired in correctly and that both input shapes
-(``connection_string`` and individual keys) produce the same
-canonical ``_conn_config`` dict.
+These tests exercise ``SyncPostgresDatabase`` / ``AsyncPostgresDatabase``
+config plumbing without requiring a running postgres server. Construction
+now flows through the typed :class:`PostgresDatabaseConfig`, whose
+``_normalize_dict`` runs the shared connection normalizer; the sync
+backend exposes the resolved connection params as a minimal
+``_conn_config`` dict (``host``/``port``/``database``/``user``/``password``
+— the keys ``connect()`` consumes), and the async backend folds them into
+``_pool_config``. The ``connection_string`` input is fully resolved into
+those individual keys and is not retained. They verify that both input
+shapes (``connection_string`` and individual keys) resolve to the same
+consumed connection params.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ def _clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_connection_string_and_individual_keys_equivalent() -> None:
-    """Both input shapes produce the same canonical _conn_config."""
+    """Both input shapes resolve to the same consumed connection params."""
     via_url = SyncPostgresDatabase(
         {"connection_string": "postgresql://u:p@h:5433/db"}
     )
@@ -51,19 +56,21 @@ def test_connection_string_and_individual_keys_equivalent() -> None:
     )
     for key in ("host", "port", "database", "user", "password"):
         assert via_url._conn_config[key] == via_keys._conn_config[key]
-    assert (
-        via_url._conn_config["connection_string"]
-        == via_keys._conn_config["connection_string"]
-    )
+    # ``connection_string`` is resolved into the individual keys above and
+    # is not retained as a consumed key on either path.
+    assert "connection_string" not in via_url._conn_config
+    assert "connection_string" not in via_keys._conn_config
 
 
 def test_dialect_prefix_stripped() -> None:
+    # A ``postgresql+asyncpg://`` driver prefix is handled by the
+    # normalizer when it parses the URL into individual keys.
     db = SyncPostgresDatabase(
         {"connection_string": "postgresql+asyncpg://u:p@h/db"}
     )
-    assert db._conn_config["connection_string"].startswith("postgresql://")
-    assert "asyncpg" not in db._conn_config["connection_string"]
     assert db._conn_config["host"] == "h"
+    assert db._conn_config["user"] == "u"
+    assert db._conn_config["database"] == "db"
 
 
 def test_sync_postgres_reads_postgres_env_vars_via_normalizer(
@@ -91,9 +98,11 @@ def test_empty_config_no_env_preserves_pre_connect_behavior() -> None:
     failures surface only when the connection is actually attempted.
     """
     db = SyncPostgresDatabase({})
-    # Nothing to populate; _conn_config is the fallback empty dict minus
-    # vector keys. Constructing must not raise.
+    # Nothing configured: _conn_config holds the dataclass connection
+    # defaults (localhost/5432/postgres/postgres/""). Constructing must
+    # not raise — connection resolvability is deferred to connect().
     assert isinstance(db._conn_config, dict)
+    assert db._conn_config["host"] == "localhost"
 
 
 def test_async_postgres_connection_string_parsed_into_keys() -> None:

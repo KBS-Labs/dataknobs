@@ -44,6 +44,29 @@ Environment variables are automatically substituted:
 - `${VAR:default}` - Use environment variable with default value
 - `${VAR:}` - Use environment variable, empty string if not set
 
+## Typed Configuration (Advanced)
+
+Every backend is constructed through a typed `<Backend>DatabaseConfig`
+frozen dataclass (a `dataknobs_common.structured_config.StructuredConfig`
+subclass). The dict / YAML / factory shapes shown above are unchanged —
+the dict keys are projected onto the typed config. For programmatic
+construction you can build the typed config directly:
+
+```python
+from dataknobs_data.backends.config import SyncSQLiteDatabaseConfig
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+cfg = SyncSQLiteDatabaseConfig(path="data.db", table="records")
+db = SyncSQLiteDatabase.from_config(cfg)   # or SyncSQLiteDatabase(cfg)
+```
+
+After construction, **`db.config` is the typed config object, not a
+dict** — read fields as attributes (`db.config.table`) rather than dict
+lookups. Each backend exposes its config class via `db.CONFIG_CLS`.
+Mixing a typed `config=` with loose keyword arguments raises `TypeError`.
+The Postgres sync and async backends share one `PostgresDatabaseConfig`
+(so both honor `ssl`); the file backends share one `FileDatabaseConfig`.
+
 ## Backend-Specific Configuration
 
 ### Memory Backend

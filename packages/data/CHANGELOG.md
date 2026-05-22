@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **All 14 database backends now construct through typed configuration
+  dataclasses.** Every `SyncDatabase` / `AsyncDatabase` backend (memory,
+  sqlite, postgres, elasticsearch, s3, duckdb, file — sync and async)
+  grows a `<Backend>DatabaseConfig` frozen dataclass (a
+  `dataknobs_common.structured_config.StructuredConfig` subclass) and is
+  built via the `StructuredConfigConsumer` mixin. As a result,
+  **`db.config` is now the typed config object, not a dict** — read
+  fields as attributes (`db.config.table`) rather than dict lookups
+  (`db.config["table"]`). Every existing construction shape is preserved:
+  `Backend(config_dict)`, `Backend.from_config(config_dict)`, and the
+  `database_factory` / `async_database_factory` registries all continue
+  to accept the same dict keys (projected onto the typed config), and a
+  typed config may now be passed directly. Mixing a typed `config=` with
+  loose keyword arguments raises `TypeError`.
+- **The sync and async Postgres backends now share one configuration**
+  (`PostgresDatabaseConfig`), the union of their parameters. This
+  corrects prior drift where only the async backend honored `ssl`
+  (see Fixed). `command_timeout` and the pool-size knobs
+  (`min_pool_size` / `max_pool_size`) remain async-only — psycopg2 has
+  no connect-time equivalent.
+- **The sync and async S3 backends now emit a single bucket-required
+  error message** (`"S3 backend requires 'bucket' in configuration"`);
+  the sync backend previously raised a different string. Both report the
+  same message now that bucket validation lives in the shared config.
+
+### Fixed
+
+- **Sync Postgres backend now honors `ssl` configuration.** Previously
+  only `AsyncPostgresDatabase` applied `ssl`; `SyncPostgresDatabase`
+  silently ignored it. The sync backend now translates the asyncpg-native
+  `ssl` value to a psycopg2 `sslmode` (`str` → that mode, `True` →
+  `"require"`, `False` → `"disable"`); an unsupported value such as an
+  `ssl.SSLContext` raises `ConfigurationError` rather than silently
+  connecting without TLS. (Requires `dataknobs-utils` with the new
+  `sslmode` connector parameter.)
+
 ## v0.4.20 - 2026-05-20
 
 ### Fixed

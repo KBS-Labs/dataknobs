@@ -125,6 +125,7 @@ class DotenvPostgresConnector:
         pwd: str | None = None,
         port: int | None = None,
         pvname: str = ".project_vars",
+        sslmode: str | None = None,
     ) -> None:
         """Initialize PostgreSQL connector with environment-based configuration.
 
@@ -140,7 +141,11 @@ class DotenvPostgresConnector:
             port: Port number. If None, uses POSTGRES_PORT environment variable
                 or 5432. Defaults to None.
             pvname: Project variables filename to load. Defaults to ".project_vars".
+            sslmode: psycopg2 ``sslmode`` (e.g. ``"require"``, ``"verify-full"``,
+                ``"disable"``). When None (the default), no ``sslmode`` is passed
+                and libpq's own default applies — preserving prior behavior.
         """
+        self.sslmode = sslmode
         config = load_project_vars(pvname=pvname)
         if host is None or db is None or user is None or pwd is None or port is None:
             load_dotenv()
@@ -187,13 +192,18 @@ class DotenvPostgresConnector:
         Returns:
             psycopg2.connection: Active database connection using configured parameters.
         """
-        return psycopg2.connect(
-            host=self.host,
-            database=self.database,
-            user=self.user,
-            password=self.password,
-            port=self.port,
-        )
+        kwargs: dict[str, Any] = {
+            "host": self.host,
+            "database": self.database,
+            "user": self.user,
+            "password": self.password,
+            "port": self.port,
+        }
+        # Only pass sslmode when explicitly configured so libpq's own
+        # default applies otherwise (preserving prior behavior).
+        if self.sslmode is not None:
+            kwargs["sslmode"] = self.sslmode
+        return psycopg2.connect(**kwargs)
 
 
 class PostgresDB:
@@ -213,6 +223,7 @@ class PostgresDB:
         user: str | None = None,
         pwd: str | None = None,
         port: int | None = None,
+        sslmode: str | None = None,
     ) -> None:
         """Initialize PostgreSQL database wrapper.
 
@@ -224,12 +235,17 @@ class PostgresDB:
             user: Username. If None, uses environment configuration. Defaults to None.
             pwd: Password. If None, uses environment configuration. Defaults to None.
             port: Port number. If None, uses environment configuration. Defaults to None.
+            sslmode: psycopg2 ``sslmode`` forwarded to the connector (e.g.
+                ``"require"``). Ignored when ``host`` is an already-built
+                ``DotenvPostgresConnector`` (it carries its own ``sslmode``).
         """
         # Allow passing a connector directly (for backward compatibility)
         if isinstance(host, DotenvPostgresConnector):
             self._connector = host
         else:
-            self._connector = DotenvPostgresConnector(host=host, db=db, user=user, pwd=pwd, port=port)
+            self._connector = DotenvPostgresConnector(
+                host=host, db=db, user=user, pwd=pwd, port=port, sslmode=sslmode
+            )
         self._tables_df: pd.DataFrame | None = None
         self._table_names: List[str] | None = None
 

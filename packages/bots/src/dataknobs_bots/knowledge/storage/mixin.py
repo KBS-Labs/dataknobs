@@ -146,7 +146,7 @@ class KnowledgeResourceBackendMixin:
     async def has_changes_since(self, domain_id: str, version: str) -> bool:
         """``True`` if the KB differs from the snapshot at ``version``.
 
-        The degenerate case of :meth:`list_changes_since` (decision 5):
+        The degenerate case of :meth:`list_changes_since`:
         one algorithm, no sibling to drift. An unresolvable version is
         treated as "assume changed" so callers safely re-ingest.
 

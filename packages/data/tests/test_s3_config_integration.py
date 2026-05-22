@@ -151,6 +151,9 @@ class TestS3ConfigIntegration:
             }]
         })
         
-        # Should raise ValueError about missing bucket
-        with pytest.raises(ValueError, match="bucket name is required"):
+        # Should raise ValueError about missing bucket. The sync and async
+        # S3 backends now share one validation message (bucket validation
+        # moved to the shared S3DatabaseConfigBase under the structured-config
+        # migration), so both report "requires 'bucket'".
+        with pytest.raises(ValueError, match="requires 'bucket'"):
             config.get_instance("databases", "s3_invalid")

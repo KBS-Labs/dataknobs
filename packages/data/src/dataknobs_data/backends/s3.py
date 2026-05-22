@@ -7,10 +7,10 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
@@ -21,19 +21,21 @@ from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_w
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import SyncS3DatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from typing import ClassVar
 
 
 logger = logging.getLogger(__name__)
 
 
 class SyncS3Database(  # type: ignore[misc]
+    StructuredConfigConsumer[SyncS3DatabaseConfig],
     SyncDatabase,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
@@ -41,44 +43,54 @@ class SyncS3Database(  # type: ignore[misc]
     VectorOperationsMixin
 ):
     """S3-based database backend with proper connection management.
-    
+
     Stores records as JSON objects in S3 with metadata as tags.
+    Constructed through :class:`SyncS3DatabaseConfig` — every documented
+    config key is a typed field on that dataclass, so ``self.config`` is
+    the typed config (not a dict) and the ``from_config`` / factory paths
+    share one construction route.
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize S3 database configuration.
-        
-        Args:
-            config: Configuration dictionary
+    CONFIG_CLS: ClassVar[type[SyncS3DatabaseConfig]] = SyncS3DatabaseConfig
+
+    def _setup(self) -> None:
+        """Derive the session config and connection state from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op — connection setup is deferred to
+        :meth:`connect`). ``bucket`` validation and ``prefix`` /
+        credential-alias normalization already happened in the config
+        dataclass.
         """
-        super().__init__(config)
+        cfg = self.config
 
         # Connection state
         self.s3_client = None
         self._connected = False
 
         # Cache for performance
-        self._index_cache = {}
+        self._index_cache: dict[str, Any] = {}
         self._cache_dirty = True
 
-        # Store configuration for later connection
-        self.bucket = self.config.get("bucket")
-        if not self.bucket:
-            raise ValueError("S3 bucket name is required in configuration")
+        self.bucket = cfg.bucket
+        self.prefix = cfg.prefix
+        self.multipart_threshold = cfg.multipart_threshold
+        self.multipart_chunksize = cfg.multipart_chunksize
 
-        # Optional configuration with defaults
-        self.prefix = self.config.get("prefix", "records/").rstrip("/") + "/"
-        self.multipart_threshold = self.config.get(
-            "multipart_threshold", 8 * 1024 * 1024
+        # Single normalized session config built from the typed (canonical)
+        # fields. Alias acceptance (``region``, ``max_workers`` …) happened
+        # in ``SyncS3DatabaseConfig._normalize_dict``.
+        self._session_config = S3SessionConfig(
+            region_name=cfg.region_name,
+            endpoint_url=cfg.endpoint_url,
+            aws_access_key_id=cfg.aws_access_key_id,
+            aws_secret_access_key=cfg.aws_secret_access_key,
+            aws_session_token=cfg.aws_session_token,
+            max_pool_connections=cfg.max_pool_connections,
+            max_attempts=cfg.max_attempts,
+            retry_mode=cfg.retry_mode,
+            extra_client_kwargs=cfg.extra_client_kwargs,
         )
-        self.multipart_chunksize = self.config.get(
-            "multipart_chunksize", 8 * 1024 * 1024
-        )
-
-        # Single normalized session config — accepts both ``region`` and
-        # ``region_name``, both legacy and canonical credential keys, and
-        # ``max_workers`` / ``max_retries`` aliases.
-        self._session_config = S3SessionConfig.from_dict(self.config)
 
         # Backward-compat attributes used elsewhere in this file and by
         # downstream consumers reading ``db.region`` / ``db.endpoint_url``
@@ -94,13 +106,8 @@ class SyncS3Database(  # type: ignore[misc]
         self.aws_session_token = self._session_config.aws_session_token
 
         # Initialize vector support
-        self._parse_vector_config(config or {})
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncS3Database:
-        """Create instance from configuration dictionary."""
-        return cls(config)
 
     def connect(self) -> None:
         """Connect to S3 service."""

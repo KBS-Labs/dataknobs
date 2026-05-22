@@ -3,7 +3,7 @@
 Handles schema-driven data extraction, normalization, merge, defaults,
 derivations, validation, recovery strategies, and related utilities.
 
-Extracted from :mod:`wizard` in item 77c.  :class:`WizardReasoning`
+Extracted from :mod:`wizard`.  :class:`WizardReasoning`
 constructs a :class:`WizardExtractor` in ``__init__`` and delegates to
 it (via ``self._extraction``) for all pipeline operations.
 """

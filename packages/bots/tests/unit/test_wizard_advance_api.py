@@ -1162,7 +1162,7 @@ class TestSkipMessageInjection:
 class TestSkipTurnContext:
     """Test that TurnContext is delivered via per-call closure during skip.
 
-    After the concurrency fix (item 82), ``_execute_fsm_step`` uses a
+    After the concurrency fix, ``_execute_fsm_step`` uses a
     per-call closure — ``self._current_turn`` no longer exists.  This
     test verifies skip still transitions correctly.
     """
@@ -1186,7 +1186,7 @@ class TestSkipTurnContext:
         reasoning = _make_reasoning(config)
         state = _make_state(reasoning, current_stage="start")
 
-        # No instance-level _current_turn attribute after item 82
+        # No instance-level _current_turn attribute after the concurrency fix
         assert not hasattr(reasoning, "_current_turn")
 
         await reasoning._navigate_skip(state, user_message="skip it")

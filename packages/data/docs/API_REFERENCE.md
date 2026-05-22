@@ -53,6 +53,31 @@ retrieved = db.read(record_id)
 db.close()
 ```
 
+#### Typed configuration (advanced)
+
+Every backend is constructed through a typed `<Backend>DatabaseConfig`
+frozen dataclass (a `dataknobs_common.structured_config.StructuredConfig`
+subclass). The factory and the dict-construction shapes shown above
+continue to work unchanged — the dict keys are projected onto the typed
+config. For programmatic construction you can also build the typed config
+directly and pass it in; after construction, `db.config` is that typed
+object (read fields as attributes, e.g. `db.config.table`, not
+`db.config["table"]`):
+
+```python
+from dataknobs_data.backends.config import SyncSQLiteDatabaseConfig
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+cfg = SyncSQLiteDatabaseConfig(path="data.db", table="records")
+db = SyncSQLiteDatabase.from_config(cfg)   # or SyncSQLiteDatabase(cfg)
+assert db.config.table == "records"
+```
+
+Each backend exposes its config class via `db.CONFIG_CLS`. Mixing a typed
+`config=` with loose keyword arguments raises `TypeError`. The Postgres
+sync and async backends share one `PostgresDatabaseConfig`; the file
+backends share one `FileDatabaseConfig`.
+
 #### Database Methods
 
 - `create(record: Record) -> str`: Create a new record and return its ID
