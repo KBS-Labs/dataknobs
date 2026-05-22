@@ -34,12 +34,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from dataknobs_common.registry import Registry
+from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ToolEntry:
+class ToolEntry(StructuredConfig):
     """Metadata for a tool in the catalog.
 
     Captures the information needed to:
@@ -47,6 +48,11 @@ class ToolEntry:
     - Reference tools in wizard stage configs (name)
     - Discover tools by capability (tags)
     - Validate tool dependencies (requires)
+
+    ``from_dict`` is inherited from :class:`StructuredConfig`;
+    ``__post_init__`` coerces ``tags``/``requires`` to frozensets and
+    fills ``default_params`` so a raw dict round-trips faithfully.
+    ``to_dict`` is overridden to omit defaults and sort the set fields.
     """
 
     name: str
@@ -57,9 +63,13 @@ class ToolEntry:
     requires: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        """Set default_params to empty dict if None."""
+        """Normalize ``default_params`` and the ``tags``/``requires`` sets."""
         if self.default_params is None:
             object.__setattr__(self, "default_params", {})
+        if not isinstance(self.tags, frozenset):
+            object.__setattr__(self, "tags", frozenset(self.tags or ()))
+        if not isinstance(self.requires, frozenset):
+            object.__setattr__(self, "requires", frozenset(self.requires or ()))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict (suitable for YAML output).
@@ -79,18 +89,6 @@ class ToolEntry:
         if self.requires:
             result["requires"] = sorted(self.requires)
         return result
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ToolEntry:
-        """Deserialize from dict (e.g., loaded from YAML)."""
-        return cls(
-            name=data["name"],
-            class_path=data["class_path"],
-            description=data.get("description", ""),
-            default_params=data.get("default_params") or {},
-            tags=frozenset(data.get("tags") or ()),
-            requires=frozenset(data.get("requires") or ()),
-        )
 
     def to_bot_config(self, **param_overrides: Any) -> dict[str, Any]:
         """Generate a bot config tool entry.

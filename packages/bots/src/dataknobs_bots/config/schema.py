@@ -33,13 +33,15 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from dataknobs_common.structured_config import StructuredConfig
+
 from .validation import ValidationResult, _validate_against_schema
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ComponentSchema:
+@dataclass(frozen=True)
+class ComponentSchema(StructuredConfig):
     """Schema for a single DynaBot config component.
 
     Attributes:
