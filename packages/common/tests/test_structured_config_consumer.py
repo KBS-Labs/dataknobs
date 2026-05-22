@@ -187,6 +187,85 @@ class TestMissingConfigCls:
             _NoCfgClsConsumer({})
 
 
+class _AsyncConsumer(StructuredConfigConsumer[_TestCfg]):
+    """Records the order of ``_setup`` / ``_ainit`` and their call counts."""
+
+    CONFIG_CLS: ClassVar[type[_TestCfg]] = _TestCfg
+
+    def _setup(self) -> None:
+        self.events: list[str] = getattr(self, "events", [])
+        self.events.append("setup")
+
+    async def _ainit(self) -> None:
+        self.events.append("ainit")
+
+
+class TestAsyncLifecycle:
+    """``_ainit`` runs once, after ``_setup``, only on the async path."""
+
+    async def test_from_config_async_runs_setup_then_ainit(self) -> None:
+        c = await _AsyncConsumer.from_config_async({"x": 1})
+        assert c.events == ["setup", "ainit"]
+        assert c.config == _TestCfg(x=1)
+
+    async def test_from_config_async_accepts_typed(self) -> None:
+        cfg = _TestCfg(x=2)
+        c = await _AsyncConsumer.from_config_async(cfg)
+        assert c.config is cfg
+        assert c.events == ["setup", "ainit"]
+
+    async def test_from_config_async_wrong_typed_raises(self) -> None:
+        with pytest.raises(TypeError, match="must be"):
+            await _AsyncConsumer.from_config_async(_OtherCfg(z=1))
+
+    def test_sync_path_does_not_run_ainit(self) -> None:
+        c = _AsyncConsumer({"x": 1})
+        assert c.events == ["setup"]
+
+    def test_from_config_sync_does_not_run_ainit(self) -> None:
+        c = _AsyncConsumer.from_config({"x": 1})
+        assert c.events == ["setup"]
+
+    async def test_default_ainit_is_noop(self) -> None:
+        """A consumer that doesn't override ``_ainit`` still builds."""
+        c = await _Consumer.from_config_async({"x": 5})
+        assert c.config == _TestCfg(x=5)
+
+
+class _MarkerBase:
+    """A non-config base that initializes its own state via ``__init__``.
+
+    Models the unified-construction contract: non-config bases take no
+    construction args and continue the cooperative chain via ``super()``.
+    """
+
+    def __init__(self) -> None:
+        self.marker = "marker-set"
+        super().__init__()
+
+
+class _MIConsumer(StructuredConfigConsumer[_TestCfg], _MarkerBase):
+    """Multiple-inheritance consumer: mixin first, then a non-config base."""
+
+    CONFIG_CLS: ClassVar[type[_TestCfg]] = _TestCfg
+
+
+class TestCooperativeMultipleInheritance:
+    """``super().__init__()`` runs the remaining MI bases (146b Piece A)."""
+
+    def test_other_base_init_runs(self) -> None:
+        c = _MIConsumer({"x": 4})
+        # Config dispatch happened ...
+        assert c.config == _TestCfg(x=4)
+        # ... and the cooperative chain reached ``_MarkerBase.__init__``.
+        assert c.marker == "marker-set"
+
+    async def test_mi_consumer_async_path(self) -> None:
+        c = await _MIConsumer.from_config_async({"x": 6})
+        assert c.config == _TestCfg(x=6)
+        assert c.marker == "marker-set"
+
+
 class TestMappingSubtypes:
     """``__init__`` accepts any ``Mapping``, not just ``dict``."""
 

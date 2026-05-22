@@ -492,40 +492,6 @@ else
     print_error "Workflow lint failed"
 fi
 
-# Build documentation (PR mode only, skip if no docs changes in pr mode)
-if [ "$PR_MODE" = "yes" ]; then
-    if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
-        print_status "Building documentation (checking for errors)..."
-        if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
-            print_success "Documentation builds without errors or warnings"
-        else
-            DOCS_STATUS=$?
-            print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
-            echo ""
-            echo -e "${YELLOW}Documentation errors:${NC}"
-            cat "$ARTIFACTS_DIR/docs-build.log"
-            echo ""
-        fi
-
-        # Check documentation versions are in sync with packages.json
-        print_status "Checking documentation versions..."
-        if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
-            print_success "Documentation versions are in sync"
-        else
-            DOCS_VERSIONS_STATUS=$?
-            print_error "Documentation versions are out of sync"
-            echo ""
-            echo -e "${YELLOW}Version sync errors:${NC}"
-            cat "$ARTIFACTS_DIR/docs-versions.log"
-            echo ""
-            echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
-            echo ""
-        fi
-    else
-        print_status "Skipping docs build (no documentation changes detected)"
-    fi
-fi
-
 # Run code validation (syntax, ruff, imports, mypy, print statements)
 if [ "$SKIP_STYLE" != "yes" ]; then
     print_status "Running code validation (syntax, ruff, imports, mypy, print statements)..."
@@ -565,6 +531,40 @@ if [ "$SKIP_STYLE" != "yes" ]; then
 else
     VALIDATION_SKIPPED="true"
     print_status "Skipping code validation"
+fi
+
+# Build documentation (PR mode only, skip if no docs changes in pr mode)
+if [ "$PR_MODE" = "yes" ]; then
+    if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
+        print_status "Building documentation (checking for errors)..."
+        if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
+            print_success "Documentation builds without errors or warnings"
+        else
+            DOCS_STATUS=$?
+            print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
+            echo ""
+            echo -e "${YELLOW}Documentation errors:${NC}"
+            cat "$ARTIFACTS_DIR/docs-build.log"
+            echo ""
+        fi
+
+        # Check documentation versions are in sync with packages.json
+        print_status "Checking documentation versions..."
+        if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
+            print_success "Documentation versions are in sync"
+        else
+            DOCS_VERSIONS_STATUS=$?
+            print_error "Documentation versions are out of sync"
+            echo ""
+            echo -e "${YELLOW}Version sync errors:${NC}"
+            cat "$ARTIFACTS_DIR/docs-versions.log"
+            echo ""
+            echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
+            echo ""
+        fi
+    else
+        print_status "Skipping docs build (no documentation changes detected)"
+    fi
 fi
 
 # Run tests using the test.sh script

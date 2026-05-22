@@ -4,8 +4,11 @@ import pytest
 
 from dataknobs_config import Config, ConfigError
 from dataknobs_config.examples import (
+    AsyncWidget,
     Cache,
     Database,
+    PlainWidget,
+    SyncWidget,
 )
 
 
@@ -230,3 +233,128 @@ class TestObjectCaching:
 
         assert obj1a is not obj1b
         assert obj2a is not obj2b
+
+
+class TestAsyncObjectConstruction:
+    """``build_object_async`` prefers async entry points."""
+
+    @pytest.mark.asyncio
+    async def test_prefers_from_config_async(self) -> None:
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = await config.build_object_async("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        # ``_ainit`` ran — only the async path sets this.
+        assert obj.warmed is True
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_sync_from_config(self) -> None:
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": "dataknobs_config.examples.SyncWidget",
+                        "extra_field": "ignored-by-from_config",
+                    }
+                ]
+            }
+        )
+        obj = await config.build_object_async("xref:widget[w]")
+        assert isinstance(obj, SyncWidget)
+        assert obj.name == "sync"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_direct_instantiation(self) -> None:
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": "dataknobs_config.examples.PlainWidget",
+                    }
+                ]
+            }
+        )
+        obj = await config.build_object_async("xref:widget[w]")
+        assert isinstance(obj, PlainWidget)
+        assert obj.name == "plain"
+
+    @pytest.mark.asyncio
+    async def test_async_build_caches(self) -> None:
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        a = await config.build_object_async("xref:widget[w]")
+        b = await config.build_object_async("xref:widget[w]")
+        assert a is b
+
+    def test_sync_build_object_does_not_run_ainit(self) -> None:
+        """The sync path leaves the async-only flag unset."""
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "class": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = config.build_object("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        assert obj.warmed is False
+
+    @pytest.mark.asyncio
+    async def test_factory_path_runs_consumer_async_init(self) -> None:
+        """A consumer referenced via ``factory:`` runs ``_ainit`` (async).
+
+        A genuine factory's ``create``/``build``/``__call__`` is preferred;
+        the consumer protocol (``from_config_async``) is the last-resort
+        path, so a consumer class used as a factory builds correctly
+        instead of erroring.
+        """
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "factory": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = await config.build_object_async("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        assert obj.warmed is True
+
+    def test_factory_path_builds_consumer_sync(self) -> None:
+        """Sync ``factory:`` path builds a consumer via ``from_config``."""
+        config = Config(
+            {
+                "widget": [
+                    {
+                        "name": "w",
+                        "factory": "dataknobs_config.examples.AsyncWidget",
+                    }
+                ]
+            }
+        )
+        obj = config.build_object("xref:widget[w]")
+        assert isinstance(obj, AsyncWidget)
+        assert obj.warmed is False

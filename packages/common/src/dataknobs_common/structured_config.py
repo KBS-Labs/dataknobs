@@ -44,8 +44,22 @@ Environment-variable substitution:
 from __future__ import annotations
 
 import dataclasses
+import functools
+import logging
+import types
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    TypeVar,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 if TYPE_CHECKING:
     # ``Self`` is referenced only in (lazy, ``from __future__``-stringized)
@@ -55,6 +69,140 @@ if TYPE_CHECKING:
     # because mypy's ``python_version = "3.10"`` target predates
     # ``typing.Self``; mypy resolves the guarded import regardless.
     from typing_extensions import Self
+
+logger = logging.getLogger(__name__)
+
+# ``X | None`` (PEP 604) yields ``types.UnionType``; ``Optional[X]`` /
+# ``Union[...]`` yield ``typing.Union``. Both must be recognised as unions
+# when decomposing field annotations.
+_UNION_ORIGINS = (Union, types.UnionType)
+# Container origins whose element type(s) may themselves be (or contain) a
+# ``StructuredConfig`` subclass and therefore need element-wise coercion.
+_SEQUENCE_ORIGINS = (list, tuple, set, frozenset)
+
+
+@functools.cache
+def _resolved_hints(cls: type) -> Mapping[str, Any]:
+    """Cache of ``typing.get_type_hints(cls)``, degrading to ``{}``.
+
+    Because the package uses ``from __future__ import annotations``,
+    ``dataclasses.fields(cls)[i].type`` is a *string*; type-aware field
+    coercion needs the resolved runtime types. ``get_type_hints`` resolves
+    them against the class's module globals. If resolution fails (an
+    annotation referencing a name unavailable at runtime — e.g. a
+    ``TYPE_CHECKING``-only import), we degrade to ``{}`` so ``from_dict``
+    falls back to the pre-146b pass-through behaviour rather than crashing.
+    """
+    try:
+        return get_type_hints(cls)
+    except (NameError, TypeError, AttributeError) as exc:
+        # An annotation that can't be resolved at runtime — typically a
+        # name available only under ``TYPE_CHECKING`` — surfaces as
+        # ``NameError``; malformed/incompatible annotations as
+        # ``TypeError`` / ``AttributeError``. Degrade to ``{}`` so
+        # ``from_dict`` falls back to the pre-146b pass-through behaviour
+        # rather than crashing, and log at debug so the dropped coercion
+        # is diagnosable.
+        logger.debug(
+            "Could not resolve type hints for %s (%s); nested-config "
+            "coercion will be skipped for its fields.",
+            getattr(cls, "__qualname__", cls),
+            exc,
+        )
+        return {}
+
+
+def _type_contains_structured_config(declared: Any) -> bool:
+    """True if ``declared`` is (or its type graph contains) a config subclass.
+
+    Used as a fast gate in ``from_dict``: a field whose declared type does
+    not reference any ``StructuredConfig`` subclass is assigned verbatim,
+    preserving the exact Item-146 projection (no new container objects,
+    identical identity for pass-through values). Only fields that actually
+    nest configs incur the recursive coercion path.
+    """
+    if isinstance(declared, type):
+        return issubclass(declared, StructuredConfig)
+    origin = get_origin(declared)
+    if origin is None:
+        return False
+    return any(
+        _type_contains_structured_config(arg)
+        for arg in get_args(declared)
+        if arg is not type(None)
+    )
+
+
+def _coerce_field(declared: Any, value: Any) -> Any:
+    """Project a raw ``value`` onto its declared field type, recursively.
+
+    Handles the nesting shapes documented on :meth:`StructuredConfig.from_dict`
+    — a ``StructuredConfig`` subclass, ``Optional`` of one, and homogeneous
+    ``list``/``tuple``/``set``/``dict`` containers of them (including
+    ``dict[K, list[SubCfg]]``). Anything that is already a typed instance
+    passes through untouched (idempotence), as does any shape the coercion
+    rules don't recognise — the dataclass ctor then validates it.
+    """
+    # Direct ``StructuredConfig`` subclass.
+    if isinstance(declared, type) and issubclass(declared, StructuredConfig):
+        if isinstance(value, declared):
+            return value
+        if isinstance(value, Mapping):
+            return declared.from_dict(value)
+        return value
+
+    origin = get_origin(declared)
+    if origin is None:
+        return value
+
+    args = get_args(declared)
+
+    # ``Optional[SubCfg]`` / ``SubCfg | None``. Only auto-coerce when
+    # exactly one non-``None`` arm is (or contains) a ``StructuredConfig``.
+    # A union with several config arms is a discriminated/polymorphic
+    # shape — selecting among them by inspecting the data is deliberately
+    # out of scope here (it belongs in the subsystem registry /
+    # object-graph layer), so the value passes through untouched rather
+    # than silently binding to whichever arm happens to be declared first.
+    if origin in _UNION_ORIGINS:
+        if value is None:
+            return value
+        config_arms = [
+            arg
+            for arg in args
+            if arg is not type(None)
+            and _type_contains_structured_config(arg)
+        ]
+        if len(config_arms) != 1:
+            return value
+        return _coerce_field(config_arms[0], value)
+
+    # ``list``/``tuple``/``set``/``frozenset`` of configs.
+    if origin in _SEQUENCE_ORIGINS:
+        if not args or not isinstance(value, (list, tuple, set, frozenset)):
+            return value
+        if origin is tuple and not (len(args) == 2 and args[1] is Ellipsis):
+            # Fixed-length tuple: coerce positionally.
+            coerced_items = [
+                _coerce_field(args[i], v) if i < len(args) else v
+                for i, v in enumerate(value)
+            ]
+        else:
+            elem_type = args[0]
+            coerced_items = [_coerce_field(elem_type, v) for v in value]
+        # Build the container from the *declared* origin (list/tuple/set/
+        # frozenset), not the raw value's type — a JSON list projected onto
+        # a ``tuple[...]`` field must come back a tuple.
+        return origin(coerced_items)
+
+    # ``dict[K, SubCfg]`` / ``dict[K, list[SubCfg]]``.
+    if isinstance(origin, type) and issubclass(origin, Mapping):
+        if len(args) != 2 or not isinstance(value, Mapping):
+            return value
+        val_type = args[1]
+        return {k: _coerce_field(val_type, v) for k, v in value.items()}
+
+    return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,11 +221,22 @@ class StructuredConfig:
     ``normalize_postgres_connection_config``) goes in
     ``_normalize_dict``; do NOT override ``from_dict``.
 
-    Nested-config composition: if a field's declared type is itself a
-    ``StructuredConfig`` subclass, ``from_dict`` does NOT automatically
-    recurse — assign the typed value directly, or normalize the nested
-    dict in ``_normalize_dict``. Auto-projection of nested fields was
-    intentionally scoped out to keep type introspection bounded.
+    Nested-config composition: ``from_dict`` recurses into a field whose
+    declared type is (or contains) a ``StructuredConfig`` subclass —
+    ``SubCfg``, ``SubCfg | None``, ``list[SubCfg]``,
+    ``tuple[SubCfg, ...]``, ``set[SubCfg]``, ``frozenset[SubCfg]``,
+    ``dict[K, SubCfg]``, and ``dict[K, list[SubCfg]]`` are all rebuilt
+    from their raw dict shape. Recursion is bounded by the static
+    field-type graph (not by runtime data), so a config whose fields are
+    all scalars terminates immediately. A field already holding a typed
+    instance passes through unchanged. Polymorphic/discriminated
+    selection (a section whose concrete type is chosen by a discriminator
+    key) is deliberately NOT handled here — that stays in the subsystem
+    registry / object-graph layer; type a polymorphic field as its
+    abstract sub-config and dispatch in the consumer's factory. A union
+    of several concrete sub-configs (``A | B`` where both are
+    ``StructuredConfig`` subclasses) is likewise left untouched — only a
+    single-config ``SubCfg | None`` is auto-coerced.
     """
 
     @classmethod
@@ -89,6 +248,11 @@ class StructuredConfig:
         (or ``default_factory``). Keys in ``config`` that don't match
         any field are ignored — registry-routing keys like
         ``"backend"`` pass through cleanly.
+
+        A field whose declared type is (or contains) a
+        ``StructuredConfig`` subclass is rebuilt recursively from its raw
+        dict shape (see the class docstring's nested-composition note);
+        all other fields are assigned verbatim.
 
         Pre-projection normalization happens in
         :meth:`_normalize_dict`; override that, not ``from_dict``.
@@ -102,10 +266,19 @@ class StructuredConfig:
             ``config`` (and defaults where keys are absent).
         """
         normalized = cls._normalize_dict(dict(config))
+        hints = _resolved_hints(cls)
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
-            if f.name in normalized:
-                kwargs[f.name] = normalized[f.name]
+            if f.name not in normalized:
+                continue
+            declared = hints.get(f.name)
+            value = normalized[f.name]
+            if declared is not None and _type_contains_structured_config(
+                declared
+            ):
+                kwargs[f.name] = _coerce_field(declared, value)
+            else:
+                kwargs[f.name] = value
         return cls(**kwargs)
 
     @classmethod
@@ -127,13 +300,11 @@ class StructuredConfig:
         """Symmetric serialization. Delegates to ``dataclasses.asdict``.
 
         Round-trip property: ``type(cfg).from_dict(cfg.to_dict()) == cfg``
-        holds for flat configs, and for nested configs whose
-        ``_normalize_dict`` rebuilds each nested ``StructuredConfig``
-        field from its dict. It does NOT hold for a nested field left as
-        a raw dict: ``asdict`` recurses into nested dataclasses but
-        ``from_dict`` deliberately does not (see the class docstring's
-        nested-composition note), so the recovered field would be a
-        ``dict`` rather than the typed sub-config. Verified by
+        holds for flat configs and for nested configs alike. ``asdict``
+        recurses into nested dataclasses and ``from_dict`` recurses back
+        into the matching field types (see the class docstring's
+        nested-composition note), so the two are symmetric for every
+        statically-typed nesting shape. Verified by
         :func:`dataknobs_common.testing.assert_structured_config_roundtrip`.
         """
         return dataclasses.asdict(self)
@@ -149,19 +320,34 @@ class StructuredConfigConsumer(Generic[ConfigT]):
 
     - ``__init__(config: ConfigT | Mapping | None, **kwargs)`` with
       built-in typed/loose/None dispatch. Mixing typed ``config=``
-      with loose ``**kwargs`` raises ``TypeError``.
+      with loose ``**kwargs`` raises ``TypeError``. Calls
+      ``super().__init__()`` so the mixin composes into a cooperative
+      multiple-inheritance hierarchy (data backends, vector stores).
     - ``cls.from_config(config) -> Self`` classmethod that runs the
       input through ``CONFIG_CLS.from_dict`` (when given a Mapping)
       then ``cls``.
-    - ``self.config: ConfigT`` typed read-only property.
-    - ``_setup()`` hook called after ``self._config`` is established.
+    - ``cls.from_config_async(config) -> Self`` classmethod: the same
+      sync assembly followed by ``await obj._ainit()`` — the canonical
+      entry point for consumers whose initialization is asynchronous
+      (DBs that connect eagerly, LLM-backed bots, KB warmup).
+    - ``self.config: ConfigT`` typed read-only property — the one
+      ``config`` notion across every adopter.
+    - ``_setup()`` sync hook called after ``self._config`` is
+      established; ``_ainit()`` async hook called by
+      ``from_config_async`` after ``_setup``.
 
     Subclass requirements:
 
     - Set ``CONFIG_CLS: ClassVar[type[ConfigT]]`` to the concrete
       ``StructuredConfig`` subclass.
-    - Implement ``_setup()`` for derived-attribute computation,
-      connection placeholders, etc. (Default ``_setup`` is a no-op.)
+    - Implement ``_setup()`` (sync) and/or ``_ainit()`` (async) for
+      derived-attribute computation, connection placeholders, async
+      collaborator construction, etc. (Both default to no-ops.)
+    - When mixing in alongside other bases, list
+      ``StructuredConfigConsumer`` **first** so its ``__init__`` is the
+      construction entry point; the remaining bases must accept
+      ``__init__()`` with no required args (expose ``_setup``, not a
+      competing config ctor).
     - Do NOT override ``__init__`` to re-implement dispatch — that
       duplication is exactly what this mixin eliminates. The one
       legitimate exception is preserving a back-compat positional
@@ -196,6 +382,18 @@ class StructuredConfigConsumer(Generic[ConfigT]):
             merged: dict[str, Any] = dict(config or {})
             merged.update(kwargs)
             self._config = cast("ConfigT", self.CONFIG_CLS.from_dict(merged))
+        # Continue the cooperative multiple-inheritance chain before
+        # derived setup. For a single-base consumer (e.g. an event-bus
+        # backend) ``super()`` is ``object`` and this is a no-op —
+        # behaviour is identical to a plain consumer. For a
+        # multiple-inheritance consumer
+        # (data backends, vector stores) this runs the remaining
+        # non-config bases' ``__init__``; under the unified construction
+        # model those bases take no construction args (they expose
+        # ``_setup``, not a competing config ctor). The mixin must be
+        # listed FIRST among the bases so its ``__init__`` is the entry
+        # point — :func:`assert_structured_config_consumer` pins this.
+        super().__init__()
         self._setup()
 
     @property
@@ -241,6 +439,29 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         return cls(cls._coerce_config(config))
 
+    @classmethod
+    async def from_config_async(
+        cls, config: Mapping[str, Any] | StructuredConfig
+    ) -> Self:
+        """Async construction: sync assemble, then ``await _ainit()``.
+
+        The canonical way to build a consumer whose initialization is
+        asynchronous — databases/vector stores that connect eagerly,
+        LLM-backed bots, knowledge-base warmup. Synchronous consumers
+        ignore this and use :meth:`from_config`. Accepts dict or typed
+        config through the same :meth:`_coerce_config` guard
+        ``from_config`` uses, so a wrong-subclass typed config raises the
+        same clear ``TypeError``.
+
+        A subclass whose async factory consumes the typed config through
+        a non-default ctor slot may override this; the override must
+        still route through :meth:`_coerce_config` (pinned by
+        :func:`dataknobs_common.testing.assert_structured_config_consumer`).
+        """
+        obj = cls(cls._coerce_config(config))
+        await obj._ainit()
+        return obj
+
     def _setup(self) -> None:
         """Subclass hook: derived-attribute computation after ``self._config``.
 
@@ -249,7 +470,20 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         lock/handle initialization, etc.). Field normalization belongs
         in the config dataclass (``_normalize_dict`` / ``__post_init__``),
         not here — ``_setup`` runs after ``self._config`` is frozen.
-        Called once during ``__init__``.
+        Called once during ``__init__`` (both sync and async paths).
+        """
+
+    async def _ainit(self) -> None:
+        """Subclass hook: async initialization after sync construction.
+
+        Default no-op. Override for connection establishment, provider
+        warmup, KB ingest, async collaborator construction, or any
+        awaitable setup that cannot run in the synchronous
+        :meth:`_setup`. Runs exactly once, after ``_setup``, when the
+        object is built via :meth:`from_config_async`. Objects built via
+        the synchronous path (``__init__`` / :meth:`from_config`) do NOT
+        run ``_ainit`` automatically — async setup is opt-in via the
+        async entry point.
         """
 
 

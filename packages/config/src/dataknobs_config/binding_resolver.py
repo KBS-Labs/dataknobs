@@ -235,8 +235,10 @@ class ConfigBindingResolver:
     ) -> Any:
         """Async version of resolve for async factories.
 
-        If the factory has a create_async method, it will be used.
-        Otherwise, falls back to synchronous create.
+        Construction precedence (see :meth:`_create_instance_async`):
+        a registered consumer class's ``from_config_async`` is preferred,
+        then a factory's ``create_async``, then the synchronous create
+        path.
 
         Args:
             resource_type: Type of resource
@@ -377,6 +379,12 @@ class ConfigBindingResolver:
         Returns:
             Created instance
         """
+        # Prefer the StructuredConfigConsumer async entry point when the
+        # target is a consumer class (it takes the whole config, not a
+        # kwarg splat), then fall back to a factory ``create_async``.
+        if hasattr(factory, "from_config_async"):
+            return await factory.from_config_async(config)
+
         # Try async create method first
         if hasattr(factory, "create_async"):
             return await factory.create_async(**config)

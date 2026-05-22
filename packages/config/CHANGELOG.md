@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- Async object-construction bridge for the `StructuredConfigConsumer`
+  contract. `Config.build_object_async(ref, ...)` (and the underlying
+  `ObjectBuilder.build_async`) prefer a target class's
+  `from_config_async` — the async entry point from
+  `dataknobs_common.structured_config` — awaiting it, then fall back to
+  a factory's `create_async`, then to the synchronous `from_config` /
+  direct-instantiation path, so the method is safe for any reference.
+  `ConfigBindingResolver.resolve_async` likewise prefers a target's
+  `from_config_async` over factory `create_async`/sync construction.
+  The synchronous `build_object` / `resolve` paths are unchanged.
+  Lets the object-graph layer build async consumers (databases that
+  connect eagerly, LLM-backed bots, knowledge-base warmup) through the
+  same uniform per-object contract the sync path already uses.
+
 ### Deprecated
 - `ConfigurableBase` (`dataknobs_config.builders`) — soft-deprecated
   in favor of `StructuredConfigConsumer[ConfigT]` from

@@ -115,6 +115,30 @@ class ObjectBuilder:
         except TypeError as e:
             raise ConfigError(f"Failed to instantiate {class_path}: {e}") from e
 
+    def _load_factory(self, factory_path: str) -> Any:
+        """Resolve a factory object from a registered name or module path.
+
+        Shared by the sync and async factory-build paths so they cannot
+        drift in how they locate a factory.
+
+        Args:
+            factory_path: Registered factory name or dotted module path.
+
+        Returns:
+            The factory object (instance, class, or callable).
+        """
+        # Check registered factories first (if they exist)
+        if hasattr(self._config, '_registered_factories') and self._config._registered_factories.has(factory_path):
+            return self._config._registered_factories.get(factory_path)
+        # Fall back to loading as a module path
+        factory_cls = self._load_class(factory_path)
+        # Create factory instance
+        try:
+            return factory_cls()
+        except TypeError:
+            # Factory might be a module-level function
+            return factory_cls
+
     def _build_with_factory(self, config: dict) -> Any:
         """Build an object using a factory class.
 
@@ -130,19 +154,7 @@ class ObjectBuilder:
         config.pop("type", None)
         config.pop("name", None)
 
-        # Check registered factories first (if they exist)
-        if hasattr(self._config, '_registered_factories') and self._config._registered_factories.has(factory_path):
-            factory = self._config._registered_factories.get(factory_path)
-        else:
-            # Fall back to loading as a module path
-            factory_cls = self._load_class(factory_path)
-
-            # Create factory instance
-            try:
-                factory = factory_cls()
-            except TypeError:
-                # Factory might be a module-level function
-                factory = factory_cls
+        factory = self._load_factory(factory_path)
 
         # Check for standard factory methods
         if hasattr(factory, "create"):
@@ -151,10 +163,122 @@ class ObjectBuilder:
             return factory.build(**config)
         elif callable(factory):
             return factory(**config)
+        # A StructuredConfigConsumer (or any class) referenced via
+        # ``factory:`` exposes the consumer protocol (``from_config``)
+        # rather than ``create``/``build``. Checked last so a genuine
+        # factory's ``create``/``build``/``__call__`` always wins.
+        elif hasattr(factory, "from_config"):
+            return factory.from_config(config)
         else:
             raise ConfigError(
-                f"Factory {factory_path} must have 'create', 'build' method or be callable"
+                f"Factory {factory_path} must have 'create', 'build', "
+                "'from_config' method or be callable"
             )
+
+    async def build_async(
+        self, ref: str, cache: bool = True, **kwargs: Any
+    ) -> Any:
+        """Build an object asynchronously from a configuration reference.
+
+        Mirror of :meth:`build` for targets whose construction is async.
+        A target class that defines ``from_config_async`` (the
+        ``StructuredConfigConsumer`` async entry point) or a factory that
+        defines ``create_async`` is awaited; anything else falls back to
+        the synchronous construction path, so this is safe to call for
+        any reference.
+
+        Args:
+            ref: String reference to configuration
+            cache: Whether to cache the built object
+            **kwargs: Additional keyword arguments for construction
+
+        Returns:
+            Built object instance
+        """
+        if cache and ref in self._cache:
+            return self._cache[ref]
+
+        config = self._config.resolve_reference(ref)
+        obj = await self._build_from_config_async(config, **kwargs)
+
+        if cache:
+            self._cache[ref] = obj
+
+        return obj
+
+    async def _build_from_config_async(
+        self, config: dict, **kwargs: Any
+    ) -> Any:
+        """Async counterpart of :meth:`_build_from_config`."""
+        config = copy.deepcopy(config)
+        config.update(kwargs)
+
+        if "factory" in config:
+            return await self._build_with_factory_async(config)
+        if "class" in config:
+            return await self._build_with_class_async(config)
+
+        raise ConfigError(
+            "Configuration must specify either 'class' or 'factory' for object construction"
+        )
+
+    async def _build_with_class_async(self, config: dict) -> Any:
+        """Async counterpart of :meth:`_build_with_class`.
+
+        Prefers ``cls.from_config_async`` (awaited) when the target
+        defines it, then falls back to the synchronous ``from_config`` /
+        direct-instantiation path.
+        """
+        class_path = config.pop("class")
+        cls = self._load_class(class_path)
+
+        config.pop("type", None)
+        config.pop("name", None)
+
+        if hasattr(cls, "from_config_async"):
+            return await cls.from_config_async(config)
+        if hasattr(cls, "from_config"):
+            return cls.from_config(config)
+        try:
+            return cls(**config)
+        except TypeError as e:
+            raise ConfigError(f"Failed to instantiate {class_path}: {e}") from e
+
+    async def _build_with_factory_async(self, config: dict) -> Any:
+        """Async counterpart of :meth:`_build_with_factory`.
+
+        Prefers ``factory.create_async`` (awaited) when present, then
+        falls back to the synchronous factory methods. A consumer class
+        referenced via ``factory:`` (exposing ``from_config_async`` /
+        ``from_config`` rather than ``create``/``build``) is supported as
+        a last resort so the async factory path stays symmetric with the
+        sync one and with :class:`ConfigBindingResolver`.
+        """
+        factory_path = config.pop("factory")
+
+        config.pop("type", None)
+        config.pop("name", None)
+
+        factory = self._load_factory(factory_path)
+
+        if hasattr(factory, "create_async"):
+            return await factory.create_async(**config)
+        if hasattr(factory, "create"):
+            return factory.create(**config)
+        if hasattr(factory, "build"):
+            return factory.build(**config)
+        if callable(factory):
+            return factory(**config)
+        # Consumer protocol, checked after the factory protocol so a
+        # genuine factory is never diverted (see sync counterpart).
+        if hasattr(factory, "from_config_async"):
+            return await factory.from_config_async(config)
+        if hasattr(factory, "from_config"):
+            return factory.from_config(config)
+        raise ConfigError(
+            f"Factory {factory_path} must have 'create', 'build', "
+            "'create_async', 'from_config' method or be callable"
+        )
 
     def _load_class(self, class_path: str) -> Type[Any]:
         """Load a class from a module path.
