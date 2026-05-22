@@ -13,9 +13,9 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
@@ -24,11 +24,13 @@ from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, Strea
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import FileDatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+    from typing import ClassVar
 
 
 class FileLock:
@@ -328,16 +330,21 @@ class ParquetFormat(FileFormat):
 
 
 class AsyncFileDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[FileDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
     VectorOperationsMixin
 ):
-    """Async file-based database implementation."""
+    """Async file-based database implementation.
+
+    Constructed through :class:`FileDatabaseConfig` (shared with the sync
+    backend) — every documented config key is a typed field on that
+    dataclass, so ``self.config`` is the typed config (not a dict).
+    """
 
     FORMAT_HANDLERS = {
         ".json": JSONFormat,
@@ -347,14 +354,22 @@ class AsyncFileDatabase(  # type: ignore[misc]
         ".pq": ParquetFormat,
     }
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        super().__init__(config)
+    CONFIG_CLS: ClassVar[type[FileDatabaseConfig]] = FileDatabaseConfig
+    _TEMP_PREFIX = "dataknobs_async_db_"
+
+    def _setup(self) -> None:
+        """Resolve filepath/format/handler and vector state from the config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize``.
+        """
+        cfg = self.config
 
         # If no path specified, use a temporary file instead of polluting CWD
-        if "path" not in self.config:
+        if cfg.path is None:
             # Create a unique temporary file that won't conflict
             temp_file = tempfile.NamedTemporaryFile(
-                prefix="dataknobs_async_db_",
+                prefix=self._TEMP_PREFIX,
                 suffix=".json",
                 delete=False
             )
@@ -362,11 +377,11 @@ class AsyncFileDatabase(  # type: ignore[misc]
             temp_file.close()
             self._is_temp_file = True
         else:
-            self.filepath = self.config["path"]
+            self.filepath = cfg.path
             self._is_temp_file = False
 
-        self.format = self.config.get("format")
-        self.compression = self.config.get("compression", None)
+        self.format = cfg.format
+        self.compression = cfg.compression
         self._lock = asyncio.Lock()
         self._file_lock = FileLock(self.filepath)
 
@@ -393,13 +408,8 @@ class AsyncFileDatabase(  # type: ignore[misc]
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
         # Initialize vector support
-        self._parse_vector_config(config or {})
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncFileDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -657,16 +667,21 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
 
 class SyncFileDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[FileDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
     VectorOperationsMixin
 ):
-    """Synchronous file-based database implementation."""
+    """Synchronous file-based database implementation.
+
+    Constructed through :class:`FileDatabaseConfig` (shared with the async
+    backend) — every documented config key is a typed field on that
+    dataclass, so ``self.config`` is the typed config (not a dict).
+    """
 
     FORMAT_HANDLERS = {
         ".json": JSONFormat,
@@ -676,14 +691,22 @@ class SyncFileDatabase(  # type: ignore[misc]
         ".pq": ParquetFormat,
     }
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        super().__init__(config)
+    CONFIG_CLS: ClassVar[type[FileDatabaseConfig]] = FileDatabaseConfig
+    _TEMP_PREFIX = "dataknobs_sync_db_"
+
+    def _setup(self) -> None:
+        """Resolve filepath/format/handler and vector state from the config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize``.
+        """
+        cfg = self.config
 
         # If no path specified, use a temporary file instead of polluting CWD
-        if "path" not in self.config:
+        if cfg.path is None:
             # Create a unique temporary file that won't conflict
             temp_file = tempfile.NamedTemporaryFile(
-                prefix="dataknobs_sync_db_",
+                prefix=self._TEMP_PREFIX,
                 suffix=".json",
                 delete=False
             )
@@ -691,11 +714,11 @@ class SyncFileDatabase(  # type: ignore[misc]
             temp_file.close()
             self._is_temp_file = True
         else:
-            self.filepath = self.config["path"]
+            self.filepath = cfg.path
             self._is_temp_file = False
 
-        self.format = self.config.get("format")
-        self.compression = self.config.get("compression", None)
+        self.format = cfg.format
+        self.compression = cfg.compression
         self._lock = threading.RLock()
         self._file_lock = FileLock(self.filepath)
 
@@ -722,13 +745,8 @@ class SyncFileDatabase(  # type: ignore[misc]
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
         # Initialize vector support
-        self._parse_vector_config(config or {})
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncFileDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

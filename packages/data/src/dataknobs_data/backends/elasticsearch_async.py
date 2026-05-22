@@ -6,7 +6,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, cast
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
@@ -20,6 +20,7 @@ from ..query import Operator, Query, SortOrder
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
+from .config import AsyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
     ElasticsearchErrorHandler,
@@ -30,8 +31,11 @@ from .elasticsearch_mixins import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+    from typing import ClassVar
+
     import numpy as np
-    from collections.abc import AsyncIterator, Callable, Awaitable
+
     from ..records import Record
 
 logger = logging.getLogger(__name__)
@@ -41,8 +45,8 @@ _client_manager = ConnectionPoolManager()
 
 
 class AsyncElasticsearchDatabase(
+    StructuredConfigConsumer[AsyncElasticsearchDatabaseConfig],
     AsyncDatabase,
-    ConfigurableBase,
     VectorOperationsMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
@@ -51,27 +55,61 @@ class AsyncElasticsearchDatabase(
     ElasticsearchRecordSerializer,
     ElasticsearchQueryBuilder,
 ):
-    """Native async Elasticsearch database backend with connection pooling."""
+    """Native async Elasticsearch database backend with connection pooling.
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async Elasticsearch database."""
-        super().__init__(config)
+    Constructed through :class:`AsyncElasticsearchDatabaseConfig` — every
+    documented config key is a typed field on that dataclass, so
+    ``self.config`` is the typed config (not a dict). The
+    ``ElasticsearchPoolConfig`` is derived from it in :meth:`_setup`.
+    """
 
-        # Initialize vector support
-        self.vector_fields = {}  # field_name -> dimensions
+    CONFIG_CLS: ClassVar[type[AsyncElasticsearchDatabaseConfig]] = (
+        AsyncElasticsearchDatabaseConfig
+    )
+
+    def _setup(self) -> None:
+        """Derive the pool config and connection state from the typed config.
+
+        Runs after the cooperative base chain has set ``self.schema`` and
+        run ``_initialize`` (a no-op — connection setup is deferred to
+        :meth:`connect`). The pool config is built through
+        ``ElasticsearchPoolConfig.from_dict`` so the ``hosts`` ⇄
+        ``host``/``port`` derivation stays in one place; only the keys the
+        caller actually set are forwarded so the pool config applies its
+        own defaults.
+        """
+        cfg = self.config
+
+        # Vector support (async ES uses VectorOperationsMixin, not the
+        # VectorConfigMixin; it discovers vector fields lazily at write time).
+        self.vector_fields: dict[str, int] = {}
         self.vector_enabled = False
 
-        config = config or {}
-        self._pool_config = ElasticsearchPoolConfig.from_dict(config)
+        pool_input: dict[str, Any] = {"index": cfg.index}
+        if cfg.hosts is not None:
+            pool_input["hosts"] = cfg.hosts
+        if cfg.host is not None:
+            pool_input["host"] = cfg.host
+        if cfg.port is not None:
+            pool_input["port"] = cfg.port
+        if cfg.api_key is not None:
+            pool_input["api_key"] = cfg.api_key
+        if cfg.basic_auth is not None:
+            pool_input["basic_auth"] = cfg.basic_auth
+        pool_input["verify_certs"] = cfg.verify_certs
+        if cfg.ca_certs is not None:
+            pool_input["ca_certs"] = cfg.ca_certs
+        if cfg.client_cert is not None:
+            pool_input["client_cert"] = cfg.client_cert
+        if cfg.client_key is not None:
+            pool_input["client_key"] = cfg.client_key
+        pool_input["ssl_show_warn"] = cfg.ssl_show_warn
+
+        self._pool_config = ElasticsearchPoolConfig.from_dict(pool_input)
         self.index_name = self._pool_config.index
-        self.refresh = config.get("refresh", True)
+        self.refresh = cfg.refresh
         self._client = None
         self._connected = False
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncElasticsearchDatabase:
-        """Create from config dictionary."""
-        return cls(config)
 
     async def connect(self) -> None:
         """Connect to the Elasticsearch database."""

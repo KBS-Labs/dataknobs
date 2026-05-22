@@ -474,8 +474,13 @@ class TestS3Configuration:
             assert db.region == "us-west-2"
     
     def test_missing_required_config(self):
-        """Test that missing bucket raises error."""
-        with pytest.raises(ValueError, match="bucket name is required"):
+        """Test that missing bucket raises error.
+
+        Sync and async S3 now share one validation message (bucket
+        validation moved to S3DatabaseConfigBase under the structured-config
+        migration), so both report "requires 'bucket'".
+        """
+        with pytest.raises(ValueError, match="requires 'bucket'"):
             SyncS3Database({})
     
     def test_default_values(self):

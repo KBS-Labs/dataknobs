@@ -6,9 +6,9 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..query_logic import ComplexQuery
@@ -16,19 +16,21 @@ from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, Strea
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
+from .config import MemoryDatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+
     from ..query import Query
     from ..records import Record
 
 
 class AsyncMemoryDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[MemoryDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
-    ConfigurableBase,
     VectorConfigMixin,           # Parse vector config
     SQLiteVectorSupport,          # Provides _compute_similarity
     PythonVectorSearchMixin,      # Provides python_vector_search_async
@@ -37,20 +39,21 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 ):
     """Async in-memory database implementation."""
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        super().__init__(config)
+    CONFIG_CLS: ClassVar[type[MemoryDatabaseConfig]] = MemoryDatabaseConfig
+
+    def _setup(self) -> None:
+        """Initialize storage, lock, and vector state from the typed config.
+
+        Schema and ``_initialize()`` are handled by ``AsyncDatabase``'s
+        construction branch before this runs (see the cooperative
+        construction note in ``StructuredConfigConsumer``).
+        """
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
 
-        # Initialize vector support
-        self._parse_vector_config(config or {})
-        self._init_vector_state()  # From SQLiteVectorSupport
-
-    @classmethod
-    def from_config(cls, config: dict) -> AsyncMemoryDatabase:
-        """Create from config dictionary."""
-        return cls(config)
-
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
+        self._init_vector_state()
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -111,7 +114,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
         # Memory-specific implementation
         async with self._lock:
             self._storage[id] = record.copy(deep=True)
@@ -249,9 +252,9 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
 
 class SyncMemoryDatabase(  # type: ignore[misc]
+    StructuredConfigConsumer[MemoryDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
-    ConfigurableBase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
@@ -260,20 +263,21 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 ):
     """Synchronous in-memory database implementation."""
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        super().__init__(config)
+    CONFIG_CLS: ClassVar[type[MemoryDatabaseConfig]] = MemoryDatabaseConfig
+
+    def _setup(self) -> None:
+        """Initialize storage, lock, and vector state from the typed config.
+
+        Schema and ``_initialize()`` are handled by ``SyncDatabase``'s
+        construction branch before this runs (see the cooperative
+        construction note in ``StructuredConfigConsumer``).
+        """
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
 
-        # Initialize vector support
-        self._parse_vector_config(config or {})
+        cfg = self.config
+        self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
         self._init_vector_state()
-
-    @classmethod
-    def from_config(cls, config: dict) -> SyncMemoryDatabase:
-        """Create from config dictionary."""
-        return cls(config)
-
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -331,7 +335,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
         # Memory-specific implementation
         with self._lock:
             self._storage[id] = record.copy(deep=True)

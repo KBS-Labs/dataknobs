@@ -22,27 +22,50 @@ class VectorConfigMixin:
     """
 
     def _parse_vector_config(self, config: dict[str, Any] | None = None) -> None:
-        """Parse vector-related configuration parameters.
-        
+        """Parse vector-related configuration parameters from a dict.
+
+        Legacy dict-construction entry point. Backends constructed via
+        ``StructuredConfigConsumer`` call :meth:`_apply_vector_config`
+        with the typed config's fields directly instead.
+
         Args:
             config: Configuration dictionary (uses self.config if not provided)
         """
         # Use provided config or fall back to self.config
         config = config if config is not None else getattr(self, 'config', {})
+        self._apply_vector_config(
+            config.get("vector_enabled", False),
+            config.get("vector_metric", "cosine"),
+        )
 
-        # Extract vector configuration parameters
-        self._vector_enabled = config.get("vector_enabled", False)
+    def _apply_vector_config(
+        self,
+        vector_enabled: bool,
+        vector_metric: str | DistanceMetric,
+    ) -> None:
+        """Set vector state from already-resolved config values.
 
-        # Parse distance metric
-        metric = config.get("vector_metric", "cosine")
-        if isinstance(metric, str):
+        Shared by :meth:`_parse_vector_config` (legacy dict path) and the
+        ``_setup`` of backends migrated to ``StructuredConfigConsumer``
+        (typed path). An unrecognized metric string falls back to cosine
+        with a warning.
+
+        Args:
+            vector_enabled: Whether vector operations are enabled.
+            vector_metric: Distance metric as a name or ``DistanceMetric``.
+        """
+        self._vector_enabled = vector_enabled
+
+        if isinstance(vector_metric, DistanceMetric):
+            self.vector_metric = vector_metric
+        elif isinstance(vector_metric, str):
             try:
-                self.vector_metric = DistanceMetric(metric.lower())
+                self.vector_metric = DistanceMetric(vector_metric.lower())
             except ValueError:
-                logger.warning(f"Invalid vector metric '{metric}', using cosine")
+                logger.warning(
+                    f"Invalid vector metric '{vector_metric}', using cosine"
+                )
                 self.vector_metric = DistanceMetric.COSINE
-        elif isinstance(metric, DistanceMetric):
-            self.vector_metric = metric
         else:
             self.vector_metric = DistanceMetric.COSINE
 

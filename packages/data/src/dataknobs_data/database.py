@@ -8,7 +8,9 @@ different backend database implementations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
 from .query import Query
@@ -16,9 +18,26 @@ from .schema import DatabaseSchema, FieldSchema
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
+
     from .query_logic import ComplexQuery
     from .records import Record
     from .streaming import StreamConfig, StreamResult
+
+
+def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
+    """Build a ``DatabaseSchema`` from a schema-config value.
+
+    Accepts a ``DatabaseSchema`` (returned as-is), a dict (built via
+    ``DatabaseSchema.from_dict``), or anything else (``None``). Shared by
+    the ``Database`` bases' legacy dict construction and by
+    ``DatabaseConfig._normalize_dict`` so the dict→schema rule lives in
+    exactly one place.
+    """
+    if isinstance(schema_config, DatabaseSchema):
+        return schema_config
+    if isinstance(schema_config, dict):
+        return DatabaseSchema.from_dict(schema_config)
+    return None
 
 
 class AsyncDatabase(ABC):
@@ -76,11 +95,26 @@ class AsyncDatabase(ABC):
             db = AsyncDatabase(config={"path": "data.db"}, schema=schema)
             ```
         """
+        if isinstance(self, StructuredConfigConsumer):
+            # Unified construction (backends migrated to
+            # StructuredConfigConsumer): the mixin has already set the
+            # typed ``self._config`` and reached here via the cooperative
+            # ``super().__init__()`` with no args. Schema + ``_initialize``
+            # read the typed config; backend-specific derived attributes
+            # run afterward in the mixin-invoked ``_setup()``. ``schema``
+            # is a field on the typed config, so ``self.config.schema``
+            # carries any ``schema=`` the caller passed.
+            super().__init__()
+            self.schema = self.config.schema or DatabaseSchema()
+            self._initialize()
+            return
+
+        # Legacy dict construction (backends not yet migrated).
         config = config or {}
 
         # Extract schema from config if present and no explicit schema provided
         if schema is None and "schema" in config:
-            schema = self._extract_schema_from_config(config["schema"])
+            schema = extract_schema_from_config(config["schema"])
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
 
@@ -91,18 +125,17 @@ class AsyncDatabase(ABC):
     @staticmethod
     def _extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
         """Extract schema from configuration.
-        
+
+        Deprecated alias retained for back-compat; delegates to the
+        module-level :func:`extract_schema_from_config`.
+
         Args:
             schema_config: Can be a DatabaseSchema, dict, or None
-            
+
         Returns:
             DatabaseSchema instance or None
         """
-        if isinstance(schema_config, DatabaseSchema):
-            return schema_config
-        elif isinstance(schema_config, dict):
-            return DatabaseSchema.from_dict(schema_config)
-        return None
+        return extract_schema_from_config(schema_config)
 
     def _initialize(self) -> None:  # noqa: B027
         """Initialize the database backend. Override in subclasses if needed."""
@@ -338,7 +371,7 @@ class AsyncDatabase(ABC):
             The record ID
         """
         import uuid
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)
@@ -350,13 +383,13 @@ class AsyncDatabase(ABC):
             record = id_or_record
             # Use Record's built-in ID property which handles all the logic
             id = record.id
-            
+
             if id is None:
                 # Generate a new ID if none found
                 id = str(uuid.uuid4())  # type: ignore[unreachable]
                 # Set it on the record for future reference
                 record.storage_id = id
-        
+
         # Now perform the upsert
         if await self.exists(id):
             await self.update(id, record)
@@ -625,11 +658,26 @@ class SyncDatabase(ABC):
             db = SyncDatabase(config={"path": "data.db"}, schema=schema)
             ```
         """
+        if isinstance(self, StructuredConfigConsumer):
+            # Unified construction (backends migrated to
+            # StructuredConfigConsumer): the mixin has already set the
+            # typed ``self._config`` and reached here via the cooperative
+            # ``super().__init__()`` with no args. Schema + ``_initialize``
+            # read the typed config; backend-specific derived attributes
+            # run afterward in the mixin-invoked ``_setup()``. ``schema``
+            # is a field on the typed config, so ``self.config.schema``
+            # carries any ``schema=`` the caller passed.
+            super().__init__()
+            self.schema = self.config.schema or DatabaseSchema()
+            self._initialize()
+            return
+
+        # Legacy dict construction (backends not yet migrated).
         config = config or {}
 
         # Extract schema from config if present and no explicit schema provided
         if schema is None and "schema" in config:
-            schema = AsyncDatabase._extract_schema_from_config(config["schema"])
+            schema = extract_schema_from_config(config["schema"])
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
 
@@ -909,7 +957,7 @@ class SyncDatabase(ABC):
             The record ID
         """
         import uuid
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             # Called with explicit ID: upsert(id, record)
@@ -921,13 +969,13 @@ class SyncDatabase(ABC):
             record = id_or_record
             # Use Record's built-in ID property which handles all the logic
             id = record.id
-            
+
             if id is None:
                 # Generate a new ID if none found
                 id = str(uuid.uuid4())  # type: ignore[unreachable]
                 # Set it on the record for future reference
                 record.storage_id = id
-        
+
         # Now perform the upsert
         if self.exists(id):
             self.update(id, record)
