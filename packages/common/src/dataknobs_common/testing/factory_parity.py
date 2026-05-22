@@ -392,10 +392,17 @@ def assert_structured_config_consumer(
 def assert_structured_config_roundtrip(config: Any) -> None:
     """Assert ``type(cfg).from_dict(cfg.to_dict()) == cfg``.
 
-    Property assertion for any
+    Property assertion for a
     :class:`~dataknobs_common.structured_config.StructuredConfig`
     instance. Eliminates the per-consumer round-trip boilerplate that
     every adopter of the abstraction would otherwise duplicate.
+
+    The property holds for flat configs and for nested configs whose
+    ``_normalize_dict`` rebuilds each nested ``StructuredConfig`` field
+    from its dict. A nested field left as a raw dict fails the assertion
+    (``asdict`` recurses; ``from_dict`` does not) — so pass this helper a
+    config whose nesting is handled by ``_normalize_dict``, or a flat
+    config.
 
     Args:
         config: A ``StructuredConfig`` instance to round-trip.

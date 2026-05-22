@@ -33,9 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `assert_factory_kwargs_match_ctor` checks for adopters of the
   structured-config primitives.
 - `dataknobs_common.testing.assert_structured_config_roundtrip(cfg)`
-  — property assertion that `type(cfg).from_dict(cfg.to_dict()) == cfg`
-  for any `StructuredConfig` instance. Eliminates per-consumer
-  round-trip boilerplate.
+  — property assertion that `type(cfg).from_dict(cfg.to_dict()) == cfg`.
+  Holds for flat configs and for nested configs whose `_normalize_dict`
+  rebuilds each nested `StructuredConfig` field (a nested field left as
+  a raw dict fails, since `asdict` recurses but `from_dict` does not).
+  Eliminates per-consumer round-trip boilerplate.
 - `dataknobs_common.events.config` module — structured config
   dataclasses for every event bus backend: `MemoryEventBusConfig`,
   `RedisEventBusConfig`, `PostgresEventBusConfig`,
@@ -50,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `<EventBus>.from_config(config: dict | <EventBus>Config)`
   classmethod on every event bus — the recommended programmatic
   construction path alongside the existing kwarg-positional and
-  typed-config init shapes.
+  typed-config init shapes. A config of the wrong `StructuredConfig`
+  subclass raises a clear `TypeError` (naming the expected and received
+  type) rather than an opaque error.
 - `<EventBus>.config` property on every event bus — read-only access
   to the underlying typed config dataclass. Pairs with the new
   `SqsEventBus.require_topic_attribute` shortcut property that maps
@@ -89,9 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `normalize_postgres_connection_config`. All documented construction
   shapes are preserved byte-for-byte (typed config, dict via
   `config=`, `from_config`, loose kwargs, `PostgresEventBus`'s legacy
-  positional `connection_string` / `channel_prefix`); the per-backend
-  sentinel-based dispatch that previously appeared inside each bus's
-  `__init__` collapses into one inherited mixin implementation.
+  positional `connection_string` / `channel_prefix`); construction
+  dispatch (typed config vs. dict vs. loose kwargs) is handled once by
+  the inherited `StructuredConfigConsumer.__init__` rather than per
+  backend.
 - `dataknobs_common.testing.assert_dataclass_config_matches_ctor` and
   `assert_factory_kwargs_match_ctor` now recognise a ctor that
   declares `**kwargs` (the `StructuredConfigConsumer` pattern) and

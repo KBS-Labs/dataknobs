@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.structured_config import (
     StructuredConfig,
@@ -150,38 +149,18 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         Overrides
         :meth:`~dataknobs_common.structured_config.StructuredConfigConsumer.from_config`
         so the typed config is delivered via the keyword-only
-        ``config=`` slot rather than the legacy
-        ``connection_string`` positional.
+        ``config=`` slot rather than the legacy ``connection_string``
+        positional. Reuses the inherited ``_coerce_config`` guard so a
+        config of the wrong ``StructuredConfig`` subclass raises a clear
+        ``TypeError``.
         """
-        if isinstance(config, PostgresEventBusConfig):
-            return cls(config=config)
-        # ``config`` is a Mapping here; mypy cannot narrow against the
-        # concrete config class, so assert the residual union away.
-        return cls(
-            config=PostgresEventBusConfig.from_dict(
-                cast("Mapping[str, Any]", config)
-            )
-        )
+        return cls(config=cls._coerce_config(config))
 
     def _setup(self) -> None:
-        # Sanitize the channel prefix the same way we sanitize topics —
-        # it is interpolated into LISTEN/UNLISTEN SQL statements which
-        # do not support parameterized queries. Preserve the typed-
-        # config invariant by replacing the dataclass with the
-        # sanitized value when sanitization changed it.
-        safe_prefix = re.sub(
-            r"[^a-zA-Z0-9_]", "", self._config.channel_prefix
-        )
-        if not safe_prefix:
-            raise ValueError(
-                f"channel_prefix {self._config.channel_prefix!r} is "
-                "empty after sanitization"
-            )
-        if safe_prefix != self._config.channel_prefix:
-            self._config = PostgresEventBusConfig(
-                connection_string=self._config.connection_string,
-                channel_prefix=safe_prefix,
-            )
+        # ``channel_prefix`` is already sanitized by
+        # ``PostgresEventBusConfig.__post_init__`` (it is interpolated
+        # into LISTEN/UNLISTEN SQL that cannot be parameterized), so this
+        # hook only initializes the connection-lifecycle placeholders.
         self._conn: Any = None  # asyncpg.Connection
         self._listen_conn: Any = None  # Separate connection for LISTEN
         self._subscriptions: dict[str, Subscription] = {}

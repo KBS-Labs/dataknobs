@@ -96,8 +96,14 @@ class RenamedConfig(StructuredConfig):
 
 ### `to_dict()`
 
-Symmetric serialization via `dataclasses.asdict`. Round-trip property:
-`type(cfg).from_dict(cfg.to_dict()) == cfg`.
+Symmetric serialization via `dataclasses.asdict`. Round-trip property —
+`type(cfg).from_dict(cfg.to_dict()) == cfg` — holds for flat configs,
+and for nested configs whose `_normalize_dict` rebuilds each nested
+`StructuredConfig` field from its dict (see [Nested-config
+composition](#nested-config-composition)). It does **not** hold for a
+nested field left as a raw dict: `asdict` recurses into nested
+dataclasses but `from_dict` does not, so without the `_normalize_dict`
+override the recovered field is a `dict`, not the typed sub-config.
 
 ### `__post_init__` validation
 
@@ -157,9 +163,10 @@ mutation is rejected.
 ### `_setup()` (override hook)
 
 Default no-op. Override to initialize derived attributes computed
-from `self.config.*` — connection placeholders, post-validation
-re-sanitization, etc. Called once during `__init__` after
-`self._config` is established.
+from `self.config.*` — connection placeholders, lock/handle
+initialization, etc. Field normalization belongs in the config
+dataclass (`_normalize_dict` / `__post_init__`), not here. Called once
+during `__init__` after `self._config` is established.
 
 ## Patterns
 
@@ -258,7 +265,11 @@ def test_widget_uses_structured_config_consumer():
 
 ### `assert_structured_config_roundtrip(cfg)`
 
-Property assertion: `type(cfg).from_dict(cfg.to_dict()) == cfg`.
+Property assertion: `type(cfg).from_dict(cfg.to_dict()) == cfg`. Holds
+for flat configs and for nested configs whose `_normalize_dict` rebuilds
+each nested `StructuredConfig` field (see [Nested-config
+composition](#nested-config-composition)); a nested field left as a raw
+dict will fail the assertion.
 
 ```python
 from dataknobs_common.testing import assert_structured_config_roundtrip

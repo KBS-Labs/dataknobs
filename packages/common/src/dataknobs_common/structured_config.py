@@ -126,9 +126,14 @@ class StructuredConfig:
     def to_dict(self) -> dict[str, Any]:
         """Symmetric serialization. Delegates to ``dataclasses.asdict``.
 
-        Round-trip property: for any ``cfg: StructuredConfig``,
-        ``type(cfg).from_dict(cfg.to_dict()) == cfg`` holds. Verified
-        by
+        Round-trip property: ``type(cfg).from_dict(cfg.to_dict()) == cfg``
+        holds for flat configs, and for nested configs whose
+        ``_normalize_dict`` rebuilds each nested ``StructuredConfig``
+        field from its dict. It does NOT hold for a nested field left as
+        a raw dict: ``asdict`` recurses into nested dataclasses but
+        ``from_dict`` deliberately does not (see the class docstring's
+        nested-composition note), so the recovered field would be a
+        ``dict`` rather than the typed sub-config. Verified by
         :func:`dataknobs_common.testing.assert_structured_config_roundtrip`.
         """
         return dataclasses.asdict(self)
@@ -199,30 +204,52 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         return self._config
 
     @classmethod
+    def _coerce_config(
+        cls, config: Mapping[str, Any] | StructuredConfig
+    ) -> ConfigT:
+        """Coerce a dict-or-typed ``config`` argument to a typed ``ConfigT``.
+
+        Shared by :meth:`from_config` and any subclass that overrides
+        ``from_config`` to deliver the typed config through a non-default
+        ctor slot (e.g. :class:`PostgresEventBus`, whose first positional
+        is the legacy ``connection_string``). Centralizing the guard here
+        means every ``from_config`` path rejects a config of the wrong
+        ``StructuredConfig`` subclass with the same clear ``TypeError``
+        rather than the opaque ``dict()``-on-dataclass crash that
+        ``from_dict`` would otherwise raise.
+        """
+        if isinstance(config, cls.CONFIG_CLS):
+            return cast("ConfigT", config)
+        if not isinstance(config, Mapping):
+            raise TypeError(
+                f"{cls.__name__}.from_config: `config` must be "
+                f"{cls.CONFIG_CLS.__name__} or Mapping, got "
+                f"{type(config).__name__}."
+            )
+        return cast("ConfigT", cls.CONFIG_CLS.from_dict(config))
+
+    @classmethod
     def from_config(
         cls, config: Mapping[str, Any] | StructuredConfig
     ) -> Self:
         """Build an instance from a config dict or typed config.
 
         The recommended programmatic-construction entry point. Registry
-        factories collapse to one-line wrappers over this.
+        factories collapse to one-line wrappers over this. A typed
+        ``config`` of the wrong ``StructuredConfig`` subclass (not
+        ``CONFIG_CLS``) raises ``TypeError``.
         """
-        if isinstance(config, cls.CONFIG_CLS):
-            return cls(config)
-        # ``config`` is a Mapping here (the typed branch returned). mypy
-        # cannot narrow against the ``type[StructuredConfig]`` ClassVar,
-        # so the residual union is asserted away explicitly.
-        return cls(
-            cls.CONFIG_CLS.from_dict(cast("Mapping[str, Any]", config))
-        )
+        return cls(cls._coerce_config(config))
 
     def _setup(self) -> None:
         """Subclass hook: derived-attribute computation after ``self._config``.
 
         Default no-op. Override to initialize derived attributes
         computed from ``self.config.*`` (connection-pool placeholders,
-        post-validation re-sanitization, etc.). Called once during
-        ``__init__``.
+        lock/handle initialization, etc.). Field normalization belongs
+        in the config dataclass (``_normalize_dict`` / ``__post_init__``),
+        not here — ``_setup`` runs after ``self._config`` is frozen.
+        Called once during ``__init__``.
         """
 
 

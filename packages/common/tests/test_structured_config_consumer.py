@@ -33,6 +33,15 @@ class _TestCfg(StructuredConfig):
     y: str = "default"
 
 
+@dataclass(frozen=True)
+class _OtherCfg(StructuredConfig):
+    """A different ``StructuredConfig`` subclass — not ``_Consumer``'s
+    ``CONFIG_CLS``. Used to assert that passing the wrong typed config
+    raises a clear ``TypeError`` rather than an opaque crash."""
+
+    z: int = 0
+
+
 class _Consumer(StructuredConfigConsumer[_TestCfg]):
     CONFIG_CLS: ClassVar[type[_TestCfg]] = _TestCfg
 
@@ -157,6 +166,17 @@ class TestFromConfig:
     def test_from_config_with_empty_dict(self) -> None:
         c = _Consumer.from_config({})
         assert c.config == _TestCfg()
+
+    def test_from_config_wrong_typed_config_raises(self) -> None:
+        """A ``StructuredConfig`` of the wrong subclass raises a clear
+        ``TypeError`` — not an opaque ``dict()``-on-dataclass crash.
+
+        ``from_config`` must reject a typed config that is not
+        ``CONFIG_CLS`` the same way ``__init__`` rejects a non-Mapping
+        argument, naming both the expected and received type.
+        """
+        with pytest.raises(TypeError, match="must be"):
+            _Consumer.from_config(_OtherCfg(z=1))
 
 
 class TestMissingConfigCls:

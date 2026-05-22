@@ -336,10 +336,12 @@ parity test to catch the original failure mode that motivated the
 helpers: a factory that enumerates a fixed allowlist of kwargs and
 silently drops the next ctor knob added to the target class.
 
-All three helpers are import-only — they read source via `inspect` and
-parse it with `ast`, so backends with optional runtime dependencies
-(asyncpg, aioboto3, ...) can be parity-tested without those
-dependencies installed.
+The four AST-based helpers (all below except
+`assert_structured_config_roundtrip`) are import-only — they read source
+via `inspect` and parse it with `ast`, so backends with optional runtime
+dependencies (asyncpg, aioboto3, ...) can be parity-tested without those
+dependencies installed. `assert_structured_config_roundtrip` is a
+runtime property assertion that takes a config instance.
 
 ### `assert_dataclass_config_matches_ctor`
 
@@ -409,6 +411,49 @@ def test_pgvector_reads_documented_keys() -> None:
 Pass `config_param="..."` to name the dict parameter when it isn't the
 default `"config"`.
 
+### `assert_structured_config_consumer`
+
+Use for a class that mixes in `StructuredConfigConsumer`. Bundles the
+structural checks into one call: asserts the class declares `CONFIG_CLS`,
+that it is a `StructuredConfig` subclass, that the dataclass field set
+matches the consumer ctor surface (via
+`assert_dataclass_config_matches_ctor`, ignoring the implicit `self` /
+`config` / `**kwargs`), and — when `expected_factory` is passed — that
+the registry factory delegates to `from_config` (via
+`assert_factory_kwargs_match_ctor`).
+
+```python
+from dataknobs_common.testing import assert_structured_config_consumer
+from dataknobs_common.events.redis import RedisEventBus
+from dataknobs_common.events.registry import _create_redis_bus
+
+def test_redis_is_structured_config_consumer() -> None:
+    assert_structured_config_consumer(
+        RedisEventBus, expected_factory=_create_redis_bus
+    )
+```
+
+Pass `ignore_params={...}` for back-compat positional shortcuts that
+intentionally live outside the dataclass surface.
+
+### `assert_structured_config_roundtrip`
+
+Use to pin the serialization round-trip of a `StructuredConfig`
+instance: asserts `type(cfg).from_dict(cfg.to_dict()) == cfg`. Holds for
+flat configs and for nested configs whose `_normalize_dict` rebuilds
+each nested `StructuredConfig` field; a nested field left as a raw dict
+fails (`asdict` recurses, `from_dict` does not).
+
+```python
+from dataknobs_common.testing import assert_structured_config_roundtrip
+from dataknobs_common.events import RedisEventBusConfig
+
+def test_redis_config_roundtrips() -> None:
+    assert_structured_config_roundtrip(
+        RedisEventBusConfig(host="h", port=6379)
+    )
+```
+
 ### When to Use Which
 
 | Factory pattern | Helper |
@@ -416,10 +461,14 @@ default `"config"`.
 | Ctor consumes a typed `@dataclass` config | `assert_dataclass_config_matches_ctor` |
 | Factory names kwargs in its body — `cls(k=cfg.get("k"))` or `cls.from_config(cfg)` | `assert_factory_kwargs_match_ctor` |
 | Ctor reads `config.get("X")` / `config["X"]` directly | `assert_ctor_reads_documented_keys` |
+| Class mixes in `StructuredConfigConsumer` | `assert_structured_config_consumer` |
+| Round-trip a `StructuredConfig` instance — `from_dict(to_dict())` | `assert_structured_config_roundtrip` |
 
 When a registry uses the dataclass + `from_config` pattern, pair the
 first two — together they pin both the dataclass↔ctor parity and the
-factory↔ctor parity, so drift in either direction fails the test.
+factory↔ctor parity, so drift in either direction fails the test. For a
+`StructuredConfigConsumer` adopter, `assert_structured_config_consumer`
+bundles them into a single call.
 
 ---
 

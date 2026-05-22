@@ -18,6 +18,7 @@ intentionally unsupported.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -77,13 +78,34 @@ class PostgresEventBusConfig(EventBusConfig):
     normalization — direct construction without normalization is
     supported but unusual; ``from_dict`` is the recommended path.
 
+    The ``channel_prefix`` is sanitized in ``__post_init__`` (stripped to
+    ``[a-zA-Z0-9_]``): it is interpolated directly into LISTEN/UNLISTEN
+    statements, which cannot use parameterized queries, so the typed
+    config is the single boundary that guarantees a SQL-safe prefix for
+    every construction path (typed, dict, ``from_config``, legacy
+    positional). A prefix that is empty after sanitization raises
+    ``ValueError``.
+
     Attributes:
         connection_string: Resolved PostgreSQL DSN.
         channel_prefix: Prefix applied to every LISTEN/NOTIFY channel.
+            Sanitized to ``[a-zA-Z0-9_]`` at construction.
     """
 
     connection_string: str
     channel_prefix: str = "events"
+
+    def __post_init__(self) -> None:
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", self.channel_prefix)
+        if not safe_prefix:
+            raise ValueError(
+                f"channel_prefix {self.channel_prefix!r} is empty after "
+                "sanitization"
+            )
+        if safe_prefix != self.channel_prefix:
+            # Frozen dataclass — bypass the immutability guard to store
+            # the sanitized value computed from the caller's input.
+            object.__setattr__(self, "channel_prefix", safe_prefix)
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
