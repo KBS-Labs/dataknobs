@@ -130,13 +130,16 @@ class ContextGenerationConfig(StructuredConfig):
 
 # ── StageConfig field classifications for serialization ──────────────
 #
-# Shared by StageConfig.to_dict() and StageConfig.from_dict() so that
-# adding a tuple or nested field only requires updating one place.
+# Shared by StageConfig.to_dict() (serialization) and StageConfig.__post_init__()
+# (the tuple coercion of deserialized values) so that adding a tuple or nested
+# field only requires updating one place. Deserialization itself is the
+# inherited StructuredConfig.from_dict(); these sets do not drive it.
 #
 # See the "HOW TO ADD A NEW STAGE FIELD" guide in
 # reasoning/wizard_loader.py for the full checklist.
 
-# Nested dataclass fields — need .to_dict() / constructor deserialization
+# Nested dataclass fields — rebuilt by the inherited from_dict; to_dict()
+# serializes them explicitly via .to_dict() and skips them in the generic loop
 _NESTED_FIELDS: frozenset[str] = frozenset({
     "transitions", "intent_detection", "context_generation",
 })

@@ -74,7 +74,7 @@ class DraftMetadata(StructuredConfig):
         prior hand-rolled lookup order).
         """
         if "id" in raw:
-            raw["draft_id"] = raw["id"]
+            raw["draft_id"] = raw.pop("id")
         return raw
 
     def to_dict(self) -> dict[str, Any]:
