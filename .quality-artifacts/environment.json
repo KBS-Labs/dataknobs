@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-21T16:59:44Z",
+  "timestamp": "2026-05-22T01:02:49Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.15 (Homebrew 2026-05-18 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/sqs-factory-fixes",
-  "git_commit": "8410bb2bd6033c9de8d799ac2dbcd3fff58dce66",
+  "git_branch": "main",
+  "git_commit": "51603d6480bd46cd54fb0c47048e2ed18749520a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
