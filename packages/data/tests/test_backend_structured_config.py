@@ -13,7 +13,7 @@ mixing a typed config with loose kwargs raises ``TypeError``;
 ``Database(config=..., schema=...)`` kwarg still lands on the typed
 config's ``schema`` field; and the parity guard
 (:func:`assert_structured_config_consumer`) holds — including the
-146b MRO-ordering check (consumer base first).
+MRO-ordering check (consumer mixin must precede other bases).
 
 No external service is required — construction only. Each backend
 family is added to this module as its migration phase lands.
@@ -144,7 +144,7 @@ class TestMemoryConstructionParity:
 
     @pytest.mark.parametrize("backend_cls", _MEMORY_BACKENDS)
     def test_parity_guard(self, backend_cls: type) -> None:
-        # Pins CONFIG_CLS, field-set match, and the 146b MRO-ordering
+        # Pins CONFIG_CLS, field-set match, and the MRO-ordering
         # check (StructuredConfigConsumer first among the bases).
         assert_structured_config_consumer(backend_cls)
 
@@ -385,7 +385,7 @@ class TestSQLiteConstructionParity:
 
     @pytest.mark.parametrize(("backend_cls", "config_cls"), _SQLITE_BACKENDS)
     def test_parity_guard(self, backend_cls: type, config_cls: type) -> None:
-        # Pins CONFIG_CLS, field-set match, and the 146b MRO-ordering
+        # Pins CONFIG_CLS, field-set match, and the MRO-ordering
         # check (StructuredConfigConsumer first among the bases).
         assert_structured_config_consumer(backend_cls)
 
@@ -671,7 +671,7 @@ class TestPostgresFactory:
 
 
 # ---------------------------------------------------------------------------
-# Elasticsearch (sync + async) — Phase 3
+# Elasticsearch (sync + async)
 # ---------------------------------------------------------------------------
 #
 # The two ES backends use different connection mechanisms (sync:
@@ -820,7 +820,7 @@ class TestElasticsearchFactory:
 
 
 # ---------------------------------------------------------------------------
-# S3 (sync + async) — Phase 3
+# S3 (sync + async)
 # ---------------------------------------------------------------------------
 #
 # Both S3 backends share ``S3DatabaseConfigBase`` (bucket + region/credential/
@@ -977,7 +977,7 @@ class TestS3Factory:
 
 
 # ---------------------------------------------------------------------------
-# DuckDB (sync + async) — Phase 4
+# DuckDB (sync + async)
 # ---------------------------------------------------------------------------
 #
 # DuckDB has no vector support, so its configs inherit ``DatabaseConfig``
@@ -1096,7 +1096,7 @@ class TestDuckDBFactory:
 
 
 # ---------------------------------------------------------------------------
-# File (sync + async) — Phase 4
+# File (sync + async)
 # ---------------------------------------------------------------------------
 #
 # The two File backends share one ``FileDatabaseConfig`` (identical surface —

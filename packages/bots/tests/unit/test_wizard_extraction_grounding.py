@@ -282,7 +282,7 @@ class TestSchemaGroundingFilterXExtraction:
 
 
 class TestRequireGrounded:
-    """Tests for require_grounded x-extraction option (item 88).
+    """Tests for require_grounded x-extraction option.
 
     When ``require_grounded: true``, ungrounded values are rejected even
     on first write (existing_value is None), closing the benefit-of-the-
@@ -1411,7 +1411,7 @@ class TestHasNegation:
 
 
 # ---------------------------------------------------------------------------
-# Type-mismatch validation (item 91)
+# Type-mismatch validation
 # ---------------------------------------------------------------------------
 
 
@@ -1459,7 +1459,7 @@ class TestValueMatchesSchemaType:
 
 
 # ---------------------------------------------------------------------------
-# E2E: type-mismatch rejection through full pipeline (item 91)
+# E2E: type-mismatch rejection through full pipeline
 # ---------------------------------------------------------------------------
 
 

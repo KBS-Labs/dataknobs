@@ -1,4 +1,4 @@
-"""Tests for ReAct phased reasoning protocol (item 81).
+"""Tests for ReAct phased reasoning protocol.
 
 Verifies:
 - ReActReasoning implements PhasedReasoningProtocol

@@ -183,13 +183,13 @@ class TestSandboxing:
 
 
 # ===================================================================
-# Tests 18a-18g: mixed mode (( )) preprocessing
+# Mixed mode (( )) preprocessing
 # ===================================================================
 class TestMixedMode:
     def test_conditional_present(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18a: (( )) section retained when author-controlled vars have values."""
+        """(( )) section retained when author-controlled vars have values."""
         stage = {
             "name": "details",
             "help_text": "Extra help here",
@@ -202,7 +202,7 @@ class TestMixedMode:
     def test_conditional_absent(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18b: (( )) section removed when author-controlled vars missing/empty."""
+        """(( )) section removed when author-controlled vars missing/empty."""
         stage = {
             "name": "details",
             "help_text": "",  # empty
@@ -215,7 +215,7 @@ class TestMixedMode:
     def test_with_jinja_features(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18c: (( )) + Jinja2 features work together."""
+        """(( )) + Jinja2 features work together."""
         stage = {"name": "details", "help_text": "tip", "suggestions": []}
         # Use {{topic}} without spaces — in mixed mode, the preprocessor
         # preserves whitespace around unmatched vars which can add spaces.
@@ -232,7 +232,7 @@ class TestMixedMode:
     def test_false_ignores_conditionals(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18d: mixed_mode=False does NOT preprocess (( )) syntax."""
+        """mixed_mode=False does NOT preprocess (( )) syntax."""
         stage = {"name": "details", "suggestions": []}
         template = "Hello ((world))"
         result = renderer.render(template, stage, state, mixed_mode=False)
@@ -260,7 +260,7 @@ class TestMixedMode:
     def test_user_data_not_substituted_by_preprocessor(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18e: User data survives (( )) preprocessing and resolves in Jinja2."""
+        """User data survives (( )) preprocessing and resolves in Jinja2."""
         stage = {"name": "details", "suggestions": []}
         template = "Stage: {{stage_name}}, Topic: {{topic}}"
         result = renderer.render(template, stage, state, mixed_mode=True)
@@ -270,7 +270,7 @@ class TestMixedMode:
     def test_injection_via_user_data_blocked(
         self, renderer: WizardRenderer
     ) -> None:
-        """18f: User-entered Jinja2 control flow is NOT interpreted as code."""
+        """User-entered Jinja2 control flow is NOT interpreted as code."""
         malicious_value = "{% for i in range(999999999) %}x{% endfor %}"
         state = _StubState(
             data={"topic": malicious_value},
@@ -285,7 +285,7 @@ class TestMixedMode:
     def test_user_data_in_conditional_section_removed(
         self, renderer: WizardRenderer, state: _StubState
     ) -> None:
-        """18g: (( )) referencing user-data var is removed (not in template_params)."""
+        """(( )) referencing user-data var is removed (not in template_params)."""
         stage = {"name": "details", "suggestions": []}
         template = "Hello((, your topic is {{topic}}))"
         result = renderer.render(template, stage, state, mixed_mode=True)

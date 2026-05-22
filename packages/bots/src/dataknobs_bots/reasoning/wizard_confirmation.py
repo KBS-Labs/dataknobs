@@ -4,8 +4,7 @@ Owns the confirmation gate (should we confirm?) and the snapshot
 lifecycle (save, compare, diff) so that ``process_input`` delegates
 to a flat result rather than embedding deeply nested if/elif logic.
 
-Extracted as part of item 87 — see the revised implementation plan
-for the full design rationale.
+Extracted from ``wizard.py`` to keep ``process_input`` flat.
 """
 
 from __future__ import annotations

@@ -229,7 +229,7 @@ class _MultiUnionNested(StructuredConfig):
 
 
 class TestNestedComposition:
-    """``from_dict`` recurses into ``StructuredConfig`` field types (146b C)."""
+    """``from_dict`` recurses into ``StructuredConfig`` field types."""
 
     def test_single_nested_dict_becomes_typed(self) -> None:
         cfg = _Nested.from_dict({"name": "n", "leaf": {"value": 3}})

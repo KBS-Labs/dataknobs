@@ -1,4 +1,4 @@
-"""Tests for tool-to-state integration (item 79).
+"""Tests for tool-to-state integration.
 
 Verifies:
 - ToolCallSpec construction and ProcessResult with pending calls

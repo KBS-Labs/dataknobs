@@ -491,7 +491,7 @@ def _configbot_like_config(
     similar to ConfigBot's configure_options stage.
     """
     builder = (
-        WizardConfigBuilder("test-92b-configbot-like")
+        WizardConfigBuilder("test-emptyrequired-configbot-like")
         .settings(auto_advance_filled_stages=auto_advance_filled)
         .stage("source", is_start=True, prompt="What would you like to change?")
         .field("edit_section", field_type="string", required=True)
@@ -542,8 +542,8 @@ class TestReExtractRequiredFieldsGate:
     async def test_required_empty_list_advances_after_re_extraction(
         self,
     ) -> None:
-        """Core 92b bug: required: [] with empty optional fields blocks
-        auto-advance after re-extraction.
+        """Core empty-required-list bug: required: [] with empty optional
+        fields blocks auto-advance after re-extraction.
 
         Mimics ConfigBot: source extracts edit_section='options',
         transitions to target.  Re-extraction captures tone='formal'.
@@ -830,8 +830,8 @@ class TestReExtractRequiredFieldsGate:
         When required fields are explicit (not the fallback-to-all path),
         only those fields are checked.  After re-extraction fills the
         required field, Gate 2 is skipped entirely — but even without
-        the 92b fix, the explicit required path would pass because only
-        'tone' is checked.
+        the empty-required-list fix, the explicit required path would pass
+        because only 'tone' is checked.
 
         This test confirms the fix doesn't regress explicit-required behavior.
         """
@@ -868,7 +868,7 @@ class TestReExtractRequiredFieldsGate:
         auto-advance iteration (count == 0), not subsequent stages.
         """
         builder = (
-            WizardConfigBuilder("test-92b-chain")
+            WizardConfigBuilder("test-emptyrequired-chain")
             .settings(auto_advance_filled_stages=True)
             .stage("source", is_start=True, prompt="Route.")
             .field("edit_section", field_type="string", required=True)
@@ -920,7 +920,7 @@ def _multi_section_form_config() -> dict[str, Any]:
     review (start) → preferences (re-extract, auto_advance: false) → review_done (end)
     """
     builder = (
-        WizardConfigBuilder("test-92b-multi-section")
+        WizardConfigBuilder("test-emptyrequired-multi-section")
         .settings(auto_advance_filled_stages=True)
         .stage("review", is_start=True, prompt="Review your settings.")
         .field("jump_to", field_type="string", required=True)
@@ -948,7 +948,7 @@ def _progressive_disclosure_config() -> dict[str, Any]:
     intake (start) → details (re-extract, auto_advance: false) → complete (end)
     """
     builder = (
-        WizardConfigBuilder("test-92b-progressive")
+        WizardConfigBuilder("test-emptyrequired-progressive")
         .settings(auto_advance_filled_stages=True)
         .stage("intake", is_start=True, prompt="Describe the issue.")
         .field("section", field_type="string", required=True)
@@ -976,7 +976,7 @@ def _confirmation_with_overrides_config() -> dict[str, Any]:
     collect (start) → confirm (re-extract, auto_advance: false) → done (end)
     """
     builder = (
-        WizardConfigBuilder("test-92b-confirm-override")
+        WizardConfigBuilder("test-emptyrequired-confirm-override")
         .settings(auto_advance_filled_stages=True)
         .stage("collect", is_start=True, prompt="Enter initial data.")
         .field("section", field_type="string", required=True)
@@ -1010,7 +1010,7 @@ def _non_string_optional_fields_config(
             stage.  Defaults to ``False`` (re-extraction path).
     """
     builder = (
-        WizardConfigBuilder("test-92b-non-string")
+        WizardConfigBuilder("test-emptyrequired-non-string")
         .settings(auto_advance_filled_stages=True)
         .stage("route", is_start=True, prompt="Route.")
         .field("section", field_type="string", required=True)

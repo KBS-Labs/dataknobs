@@ -5,8 +5,8 @@ guided conversational wizard flows with validation, data collection,
 and branching logic.
 
 Data types, constants, and standalone helpers live in
-:mod:`wizard_types` (extracted in item 77a).  This module re-exports
-them for backward compatibility.
+:mod:`wizard_types`.  This module re-exports them for backward
+compatibility.
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Extraction pipeline — handles extract, normalize, merge,
-        # defaults, derivations, recovery (extracted in item 77c).
+        # defaults, derivations, recovery (extracted to WizardExtractor).
         # Extraction-config params are passed directly (no instance attrs).
         self._extraction = WizardExtractor(
             extractor=self._extractor,
@@ -434,7 +434,7 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Confirmation decision logic — owns the should-confirm gate
-        # and snapshot lifecycle (extracted in item 87).
+        # and snapshot lifecycle (extracted to ConfirmationEvaluator).
         self._confirmation = ConfirmationEvaluator()
 
         # Track last wizard state for cleanup in close()
@@ -468,7 +468,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Response generation module — handles all response paths,
         # auto-advance, condition evaluation, strategy delegation
-        # (extracted in item 77d).
+        # (extracted to WizardResponder).
         self._response = WizardResponder(
             renderer=self._renderer,
             fsm=self._fsm,
@@ -507,7 +507,7 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Navigation module — handles back/skip/restart, amendments,
-        # and conversation tree branching (extracted in item 77b).
+        # and conversation tree branching (extracted to WizardNavigator).
         self._navigator = WizardNavigator(
             fsm=self._fsm,
             subflows=self._subflows,
@@ -1891,7 +1891,7 @@ class WizardReasoning(ReasoningStrategy):
 
                 # Decide whether to render a confirmation before
                 # evaluating transitions.  The evaluator owns the
-                # decision matrix and snapshot lifecycle (item 87).
+                # decision matrix and snapshot lifecycle.
                 evaluation = self._confirmation.evaluate(
                     stage, wizard_state, new_data_keys,
                 )
@@ -2110,7 +2110,7 @@ class WizardReasoning(ReasoningStrategy):
         stage = active_fsm.current_metadata
 
         # Pre-transition preparation: derivations, routing transforms,
-        # and snapshot update (shared with advance — see item 87).
+        # and snapshot update (shared with advance).
         await self._prepare_transition(stage, wizard_state)
 
         # Log pre-transition state
@@ -3236,7 +3236,7 @@ class WizardReasoning(ReasoningStrategy):
     # ------------------------------------------------------------------
     # Navigation delegation — thin forwards to WizardNavigator.
     # These exist so that unit tests and advance() can call navigation
-    # methods via the same interface as before the 77b extraction.
+    # methods via the same interface as before the navigator extraction.
     # ------------------------------------------------------------------
 
     async def _handle_navigation(
@@ -3464,7 +3464,7 @@ class WizardReasoning(ReasoningStrategy):
     # ------------------------------------------------------------------
     # Response generation delegation — thin forwards to WizardResponder.
     # These exist so that unit tests can call response methods via the
-    # same interface as before the 77d extraction.
+    # same interface as before the responder extraction.
     # ------------------------------------------------------------------
 
     async def _generate_stage_response(

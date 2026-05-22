@@ -251,7 +251,7 @@ class _MIConsumer(StructuredConfigConsumer[_TestCfg], _MarkerBase):
 
 
 class TestCooperativeMultipleInheritance:
-    """``super().__init__()`` runs the remaining MI bases (146b Piece A)."""
+    """``super().__init__()`` runs the remaining MI bases."""
 
     def test_other_base_init_runs(self) -> None:
         c = _MIConsumer({"x": 4})

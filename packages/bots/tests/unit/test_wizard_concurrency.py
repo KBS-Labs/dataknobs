@@ -1,4 +1,4 @@
-"""Tests for the per-call closure factory in _execute_fsm_step (item 82).
+"""Tests for the per-call closure factory in _execute_fsm_step.
 
 Verifies that:
 - Each FSM step receives its own LLM and TurnContext via the closure
