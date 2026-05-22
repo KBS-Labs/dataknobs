@@ -126,6 +126,16 @@ class TestConfigHierarchy:
             MemoryDatabaseConfig(vector_enabled=True, vector_metric="dot_product")
         )
 
+    def test_roundtrip_holds_with_populated_schema(self) -> None:
+        # ``schema`` is a ``DatabaseSchema`` — a plain dataclass, not a
+        # ``StructuredConfig`` — so its round-trip goes through
+        # ``dataclasses.asdict`` (serializing ``FieldType`` enums) and
+        # back via ``extract_schema_from_config``. Exercise that path so a
+        # config persisted with a populated structural schema reconstructs
+        # equal.
+        sch = DatabaseSchema.create(name=FieldType.STRING, age=FieldType.INTEGER)
+        assert_structured_config_roundtrip(MemoryDatabaseConfig(schema=sch))
+
 
 # ---------------------------------------------------------------------------
 # Memory backends — construction parity
@@ -566,6 +576,18 @@ class TestPostgresConfigHierarchy:
     def test_non_string_schema_raises(self) -> None:
         with pytest.raises(ConfigurationError):
             PostgresDatabaseConfig.from_dict({"schema": object()})
+
+    def test_database_schema_instance_lands_on_structural_field(self) -> None:
+        # The public ``Database(config=..., schema=DatabaseSchema(...))``
+        # kwarg must work for Postgres like every other backend: a
+        # ``DatabaseSchema`` is the structural schema, NOT the SQL
+        # schema-name overload (which is the *string* form). It lands on
+        # the structural ``schema`` field and leaves ``schema_name`` at
+        # its default.
+        sch = DatabaseSchema.create(name=FieldType.STRING)
+        cfg = PostgresDatabaseConfig.from_dict({"schema": sch})
+        assert cfg.schema is sch
+        assert cfg.schema_name == "public"
 
     def test_invalid_table_identifier_raises(self) -> None:
         with pytest.raises(ConfigurationError):

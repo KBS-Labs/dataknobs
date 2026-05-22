@@ -151,7 +151,10 @@ class SyncSQLiteDatabaseConfig(SQLiteDatabaseConfigBase):
     aiosqlite equivalent.
 
     Attributes:
-        check_same_thread: Allow the connection to be used across threads.
+        check_same_thread: Passed straight to ``sqlite3.connect``. Note the
+            stdlib polarity: ``True`` *restricts* the connection to its
+            creating thread (raising on cross-thread use); ``False`` (the
+            default here) *permits* cross-thread sharing.
     """
 
     check_same_thread: bool = False
@@ -202,10 +205,14 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     **Schema-name overload.** Postgres uses the ``schema`` config key for
     the SQL *schema name* (a string), which collides with the base
     :attr:`DatabaseConfig.schema` (a ``DatabaseSchema``). ``_normalize_dict``
-    maps a non-``None`` ``schema`` to ``schema_name`` (``schema`` wins over
-    an explicit ``schema_name``, matching legacy precedence); a ``None``
-    ``schema`` is the inherited structural-schema default and is left for
-    the base. Identifiers are validated in ``__post_init__``.
+    disambiguates by type: a *string* ``schema`` is the SQL schema name and
+    maps to ``schema_name`` (winning over an explicit ``schema_name``,
+    matching legacy precedence); a ``DatabaseSchema`` instance is the
+    structural schema and is left for the base, so the public
+    ``Database(config=..., schema=DatabaseSchema(...))`` kwarg works for
+    Postgres exactly as it does for every other backend; a ``None``
+    ``schema`` is the structural default and is also left for the base.
+    Identifiers are validated in ``__post_init__``.
 
     Attributes:
         host/port/database/user/password: Connection parameters
@@ -237,14 +244,21 @@ class PostgresDatabaseConfig(VectorBackendConfig):
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Map the overloaded ``schema`` key (SQL schema name) to
-        # ``schema_name`` before the base routes ``schema`` through
-        # ``extract_schema_from_config``. A ``None`` ``schema`` is the
-        # inherited structural-schema default emitted by ``to_dict`` —
-        # leave it for the base (keeps round-trip stable). A non-``None``
-        # ``schema`` wins over an explicit ``schema_name`` (legacy
-        # precedence); a non-identifier value is caught in ``__post_init__``.
-        if "schema" in raw and raw["schema"] is not None:
+        # Disambiguate the overloaded ``schema`` key. The SQL schema-name
+        # overload is the *string* form (``schema="myschema"``) — route it
+        # to ``schema_name`` (it wins over an explicit ``schema_name``,
+        # matching legacy precedence). A ``DatabaseSchema`` instance is the
+        # structural schema (the public ``Database(config=..., schema=...)``
+        # kwarg, identical to every other backend) — leave it for the base
+        # so it lands on the inherited ``schema`` field. A ``None`` schema
+        # is the structural default emitted by ``to_dict`` — also left for
+        # the base (keeps round-trip stable). Any other non-``None`` type
+        # is routed to ``schema_name`` so it fails ``__post_init__``'s
+        # identifier validation with a clear error rather than being
+        # silently dropped.
+        if "schema" in raw and raw["schema"] is not None and not isinstance(
+            raw["schema"], DatabaseSchema
+        ):
             raw["schema_name"] = raw.pop("schema")
         # ``table`` wins over the ``table_name`` alias (legacy precedence).
         if "table_name" in raw:
@@ -501,8 +515,9 @@ class AsyncS3DatabaseConfig(S3DatabaseConfigBase):
 
     Mirrors :class:`~dataknobs_data.pooling.s3.S3PoolConfig` (the pool
     config is constructed directly from these fields in the backend's
-    ``_setup``). ``prefix`` defaults to ``""`` and keys are joined as
-    ``"{prefix}/{id}.json"``, matching the legacy async backend.
+    ``_setup``). ``prefix`` defaults to ``""``; the backend joins keys as
+    ``"{prefix}/{id}.json"`` when a prefix is set and ``"{id}.json"`` when
+    it is empty (the default), matching the legacy async backend.
 
     Attributes:
         prefix: Object key prefix (empty by default).
