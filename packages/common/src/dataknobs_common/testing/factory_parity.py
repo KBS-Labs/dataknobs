@@ -89,7 +89,10 @@ def assert_dataclass_config_matches_ctor(
         for name, p in sig.parameters.items()
         if p.kind is not inspect.Parameter.VAR_KEYWORD
         and p.kind is not inspect.Parameter.VAR_POSITIONAL
-        and name not in {"self", "config"} | ignore_params
+        # ``self`` and ``config`` are framework slots; ``_components`` is
+        # the mixin's internal collaborator channel (injected objects, not
+        # config fields) and is never expected on the config dataclass.
+        and name not in {"self", "config", "_components"} | ignore_params
     }
     missing_in_config = ctor_params - config_fields
     # When the ctor accepts ``**kwargs`` (the
@@ -219,7 +222,7 @@ def assert_factory_kwargs_match_ctor(
         set() if accepts_var_kwargs else factory_kwargs - ctor_params
     )
     missing_in_factory = (
-        ctor_params - factory_kwargs - ignore_kwargs - {"config"}
+        ctor_params - factory_kwargs - ignore_kwargs - {"config", "_components"}
     )
     failures: list[str] = []
     if unknown_in_factory:
@@ -352,6 +355,12 @@ def assert_structured_config_consumer(
        delegates to ``consumer_cls.from_config(config)`` (delegates to
        :func:`assert_factory_kwargs_match_ctor`) — proves the registry
        factory hasn't regressed to a per-kwarg allowlist.
+    7. **Collaborator-hook safety.** If ``consumer_cls`` overrides
+       ``_ainit`` or ``_adopt_components`` with parameters beyond
+       ``self``, those parameters must be keyword-only with defaults —
+       so the framework's collaborator delivery is safe and the
+       zero-collaborator construction path (``from_config_async(config)``
+       with no components) never crashes on a required positional.
 
     Args:
         consumer_cls: A class mixing in
@@ -433,6 +442,46 @@ def assert_structured_config_consumer(
                 f"{consumer_cls.__name__}.from_config_async does not route "
                 "through _coerce_config; it must use the same typed-config "
                 "guard as from_config so a wrong-subclass config is rejected."
+            )
+
+    # Check 7 — collaborator-hook safety. An override of ``_ainit`` /
+    # ``_adopt_components`` that consumes injected collaborators must
+    # declare them keyword-only with defaults, so the framework's
+    # component delivery is safe and the zero-collaborator path never
+    # crashes (a required-positional ``async def _ainit(self, kb)`` would
+    # break ``from_config_async(config)`` with no components).
+    for hook_name in ("_ainit", "_adopt_components"):
+        if hook_name not in consumer_cls.__dict__:
+            continue
+        hook = consumer_cls.__dict__[hook_name]
+        if isinstance(hook, (classmethod, staticmethod)):
+            hook = hook.__func__
+        try:
+            hook_sig = inspect.signature(hook)
+        except (TypeError, ValueError) as e:
+            raise AssertionError(
+                f"Cannot inspect {consumer_cls.__name__}.{hook_name}: {e}"
+            ) from e
+        unsafe = [
+            name
+            for name, p in hook_sig.parameters.items()
+            if name != "self"
+            and p.kind
+            not in (
+                inspect.Parameter.VAR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+            and (
+                p.kind is not inspect.Parameter.KEYWORD_ONLY
+                or p.default is inspect.Parameter.empty
+            )
+        ]
+        if unsafe:
+            raise AssertionError(
+                f"{consumer_cls.__name__}.{hook_name} declares collaborator "
+                f"params {sorted(unsafe)} that are not keyword-only with "
+                "defaults. Declare them as `*, name=None` so the "
+                "zero-collaborator construction path is safe."
             )
 
     if expected_factory is not None:

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-22T23:02:04Z",
+  "timestamp": "2026-05-22T23:23:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/bots-structured-config-rollout",
-  "git_commit": "7d0688c772c726601ca9978ebd5ad794cce95319",
+  "git_branch": "sbk/structured-config-collaborator-injection",
+  "git_commit": "f18b2367b64cf66d5938defe9ad9f399e6d5696d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

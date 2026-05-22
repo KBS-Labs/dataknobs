@@ -152,7 +152,7 @@ class Widget(StructuredConfigConsumer[WidgetConfig]):
 | `Widget(WidgetConfig(...), name="x")` | `TypeError` — ambiguous, refuse to guess              |
 | `Widget(42)`                          | `TypeError` — non-Mapping non-`ConfigT` is invalid    |
 
-### `from_config(config)` (classmethod)
+### `from_config(config, **components)` (classmethod)
 
 Recommended programmatic-construction entry point. Registry factories
 should be one-line wrappers:
@@ -162,14 +162,20 @@ def _create_widget(config: dict) -> Widget:
     return Widget.from_config(config)
 ```
 
-### `from_config_async(config)` (classmethod)
+Optional keyword `components` carry injected collaborators (see
+[Collaborator injection](#collaborator-injection)); the collaborator-free
+call `from_config(config)` is unchanged.
+
+### `from_config_async(config, **components)` (classmethod)
 
 Async construction entry point: the same sync assembly as `from_config`
 (typed/dict dispatch through `_coerce_config`), followed by
-`await obj._ainit()`. Use it for consumers whose initialization is
-asynchronous — databases that connect eagerly, LLM-backed bots,
-knowledge-base warmup. Synchronous consumers ignore it and use
-`from_config`.
+`await obj._ainit(**components)`. Use it for consumers whose
+initialization is asynchronous — databases that connect eagerly,
+LLM-backed bots, knowledge-base warmup. Synchronous consumers ignore it
+and use `from_config`. Injected collaborators passed as keyword
+`components` are delivered to `_ainit` (see
+[Collaborator injection](#collaborator-injection)).
 
 ```python
 widget = await Widget.from_config_async({"name": "x", "size": 4})
@@ -180,6 +186,13 @@ widget = await Widget.from_config_async({"name": "x", "size": 4})
 Read-only typed view. Backed by the frozen `ConfigT` so runtime
 mutation is rejected.
 
+### `self.components` (property)
+
+Read-only mapping of injected collaborators (empty for config-only
+construction). Populated when collaborators are passed through
+`from_config` / `from_config_async` / `from_components` — see
+[Collaborator injection](#collaborator-injection).
+
 ### `_setup()` (sync override hook)
 
 Default no-op. Override to initialize derived attributes computed
@@ -189,13 +202,16 @@ dataclass (`_normalize_dict` / `__post_init__`), not here. Called once
 during `__init__` (both the sync and async construction paths) after
 `self._config` is established.
 
-### `_ainit()` (async override hook)
+### `_ainit(**components)` (async override hook)
 
 Default no-op. Override for awaitable setup that cannot run in the
 synchronous `_setup` — connection establishment, provider warmup, async
 collaborator construction. Runs exactly once, after `_setup`, **only**
 on the `from_config_async` path; the synchronous `__init__` /
-`from_config` path does not run it.
+`from_config` path does not run it. Injected collaborators (see
+[Collaborator injection](#collaborator-injection)) are delivered here as
+keyword arguments — an override that consumes them declares them
+keyword-only with defaults: `async def _ainit(self, *, dep=None, **_)`.
 
 ### Cooperative multiple inheritance
 
@@ -291,6 +307,103 @@ subsystem's factory / registry. Keeping a subclass registry out of
 primitive and duplicating the `class`/`factory`/`type` dispatch that the
 `dataknobs-config` object-graph layer already owns.
 
+### Collaborator injection
+
+The construction contract distinguishes two kinds of input:
+
+- **Config** — scalar knobs and nested sub-configs. Flows through
+  `CONFIG_CLS` and lands on `self.config`.
+- **Injected collaborators** — *objects* the orchestrating parent
+  supplies that are **not** part of this object's own config: a shared
+  knowledge base threaded into several strategies, a bot's main LLM
+  passed as a memory fallback, a pre-built store handed to a child. In an
+  interconnected object graph these are the norm, not the exception.
+
+Collaborators travel through a keyword channel distinct from config and
+never enter `self.config`. They land on the read-only `self.components`
+mapping and, on the async path, are delivered to `_ainit` as keyword
+arguments:
+
+```python
+class Strategy(StructuredConfigConsumer[StrategyConfig]):
+    CONFIG_CLS: ClassVar[type[StrategyConfig]] = StrategyConfig
+
+    async def _ainit(self, *, knowledge_base=None, **_) -> None:
+        # Injected collaborator — supplied by the parent, not in config.
+        self._kb = knowledge_base
+        # Config-derived collaborator — built from this object's config.
+        self._store = await VectorStore.from_config_async(self.config.store)
+
+
+strategy = await Strategy.from_config_async(
+    {"store": {...}},          # config
+    knowledge_base=shared_kb,  # injected collaborator
+)
+assert strategy.components["knowledge_base"] is shared_kb
+```
+
+The collaborator-free call sites (`from_config(config)`, `cls(config)`,
+`from_config_async(config)`) are unchanged — `self.components` is empty
+and `_ainit` receives nothing. An `_ainit` (or `_adopt_components`)
+override that names collaborators must declare them **keyword-only with
+defaults** so the zero-collaborator path stays safe;
+`assert_structured_config_consumer` enforces this.
+
+#### Dual input: `from_components`
+
+When the parent already holds fully-built collaborators (and so should
+*not* have the child rebuild them from config), assemble via
+`from_components` instead of `from_config`:
+
+```python
+class Bot(StructuredConfigConsumer[BotConfig]):
+    CONFIG_CLS: ClassVar[type[BotConfig]] = BotConfig
+
+    def _adopt_components(self, *, llm=None, memory=None, **_) -> None:
+        # Bind pre-built collaborators (the config-driven build is skipped).
+        self._llm = llm
+        self._memory = memory
+
+    async def _ainit(self, *, llm=None, memory=None, **_) -> None:
+        if self._prebuilt:
+            return  # already wired by from_components — don't rebuild
+        self._llm = await build_llm(self.config.llm)
+        self._memory = await build_memory(self.config.memory)
+
+
+# Config-driven build:
+bot = await Bot.from_config_async({"llm": {...}, "memory": {...}})
+
+# Pre-built assembly (config is an optional scalar-knob snapshot):
+bot = Bot.from_components(llm=prebuilt_llm, memory=prebuilt_memory)
+```
+
+`from_components` stores the collaborators on `self.components`, sets
+`self._prebuilt = True`, and calls `_adopt_components` so the subclass
+binds its collaborator attributes. A consumer's `_ainit` should
+short-circuit when `self._prebuilt` is `True`. `config` defaults to
+`CONFIG_CLS()` (valid only when every field has a default — pass a
+`config` snapshot for configs with required fields).
+
+#### Async registry dispatch: `create_async`
+
+When a registry dispatches polymorphic, asynchronously-constructed
+plugins, use `PluginRegistry.create_async` — it awaits the factory
+before the `validate_type` guard runs (so the guard checks the resolved
+instance, not a coroutine) and forwards `**kwargs` (injected
+collaborators) to the factory:
+
+```python
+strategy = await registry.create_async(
+    config={"strategy": "rag", ...},
+    knowledge_base=shared_kb,
+)
+```
+
+It prefers a `from_config_async` classmethod when present, else awaits an
+awaitable `from_config`/factory result; a purely synchronous factory
+works unchanged.
+
 ### Environment-variable substitution
 
 `StructuredConfig` lives in `dataknobs-common`, the lowest workspace
@@ -320,6 +433,9 @@ Unified parity guard combining structural checks:
 5. An overridden `from_config_async` routes through `_coerce_config`.
 6. (Optional) A registry factory passed via `expected_factory=`
    delegates to `from_config`.
+7. An overridden `_ainit` / `_adopt_components` that names collaborator
+   parameters declares them keyword-only with defaults (so the
+   zero-collaborator construction path cannot crash).
 
 ```python
 from dataknobs_common.testing import assert_structured_config_consumer
