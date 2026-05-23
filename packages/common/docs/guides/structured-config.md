@@ -210,8 +210,15 @@ collaborator construction. Runs exactly once, after `_setup`, **only**
 on the `from_config_async` path; the synchronous `__init__` /
 `from_config` path does not run it. Injected collaborators (see
 [Collaborator injection](#collaborator-injection)) are delivered here as
-keyword arguments — an override that consumes them declares them
-keyword-only with defaults: `async def _ainit(self, *, dep=None, **_)`.
+keyword arguments through **signature-aware delivery**: a hook receives
+only the collaborators it declares (or all of them, if it declares
+`**kwargs`), so a no-arg `_ainit(self)` or a narrowly-typed override is
+never crashed by an undeclared injected collaborator — that collaborator
+stays reachable on `self.components`. An override that consumes a
+collaborator declares it keyword-only with a default:
+`async def _ainit(self, *, dep=None)`. A collaborator parameter *without*
+a default (or a required positional) still breaks the zero-injection call
+and is rejected by `assert_structured_config_consumer`.
 
 ### Cooperative multiple inheritance
 
@@ -328,7 +335,7 @@ arguments:
 class Strategy(StructuredConfigConsumer[StrategyConfig]):
     CONFIG_CLS: ClassVar[type[StrategyConfig]] = StrategyConfig
 
-    async def _ainit(self, *, knowledge_base=None, **_) -> None:
+    async def _ainit(self, *, knowledge_base=None) -> None:
         # Injected collaborator — supplied by the parent, not in config.
         self._kb = knowledge_base
         # Config-derived collaborator — built from this object's config.
@@ -344,10 +351,14 @@ assert strategy.components["knowledge_base"] is shared_kb
 
 The collaborator-free call sites (`from_config(config)`, `cls(config)`,
 `from_config_async(config)`) are unchanged — `self.components` is empty
-and `_ainit` receives nothing. An `_ainit` (or `_adopt_components`)
-override that names collaborators must declare them **keyword-only with
-defaults** so the zero-collaborator path stays safe;
-`assert_structured_config_consumer` enforces this.
+and `_ainit` receives nothing. Delivery is **signature-aware**: a hook
+receives only the collaborators it declares (or all of them, if it
+declares `**kwargs`), so a no-arg or narrowly-typed override is never
+crashed by an undeclared injected collaborator — it stays reachable on
+`self.components`. An `_ainit` (or `_adopt_components`) override that
+consumes a collaborator declares it **keyword-only with a default** so
+the zero-injection path stays safe; a parameter without a default (or a
+required positional) is rejected by `assert_structured_config_consumer`.
 
 #### Dual input: `from_components`
 
@@ -359,12 +370,12 @@ When the parent already holds fully-built collaborators (and so should
 class Bot(StructuredConfigConsumer[BotConfig]):
     CONFIG_CLS: ClassVar[type[BotConfig]] = BotConfig
 
-    def _adopt_components(self, *, llm=None, memory=None, **_) -> None:
+    def _adopt_components(self, *, llm=None, memory=None) -> None:
         # Bind pre-built collaborators (the config-driven build is skipped).
         self._llm = llm
         self._memory = memory
 
-    async def _ainit(self, *, llm=None, memory=None, **_) -> None:
+    async def _ainit(self, *, llm=None, memory=None) -> None:
         if self._prebuilt:
             return  # already wired by from_components — don't rebuild
         self._llm = await build_llm(self.config.llm)
@@ -383,7 +394,9 @@ bot = Bot.from_components(llm=prebuilt_llm, memory=prebuilt_memory)
 binds its collaborator attributes. A consumer's `_ainit` should
 short-circuit when `self._prebuilt` is `True`. `config` defaults to
 `CONFIG_CLS()` (valid only when every field has a default — pass a
-`config` snapshot for configs with required fields).
+`config` snapshot for configs with required fields; omitting it for a
+required-field config raises a clear `ValueError` naming the class and
+the remedy, not a cryptic dataclass `TypeError`).
 
 #### Async registry dispatch: `create_async`
 

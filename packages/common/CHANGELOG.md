@@ -62,17 +62,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel distinct from config — `from_config(config, **components)`
   and `from_config_async(config, **components)` — landing them on the
   read-only `self.components` mapping (never folded into
-  `self.config`); the async `_ainit(**components)` hook receives them
-  as keyword arguments. A consumer that consumes injected collaborators
-  overrides `_ainit(self, *, <name>=None, **_)` (keyword-only with
-  defaults so the zero-collaborator path is safe). The
-  collaborator-free call sites (`from_config(config)`, `cls(config)`)
-  are unchanged. `from_components(config=None, **collaborators)` covers
-  the dual-input shape — assemble directly from pre-built collaborators
-  (binding them via the `_adopt_components` hook and setting
-  `self._prebuilt`) instead of building from config — so a parent that
-  already holds fully-built children can wire an object graph without
-  each class hand-rolling a config-vs-collaborators constructor.
+  `self.config`); the async `_ainit` hook receives them as keyword
+  arguments through signature-aware delivery — a hook gets the
+  collaborators it declares (or all, when it declares `**kwargs`), so a
+  no-arg or narrowly-typed override is never crashed by an undeclared
+  injected collaborator (which stays reachable on `self.components`). A
+  consumer that consumes a collaborator declares it keyword-only with a
+  default — `_ainit(self, *, <name>=None)` — so the zero-injection path
+  is safe. The collaborator-free call sites (`from_config(config)`,
+  `cls(config)`) are unchanged. `from_components(config=None,
+  **collaborators)` covers the dual-input shape — assemble directly from
+  pre-built collaborators (binding them via the `_adopt_components` hook
+  and setting `self._prebuilt`) instead of building from config — so a
+  parent that already holds fully-built children can wire an object
+  graph without each class hand-rolling a config-vs-collaborators
+  constructor. Called without a `config` snapshot against a `CONFIG_CLS`
+  that has required fields, it raises a clear `ValueError` naming the
+  class and the remedy rather than a cryptic dataclass `TypeError`.
 - `PluginRegistry.create_async(key=None, config=None, **kwargs)` — the
   async counterpart to `create()`. Identical key resolution and factory
   lookup (both share an extracted `_resolve_factory` prologue), but the

@@ -157,6 +157,117 @@ class TestFromComponents:
         assert c.store == "built:y"
         assert c.built_from_config is True
 
+    def test_no_config_with_required_fields_raises_value_error(self) -> None:
+        """Default-construct of a required-field config is a clear ValueError.
+
+        With no ``config=`` snapshot, ``from_components`` falls back to
+        ``CONFIG_CLS()`` — which a config with required fields cannot
+        satisfy. The raw dataclass ``TypeError`` is re-raised as a
+        ``ValueError`` naming the class and the remedy, rather than
+        bubbling out a cryptic ``__init__() missing argument``.
+        """
+
+        @dataclass(frozen=True)
+        class _ReqCfg(StructuredConfig):
+            name: str  # required — no default
+
+        class _ReqConsumer(StructuredConfigConsumer[_ReqCfg]):
+            CONFIG_CLS: ClassVar[type[_ReqCfg]] = _ReqCfg
+
+        with pytest.raises(ValueError, match="required fields"):
+            _ReqConsumer.from_components(store=object())
+
+    def test_config_snapshot_satisfies_required_fields(self) -> None:
+        """Passing a ``config`` snapshot covers the required-field case."""
+
+        @dataclass(frozen=True)
+        class _ReqCfg(StructuredConfig):
+            name: str
+
+        class _ReqConsumer(StructuredConfigConsumer[_ReqCfg]):
+            CONFIG_CLS: ClassVar[type[_ReqCfg]] = _ReqCfg
+
+        store = object()
+        c = _ReqConsumer.from_components({"name": "ok"}, store=store)
+        assert c.config == _ReqCfg(name="ok")
+        assert c.components["store"] is store
+
+
+# ── Signature-aware hook delivery (no-arg / narrow overrides are safe) ─
+class TestSignatureAwareDelivery:
+    """A hook receives only the collaborators it declares.
+
+    Regression guard: ``from_config_async`` / ``from_components`` used to
+    splat *all* injected components into the hook unconditionally, so a
+    legacy no-arg ``_ainit(self)`` (or a narrowly-typed override without
+    ``**kwargs``) raised ``TypeError`` the moment any collaborator was
+    injected. Delivery is now signature-aware — undeclared collaborators
+    are dropped from the call and remain reachable on ``self.components``.
+    """
+
+    async def test_no_arg_ainit_survives_injection(self) -> None:
+        class _NoArgAinit(StructuredConfigConsumer[_Cfg]):
+            CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+
+            async def _ainit(self) -> None:  # no **kwargs, no params
+                self.ran = True
+
+        dep = object()
+        c = await _NoArgAinit.from_config_async({"label": "a"}, dep=dep)
+        assert c.ran is True
+        # The collaborator was not delivered to the hook, but is reachable.
+        assert c.components["dep"] is dep
+
+    def test_no_arg_adopt_components_survives_injection(self) -> None:
+        class _NoArgAdopt(StructuredConfigConsumer[_Cfg]):
+            CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+
+            def _adopt_components(self) -> None:  # no **kwargs, no params
+                self.adopted = True
+
+        store = object()
+        c = _NoArgAdopt.from_components({"label": "a"}, store=store)
+        assert c.adopted is True
+        assert c.components["store"] is store
+
+    async def test_narrow_ainit_receives_only_declared_subset(self) -> None:
+        """A keyword-only param without ``**_`` ignores undeclared extras."""
+
+        class _NarrowAinit(StructuredConfigConsumer[_Cfg]):
+            CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+
+            async def _ainit(self, *, dep: Any = None) -> None:  # no **_
+                self.dep = dep
+
+        dep = object()
+        extra = object()
+        c = await _NarrowAinit.from_config_async(
+            {"label": "a"}, dep=dep, extra=extra
+        )
+        # Declared param delivered; undeclared extra dropped but retained.
+        assert c.dep is dep
+        assert c.components["extra"] is extra
+
+    def test_narrow_adopt_components_receives_only_declared_subset(
+        self,
+    ) -> None:
+        """The ``from_components`` → ``_adopt_components`` mirror of above."""
+
+        class _NarrowAdopt(StructuredConfigConsumer[_Cfg]):
+            CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+
+            def _adopt_components(self, *, store: Any = None) -> None:  # no **_
+                self.store = store
+
+        store = object()
+        extra = object()
+        c = _NarrowAdopt.from_components(
+            {"label": "a"}, store=store, extra=extra
+        )
+        # Declared param delivered; undeclared extra dropped but retained.
+        assert c.store is store
+        assert c.components["extra"] is extra
+
 
 # ── Piece 2: PluginRegistry.create_async ──────────────────────────────
 class TestCreateAsync:

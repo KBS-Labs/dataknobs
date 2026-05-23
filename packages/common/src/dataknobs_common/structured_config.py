@@ -45,9 +45,10 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import inspect
 import logging
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -314,6 +315,78 @@ class StructuredConfig:
 ConfigT = TypeVar("ConfigT", bound=StructuredConfig)
 
 
+@functools.cache
+def _hook_keyword_spec(func: Callable[..., Any]) -> tuple[bool, frozenset[str]]:
+    """Keyword-binding spec for a collaborator hook (``_ainit`` / ``_adopt_components``).
+
+    Returns ``(accepts_var_keyword, bindable_names)`` for the unbound hook
+    function. ``self`` and positional-only / var-positional params are
+    excluded; ``bindable_names`` lists only the parameters a caller can
+    supply by keyword. Cached per function (one per consumer class).
+
+    A callable whose signature can't be introspected degrades to
+    ``(True, frozenset())`` so delivery falls back to the historical
+    pass-everything behaviour rather than silently dropping collaborators.
+    (When ``accepts_var_keyword`` is ``True`` the ``names`` set is unused —
+    :func:`_components_for_hook` passes everything — so this fallback is
+    intentionally indistinguishable from a genuine ``**kwargs`` hook.)
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True, frozenset()
+    accepts_var_keyword = False
+    names: set[str] = set()
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            accepts_var_keyword = True
+        elif param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            names.add(name)
+    return accepts_var_keyword, frozenset(names)
+
+
+def _components_for_hook(
+    func: Callable[..., Any], components: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Select the collaborators a hook can bind by keyword.
+
+    Delivers every component when the hook declares ``**kwargs``; otherwise
+    only those whose names match a keyword-bindable parameter. A no-arg
+    hook (``_ainit(self)``) receives ``{}``. Either way the full set stays
+    on ``self.components`` — this governs only the convenience keyword
+    delivery, so a hook that narrows or omits the collaborator parameters
+    cannot be crashed by an injected component it does not declare. (A hook
+    that declares a collaborator param *without* a default still fails the
+    zero-injection path; that drift is pinned by
+    :func:`dataknobs_common.testing.assert_structured_config_consumer`.)
+    """
+    if not components:
+        return {}
+    accepts_var_keyword, names = _hook_keyword_spec(func)
+    if accepts_var_keyword:
+        return dict(components)
+    selected = {k: v for k, v in components.items() if k in names}
+    if len(selected) != len(components):
+        # A collaborator the caller injected is not declared by the hook
+        # (commonly a misspelled parameter name). It stays on
+        # ``self.components`` but is not delivered to the hook — log at
+        # debug so the silent drop is diagnosable, mirroring the
+        # hint-resolution degrade in ``_resolved_hints``.
+        dropped = sorted(set(components) - selected.keys())
+        logger.debug(
+            "Hook %s does not declare injected collaborator(s) %s; they "
+            "remain on self.components but are not delivered to the hook.",
+            getattr(func, "__qualname__", func),
+            dropped,
+        )
+    return selected
+
+
 class StructuredConfigConsumer(Generic[ConfigT]):
     """Mixin for classes constructed from a ``StructuredConfig`` subclass.
 
@@ -328,9 +401,10 @@ class StructuredConfigConsumer(Generic[ConfigT]):
       runs the input through ``CONFIG_CLS.from_dict`` (when given a
       Mapping) then ``cls``.
     - ``cls.from_config_async(config, **components) -> Self`` classmethod:
-      the same sync assembly followed by ``await obj._ainit(**components)``
-      — the canonical entry point for consumers whose initialization is
-      asynchronous (DBs that connect eagerly, LLM-backed bots, KB warmup).
+      the same sync assembly followed by ``await obj._ainit(...)`` with
+      signature-aware collaborator delivery — the canonical entry point
+      for consumers whose initialization is asynchronous (DBs that connect
+      eagerly, LLM-backed bots, KB warmup).
     - ``cls.from_components(config=None, **collaborators) -> Self``
       classmethod for the dual-input shape: assemble from pre-built
       collaborators (skipping the config-driven build) instead of from
@@ -364,11 +438,15 @@ class StructuredConfigConsumer(Generic[ConfigT]):
       ``StructuredConfig`` subclass.
     - Implement ``_setup()`` (sync) and/or ``_ainit()`` (async) for
       derived-attribute computation, connection placeholders, async
-      collaborator construction, etc. (Both default to no-ops.) An
-      ``_ainit`` (or ``_adopt_components``) override that consumes
-      injected collaborators must declare them keyword-only with
-      defaults (``async def _ainit(self, *, knowledge_base=None, **_)``)
-      so the zero-collaborator path is safe.
+      collaborator construction, etc. (Both default to no-ops.) Hook
+      delivery is signature-aware: an ``_ainit`` (or
+      ``_adopt_components``) override receives only the collaborators it
+      declares (or all, if it declares ``**kwargs``), so a no-arg or
+      narrowly-typed override is never crashed by an undeclared injected
+      collaborator. A consumed collaborator should be declared
+      keyword-only with a default
+      (``async def _ainit(self, *, knowledge_base=None)``) so the
+      zero-injection path is safe.
     - When mixing in alongside other bases, list
       ``StructuredConfigConsumer`` **first** so its ``__init__`` is the
       construction entry point; the remaining bases must accept
@@ -452,7 +530,8 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         bot's main LLM, a prompt resolver, pre-built test doubles) that
         are *not* part of this object's own config. The sync
         :meth:`_setup` hook may read this; the async :meth:`_ainit` hook
-        also receives the same collaborators as keyword arguments.
+        also receives the collaborators it declares as keyword arguments
+        (signature-aware delivery — see :meth:`_ainit`).
         """
         return types.MappingProxyType(self._components)
 
@@ -531,7 +610,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         :func:`dataknobs_common.testing.assert_structured_config_consumer`).
         """
         obj = cls(cls._coerce_config(config), _components=components or None)
-        await obj._ainit(**obj._components)
+        await obj._ainit(**_components_for_hook(cls._ainit, obj._components))
         return obj
 
     @classmethod
@@ -559,14 +638,23 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         short-circuit when ``self._prebuilt`` is ``True`` so a later
         :meth:`from_config_async` does not rebuild what is already wired.
         """
-        cfg: ConfigT = (
-            cls._coerce_config(config)
-            if config is not None
-            else cast("ConfigT", cls.CONFIG_CLS())
-        )
+        if config is not None:
+            cfg: ConfigT = cls._coerce_config(config)
+        else:
+            try:
+                cfg = cast("ConfigT", cls.CONFIG_CLS())
+            except TypeError as exc:
+                raise ValueError(
+                    f"{cls.__name__}.from_components: CONFIG_CLS "
+                    f"{cls.CONFIG_CLS.__name__} has required fields and "
+                    "cannot be default-constructed. Pass a `config=` "
+                    "snapshot covering the required fields."
+                ) from exc
         obj = cls(cfg, _components=collaborators or None)
         obj._prebuilt = True
-        obj._adopt_components(**collaborators)
+        obj._adopt_components(
+            **_components_for_hook(cls._adopt_components, obj._components)
+        )
         return obj
 
     def _setup(self) -> None:
@@ -578,6 +666,13 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         in the config dataclass (``_normalize_dict`` / ``__post_init__``),
         not here — ``_setup`` runs after ``self._config`` is frozen.
         Called once during ``__init__`` (both sync and async paths).
+
+        Injected collaborators (if any) are already on ``self.components``
+        when ``_setup`` runs, so a sync consumer can bind them here. Note
+        that ``self._prebuilt`` is always ``False`` in ``_setup`` — it is
+        set after ``__init__`` returns, so the ``_prebuilt`` short-circuit
+        is only observable in :meth:`_ainit` / :meth:`_adopt_components`,
+        not here.
         """
 
     async def _ainit(self, **components: Any) -> None:
@@ -593,14 +688,21 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         async entry point.
 
         Injected collaborators passed to :meth:`from_config_async` are
-        delivered here as keyword arguments (the same objects are also on
-        ``self._components``). An override that consumes them MUST declare
-        them keyword-only with defaults — e.g.
-        ``async def _ainit(self, *, knowledge_base=None, **_)`` — so the
-        zero-collaborator call is safe; ``**_`` absorbs any it ignores.
-        :func:`dataknobs_common.testing.assert_structured_config_consumer`
-        pins this. A consumer that also supports :meth:`from_components`
-        should ``return`` early when ``self._prebuilt`` is ``True``.
+        delivered here as keyword arguments (the same objects are always
+        on ``self._components`` regardless). Delivery is signature-aware:
+        a hook declaring ``**kwargs`` receives every collaborator; one
+        declaring named params receives only the matching subset; a no-arg
+        override receives none (and reads ``self.components`` instead). An
+        override that consumes a collaborator should declare it
+        keyword-only with a default — e.g.
+        ``async def _ainit(self, *, knowledge_base=None)`` — so the
+        zero-injection call is safe; an undeclared collaborator is dropped
+        from delivery rather than crashing the hook. A collaborator param
+        *without* a default (or a required positional) still breaks the
+        zero-injection path and is rejected by
+        :func:`dataknobs_common.testing.assert_structured_config_consumer`.
+        A consumer that also supports :meth:`from_components` should
+        ``return`` early when ``self._prebuilt`` is ``True``.
         """
 
     def _adopt_components(self, **collaborators: Any) -> None:
@@ -610,8 +712,13 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         config-driven :meth:`_ainit` would otherwise build (e.g.
         ``self._vector_store = vector_store``). Called once, synchronously,
         immediately after construction when the object is assembled via
-        :meth:`from_components`; like :meth:`_ainit`, consumed parameters
-        MUST be keyword-only with defaults so the contract is uniform.
+        :meth:`from_components`. Delivery is signature-aware exactly as for
+        :meth:`_ainit`: ``**kwargs`` receives every collaborator, named
+        params receive the matching subset, a no-arg override receives
+        none (collaborators stay on ``self.components``). Consumed
+        parameters should be keyword-only with defaults so the
+        zero-injection path is safe; a param without a default is rejected
+        by :func:`dataknobs_common.testing.assert_structured_config_consumer`.
         """
 
 
