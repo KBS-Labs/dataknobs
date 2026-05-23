@@ -4,9 +4,18 @@ import logging
 import types
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar
 
+from dataknobs_bots.knowledge.base import KnowledgeBase
+from dataknobs_bots.knowledge.config import RAGKnowledgeBaseConfig
+from dataknobs_bots.knowledge.retrieval import (
+    ChunkMerger,
+    ContextFormatter,
+    FormatterConfig,
+    MergerConfig,
+)
 from dataknobs_common.metadata import enforce_immutable_keys
+from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_xization import (
     ContentTransformer,
     create_chunker,
@@ -17,19 +26,11 @@ from dataknobs_xization.ingestion import (
     DirectoryProcessor,
     KnowledgeBaseConfig,
 )
-from dataknobs_bots.knowledge.base import KnowledgeBase
-from dataknobs_bots.knowledge.retrieval import (
-    ChunkMerger,
-    ContextFormatter,
-    FormatterConfig,
-    MergerConfig,
-)
 
 if TYPE_CHECKING:
-    from dataknobs_common.ratelimit import RateLimiter
-
     from dataknobs_bots.knowledge.storage.backend import KnowledgeResourceBackend
     from dataknobs_bots.knowledge.storage.models import KnowledgeFile
+    from dataknobs_common.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 _R = TypeVar("_R")
 
 
-class RAGKnowledgeBase(KnowledgeBase):
+class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], KnowledgeBase):
     """RAG knowledge base using dataknobs-xization for chunking and vector search.
 
     This implementation:
@@ -47,67 +48,83 @@ class RAGKnowledgeBase(KnowledgeBase):
     - Stores chunks with embeddings in vector store
     - Provides semantic search for relevant context
 
+    Construct from config (``await RAGKnowledgeBase.from_config({...})`` —
+    builds the vector store + embedder and optionally ingests
+    ``documents_path``) or from pre-built collaborators
+    (``RAGKnowledgeBase.from_components(vector_store=…,
+    embedding_provider=…)``). The chunker, merger, and formatter are
+    built synchronously from config (``chunking`` / ``merger`` /
+    ``formatter``) or accepted as pre-built ``chunker`` /
+    ``merger_config`` / ``formatter_config`` collaborators.
+
     Attributes:
         vector_store: Vector store backend from dataknobs_data
         embedding_provider: LLM provider for generating embeddings
         chunking_config: Configuration for document chunking
     """
 
-    def __init__(
-        self,
-        vector_store: Any,
-        embedding_provider: Any,
-        chunking_config: dict[str, Any] | None = None,
-        merger_config: MergerConfig | None = None,
-        formatter_config: FormatterConfig | None = None,
-        chunker: Chunker | None = None,
-    ):
-        """Initialize RAG knowledge base.
+    CONFIG_CLS: ClassVar[type[RAGKnowledgeBaseConfig]] = RAGKnowledgeBaseConfig
 
-        Args:
-            vector_store: Vector store backend instance
-            embedding_provider: LLM provider with embed() method
-            chunking_config: Configuration for chunking.  The ``chunker``
-                key selects the chunker implementation (default:
-                ``"markdown_tree"``).  Remaining keys are forwarded to the
-                chunker's ``from_config()`` method.  Legacy keys
-                (``max_chunk_size``, ``combine_under_heading``, etc.) are
-                preserved for backward compatibility.
-            merger_config: Configuration for chunk merging (optional)
-            formatter_config: Configuration for context formatting (optional)
-            chunker: Pre-built chunker instance.  When provided, takes
-                precedence over ``chunking_config`` for chunker selection.
+    def _setup(self) -> None:
+        """Build the chunker, merger, and formatter (synchronous).
+
+        These are config-derived but require no async work, so they are
+        built here for both construction paths. Injected pre-built
+        collaborators (``chunker`` / ``merger_config`` /
+        ``formatter_config``, available on ``self.components``) take
+        precedence over the config dicts. The vector store and embedding
+        provider are bound by :meth:`_ainit` (config-driven) or
+        :meth:`_adopt_components` (pre-built injection).
         """
-        self.vector_store = vector_store
-        self.embedding_provider = embedding_provider
-        self.chunking_config = chunking_config or {
+        self.chunking_config = self.config.chunking or {
             "max_chunk_size": 500,
             "combine_under_heading": True,
         }
 
-        # Resolve chunker: explicit instance > config-driven > default
-        self._chunker = chunker or create_chunker(self.chunking_config)
+        # Resolve chunker: injected instance > config-driven > default
+        injected_chunker = self.components.get("chunker")
+        self._chunker: Chunker = injected_chunker or create_chunker(
+            self.chunking_config
+        )
 
-        # Initialize merger and formatter
+        # Resolve merger: injected MergerConfig > config dict > default
+        merger_config = self.components.get("merger_config")
+        if merger_config is None and self.config.merger is not None:
+            merger_config = MergerConfig(**self.config.merger)
         self.merger = ChunkMerger(merger_config) if merger_config else ChunkMerger()
-        self.formatter = ContextFormatter(formatter_config) if formatter_config else ContextFormatter()
+
+        # Resolve formatter: injected FormatterConfig > config dict > default
+        formatter_config = self.components.get("formatter_config")
+        if formatter_config is None and self.config.formatter is not None:
+            formatter_config = FormatterConfig(**self.config.formatter)
+        self.formatter = (
+            ContextFormatter(formatter_config)
+            if formatter_config
+            else ContextFormatter()
+        )
+
+        self.vector_store: Any = None
+        self.embedding_provider: Any = None
 
     @classmethod
-    async def from_config(cls, config: dict[str, Any]) -> "RAGKnowledgeBase":
-        """Create RAG knowledge base from configuration.
+    async def from_config(  # type: ignore[override]
+        cls, config: Any, **components: Any
+    ) -> "RAGKnowledgeBase":
+        """Create RAG knowledge base from configuration (async warmup).
 
-        Args:
-            config: Configuration dictionary with:
-                - vector_store: Vector store configuration
-                - embedding: Nested embedding config dict (preferred), e.g.
-                  ``{"provider": "ollama", "model": "nomic-embed-text"}``
-                - embedding_provider / embedding_model: Legacy flat keys
-                - chunking: Optional chunking configuration
-                - documents_path: Optional path to load documents from
-                - document_pattern: Optional glob pattern for documents
+        Builds the vector store and embedding provider, awaits the
+        store's ``initialize()``, and ingests ``documents_path`` when set.
+        Accepts a config dict or a typed :class:`RAGKnowledgeBaseConfig`.
+        The config keys are:
 
-        Returns:
-            Configured RAGKnowledgeBase instance
+        - ``vector_store``: Vector store configuration
+        - ``embedding``: Nested embedding config dict (preferred), e.g.
+          ``{"provider": "ollama", "model": "nomic-embed-text"}``
+        - ``embedding_provider`` / ``embedding_model``: Legacy flat keys
+        - ``chunking``: Optional chunking configuration
+        - ``merger`` / ``formatter``: Optional retrieval configuration
+        - ``documents_path``: Optional path to load documents from
+        - ``document_pattern``: Optional glob pattern for documents
 
         Example:
             ```python
@@ -129,45 +146,48 @@ class RAGKnowledgeBase(KnowledgeBase):
             kb = await RAGKnowledgeBase.from_config(config)
             ```
         """
+        return await cls.from_config_async(config, **components)
+
+    async def _ainit(self, **_: Any) -> None:
+        """Build the vector store + embedder and optionally ingest docs."""
+        if self._prebuilt:
+            return
         from dataknobs_data.vector.stores import VectorStoreFactory
 
-        from ..providers import create_embedding_provider
+        from ..providers import build_embedding_config, create_embedding_provider
 
-        # Create vector store
-        vs_config = config["vector_store"]
         factory = VectorStoreFactory()
-        vector_store = factory.create(**vs_config)
-        await vector_store.initialize()
+        self.vector_store = factory.create(**self.config.vector_store)
+        await self.vector_store.initialize()
 
-        # Create embedding provider
-        embedding_provider = await create_embedding_provider(config)
-
-        # Create merger config if specified
-        merger_config = None
-        if "merger" in config:
-            merger_config = MergerConfig(**config["merger"])
-
-        # Create formatter config if specified
-        formatter_config = None
-        if "formatter" in config:
-            formatter_config = FormatterConfig(**config["formatter"])
-
-        # Create instance
-        kb = cls(
-            vector_store=vector_store,
-            embedding_provider=embedding_provider,
-            chunking_config=config.get("chunking", {}),
-            merger_config=merger_config,
-            formatter_config=formatter_config,
+        self.embedding_provider = await create_embedding_provider(
+            build_embedding_config(
+                embedding=self.config.embedding,
+                embedding_provider=self.config.embedding_provider,
+                embedding_model=self.config.embedding_model,
+            )
         )
 
-        # Load documents if path provided
-        if "documents_path" in config:
-            await kb.load_documents_from_directory(
-                config["documents_path"], config.get("document_pattern", "**/*.md")
+        if self.config.documents_path is not None:
+            await self.load_documents_from_directory(
+                self.config.documents_path, self.config.document_pattern
             )
 
-        return kb
+    def _adopt_components(
+        self,
+        *,
+        vector_store: Any = None,
+        embedding_provider: Any = None,
+        **_: Any,
+    ) -> None:
+        """Adopt caller-owned store + embedder for ``from_components``."""
+        if vector_store is None or embedding_provider is None:
+            raise TypeError(
+                "RAGKnowledgeBase.from_components requires vector_store and "
+                "embedding_provider"
+            )
+        self.vector_store = vector_store
+        self.embedding_provider = embedding_provider
 
     async def load_markdown_document(
         self, filepath: str | Path, metadata: dict[str, Any] | None = None
@@ -1213,13 +1233,14 @@ class RAGKnowledgeBase(KnowledgeBase):
                 print(result['text'])
             ```
         """
+        import numpy as np
+
         from dataknobs_data.vector.hybrid import (
             FusionStrategy,
             HybridSearchConfig,
             reciprocal_rank_fusion,
             weighted_score_fusion,
         )
-        import numpy as np
 
         # Generate query embedding
         query_embedding = await self.embedding_provider.embed(query)

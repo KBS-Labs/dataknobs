@@ -24,10 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exported alongside each. All three `register_*_backend` functions are
   re-exported from the top-level `dataknobs_bots` namespace, mirroring
   `register_strategy`.
-- **Typed memory sub-configs** `BufferMemoryConfig`, `SummaryMemoryConfig`,
-  and `CompositeMemoryConfig` (`StructuredConfig` subclasses, exported from
-  `dataknobs_bots.memory`). The memory factory projects each backend's
-  config dict through the matching typed config before construction.
+- **Typed subsystem sub-configs** — `BufferMemoryConfig`,
+  `SummaryMemoryConfig`, `CompositeMemoryConfig`, and `VectorMemoryConfig`
+  (exported from `dataknobs_bots.memory`) plus `RAGKnowledgeBaseConfig`
+  (exported from `dataknobs_bots.knowledge`), all `StructuredConfig`
+  subclasses. Each concrete subsystem class consumes the matching typed
+  config (see the corresponding *Changed* entry).
+- **`from_components(...)` on the subsystem classes** — `VectorMemory`,
+  `SummaryMemory`, `CompositeMemory`, and `RAGKnowledgeBase` expose
+  `from_components(config=None, **collaborators)` for assembling an
+  instance from already-built collaborators (a pre-built vector store and
+  embedder, an LLM provider, child memory strategies) instead of from
+  config. The collaborator-adopting path does not own the resources it is
+  handed (`close()` leaves caller-owned resources open).
 - **Typed `DynaBotConfig`** (`StructuredConfig` subclass,
   `dataknobs_bots.bot.config`). A `DynaBot` now carries a typed
   `bot.config: DynaBotConfig` snapshot — a thin top-level envelope of typed
@@ -55,6 +64,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signatures (`create_memory_from_config`,
   `create_knowledge_base_from_config`, `create_source_from_config`) and the
   `ValueError` raised on an unknown type are unchanged.
+- **The concrete memory and knowledge subsystem classes are now
+  `StructuredConfigConsumer`s.** `BufferMemory`, `VectorMemory`,
+  `SummaryMemory`, `CompositeMemory`, and `RAGKnowledgeBase` carry a typed
+  `self.config` and build through the shared construction lifecycle, and
+  the memory registry registers the classes directly (the transitional
+  per-backend builder functions are gone). Config-driven construction is
+  unchanged: `await create_memory_from_config({...})`,
+  `await create_knowledge_base_from_config({...})`,
+  `await VectorMemory.from_config({...})`, and
+  `await RAGKnowledgeBase.from_config({...})` keep their exact signatures
+  and behavior (the async warmup classes expose `from_config` as a
+  lifecycle-faithful async delegator that runs `_ainit`), and
+  `BufferMemory(max_messages=...)` still works. Direct construction from
+  pre-built collaborators moves from positional/keyword constructors to
+  `from_components(...)` (see the *Added* entry); e.g.
+  `SummaryMemory(llm_provider=p, recent_window=2)` becomes
+  `SummaryMemory.from_components({"recent_window": 2}, llm_provider=p)`,
+  `CompositeMemory([m1, m2])` becomes
+  `CompositeMemory.from_components(strategies=[m1, m2])`, and
+  `RAGKnowledgeBase(vector_store=vs, embedding_provider=ep,
+  chunking_config={...})` becomes
+  `RAGKnowledgeBase.from_components({"chunking": {...}}, vector_store=vs,
+  embedding_provider=ep)` (the `chunking_config` / `merger_config` /
+  `formatter_config` constructor arguments are now the `chunking` /
+  `merger` / `formatter` config keys, with pre-built `chunker` /
+  `merger_config` / `formatter_config` accepted as `from_components`
+  collaborators). The
+  `owns_llm_provider` constructor flag is gone: ownership now follows the
+  construction path (a dedicated `llm` config section is owned; an injected
+  provider is not). Typing/contract refactor only — no runtime, retrieval,
+  or ownership-semantics behavior changes.
 - **`DynaBot` is now a `StructuredConfigConsumer` and builds through the
   shared async construction lifecycle** (`from_config` → `from_config_async`
   → `__init__` → `_setup` → `_ainit`). `DynaBot.from_config(config, *,

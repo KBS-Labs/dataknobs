@@ -52,6 +52,48 @@ class SummaryMemoryConfig(StructuredConfig):
 
 
 @dataclass(frozen=True)
+class VectorMemoryConfig(StructuredConfig):
+    """Configuration for :class:`~dataknobs_bots.memory.vector.VectorMemory`.
+
+    Attributes:
+        backend: Vector-store backend key (``memory``, ``faiss``, …).
+        dimension: Vector-store dimension (singular). Distinct from
+            ``dimensions`` below, which is forwarded to the embedder.
+        collection: Optional collection/index name for the store.
+        persist_path: Optional persistence path for the store.
+        store_params: Extra keyword arguments merged into the
+            vector-store factory call.
+        embedding: Nested embedding-provider config (preferred). Kept as
+            a raw mapping — embedder config is owned by ``dataknobs-llm``.
+        embedding_provider: Legacy flat embedding-provider key.
+        embedding_model: Legacy flat embedding-model key.
+        dimensions: Embedder dimension (plural). Forwarded to the
+            embedding provider, NOT the vector store.
+        max_results: Maximum number of similar messages returned.
+        similarity_threshold: Minimum similarity score (0-1) for results.
+        default_metadata: Metadata merged into every ``add_message``.
+        default_filter: Filter merged into every ``get_context`` search.
+        immutable_metadata_keys: Keys whose ``default_metadata`` values
+            cannot be overridden by caller-supplied metadata.
+    """
+
+    backend: str = "memory"
+    dimension: int = 1536
+    collection: str | None = None
+    persist_path: str | None = None
+    store_params: dict[str, Any] = field(default_factory=dict)
+    embedding: dict[str, Any] | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    dimensions: int | None = None
+    max_results: int = 5
+    similarity_threshold: float = 0.7
+    default_metadata: dict[str, Any] | None = None
+    default_filter: dict[str, Any] | None = None
+    immutable_metadata_keys: list[str] | None = None
+
+
+@dataclass(frozen=True)
 class CompositeMemoryConfig(StructuredConfig):
     """Configuration for :class:`~dataknobs_bots.memory.composite.CompositeMemory`.
 

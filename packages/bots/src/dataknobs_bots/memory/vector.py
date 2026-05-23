@@ -1,25 +1,31 @@
 """Vector-based semantic memory implementation."""
 
 import logging
-from collections.abc import Iterable
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 import numpy as np
 
 from dataknobs_common.metadata import enforce_immutable_keys
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .base import Memory
+from .config import VectorMemoryConfig
 
 logger = logging.getLogger(__name__)
 
 
-class VectorMemory(Memory):
+class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
     """Vector-based semantic memory using dataknobs-data vector stores.
 
     This implementation stores messages with vector embeddings and retrieves
     relevant messages based on semantic similarity.
+
+    Construct from config (``await VectorMemory.from_config({...})``,
+    which builds and owns the store + embedder) or from pre-built
+    collaborators (``VectorMemory.from_components(vector_store=…,
+    embedding_provider=…)``, which adopts caller-owned resources).
 
     Attributes:
         vector_store: Vector store backend from dataknobs_data.vector.stores
@@ -28,122 +34,110 @@ class VectorMemory(Memory):
         similarity_threshold: Minimum similarity score for results
     """
 
-    def __init__(
-        self,
-        vector_store: Any,
-        embedding_provider: Any,
-        max_results: int = 5,
-        similarity_threshold: float = 0.7,
-        default_metadata: dict[str, Any] | None = None,
-        default_filter: dict[str, Any] | None = None,
-        immutable_metadata_keys: Iterable[str] | None = None,
-        owns_embedding_provider: bool = False,
-        owns_vector_store: bool = False,
-    ):
-        """Initialize vector memory.
+    CONFIG_CLS: ClassVar[type[VectorMemoryConfig]] = VectorMemoryConfig
 
-        Args:
-            vector_store: Vector store backend instance
-            embedding_provider: LLM provider with embed() method
-            max_results: Maximum number of similar messages to return
-            similarity_threshold: Minimum similarity score (0-1)
-            default_metadata: Metadata merged into every ``add_message()``
-                call. Caller-supplied metadata overrides these defaults
-                unless the key is listed in ``immutable_metadata_keys``.
-                Use for tenant scoping, e.g. ``{"user_id": "u123"}``.
-            default_filter: Filter merged into every ``get_context()``
-                search call. Use to scope reads to a tenant, e.g.
-                ``{"user_id": "u123"}``.
-            immutable_metadata_keys: Optional iterable of keys whose
-                ``default_metadata`` values cannot be overridden by
-                caller-supplied ``metadata`` on ``add_message()``.  Use
-                for tenant-scoping identifiers paired with
-                ``default_metadata`` — e.g.
-                ``immutable_metadata_keys=["user_id"]`` paired with
-                ``default_metadata={"user_id": "u123"}``.  Caller
-                attempts to override an immutable key are logged as
-                warnings and the configured value is preserved.
-            owns_embedding_provider: If True, ``close()`` will close the
-                embedding provider. Set by ``from_config`` for resources
-                it creates. Default False for externally-injected providers.
-            owns_vector_store: If True, ``close()`` will close the vector
-                store. Set by ``from_config`` for resources it creates.
-                Default False for externally-injected stores.
+    def _setup(self) -> None:
+        """Initialize config-derived knobs shared by both build paths.
+
+        Collaborators (``vector_store`` / ``embedding_provider``) and the
+        ownership flags are bound by :meth:`_ainit` (config-driven build,
+        owns the resources it creates) or :meth:`_adopt_components`
+        (pre-built injection, caller-owned).
         """
-        self.vector_store = vector_store
-        self.embedding_provider = embedding_provider
-        self.max_results = max_results
-        self.similarity_threshold = similarity_threshold
-        self._default_metadata = default_metadata or {}
-        self._default_filter = default_filter or {}
+        self.max_results = self.config.max_results
+        self.similarity_threshold = self.config.similarity_threshold
+        self._default_metadata = self.config.default_metadata or {}
+        self._default_filter = self.config.default_filter or {}
         self._immutable_keys: frozenset[str] = (
-            frozenset(immutable_metadata_keys)
-            if immutable_metadata_keys
+            frozenset(self.config.immutable_metadata_keys)
+            if self.config.immutable_metadata_keys
             else frozenset()
         )
-        self._owns_embedding_provider = owns_embedding_provider
-        self._owns_vector_store = owns_vector_store
+        self.vector_store: Any = None
+        self.embedding_provider: Any = None
+        self._owns_vector_store = False
+        self._owns_embedding_provider = False
 
     @classmethod
-    async def from_config(cls, config: dict[str, Any]) -> "VectorMemory":
-        """Create VectorMemory from configuration.
+    async def from_config(  # type: ignore[override]
+        cls, config: Any, **components: Any
+    ) -> "VectorMemory":
+        """Create VectorMemory from configuration (async warmup).
 
-        Args:
-            config: Configuration dictionary with:
-                - backend: Vector store backend type
-                - dimension: Vector store dimension (singular; default 1536)
-                - collection: Collection/index name (optional)
-                - embedding: Nested embedding config dict (preferred), e.g.
-                  ``{"provider": "ollama", "model": "nomic-embed-text",
-                  "dimensions": 768}``
-                - embedding_provider / embedding_model: Legacy flat keys.
-                  Note: ``dimensions`` (plural) at the top level is forwarded
-                  to the embedding provider, not the vector store.  Use
-                  ``dimension`` (singular) for the vector store size.
-                - max_results: Max results to return (default 5)
-                - similarity_threshold: Min similarity score (default 0.7)
+        Builds the vector store and embedding provider, then awaits the
+        store's ``initialize()``. The instance owns both resources, so
+        :meth:`close` closes them. Accepts a config dict or a typed
+        :class:`VectorMemoryConfig`. The config keys are:
+
+        - ``backend``: Vector store backend type
+        - ``dimension``: Vector store dimension (singular; default 1536)
+        - ``collection``: Collection/index name (optional)
+        - ``embedding``: Nested embedding config dict (preferred), e.g.
+          ``{"provider": "ollama", "model": "nomic-embed-text",
+          "dimensions": 768}``
+        - ``embedding_provider`` / ``embedding_model``: Legacy flat keys.
+          Note: ``dimensions`` (plural) is forwarded to the embedding
+          provider, not the vector store. Use ``dimension`` (singular)
+          for the vector store size.
+        - ``max_results``: Max results to return (default 5)
+        - ``similarity_threshold``: Min similarity score (default 0.7)
 
         Returns:
-            Configured VectorMemory instance
+            Configured VectorMemory instance.
         """
+        return await cls.from_config_async(config, **components)
+
+    async def _ainit(self, **_: Any) -> None:
+        """Build and own the vector store + embedding provider from config."""
+        if self._prebuilt:
+            return
         from dataknobs_data.vector.stores import VectorStoreFactory
 
-        from ..providers import create_embedding_provider
+        from ..providers import build_embedding_config, create_embedding_provider
 
-        # Create vector store
-        store_config = {
-            "backend": config.get("backend", "memory"),
-            "dimensions": config.get("dimension", 1536),
+        store_config: dict[str, Any] = {
+            "backend": self.config.backend,
+            "dimensions": self.config.dimension,
         }
-
-        # Add optional store parameters
-        if "collection" in config:
-            store_config["collection_name"] = config["collection"]
-        if "persist_path" in config:
-            store_config["persist_path"] = config["persist_path"]
-
-        # Merge any additional store_params
-        if "store_params" in config:
-            store_config.update(config["store_params"])
+        if self.config.collection is not None:
+            store_config["collection_name"] = self.config.collection
+        if self.config.persist_path is not None:
+            store_config["persist_path"] = self.config.persist_path
+        if self.config.store_params:
+            store_config.update(self.config.store_params)
 
         factory = VectorStoreFactory()
-        vector_store = factory.create(**store_config)
-        await vector_store.initialize()
+        self.vector_store = factory.create(**store_config)
+        await self.vector_store.initialize()
+        self._owns_vector_store = True
 
-        # Create embedding provider
-        embedding_provider = await create_embedding_provider(config)
-
-        return cls(
-            vector_store=vector_store,
-            embedding_provider=embedding_provider,
-            max_results=config.get("max_results", 5),
-            similarity_threshold=config.get("similarity_threshold", 0.7),
-            default_metadata=config.get("default_metadata"),
-            default_filter=config.get("default_filter"),
-            immutable_metadata_keys=config.get("immutable_metadata_keys"),
-            owns_embedding_provider=True,
-            owns_vector_store=True,
+        self.embedding_provider = await create_embedding_provider(
+            build_embedding_config(
+                embedding=self.config.embedding,
+                embedding_provider=self.config.embedding_provider,
+                embedding_model=self.config.embedding_model,
+                dimensions=self.config.dimensions,
+            )
         )
+        self._owns_embedding_provider = True
+
+    def _adopt_components(
+        self,
+        *,
+        vector_store: Any = None,
+        embedding_provider: Any = None,
+        **_: Any,
+    ) -> None:
+        """Adopt caller-owned store + embedder for ``from_components``."""
+        if vector_store is None or embedding_provider is None:
+            raise TypeError(
+                "VectorMemory.from_components requires vector_store and "
+                "embedding_provider"
+            )
+        self.vector_store = vector_store
+        self.embedding_provider = embedding_provider
+        self._owns_vector_store = False
+        self._owns_embedding_provider = False
 
     async def add_message(
         self, content: str, role: str, metadata: dict[str, Any] | None = None

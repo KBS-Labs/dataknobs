@@ -39,7 +39,9 @@ async def test_adversarial_content_summarized_not_followed() -> None:
     # The summarizer will call the provider — set a normal summary response
     provider.set_responses(["User discussed general topics."])
 
-    memory = SummaryMemory(llm_provider=provider, recent_window=2)
+    memory = SummaryMemory.from_components(
+        {"recent_window": 2}, llm_provider=provider
+    )
 
     # The adversarial message must overflow the recent window to be
     # included in the summarization prompt.
@@ -71,7 +73,9 @@ async def test_normal_conversation_summarized_correctly() -> None:
     provider = EchoProvider({"provider": "echo", "model": "echo-test"})
     provider.set_responses(["User asked about weather in Paris."])
 
-    memory = SummaryMemory(llm_provider=provider, recent_window=2)
+    memory = SummaryMemory.from_components(
+        {"recent_window": 2}, llm_provider=provider
+    )
 
     await memory.add_message("What's the weather in Paris?", role="user")
     await memory.add_message("It's sunny and 22C.", role="assistant")
@@ -90,8 +94,8 @@ async def test_custom_prompt_overrides_default() -> None:
     provider = EchoProvider({"provider": "echo", "model": "echo-test"})
     provider.set_responses(["custom summary"])
 
-    memory = SummaryMemory(
-        llm_provider=provider, recent_window=2, summary_prompt=custom
+    memory = SummaryMemory.from_components(
+        {"recent_window": 2, "summary_prompt": custom}, llm_provider=provider
     )
 
     await memory.add_message("msg1", role="user")

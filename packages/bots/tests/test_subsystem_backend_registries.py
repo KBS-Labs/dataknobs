@@ -3,8 +3,9 @@
 Covers the data-driven dispatch added to the memory, knowledge-base, and
 grounded-source factories: built-in backend registration, 3rd-party
 extensibility via the ``register_*_backend`` wrappers, injected-collaborator
-threading, round-trip behaviour of the new typed sub-configs, and
-builder↔ctor parity for the hand-rolled memory builders.
+threading, round-trip behaviour of the typed sub-configs,
+structured-config-consumer parity for the subsystem classes, and the
+config-vs-pre-built construction contracts.
 
 The exhaustive behavioural coverage of each factory (every backend's output
 and key handling) lives in ``test_memory.py``, ``test_composite_memory.py``,
@@ -23,6 +24,8 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    RAGKnowledgeBaseConfig,
     create_knowledge_base_from_config,
     is_knowledge_base_backend_registered,
     list_knowledge_base_backends,
@@ -39,23 +42,34 @@ from dataknobs_bots.memory import (
     CompositeMemoryConfig,
     Memory,
     SummaryMemoryConfig,
+    VectorMemory,
+    VectorMemoryConfig,
     create_memory_from_config,
     is_memory_backend_registered,
     list_memory_backends,
     memory_backends,
     register_memory_backend,
 )
-from dataknobs_bots.memory.registry import (
-    _build_buffer,
-    _build_composite,
-    _build_summary,
-)
 from dataknobs_bots.memory.summary import SummaryMemory
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_common.testing import (
-    assert_factory_kwargs_match_ctor,
+    assert_structured_config_consumer,
     assert_structured_config_roundtrip,
 )
+from dataknobs_data.vector.stores import VectorStoreFactory
+from dataknobs_llm.llm import LLMProviderFactory
+
+
+async def _make_store_and_embedder() -> tuple[Any, Any]:
+    """Build an initialized in-memory vector store + echo embedder."""
+    store = VectorStoreFactory().create(backend="memory", dimensions=8)
+    await store.initialize()
+    provider = LLMProviderFactory(is_async=True).create(
+        {"provider": "echo", "model": "test"}
+    )
+    await provider.initialize()
+    return store, provider
+
 
 # ===========================================================================
 # Built-in registration
@@ -331,6 +345,28 @@ class TestConfigRoundTrips:
             )
         )
 
+    def test_vector_config_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(
+            VectorMemoryConfig(
+                backend="memory",
+                dimension=8,
+                embedding={"provider": "echo", "model": "m"},
+                max_results=3,
+                default_filter={"user_id": "u1"},
+                immutable_metadata_keys=["user_id"],
+            )
+        )
+
+    def test_rag_config_roundtrip(self) -> None:
+        assert_structured_config_roundtrip(
+            RAGKnowledgeBaseConfig(
+                vector_store={"backend": "memory", "dimensions": 8},
+                embedding={"provider": "echo", "model": "m"},
+                chunking={"max_chunk_size": 300},
+                documents_path="./docs",
+            )
+        )
+
     def test_composite_primary_alias(self) -> None:
         """The documented ``primary`` key maps to ``primary_index``."""
         cfg = CompositeMemoryConfig.from_dict(
@@ -368,31 +404,62 @@ class TestConfigRoundTrips:
 
 
 # ===========================================================================
-# Builder ↔ ctor parity (drift guard)
+# Structured-config-consumer parity (drift guard)
 # ===========================================================================
 
 
-class TestBuilderCtorParity:
-    """The hand-rolled builders stay in sync with their target ctors.
+class TestStructuredConfigConsumerParity:
+    """The subsystem classes correctly apply the structured-config pattern.
 
-    The buffer/summary/composite builders construct their ``Memory`` by
-    naming kwargs explicitly (unlike the vector/rag builders, which delegate
-    to the class's own ``from_config``). That hand-rolled forwarding is the
-    drift surface ``assert_factory_kwargs_match_ctor`` exists to police: if a
-    ctor gains a param the builder forgets to forward, or the builder passes
-    a kwarg the ctor no longer accepts, the config knob is silently dropped
-    (or construction breaks) at runtime. These guards fail the build the
-    moment either side drifts.
+    Each memory/knowledge class mixes in
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`
+    and is registered directly (no hand-rolled builder). The parity guard
+    pins: ``CONFIG_CLS`` is declared and is a ``StructuredConfig`` subclass,
+    the dataclass field set matches the construction surface, the mixin
+    precedes ``Memory`` / ``KnowledgeBase`` in the MRO, an async
+    ``from_config`` override delegates to ``from_config_async`` (Check 5),
+    and the ``_ainit`` / ``_adopt_components`` collaborator hooks declare
+    their params keyword-only with defaults (Check 7). ``ignore_params``
+    lists the injected collaborators that are not config fields.
     """
 
-    def test_buffer_builder_matches_ctor(self) -> None:
-        assert_factory_kwargs_match_ctor(_build_buffer, BufferMemory)
+    def test_buffer_consumer(self) -> None:
+        assert_structured_config_consumer(BufferMemory)
 
-    def test_summary_builder_matches_ctor(self) -> None:
-        assert_factory_kwargs_match_ctor(_build_summary, SummaryMemory)
+    def test_vector_consumer(self) -> None:
+        assert_structured_config_consumer(
+            VectorMemory,
+            ignore_params={"vector_store", "embedding_provider"},
+        )
 
-    def test_composite_builder_matches_ctor(self) -> None:
-        assert_factory_kwargs_match_ctor(_build_composite, CompositeMemory)
+    def test_summary_consumer(self) -> None:
+        assert_structured_config_consumer(
+            SummaryMemory,
+            ignore_params={"llm_provider", "prompt_resolver"},
+        )
+
+    def test_composite_consumer(self) -> None:
+        assert_structured_config_consumer(
+            CompositeMemory,
+            ignore_params={
+                "strategies",
+                "primary_index",
+                "llm_provider",
+                "prompt_resolver",
+            },
+        )
+
+    def test_rag_consumer(self) -> None:
+        assert_structured_config_consumer(
+            RAGKnowledgeBase,
+            ignore_params={
+                "vector_store",
+                "embedding_provider",
+                "chunker",
+                "merger_config",
+                "formatter_config",
+            },
+        )
 
 
 # ===========================================================================
@@ -421,3 +488,92 @@ class TestFactoryAcceptsDictAndDefaults:
         from dataknobs_bots.knowledge import RAGKnowledgeBase
 
         assert isinstance(kb, RAGKnowledgeBase)
+
+
+# ===========================================================================
+# Construction-citizenship contracts (config vs. pre-built collaborators)
+# ===========================================================================
+
+
+class TestConstructionCitizenship:
+    """The subsystem classes construct uniformly through the mixin lifecycle.
+
+    Two construction shapes per class: ``from_config(_async)`` builds (and,
+    where applicable, owns) its collaborators via ``_ainit``;
+    ``from_components`` adopts caller-owned collaborators and short-circuits
+    ``_ainit`` via the ``_prebuilt`` flag. Real constructs only — in-memory
+    vector store + echo embedder.
+    """
+
+    @pytest.mark.asyncio
+    async def test_vector_from_components_adopts_without_building(self) -> None:
+        store, provider = await _make_store_and_embedder()
+        mem = VectorMemory.from_components(
+            {"max_results": 2},
+            vector_store=store,
+            embedding_provider=provider,
+        )
+        # Adopts the exact instances, marks them not-owned, skips _ainit.
+        assert mem.vector_store is store
+        assert mem.embedding_provider is provider
+        assert mem._owns_vector_store is False
+        assert mem._owns_embedding_provider is False
+        assert mem._prebuilt is True
+        assert mem.max_results == 2
+
+    @pytest.mark.asyncio
+    async def test_vector_from_config_builds_and_owns(self) -> None:
+        mem = await VectorMemory.from_config(
+            {
+                "backend": "memory",
+                "dimension": 8,
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            }
+        )
+        assert mem.vector_store is not None
+        assert mem.embedding_provider is not None
+        assert mem._owns_vector_store is True
+        assert mem._owns_embedding_provider is True
+
+    @pytest.mark.asyncio
+    async def test_rag_from_components_adopts_without_building(self) -> None:
+        store, provider = await _make_store_and_embedder()
+        kb = RAGKnowledgeBase.from_components(
+            {"chunking": {"max_chunk_size": 123}},
+            vector_store=store,
+            embedding_provider=provider,
+        )
+        assert kb.vector_store is store
+        assert kb.embedding_provider is provider
+        assert kb._prebuilt is True
+        # Config-derived (synchronous) collaborator still built in _setup.
+        assert kb.chunking_config["max_chunk_size"] == 123
+
+    @pytest.mark.asyncio
+    async def test_summary_from_config_delegator_runs_ainit(self) -> None:
+        # The async ``from_config`` delegator runs ``_ainit`` so a dedicated
+        # ``llm`` section yields an owned, initialized provider.
+        mem = await SummaryMemory.from_config(
+            {"recent_window": 4, "llm": {"provider": "echo", "model": "test"}}
+        )
+        assert mem.recent_window == 4
+        assert mem._owns_llm_provider is True
+        assert mem.llm_provider is not None
+
+    @pytest.mark.asyncio
+    async def test_composite_from_config_delegator_runs_ainit(self) -> None:
+        # The async ``from_config`` delegator runs ``_ainit`` so child specs
+        # are recursively built through the factory.
+        composite = await CompositeMemory.from_config(
+            {
+                "strategies": [
+                    {"type": "buffer", "max_messages": 5},
+                    {"type": "buffer", "max_messages": 10},
+                ],
+                "primary": 1,
+            }
+        )
+        assert isinstance(composite, CompositeMemory)
+        assert len(composite.strategies) == 2
+        assert composite.primary.max_messages == 10

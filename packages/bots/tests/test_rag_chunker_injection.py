@@ -12,7 +12,6 @@ from dataknobs_llm.llm import LLMProviderFactory
 from dataknobs_xization.chunking import Chunker, DocumentInfo, MarkdownTreeChunker
 from dataknobs_xization.markdown.md_chunker import Chunk, ChunkMetadata
 
-
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
@@ -73,12 +72,16 @@ async def _make_kb(
     provider = llm_factory.create({"provider": "echo", "model": "test"})
     await provider.initialize()
 
-    return RAGKnowledgeBase(
-        vector_store=vector_store,
-        embedding_provider=provider,
-        chunking_config=chunking_config,
-        chunker=chunker,
-    )
+    config: dict[str, Any] = {}
+    if chunking_config is not None:
+        config["chunking"] = chunking_config
+    collaborators: dict[str, Any] = {
+        "vector_store": vector_store,
+        "embedding_provider": provider,
+    }
+    if chunker is not None:
+        collaborators["chunker"] = chunker
+    return RAGKnowledgeBase.from_components(config, **collaborators)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +110,7 @@ class TestRAGChunkerInjection:
     @pytest.mark.asyncio
     async def test_chunker_from_config_key(self):
         """Config with 'chunker' key selects a registered chunker."""
-        from dataknobs_xization.chunking import register_chunker, chunker_registry
+        from dataknobs_xization.chunking import chunker_registry, register_chunker
 
         register_chunker("stub_test", StubChunker, override=True)
         try:

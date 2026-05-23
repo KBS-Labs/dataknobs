@@ -288,7 +288,7 @@ from dataknobs_bots.knowledge import RAGKnowledgeBase
 from dataknobs_xization import ContentTransformer
 
 # Create knowledge base
-kb = RAGKnowledgeBase(...)
+kb = await RAGKnowledgeBase.from_config({...})
 
 # Create transformer with custom schema
 transformer = ContentTransformer()

@@ -13,16 +13,12 @@ Verifies:
 
 import pytest
 
-from dataknobs_llm.prompts import ConfigPromptLibrary, CompositePromptLibrary
-from dataknobs_llm.prompts.base.types import TemplateMode
-
-from dataknobs_bots.prompts.resolver import PromptResolver
 from dataknobs_bots.prompts.defaults import (
     get_all_bots_keys,
     get_default_prompt_library,
-    get_full_prompt_library,
 )
-
+from dataknobs_bots.prompts.resolver import PromptResolver
+from dataknobs_llm.prompts import CompositePromptLibrary, ConfigPromptLibrary
 
 # ============================================================================
 # PromptResolver tests
@@ -278,15 +274,14 @@ class TestFocusGuardPromptIntegration:
 class TestSummaryMemoryPromptIntegration:
 
     def test_summary_memory_with_resolver(self) -> None:
+        from dataknobs_bots.memory.summary import SummaryMemory
         from dataknobs_llm import EchoProvider
-
-        from dataknobs_bots.memory.summary import DEFAULT_SUMMARY_PROMPT, SummaryMemory
 
         library = get_default_prompt_library()
         resolver = PromptResolver(library)
         provider = EchoProvider(config={"provider": "echo", "model": "test"})
 
-        memory = SummaryMemory(
+        memory = SummaryMemory.from_components(
             llm_provider=provider,
             prompt_resolver=resolver,
         )
@@ -295,18 +290,17 @@ class TestSummaryMemoryPromptIntegration:
         assert "conversation summarizer" in memory.summary_prompt
 
     def test_summary_memory_explicit_prompt_overrides_library(self) -> None:
-        from dataknobs_llm import EchoProvider
-
         from dataknobs_bots.memory.summary import SummaryMemory
+        from dataknobs_llm import EchoProvider
 
         library = get_default_prompt_library()
         resolver = PromptResolver(library)
         provider = EchoProvider(config={"provider": "echo", "model": "test"})
 
         custom = "Custom summary: {existing_summary} + {new_messages}"
-        memory = SummaryMemory(
+        memory = SummaryMemory.from_components(
+            {"summary_prompt": custom},
             llm_provider=provider,
-            summary_prompt=custom,
             prompt_resolver=resolver,
         )
 
@@ -314,12 +308,11 @@ class TestSummaryMemoryPromptIntegration:
         assert memory.summary_prompt == custom
 
     def test_summary_memory_without_resolver_uses_default(self) -> None:
+        from dataknobs_bots.memory.summary import DEFAULT_SUMMARY_PROMPT, SummaryMemory
         from dataknobs_llm import EchoProvider
 
-        from dataknobs_bots.memory.summary import DEFAULT_SUMMARY_PROMPT, SummaryMemory
-
         provider = EchoProvider(config={"provider": "echo", "model": "test"})
-        memory = SummaryMemory(llm_provider=provider)
+        memory = SummaryMemory.from_components(llm_provider=provider)
         assert memory.summary_prompt == DEFAULT_SUMMARY_PROMPT
 
 

@@ -4,20 +4,61 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from dataknobs_bots.prompts.resolver import PromptResolver
 
-from dataknobs_llm.llm.base import AsyncLLMProvider
-
 from dataknobs_bots.prompts.memory import DEFAULT_SUMMARY_PROMPT
+from dataknobs_common.structured_config import StructuredConfigConsumer
+
 from .base import Memory
+from .config import SummaryMemoryConfig
 
 logger = logging.getLogger(__name__)
 
 
-class SummaryMemory(Memory):
+async def _resolve_summary_llm(
+    llm_config: dict[str, Any] | None,
+    fallback_provider: Any | None,
+) -> Any:
+    """Resolve the LLM provider for summary memory.
+
+    If ``llm_config`` is provided, a dedicated provider is created and
+    initialized from it. Otherwise the ``fallback_provider`` (typically
+    the bot's own LLM) is used.
+
+    Args:
+        llm_config: Optional dedicated LLM-provider config.
+        fallback_provider: Provider to use when no dedicated LLM is
+            configured.
+
+    Returns:
+        An initialised ``AsyncLLMProvider``.
+
+    Raises:
+        ValueError: If neither a dedicated LLM config nor a fallback is
+            available.
+    """
+    if llm_config is not None:
+        from dataknobs_llm.llm import LLMProviderFactory
+
+        factory = LLMProviderFactory(is_async=True)
+        provider = factory.create(llm_config)
+        await provider.initialize()
+        return provider
+
+    if fallback_provider is not None:
+        return fallback_provider
+
+    raise ValueError(
+        "Summary memory requires an LLM provider. Either include an 'llm' "
+        "section in the memory config or pass llm_provider to "
+        "create_memory_from_config()."
+    )
+
+
+class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
     """Memory that summarizes older messages to maintain long context windows.
 
     Maintains a rolling buffer of recent messages. When the buffer exceeds
@@ -28,51 +69,101 @@ class SummaryMemory(Memory):
     ``get_context()`` returns the summary (if any) as a system message,
     followed by the recent verbatim messages.
 
+    Construct from config (``await SummaryMemory.from_config({...},
+    llm_provider=fallback)`` — a dedicated provider built from a
+    ``llm`` config section is owned by the memory, otherwise the
+    injected fallback is reused) or from a pre-built provider
+    (``SummaryMemory.from_components({"recent_window": …},
+    llm_provider=provider)`` — caller-owned).
+
     Attributes:
         llm_provider: LLM provider used for generating summaries
         recent_window: Number of recent messages to keep verbatim
         summary_prompt: Template for the summarization prompt
     """
 
-    def __init__(
-        self,
-        llm_provider: AsyncLLMProvider,
-        recent_window: int = 10,
-        summary_prompt: str | None = None,
-        *,
-        owns_llm_provider: bool = False,
-        prompt_resolver: PromptResolver | None = None,
-    ) -> None:
-        """Initialize summary memory.
+    CONFIG_CLS: ClassVar[type[SummaryMemoryConfig]] = SummaryMemoryConfig
 
-        Args:
-            llm_provider: Async LLM provider for generating summaries
-            recent_window: Number of recent messages to keep verbatim.
-                          When the buffer has more than ``recent_window``
-                          messages, the oldest are summarized.
-            summary_prompt: Custom summarization prompt template. Must
-                           contain ``{existing_summary}`` and
-                           ``{new_messages}`` placeholders.
-            owns_llm_provider: Whether this instance owns the provider's
-                lifecycle. True when a dedicated provider was created for
-                this memory; False when reusing the bot's main LLM.
-            prompt_resolver: Optional PromptResolver for resolving the
-                summary prompt from the prompt library.
+    @classmethod
+    async def from_config(  # type: ignore[override]
+        cls, config: Any, **components: Any
+    ) -> SummaryMemory:
+        """Create SummaryMemory from configuration (async warmup).
+
+        Construction is asynchronous — a dedicated provider built from the
+        ``llm`` config section must be initialized — so ``from_config``
+        delegates to :meth:`from_config_async` to run ``_ainit``. Pass the
+        bot's main LLM as the ``llm_provider`` keyword to use it as the
+        fallback when no dedicated ``llm`` section is configured.
         """
-        self.llm_provider = llm_provider
-        self.recent_window = recent_window
+        return await cls.from_config_async(config, **components)
+
+    def _setup(self) -> None:
+        """Initialize the message buffer and running summary.
+
+        The LLM provider, ownership flag, and resolved prompt are bound
+        by :meth:`_ainit` (config-driven) or :meth:`_adopt_components`
+        (pre-built injection).
+        """
+        self.recent_window = self.config.recent_window
+        self.llm_provider: Any = None
+        self._owns_llm_provider = False
+        self._prompt_resolver: PromptResolver | None = None
+        self.summary_prompt: str = DEFAULT_SUMMARY_PROMPT
+        self._messages: deque[dict[str, Any]] = deque()
+        self._summary: str = ""
+
+    def _resolve_prompt(self, prompt_resolver: PromptResolver | None) -> None:
+        """Resolve ``summary_prompt`` (explicit > library > default).
+
+        Shared by the config and pre-built construction paths.
+        """
         self._prompt_resolver = prompt_resolver
-        # Priority: explicit param > library > default constant
-        if summary_prompt is not None:
-            self.summary_prompt = summary_prompt
+        if self.config.summary_prompt is not None:
+            self.summary_prompt = self.config.summary_prompt
         elif prompt_resolver is not None:
             resolved = prompt_resolver.resolve("memory.summary")
             self.summary_prompt = resolved if resolved else DEFAULT_SUMMARY_PROMPT
         else:
             self.summary_prompt = DEFAULT_SUMMARY_PROMPT
-        self._owns_llm_provider = owns_llm_provider
-        self._messages: deque[dict[str, Any]] = deque()
-        self._summary: str = ""
+
+    async def _ainit(
+        self,
+        *,
+        llm_provider: Any = None,
+        prompt_resolver: PromptResolver | None = None,
+        **_: Any,
+    ) -> None:
+        """Resolve the summary LLM and prompt from config + injection.
+
+        A dedicated provider built from the ``llm`` config section is
+        owned by this memory; the injected ``llm_provider`` fallback
+        (the bot's main LLM) is not.
+        """
+        if self._prebuilt:
+            return
+        has_dedicated_llm = self.config.llm is not None
+        self.llm_provider = await _resolve_summary_llm(
+            self.config.llm, llm_provider
+        )
+        self._owns_llm_provider = has_dedicated_llm
+        self._resolve_prompt(prompt_resolver)
+
+    def _adopt_components(
+        self,
+        *,
+        llm_provider: Any = None,
+        prompt_resolver: PromptResolver | None = None,
+        **_: Any,
+    ) -> None:
+        """Adopt a caller-owned LLM provider for ``from_components``."""
+        if llm_provider is None:
+            raise TypeError(
+                "SummaryMemory.from_components requires llm_provider"
+            )
+        self.llm_provider = llm_provider
+        self._owns_llm_provider = False
+        self._resolve_prompt(prompt_resolver)
 
     async def add_message(
         self, content: str, role: str, metadata: dict[str, Any] | None = None

@@ -1,7 +1,6 @@
 """Tests for memory implementations."""
 
 import pytest
-import numpy as np
 
 from dataknobs_bots.bot.base import PROVIDER_ROLE_MAIN, PROVIDER_ROLE_SUMMARY_LLM
 from dataknobs_bots.memory import (
@@ -217,11 +216,10 @@ class TestVectorMemory:
         await embedding_provider.initialize()
 
         # Create vector memory
-        memory = VectorMemory(
+        memory = VectorMemory.from_components(
+            {"max_results": 5, "similarity_threshold": 0.0},  # Low threshold
             vector_store=vector_store,
             embedding_provider=embedding_provider,
-            max_results=5,
-            similarity_threshold=0.0,  # Low threshold for testing
         )
 
         # Add messages
@@ -248,11 +246,10 @@ class TestVectorMemory:
         await embedding_provider.initialize()
 
         # Create memory with high threshold
-        memory = VectorMemory(
+        memory = VectorMemory.from_components(
+            {"max_results": 10, "similarity_threshold": 0.99},  # Very high
             vector_store=vector_store,
             embedding_provider=embedding_provider,
-            max_results=10,
-            similarity_threshold=0.99,  # Very high threshold
         )
 
         # Add messages
@@ -304,7 +301,9 @@ class TestSummaryMemory:
     async def test_add_and_get_messages_within_window(self):
         """Messages within the window are returned verbatim."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider, recent_window=5)
+        memory = SummaryMemory.from_components(
+            {"recent_window": 5}, llm_provider=provider
+        )
 
         await memory.add_message("Hello", "user")
         await memory.add_message("Hi there!", "assistant")
@@ -323,7 +322,9 @@ class TestSummaryMemory:
             responses=["Summary of the conversation so far."]
         )
         await provider.initialize()
-        memory = SummaryMemory(llm_provider=provider, recent_window=3)
+        memory = SummaryMemory.from_components(
+            {"recent_window": 3}, llm_provider=provider
+        )
 
         # Add 4 messages (exceeds window of 3)
         await memory.add_message("Message 1", "user")
@@ -349,7 +350,7 @@ class TestSummaryMemory:
             responses=["First summary", "Updated summary"]
         )
         await provider.initialize()
-        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+        memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
         # Add enough to trigger summarization
         await memory.add_message("Msg 1", "user")
@@ -371,7 +372,7 @@ class TestSummaryMemory:
             responses=["A summary"]
         )
         await provider.initialize()
-        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+        memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
         # Fill and trigger summarization
         await memory.add_message("Msg 1", "user")
@@ -401,7 +402,7 @@ class TestSummaryMemory:
 
         provider.complete = fail_complete  # type: ignore[assignment]
 
-        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+        memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
         # Add 3 messages — the overflow triggers summarization which will fail
         await memory.add_message("Msg 1", "user")
@@ -419,7 +420,7 @@ class TestSummaryMemory:
     async def test_empty_history(self):
         """get_context on empty memory returns an empty list."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider)
+        memory = SummaryMemory.from_components(llm_provider=provider)
 
         context = await memory.get_context("test")
         assert context == []
@@ -432,10 +433,9 @@ class TestSummaryMemory:
         )
         provider = self._create_echo_provider(responses=["custom summary result"])
         await provider.initialize()
-        memory = SummaryMemory(
+        memory = SummaryMemory.from_components(
+            {"recent_window": 1, "summary_prompt": custom_prompt},
             llm_provider=provider,
-            recent_window=1,
-            summary_prompt=custom_prompt,
         )
 
         await memory.add_message("Msg 1", "user")
@@ -453,24 +453,24 @@ class TestSummaryMemoryProviderVisibility:
         factory = LLMProviderFactory(is_async=True)
         return factory.create({"provider": "echo", "model": "test"})
 
-    def test_providers_returns_provider_when_owned(self):
-        """Provider visible when _owns_llm_provider=True."""
-        provider = self._create_echo_provider()
-        memory = SummaryMemory(
-            llm_provider=provider, owns_llm_provider=True
+    @pytest.mark.asyncio
+    async def test_providers_returns_provider_when_owned(self):
+        """Provider visible when built from a dedicated ``llm`` config section."""
+        memory = await SummaryMemory.from_config(
+            {"llm": {"provider": "echo", "model": "test"}}
         )
 
+        assert memory._owns_llm_provider is True
         result = memory.providers()
         assert PROVIDER_ROLE_SUMMARY_LLM in result
-        assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
+        assert result[PROVIDER_ROLE_SUMMARY_LLM] is memory.llm_provider
 
     def test_providers_returns_provider_when_not_owned(self):
-        """Provider visible when _owns_llm_provider=False (shared main LLM)."""
+        """Provider visible when injected (shared main LLM, not owned)."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(
-            llm_provider=provider, owns_llm_provider=False
-        )
+        memory = SummaryMemory.from_components(llm_provider=provider)
 
+        assert memory._owns_llm_provider is False
         result = memory.providers()
         assert PROVIDER_ROLE_SUMMARY_LLM in result
         assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
@@ -478,7 +478,7 @@ class TestSummaryMemoryProviderVisibility:
     def test_providers_returns_empty_when_no_provider(self):
         """Empty dict when llm_provider is None."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider)
+        memory = SummaryMemory.from_components(llm_provider=provider)
         memory.llm_provider = None  # type: ignore[assignment]
 
         result = memory.providers()
@@ -486,33 +486,32 @@ class TestSummaryMemoryProviderVisibility:
 
     @pytest.mark.asyncio
     async def test_close_skips_when_not_owned(self):
-        """close() does NOT close provider when _owns_llm_provider=False."""
+        """close() does NOT close an injected (not-owned) provider."""
         provider = self._create_echo_provider()
         await provider.initialize()
-        memory = SummaryMemory(
-            llm_provider=provider, owns_llm_provider=False
-        )
+        memory = SummaryMemory.from_components(llm_provider=provider)
 
         await memory.close()
         assert provider.close_count == 0, "Provider should NOT be closed when not owned"
 
     @pytest.mark.asyncio
     async def test_close_closes_when_owned(self):
-        """close() closes provider when _owns_llm_provider=True."""
-        provider = self._create_echo_provider()
-        await provider.initialize()
-        memory = SummaryMemory(
-            llm_provider=provider, owns_llm_provider=True
+        """close() closes the provider built from a dedicated ``llm`` section."""
+        memory = await SummaryMemory.from_config(
+            {"llm": {"provider": "echo", "model": "test"}}
         )
 
+        assert memory._owns_llm_provider is True
         await memory.close()
-        assert provider.close_count == 1, "Provider should be closed exactly once when owned"
+        assert memory.llm_provider.close_count == 1, (
+            "Provider should be closed exactly once when owned"
+        )
 
     def test_set_provider_replaces_provider(self):
         """set_provider() updates the LLM provider for the summary role."""
         provider1 = self._create_echo_provider()
         provider2 = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider1)
+        memory = SummaryMemory.from_components(llm_provider=provider1)
 
         result = memory.set_provider(PROVIDER_ROLE_SUMMARY_LLM, provider2)
         assert result is True
@@ -525,7 +524,7 @@ class TestSummaryMemoryProviderVisibility:
     def test_set_provider_ignores_wrong_role(self):
         """set_provider() returns False for non-matching role."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider)
+        memory = SummaryMemory.from_components(llm_provider=provider)
 
         result = memory.set_provider(PROVIDER_ROLE_MAIN, self._create_echo_provider())
         assert result is False
@@ -549,7 +548,9 @@ class TestSummaryMemoryPopMessages:
     async def test_pop_within_window(self):
         """Pop messages that are still in the recent window."""
         provider = self._create_echo_provider()
-        memory = SummaryMemory(llm_provider=provider, recent_window=10)
+        memory = SummaryMemory.from_components(
+            {"recent_window": 10}, llm_provider=provider
+        )
 
         await memory.add_message("Hello", "user")
         await memory.add_message("Hi!", "assistant")
@@ -569,7 +570,7 @@ class TestSummaryMemoryPopMessages:
         """Cannot pop more messages than remain in the recent window."""
         provider = self._create_echo_provider(responses=["Summary"])
         await provider.initialize()
-        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+        memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
         # Add 3 messages — first gets summarized, 2 remain in window
         await memory.add_message("Msg 1", "user")
@@ -585,7 +586,7 @@ class TestSummaryMemoryPopMessages:
         """Popping from window does not affect the existing summary."""
         provider = self._create_echo_provider(responses=["Conversation summary"])
         await provider.initialize()
-        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+        memory = SummaryMemory.from_components({"recent_window": 2}, llm_provider=provider)
 
         await memory.add_message("Msg 1", "user")
         await memory.add_message("Msg 2", "assistant")
@@ -616,7 +617,7 @@ class TestVectorMemoryPopMessages:
         embedding_provider = llm_factory.create({"provider": "echo", "model": "test"})
         await embedding_provider.initialize()
 
-        memory = VectorMemory(
+        memory = VectorMemory.from_components(
             vector_store=vector_store,
             embedding_provider=embedding_provider,
         )
