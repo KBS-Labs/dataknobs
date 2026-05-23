@@ -30,7 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `TypeError`), a typed `self.config` property, a
   `cls.from_config(config)` one-liner, a `cls.from_config_async(config)`
   async entry point (sync assemble + `await _ainit()`), and `_setup()`
-  (sync) / `_ainit()` (async) subclass hooks. `__init__` calls
+  (sync) / `_ainit()` (async) subclass hooks. `from_config_async` is the
+  canonical async-construction entry — the only path that runs `_ainit`;
+  the base `from_config` is synchronous and never runs it. An object
+  whose canonical construction is async but that must keep a public
+  `await X.from_config(...)` API may override `from_config` with a
+  one-line async delegator (`return await cls.from_config_async(config,
+  **components)`) — the blessed counterpart to the back-compat `__init__`
+  shortcut, routing through `_coerce_config` / `_setup` / `_ainit` so the
+  override is lifecycle-faithful rather than returning a half-built
+  instance. `__init__` calls
   `super().__init__()` so the mixin composes into a cooperative
   multiple-inheritance hierarchy — list it first among the bases so its
   `__init__` is the construction entry point. The four event-bus
@@ -40,8 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unified parity guard combining structural checks: `CONFIG_CLS`
   declared, is a `StructuredConfig` subclass, dataclass field set
   matches the consumer ctor surface, the mixin precedes other bases in
-  the MRO (so its `__init__` is the entry point), an overridden
-  `from_config_async` routes through `_coerce_config`, and (optional)
+  the MRO (so its `__init__` is the entry point), entry-point symmetry
+  (an overridden `from_config_async` routes through `_coerce_config`; an
+  overridden `from_config` routes through `_coerce_config` when sync, or
+  delegates to `from_config_async` when async — pinning the blessed
+  async-canonical delegator), and (optional)
   the registry factory delegates to `from_config`. Bundles the
   `assert_dataclass_config_matches_ctor` /
   `assert_factory_kwargs_match_ctor` checks for adopters of the

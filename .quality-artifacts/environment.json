@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-23T02:21:43Z",
+  "timestamp": "2026-05-23T02:45:27Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/bots-subsystem-factory-alignment",
-  "git_commit": "d2ebd9aac4ca11d8d2071a9a62e6b9f5b4e36698",
+  "git_branch": "sbk/async-canonical-from-config",
+  "git_commit": "73df92f0ff283b614478be53434eea47bdd7a20b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

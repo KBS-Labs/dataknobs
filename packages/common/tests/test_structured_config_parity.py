@@ -7,8 +7,10 @@ The helper combines these structural checks for adopters of
 2. ``CONFIG_CLS`` is a ``StructuredConfig`` subclass.
 3. Dataclass field set matches consumer ctor surface.
 4. MRO ordering — the mixin's ``__init__`` is the resolved entry point.
-5. Async-entry symmetry — an overridden ``from_config_async`` routes
-   through ``_coerce_config``.
+5. Entry-point symmetry — an overridden ``from_config_async`` routes
+   through ``_coerce_config``; an overridden ``from_config`` routes
+   through ``_coerce_config`` when sync, or delegates to
+   ``from_config_async`` when async.
 6. (Optional) Registry factory delegates to ``from_config``.
 
 These tests exercise each failure mode against synthetic
@@ -190,3 +192,113 @@ class TestAsyncEntrySymmetry:
     def test_override_bypassing_guard_raises(self) -> None:
         with pytest.raises(AssertionError, match="_coerce_config"):
             assert_structured_config_consumer(_BadAsync)
+
+
+@dataclass(frozen=True)
+class _AsyncCfg(StructuredConfig):
+    name: str = "x"
+
+
+class _GoodAsyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
+    """Async ``from_config`` override delegating to ``from_config_async``.
+
+    The blessed back-compat shim for an object whose canonical
+    construction is async but that keeps a public ``await
+    X.from_config(...)`` API. Also records ``_ainit`` so the behavioral
+    test can prove the lifecycle ran.
+    """
+
+    CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
+
+    def _setup(self) -> None:
+        self.ainit_calls = 0
+        self.ready = False
+
+    async def _ainit(self, **components: object) -> None:
+        self.ainit_calls += 1
+        self.ready = True
+
+    @classmethod
+    async def from_config(
+        cls,
+        config: Mapping[str, object] | StructuredConfig,
+        **components: object,
+    ) -> Self:
+        return await cls.from_config_async(config, **components)
+
+
+class _BadAsyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
+    """Async ``from_config`` that builds directly, skipping ``_ainit``.
+
+    It routes through ``_coerce_config`` but never delegates to
+    ``from_config_async``, so the returned object is half-built (no
+    ``_ainit``). The guard must reject it on the missing delegation.
+    """
+
+    CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
+
+    @classmethod
+    async def from_config(
+        cls,
+        config: Mapping[str, object] | StructuredConfig,
+        **components: object,
+    ) -> Self:
+        return cls(cls._coerce_config(config))  # type: ignore[arg-type]
+
+
+class _GoodSyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
+    """Sync ``from_config`` override that routes through the guard."""
+
+    CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, object] | StructuredConfig,
+        **components: object,
+    ) -> Self:
+        return cls(cls._coerce_config(config), _components=components or None)
+
+
+class _BadSyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
+    """Sync ``from_config`` override that bypasses ``_coerce_config``."""
+
+    CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, object] | StructuredConfig,
+        **components: object,
+    ) -> Self:
+        return cls(config)  # type: ignore[arg-type]
+
+
+class TestFromConfigOverrideSymmetry:
+    def test_no_from_config_override_passes(self) -> None:
+        """A plain consumer (no ``from_config`` override) is unaffected."""
+        assert_structured_config_consumer(_GoodConsumer)
+
+    def test_async_delegator_passes(self) -> None:
+        assert_structured_config_consumer(_GoodAsyncFromConfig)
+
+    def test_async_non_delegator_raises(self) -> None:
+        with pytest.raises(AssertionError, match="from_config_async"):
+            assert_structured_config_consumer(_BadAsyncFromConfig)
+
+    def test_sync_override_through_guard_passes(self) -> None:
+        assert_structured_config_consumer(_GoodSyncFromConfig)
+
+    def test_sync_override_bypassing_guard_raises(self) -> None:
+        with pytest.raises(AssertionError, match="_coerce_config"):
+            assert_structured_config_consumer(_BadSyncFromConfig)
+
+    async def test_async_canonical_from_config_is_lifecycle_faithful(
+        self,
+    ) -> None:
+        """The blessed shim builds via ``await X.from_config`` and runs
+        ``_ainit`` exactly once, yielding a fully-initialized instance."""
+        obj = await _GoodAsyncFromConfig.from_config({"name": "alice"})
+        assert obj.ready is True
+        assert obj.ainit_calls == 1
+        assert obj.config.name == "alice"
