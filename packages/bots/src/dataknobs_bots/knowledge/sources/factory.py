@@ -12,6 +12,8 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.registry import PluginRegistry
 from dataknobs_data.sources.base import GroundedSource
 
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
@@ -21,6 +23,10 @@ if TYPE_CHECKING:
     from dataknobs_data.schema import DatabaseSchema
 
 logger = logging.getLogger(__name__)
+
+# A source factory is either a GroundedSource subclass or a callable with
+# the ``(config, **collaborators)`` dispatch signature.
+SourceFactory = type[GroundedSource] | Callable[..., GroundedSource]
 
 
 async def create_source_from_config(
@@ -74,23 +80,32 @@ async def create_source_from_config(
                 level: {type: integer}
                 description: {type: text}
     """
-    source_type = config.source_type
-
-    if source_type == "vector_kb":
-        return _create_vector_kb_source(config, knowledge_base)
-
-    if source_type == "database":
-        return await _create_database_source(config)
-
-    raise ValueError(
-        f"Unknown grounded source type: {source_type!r}. "
-        f"Supported types: vector_kb, database"
-    )
+    try:
+        return await source_backends.create_async(
+            key=config.source_type,
+            config=config,
+            knowledge_base=knowledge_base,
+        )
+    except NotFoundError as exc:
+        raise ValueError(
+            f"Unknown grounded source type: {config.source_type!r}. "
+            f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
+        ) from exc
+    except OperationError as exc:
+        # The registry wraps a builder-raised exception in OperationError.
+        # Surface a ValueError cause (e.g. the missing-knowledge_base
+        # ValueError) unchanged; other errors propagate as-is.
+        cause = exc.__cause__
+        if isinstance(cause, ValueError):
+            raise cause from cause.__cause__
+        raise
 
 
 def _create_vector_kb_source(
     config: GroundedSourceConfig,
-    knowledge_base: Any | None,
+    *,
+    knowledge_base: Any | None = None,
+    **_: Any,
 ) -> GroundedSource:
     """Wrap a KnowledgeBase as a VectorKnowledgeSource."""
     from dataknobs_bots.tools.resolve import resolve_optional_callable
@@ -337,6 +352,7 @@ def _build_heading_selection_llm(config: Any) -> Any | None:
 
 async def _create_database_source(
     config: GroundedSourceConfig,
+    **_: Any,
 ) -> GroundedSource:
     """Create a DatabaseSource from config options.
 
@@ -450,3 +466,64 @@ def _build_database_schema(
             schema.fields[name].metadata["enum"] = values
 
     return schema
+
+
+# ------------------------------------------------------------------
+# Backend registry — data-driven dispatch on ``source_type``
+# ------------------------------------------------------------------
+
+
+def _register_source_builtins(registry: PluginRegistry[GroundedSource]) -> None:
+    """Register the built-in grounded-source backends (lazy, on first access)."""
+    registry.register("vector_kb", _create_vector_kb_source)
+    registry.register("database", _create_database_source)
+
+
+# Module-level singleton — data-driven dispatch replaces the former
+# inline ``if`` on ``config.source_type``. No ``config_key`` is configured
+# because the dispatch key is read from the typed ``GroundedSourceConfig``
+# (``config.source_type``) and passed explicitly — the config is a typed
+# object, not a dict the registry could index.
+source_backends: PluginRegistry[GroundedSource] = PluginRegistry(
+    "source_backends",
+    validate_type=GroundedSource,
+    canonicalize_keys=True,
+    on_first_access=_register_source_builtins,
+)
+
+
+def register_source_backend(
+    name: str,
+    factory: SourceFactory,
+    *,
+    override: bool = False,
+) -> None:
+    """Register a custom grounded-source backend.
+
+    Args:
+        name: Backend name (matched against ``GroundedSourceConfig.source_type``).
+        factory: ``GroundedSource`` subclass or factory callable accepting
+            ``(config, **collaborators)``.
+        override: Replace an existing registration if ``True``.
+
+    Raises:
+        OperationError: If ``name`` is already registered and ``override``
+            is ``False``.
+        TypeError: If ``factory`` is not a ``GroundedSource`` subclass or callable.
+    """
+    source_backends.register(name, factory, override=override)
+
+
+def get_source_backend_factory(name: str) -> SourceFactory | None:
+    """Return the factory for a source backend name, or ``None``."""
+    return source_backends.get_factory(name)
+
+
+def is_source_backend_registered(name: str) -> bool:
+    """Check whether a source backend name is registered."""
+    return source_backends.is_registered(name)
+
+
+def list_source_backends() -> list[str]:
+    """Return a sorted list of all registered source backend names."""
+    return sorted(source_backends.list_keys())

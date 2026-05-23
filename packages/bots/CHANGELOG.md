@@ -7,8 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Pluggable backend registries for memory, knowledge bases, and grounded
+  sources.** Each subsystem's `create_*_from_config` factory now dispatches
+  through a `PluginRegistry`, so 3rd parties can register custom backends
+  without modifying core code:
+  `register_memory_backend(name, factory)` (discriminator `type`, built-ins
+  `buffer`/`vector`/`summary`/`composite`),
+  `register_knowledge_base_backend(name, factory)` (discriminator `type`,
+  built-in `rag`), and
+  `register_source_backend(name, factory)`
+  (matched against `GroundedSourceConfig.source_type`, built-ins
+  `vector_kb`/`database`). Companion `list_*_backends()`,
+  `is_*_backend_registered()`, and `get_*_backend_factory()` helpers are
+  exported alongside each. All three `register_*_backend` functions are
+  re-exported from the top-level `dataknobs_bots` namespace, mirroring
+  `register_strategy`.
+- **Typed memory sub-configs** `BufferMemoryConfig`, `SummaryMemoryConfig`,
+  and `CompositeMemoryConfig` (`StructuredConfig` subclasses, exported from
+  `dataknobs_bots.memory`). The memory factory projects each backend's
+  config dict through the matching typed config before construction.
+
 ### Changed
 
+- **`GroundedSourceConfig` is now a frozen `StructuredConfig`.** Its
+  `from_dict` is derived from the dataclass fields with a `_normalize_dict`
+  hook that preserves the legacy flat declaration shape (the `type` key
+  aliases `source_type`; keys outside the reserved set collect into
+  `options`). Public behaviour is unchanged; it gains `to_dict` and
+  symmetric round-tripping and is immutable (construct a modified copy with
+  `dataclasses.replace(...)`).
+- **The memory, knowledge-base, and grounded-source factories dispatch via
+  their backend registries** instead of inline type branching. Public
+  signatures (`create_memory_from_config`,
+  `create_knowledge_base_from_config`, `create_source_from_config`) and the
+  `ValueError` raised on an unknown type are unchanged.
 - **`config/` subcomponent dataclasses now subclass `StructuredConfig`.**
   `ToolEntry`, `TemplateVariable`, `ConfigTemplate`, `ConfigVersion`,
   `DraftMetadata`, `ComponentSchema`, and the wizard-builder configs

@@ -827,6 +827,36 @@ memory:
 - Multi-session bots that should remember past conversations
 - Any case where a single memory strategy is insufficient
 
+### Custom Memory Backends
+
+The built-in memory types (`buffer`, `vector`, `summary`, `composite`) are
+registered in a plugin registry keyed by the `type` field. Register your own
+backend to make it selectable by config — no core changes required:
+
+```python
+from dataknobs_bots import register_memory_backend
+from dataknobs_bots.memory import Memory
+
+class RedisMemory(Memory):
+    ...
+
+# A Memory subclass (with from_config / from_config_async) or a factory
+# callable accepting (config, *, llm_provider=None, prompt_resolver=None, **_)
+register_memory_backend("redis", RedisMemory)
+```
+
+```yaml
+memory:
+  type: redis        # now resolved to your backend
+  ...
+```
+
+Companion helpers: `list_memory_backends()`, `is_memory_backend_registered(name)`,
+and `get_memory_backend_factory(name)` (all importable from
+`dataknobs_bots.memory`). This mirrors `register_strategy()` for reasoning
+strategies. Knowledge bases and grounded sources expose the same pattern via
+`register_knowledge_base_backend()` and `register_source_backend()`.
+
 ### Memory Banks (Wizard Data Collection)
 
 Memory Banks are a separate concept from conversation memory. While the memory types above
