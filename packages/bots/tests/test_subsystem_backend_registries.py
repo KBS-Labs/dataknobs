@@ -3,7 +3,8 @@
 Covers the data-driven dispatch added to the memory, knowledge-base, and
 grounded-source factories: built-in backend registration, 3rd-party
 extensibility via the ``register_*_backend`` wrappers, injected-collaborator
-threading, and round-trip behaviour of the new typed sub-configs.
+threading, round-trip behaviour of the new typed sub-configs, and
+builder↔ctor parity for the hand-rolled memory builders.
 
 The exhaustive behavioural coverage of each factory (every backend's output
 and key handling) lives in ``test_memory.py``, ``test_composite_memory.py``,
@@ -44,8 +45,17 @@ from dataknobs_bots.memory import (
     memory_backends,
     register_memory_backend,
 )
+from dataknobs_bots.memory.registry import (
+    _build_buffer,
+    _build_composite,
+    _build_summary,
+)
+from dataknobs_bots.memory.summary import SummaryMemory
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
-from dataknobs_common.testing import assert_structured_config_roundtrip
+from dataknobs_common.testing import (
+    assert_factory_kwargs_match_ctor,
+    assert_structured_config_roundtrip,
+)
 
 # ===========================================================================
 # Built-in registration
@@ -355,6 +365,34 @@ class TestConfigRoundTrips:
             "backend": "sqlite",
             "content_field": "description",
         }
+
+
+# ===========================================================================
+# Builder ↔ ctor parity (drift guard)
+# ===========================================================================
+
+
+class TestBuilderCtorParity:
+    """The hand-rolled builders stay in sync with their target ctors.
+
+    The buffer/summary/composite builders construct their ``Memory`` by
+    naming kwargs explicitly (unlike the vector/rag builders, which delegate
+    to the class's own ``from_config``). That hand-rolled forwarding is the
+    drift surface ``assert_factory_kwargs_match_ctor`` exists to police: if a
+    ctor gains a param the builder forgets to forward, or the builder passes
+    a kwarg the ctor no longer accepts, the config knob is silently dropped
+    (or construction breaks) at runtime. These guards fail the build the
+    moment either side drifts.
+    """
+
+    def test_buffer_builder_matches_ctor(self) -> None:
+        assert_factory_kwargs_match_ctor(_build_buffer, BufferMemory)
+
+    def test_summary_builder_matches_ctor(self) -> None:
+        assert_factory_kwargs_match_ctor(_build_summary, SummaryMemory)
+
+    def test_composite_builder_matches_ctor(self) -> None:
+        assert_factory_kwargs_match_ctor(_build_composite, CompositeMemory)
 
 
 # ===========================================================================
