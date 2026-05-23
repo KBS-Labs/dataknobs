@@ -44,6 +44,7 @@ With Caching:
 """
 
 import asyncio
+import inspect
 import threading
 import time
 from typing import (
@@ -1161,6 +1162,145 @@ class PluginRegistry(Generic[T]):
             registration errors are programming mistakes caught immediately,
             while creation errors may arise from dynamic factory behavior.
         """
+        factory, key, config = self._resolve_factory(key, config)
+
+        try:
+            if isinstance(factory, type) and hasattr(factory, "from_config"):
+                instance = factory.from_config(config or {}, **kwargs)
+            else:
+                instance = factory(config or {}, **kwargs)
+
+            if self._validate_type and not isinstance(
+                instance, self._validate_type
+            ):
+                raise TypeError(
+                    f"Factory must return a "
+                    f"{self._validate_type.__name__} instance, "
+                    f"got {type(instance).__name__}"
+                )
+
+        except (NotFoundError, OperationError):
+            raise
+        except Exception as e:
+            raise OperationError(
+                f"Failed to create plugin '{key}': {e}",
+                context={"key": key, "registry": self._name},
+            ) from e
+
+        return instance
+
+    async def create_async(
+        self,
+        key: str | None = None,
+        config: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> T:
+        """Create a fresh instance, awaiting an asynchronous factory.
+
+        The async counterpart to :meth:`create`. Identical key
+        resolution and factory lookup (both delegate to the shared
+        ``_resolve_factory`` prologue), but the factory result is
+        awaited before the ``validate_type`` guard runs — so the guard
+        checks the resolved instance, not a coroutine. Use this for
+        plugins whose construction is asynchronous (an eager-connecting
+        backend, an LLM-warmed component, a knowledge base that ingests
+        on build).
+
+        Factory invocation:
+
+        - If the factory is a class with a ``from_config_async``
+          classmethod: ``await factory.from_config_async(config, **kwargs)``
+          (the canonical async entry point).
+        - Else if it exposes ``from_config``:
+          ``factory.from_config(config, **kwargs)``, awaited if the
+          result is awaitable.
+        - Otherwise: ``factory(config, **kwargs)``, awaited if the result
+          is awaitable.
+
+        A purely synchronous factory works unchanged — its non-awaitable
+        result passes through. Like :meth:`create`, this never caches.
+
+        Args:
+            key: Plugin identifier. Optional when ``config_key`` is
+                configured on the registry.
+            config: Configuration dictionary passed to the factory.
+                ``None`` is treated as ``{}``.
+            **kwargs: Additional keyword arguments forwarded to the
+                factory (e.g. injected collaborators threaded into a
+                ``StructuredConfigConsumer`` consumer's ``_ainit``).
+
+        Returns:
+            Fresh plugin instance.
+
+        Raises:
+            ValueError: If ``key`` is ``None`` and cannot be resolved.
+            NotFoundError: If the resolved key is not registered.
+            OperationError: If the factory raises (including
+                ``validate_type`` failures).
+        """
+        factory, key, config = self._resolve_factory(key, config)
+
+        try:
+            if isinstance(factory, type) and hasattr(
+                factory, "from_config_async"
+            ):
+                instance = await factory.from_config_async(
+                    config or {}, **kwargs
+                )
+            else:
+                if isinstance(factory, type) and hasattr(
+                    factory, "from_config"
+                ):
+                    result = factory.from_config(config or {}, **kwargs)
+                else:
+                    result = factory(config or {}, **kwargs)
+                instance = (
+                    await result if inspect.isawaitable(result) else result
+                )
+
+            if self._validate_type and not isinstance(
+                instance, self._validate_type
+            ):
+                raise TypeError(
+                    f"Factory must return a "
+                    f"{self._validate_type.__name__} instance, "
+                    f"got {type(instance).__name__}"
+                )
+
+        except (NotFoundError, OperationError):
+            raise
+        except Exception as e:
+            raise OperationError(
+                f"Failed to create plugin '{key}': {e}",
+                context={"key": key, "registry": self._name},
+            ) from e
+
+        return instance
+
+    def _resolve_factory(
+        self,
+        key: str | None,
+        config: Dict[str, Any] | None,
+    ) -> tuple[type[T] | Callable[..., T], str, Dict[str, Any] | None]:
+        """Resolve ``(factory, canonical_key, config)`` for create paths.
+
+        Shared prologue for :meth:`create` and :meth:`create_async` — the
+        single source of truth for routing-key resolution and factory
+        lookup, so the sync and async paths cannot drift. Handles:
+
+        - Explicit ``key``, or extraction from ``config[config_key]``
+          (falling back to ``config_key_default``).
+        - Optional stripping of the routing key from ``config`` when
+          ``strip_config_key`` is set.
+        - Key canonicalization and factory lookup.
+
+        Returns the resolved factory, the canonical key (for error
+        context), and the possibly key-stripped config. Raises
+        ``ValueError`` (unresolvable key) / ``NotFoundError`` (unknown
+        key) directly — both callers invoke this *before* their
+        factory-invocation ``try`` so these propagate unwrapped, matching
+        the historical contract.
+        """
         self._ensure_initialized()
 
         # Resolve key
@@ -1196,32 +1336,7 @@ class PluginRegistry(Generic[T]):
                         "available": list(self._factories.keys()),
                     },
                 )
-            factory = self._factories[key]
-
-        try:
-            if isinstance(factory, type) and hasattr(factory, "from_config"):
-                instance = factory.from_config(config or {}, **kwargs)
-            else:
-                instance = factory(config or {}, **kwargs)
-
-            if self._validate_type and not isinstance(
-                instance, self._validate_type
-            ):
-                raise TypeError(
-                    f"Factory must return a "
-                    f"{self._validate_type.__name__} instance, "
-                    f"got {type(instance).__name__}"
-                )
-
-        except (NotFoundError, OperationError):
-            raise
-        except Exception as e:
-            raise OperationError(
-                f"Failed to create plugin '{key}': {e}",
-                context={"key": key, "registry": self._name},
-            ) from e
-
-        return instance
+            return self._factories[key], key, config
 
     def list_keys(self) -> List[str]:
         """List all registered plugin keys.

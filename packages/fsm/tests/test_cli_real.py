@@ -739,7 +739,19 @@ class TestHistoryCLICommands:
         """Env overlay that points ``Path.home()`` at ``tmp_path``."""
         # ``Path.home()`` consults ``HOME`` on POSIX and ``USERPROFILE``
         # on Windows.  Set both so the test is platform-agnostic.
-        return {'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path)}
+        #
+        # ``COLUMNS`` pins the Rich render width: under ``CliRunner`` the
+        # module-level ``Console`` writes to a non-TTY buffer, so Rich
+        # falls back to whatever ``COLUMNS`` is in the ambient environment
+        # (80 when unset, as in CI). At 80 cols the 7-column history table
+        # truncates the FSM-name and status cells with ``…``, so the
+        # full-value assertions become environment-dependent. Pin a wide,
+        # deterministic width so the rendered cells are never truncated.
+        return {
+            'HOME': str(tmp_path),
+            'USERPROFILE': str(tmp_path),
+            'COLUMNS': '200',
+        }
 
     @staticmethod
     def _seed_history(

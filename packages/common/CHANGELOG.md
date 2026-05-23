@@ -53,6 +53,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field types, so the two are symmetric for every statically-typed
   nesting shape (no `_normalize_dict` override required for nesting).
   Eliminates per-consumer round-trip boilerplate.
+- Collaborator injection on `StructuredConfigConsumer`. The
+  construction contract distinguishes *config* (scalar knobs, nested
+  sub-configs — flows through `CONFIG_CLS` onto `self.config`) from
+  *injected collaborators* (objects the orchestrating parent supplies:
+  a shared knowledge base, a bot's main LLM, a pre-built store). The
+  classmethod entry points accept collaborators through a keyword
+  channel distinct from config — `from_config(config, **components)`
+  and `from_config_async(config, **components)` — landing them on the
+  read-only `self.components` mapping (never folded into
+  `self.config`); the async `_ainit` hook receives them as keyword
+  arguments through signature-aware delivery — a hook gets the
+  collaborators it declares (or all, when it declares `**kwargs`), so a
+  no-arg or narrowly-typed override is never crashed by an undeclared
+  injected collaborator (which stays reachable on `self.components`). A
+  consumer that consumes a collaborator declares it keyword-only with a
+  default — `_ainit(self, *, <name>=None)` — so the zero-injection path
+  is safe. The collaborator-free call sites (`from_config(config)`,
+  `cls(config)`) are unchanged. `from_components(config=None,
+  **collaborators)` covers the dual-input shape — assemble directly from
+  pre-built collaborators (binding them via the `_adopt_components` hook
+  and setting `self._prebuilt`) instead of building from config — so a
+  parent that already holds fully-built children can wire an object
+  graph without each class hand-rolling a config-vs-collaborators
+  constructor. Called without a `config` snapshot against a `CONFIG_CLS`
+  that has required fields, it raises a clear `ValueError` naming the
+  class and the remedy rather than a cryptic dataclass `TypeError`.
+- `PluginRegistry.create_async(key=None, config=None, **kwargs)` — the
+  async counterpart to `create()`. Identical key resolution and factory
+  lookup (both share an extracted `_resolve_factory` prologue), but the
+  factory result is awaited before the `validate_type` guard runs, so
+  the guard checks the resolved instance rather than a coroutine.
+  Prefers a `from_config_async` classmethod when present, else awaits an
+  awaitable `from_config`/factory result; a purely synchronous factory
+  works unchanged. Lets registries dispatch asynchronously-constructed
+  plugins (eager-connecting backends, LLM-warmed components,
+  ingest-on-build knowledge bases) with the type guard intact.
+  `assert_structured_config_consumer` gains a collaborator-hook check:
+  an overridden `_ainit` / `_adopt_components` that names parameters
+  must declare them keyword-only with defaults, so the framework's
+  component delivery is safe and the zero-collaborator path cannot
+  crash on a required positional.
 - `dataknobs_common.events.config` module — structured config
   dataclasses for every event bus backend: `MemoryEventBusConfig`,
   `RedisEventBusConfig`, `PostgresEventBusConfig`,
