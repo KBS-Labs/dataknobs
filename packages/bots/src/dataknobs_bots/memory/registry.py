@@ -31,7 +31,11 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.exceptions import (
+    DataknobsError,
+    NotFoundError,
+    OperationError,
+)
 from dataknobs_common.registry import PluginRegistry
 
 from .base import Memory
@@ -275,13 +279,15 @@ async def create_memory_from_config(
         ) from exc
     except OperationError as exc:
         # The registry wraps a backend-raised exception in OperationError.
-        # The factory's public contract raises ValueError for config
-        # problems (missing LLM source, empty/invalid composite, unknown
-        # nested type), so surface a ValueError cause unchanged. A backend
-        # that deliberately raises OperationError (or any non-ValueError)
-        # propagates as-is.
+        # Surface the original cause unchanged: the public contract raises
+        # ValueError for config problems (missing LLM source, empty/invalid
+        # composite, unknown nested type), and a backend's native dataknobs
+        # error (``ResourceError`` from a vector backend that fails to
+        # connect, ``ConfigurationError``, …) should reach the caller as its
+        # own type rather than as a generic OperationError. A wrapper with no
+        # informative cause propagates as-is.
         cause = exc.__cause__
-        if isinstance(cause, ValueError):
+        if isinstance(cause, ValueError | DataknobsError):
             raise cause from cause.__cause__
         raise
 

@@ -21,19 +21,15 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common.testing import assert_structured_config_roundtrip
 from dataknobs_bots.knowledge import (
     create_knowledge_base_from_config,
     is_knowledge_base_backend_registered,
     list_knowledge_base_backends,
-    register_knowledge_base_backend,
 )
 from dataknobs_bots.knowledge.sources import (
     create_source_from_config,
     is_source_backend_registered,
     list_source_backends,
-    register_source_backend,
-    source_backends,
 )
 from dataknobs_bots.memory import (
     BufferMemory,
@@ -49,7 +45,7 @@ from dataknobs_bots.memory import (
     register_memory_backend,
 )
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
-
+from dataknobs_common.testing import assert_structured_config_roundtrip
 
 # ===========================================================================
 # Built-in registration
@@ -60,12 +56,16 @@ class TestBuiltinRegistration:
     """The built-in backends are registered (lazily) on first access."""
 
     def test_memory_builtins_registered(self) -> None:
-        assert list_memory_backends() == [
+        # Subset, not exact-equality: ``memory_backends`` is a process-global
+        # singleton, so an exact ``==`` would be fragile if any other test
+        # registered a backend without cleanup (order-dependent under
+        # pytest-randomly).
+        assert set(list_memory_backends()) >= {
             "buffer",
             "composite",
             "summary",
             "vector",
-        ]
+        }
         for name in ("buffer", "vector", "summary", "composite"):
             assert is_memory_backend_registered(name)
 
@@ -74,7 +74,9 @@ class TestBuiltinRegistration:
         assert is_knowledge_base_backend_registered("rag")
 
     def test_source_builtins_registered(self) -> None:
-        assert list_source_backends() == ["database", "vector_kb"]
+        # Subset rather than exact-equality — see the note on the memory
+        # built-ins test (shared process-global singleton).
+        assert set(list_source_backends()) >= {"database", "vector_kb"}
         assert is_source_backend_registered("vector_kb")
         assert is_source_backend_registered("database")
 
@@ -197,6 +199,51 @@ class TestErrorContract:
                     ],
                 }
             )
+
+    @pytest.mark.asyncio
+    async def test_null_source_type_raises_friendly_value_error(self) -> None:
+        """A null ``type:`` (``source_type`` is ``None``) surfaces the
+        documented unknown-type message — not the registry's internal
+        "key is required when config_key is not configured"."""
+        config = GroundedSourceConfig.from_dict({"type": None, "name": "s"})
+        assert config.source_type is None
+        with pytest.raises(ValueError, match="Unknown grounded source type"):
+            await create_source_from_config(config)
+
+    @pytest.mark.asyncio
+    async def test_empty_source_type_raises_friendly_value_error(self) -> None:
+        config = GroundedSourceConfig(source_type="", name="s")
+        with pytest.raises(ValueError, match="Unknown grounded source type"):
+            await create_source_from_config(config)
+
+
+# ===========================================================================
+# Native error-type preservation (non-ValueError backend failures)
+# ===========================================================================
+
+
+class TestBackendErrorTypePreserved:
+    """A backend's native dataknobs error reaches the caller as its own type.
+
+    The registry wraps factory exceptions in ``OperationError``; the public
+    factory unwraps the original cause so a ``ResourceError`` (e.g. a vector
+    backend that fails to connect) is surfaced as ``ResourceError`` rather
+    than masked as a generic ``OperationError``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resource_error_from_backend_not_masked(self) -> None:
+        from dataknobs_common.exceptions import ResourceError
+
+        def _failing(config: dict[str, Any], **_: Any) -> Memory:
+            raise ResourceError("backend connection refused")
+
+        register_memory_backend("failing", _failing)
+        try:
+            with pytest.raises(ResourceError, match="connection refused"):
+                await create_memory_from_config({"type": "failing"})
+        finally:
+            memory_backends.unregister("failing")
 
 
 # ===========================================================================

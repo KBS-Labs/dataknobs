@@ -25,7 +25,11 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.exceptions import (
+    DataknobsError,
+    NotFoundError,
+    OperationError,
+)
 from dataknobs_common.registry import PluginRegistry
 
 from .base import KnowledgeBase
@@ -105,10 +109,13 @@ async def create_knowledge_base_from_config(config: dict[str, Any]) -> Knowledge
         ) from exc
     except OperationError as exc:
         # The registry wraps a backend-raised exception in OperationError.
-        # Surface a ValueError cause (config-problem contract) unchanged; a
-        # backend that deliberately raises OperationError propagates as-is.
+        # Surface the original cause unchanged: a config-problem ValueError
+        # and the dataknobs error hierarchy (``ResourceError`` when the
+        # embedding/vector backend fails to connect, ``ConfigurationError``,
+        # …) should reach the caller as their own type. A wrapper with no
+        # informative cause propagates as-is.
         cause = exc.__cause__
-        if isinstance(cause, ValueError):
+        if isinstance(cause, ValueError | DataknobsError):
             raise cause from cause.__cause__
         raise
 

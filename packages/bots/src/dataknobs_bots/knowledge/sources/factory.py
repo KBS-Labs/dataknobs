@@ -12,11 +12,14 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
+from dataknobs_common.exceptions import (
+    DataknobsError,
+    NotFoundError,
+    OperationError,
+)
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_data.sources.base import GroundedSource
-
-from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 
 if TYPE_CHECKING:
     from dataknobs_data.fields import FieldType
@@ -80,6 +83,16 @@ async def create_source_from_config(
                 level: {type: integer}
                 description: {type: text}
     """
+    # A falsy ``source_type`` (e.g. ``type:`` declared null in YAML) would
+    # otherwise reach the registry with ``key=None`` — and since
+    # ``source_backends`` has no ``config_key``, that raises an opaque
+    # "key is required" error. Surface the documented unknown-type message.
+    if not config.source_type:
+        raise ValueError(
+            f"Unknown grounded source type: {config.source_type!r}. "
+            f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
+        )
+
     try:
         return await source_backends.create_async(
             key=config.source_type,
@@ -93,10 +106,13 @@ async def create_source_from_config(
         ) from exc
     except OperationError as exc:
         # The registry wraps a builder-raised exception in OperationError.
-        # Surface a ValueError cause (e.g. the missing-knowledge_base
-        # ValueError) unchanged; other errors propagate as-is.
+        # Surface the original cause unchanged — both config-problem
+        # ``ValueError``s (e.g. missing knowledge_base) and the dataknobs
+        # error hierarchy (``ResourceError``, ``ConfigurationError``, …) so
+        # the builder's native error type reaches the caller. A wrapper with
+        # no informative cause propagates as-is.
         cause = exc.__cause__
-        if isinstance(cause, ValueError):
+        if isinstance(cause, ValueError | DataknobsError):
             raise cause from cause.__cause__
         raise
 
