@@ -207,6 +207,25 @@ class TestDualInputConstructor:
         with pytest.raises(TypeError, match="`llm` is required"):
             DynaBot()
 
+    def test_prebuilt_without_storage_raises(self) -> None:
+        """A built bot needs conversation storage — omitting it is rejected.
+
+        ``ConversationManager`` (driven by every ``chat()``) requires a
+        non-None storage, so a pre-built bot lacking it would fail on first
+        use. The constructor rejects it up front instead of building a
+        broken bot.
+        """
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        with pytest.raises(TypeError, match="conversation_storage"):
+            DynaBot(llm=provider, prompt_builder=_make_prompt_builder())
+
+    @pytest.mark.asyncio
+    async def test_prebuilt_without_prompt_builder_raises(self) -> None:
+        """A built bot needs a prompt builder — omitting it is rejected."""
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        with pytest.raises(TypeError, match="prompt_builder"):
+            DynaBot(llm=provider, conversation_storage=await _make_storage())
+
     def test_typed_config_with_collaborator_kwarg_raises(self) -> None:
         cfg = DynaBotConfig.from_dict({"llm": {"provider": "echo"}})
         with pytest.raises(TypeError, match="cannot mix a config"):
@@ -245,6 +264,15 @@ class TestFromComponents:
         with pytest.raises(TypeError, match="requires a built `llm`"):
             DynaBot.from_components(prompt_builder=_make_prompt_builder())
 
+    def test_requires_prompt_builder_and_storage(self) -> None:
+        """``from_components`` shares the pre-built collaborator contract:
+        a built bot needs both a prompt builder and conversation storage."""
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        with pytest.raises(
+            TypeError, match="prompt_builder and conversation_storage"
+        ):
+            DynaBot.from_components(llm=provider)
+
 
 # ---------------------------------------------------------------------------
 # Config-driven lifecycle
@@ -277,6 +305,21 @@ class TestConfigDrivenLifecycle:
         async with bot_dict, bot_typed:
             assert bot_dict.config == bot_typed.config
             assert bot_dict._max_tool_iterations == bot_typed._max_tool_iterations == 4
+
+    @pytest.mark.asyncio
+    async def test_from_config_without_llm_raises_clear_error(self) -> None:
+        """No ``llm`` section and no injected provider → a clear error.
+
+        Without the guard this fails deep inside ``LLMConfig.from_dict({})``
+        with an opaque ``TypeError`` about missing positional arguments. The
+        guard surfaces a ``ConfigurationError`` naming the real problem.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="'llm' section"):
+            await DynaBot.from_config(
+                {"conversation_storage": {"backend": "memory"}}
+            )
 
     @pytest.mark.asyncio
     async def test_from_config_injected_llm_not_owned(self) -> None:

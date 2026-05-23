@@ -372,10 +372,34 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         :meth:`_adopt_components` so the two pre-built entry points cannot
         drift. Scalar derived state is set by :meth:`_setup`; this method
         only assigns the collaborator objects.
+
+        ``prompt_builder`` and ``conversation_storage`` are required: a
+        functioning bot drives every conversation through a
+        :class:`~dataknobs_llm.conversations.ConversationManager`, which
+        needs both. Pre-built construction that omits either yields a bot
+        that would fail on the first :meth:`chat`, so it is rejected up
+        front (mirroring the ``llm`` requirement). The config-driven shape
+        builds these in :meth:`_build_collaborators` instead and never
+        reaches this method.
         """
+        missing = [
+            name
+            for name, value in (
+                ("prompt_builder", prompt_builder),
+                ("conversation_storage", conversation_storage),
+            )
+            if value is None
+        ]
+        if missing:
+            raise TypeError(
+                f"{type(self).__name__}: pre-built construction requires "
+                f"{' and '.join(missing)} — a built bot needs a prompt "
+                "builder and conversation storage. Provide them, or use "
+                "config-driven construction via from_config()."
+            )
         self.llm = llm
-        self.prompt_builder = prompt_builder  # type: ignore[assignment]
-        self.conversation_storage = conversation_storage  # type: ignore[assignment]
+        self.prompt_builder = prompt_builder
+        self.conversation_storage = conversation_storage
         self.tool_registry = tool_registry or ToolRegistry()
         self.memory = memory
         self.knowledge_base = knowledge_base
@@ -636,6 +660,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             self._owns_llm = False
             await self._build_collaborators(middleware_override=middleware)
             return
+
+        if not self.config.llm:
+            from dataknobs_common.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "DynaBot config-driven construction requires an 'llm' "
+                "section (at minimum 'provider' and 'model'), or a pre-built "
+                "provider passed as from_config(config, llm=...). Neither was "
+                "provided."
+            )
 
         from dataknobs_llm.llm import LLMProviderFactory
 
