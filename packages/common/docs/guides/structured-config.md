@@ -181,6 +181,45 @@ and use `from_config`. Injected collaborators passed as keyword
 widget = await Widget.from_config_async({"name": "x", "size": 4})
 ```
 
+#### Async-canonical construction (the `from_config` async delegator)
+
+`from_config_async` is the canonical entry point for an asynchronously
+constructed object — it is the only path that runs `_ainit`. The base
+`from_config` stays synchronous and never runs `_ainit`. An object whose
+canonical construction is async **and** that must keep a public
+`await X.from_config(...)` API may override `from_config` with a one-line
+async delegator — the blessed counterpart to the
+[back-compat `__init__` shortcut](#back-compat-positional-shortcuts):
+
+```python
+@classmethod
+async def from_config(cls, config, **components) -> Self:
+    return await cls.from_config_async(config, **components)
+```
+
+This is not a divergence: it routes straight through
+`from_config_async`, so `_coerce_config`, `__init__(config)`, `_setup`,
+and `_ainit` all run. A consumer with explicit injection kwargs keeps
+them and forwards them as components:
+
+```python
+@classmethod
+async def from_config(cls, config, *, llm=None, middleware=None) -> Bot:
+    return await cls.from_config_async(config, llm=llm, middleware=middleware)
+```
+
+Footgun: an async `from_config` override *removes* the synchronous
+half-built path for that class — `X.from_config(...)` now returns a
+coroutine — which is exactly what an async-built object wants. A caller
+that forgets the `await` is not left without a signal: a static type
+checker flags any use of the result as an instance (its inferred type is
+`Coroutine[..., Self]`, not `Self`), and the interpreter emits
+`RuntimeWarning: coroutine '...from_config' was never awaited` when the
+orphaned coroutine is garbage-collected. The parity guard requires an
+async `from_config` override to delegate to `from_config_async`, and a
+sync override to route through `_coerce_config` (see
+[`assert_structured_config_consumer`](#testing-helpers)).
+
 ### `self.config` (property)
 
 Read-only typed view. Backed by the frozen `ConfigT` so runtime
@@ -443,7 +482,11 @@ Unified parity guard combining structural checks:
 4. The mixin precedes other bases in the MRO (so its `__init__` is the
    construction entry point) — unless the consumer defines its own
    `__init__` (the documented back-compat shortcut).
-5. An overridden `from_config_async` routes through `_coerce_config`.
+5. Entry-point symmetry: an overridden `from_config_async` routes
+   through `_coerce_config`; an overridden `from_config` routes through
+   `_coerce_config` when sync, or delegates to `from_config_async` when
+   async (the [async-canonical
+   delegator](#async-canonical-construction-the-from_config-async-delegator)).
 6. (Optional) A registry factory passed via `expected_factory=`
    delegates to `from_config`.
 7. An overridden `_ainit` / `_adopt_components` that names collaborator

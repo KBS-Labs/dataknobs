@@ -426,11 +426,19 @@ structural checks into one call:
    `StructuredConfigConsumer.__init__`, proving the mixin precedes any
    other base with a competing `__init__`. A consumer that overrides
    `__init__` (the back-compat positional shortcut) is exempt.
-5. **Async-entry symmetry** — when the consumer overrides
-   `from_config_async`, the override must route through `_coerce_config`
-   (the same guard `from_config` uses).
+5. **Entry-point symmetry** — an overridden `from_config_async` must
+   route through `_coerce_config` (the same guard `from_config` uses); an
+   overridden `from_config` must route through `_coerce_config` when sync,
+   or delegate to `from_config_async` when async (the blessed
+   async-canonical delegator, so `_coerce_config` and the `_ainit`
+   lifecycle both run rather than returning a half-built instance).
 6. (Optional) when `expected_factory` is passed, the registry factory
    delegates to `from_config` (via `assert_factory_kwargs_match_ctor`).
+7. **Collaborator-hook safety** — an overridden `_ainit` /
+   `_adopt_components` that names collaborator parameters must declare
+   them keyword-only with defaults, so the framework's signature-aware
+   delivery is safe and the zero-collaborator construction path cannot
+   crash on a required positional.
 
 ```python
 from dataknobs_common.testing import assert_structured_config_consumer

@@ -457,6 +457,40 @@ class StructuredConfigConsumer(Generic[ConfigT]):
       legitimate exception is preserving a back-compat positional
       shortcut (see ``PostgresEventBus`` for an example).
 
+    Async-canonical construction:
+
+    ``from_config_async`` is the canonical entry point for an object
+    whose initialization is asynchronous; it is the only path that runs
+    :meth:`_ainit`. ``from_config`` stays synchronous on this base and
+    never runs ``_ainit`` — synchronous construction is opt-in to the
+    sync lifecycle only. An object whose canonical construction is async
+    AND that must keep a public ``await X.from_config(...)`` API may
+    override ``from_config`` to a one-line async delegator — the blessed
+    counterpart to the ``__init__`` back-compat exception above::
+
+        @classmethod
+        async def from_config(cls, config, **components) -> Self:
+            return await cls.from_config_async(config, **components)
+
+    This is not a divergence: it routes straight through
+    ``from_config_async``, so ``_coerce_config``, ``__init__(config)``,
+    ``_setup``, and ``_ainit`` all run. A consumer with explicit
+    injection kwargs keeps them and forwards them as components (e.g. a
+    bot threading its main LLM and middleware through). Note the
+    footgun: an async ``from_config`` override *removes* the synchronous
+    half-built path for that class — ``X.from_config(...)`` now returns a
+    coroutine — which is exactly what an async-built object wants. A
+    caller that forgets the ``await`` is not left without a signal: a
+    static type checker flags any use of the result as an instance (its
+    inferred type is ``Coroutine[..., Self]``, not ``Self``), and the
+    interpreter emits ``RuntimeWarning: coroutine '...from_config' was
+    never awaited`` when the orphaned coroutine is garbage-collected. The
+    parity guard
+    (:func:`dataknobs_common.testing.assert_structured_config_consumer`)
+    requires an async ``from_config`` override to delegate to
+    ``from_config_async`` and a sync override to route through
+    ``_coerce_config``.
+
     See :func:`dataknobs_common.testing.assert_structured_config_consumer`
     for the parity guard that pins these contracts at test time.
     """

@@ -323,6 +323,46 @@ def assert_ctor_reads_documented_keys(
         )
 
 
+def _override_calls_attr(
+    consumer_cls: type, method_name: str, attr_name: str
+) -> bool:
+    """True if the ``method_name`` override *calls* ``....attr_name(...)``.
+
+    Reads the source of the ``method_name`` entry in
+    ``consumer_cls.__dict__`` (unwrapping ``classmethod`` /
+    ``staticmethod``) and walks it for a *call* whose function is an
+    attribute access ending in ``attr_name`` — the
+    ``await cls.from_config_async(...)`` or ``cls._coerce_config(...)``
+    shape both legitimate overrides use. Used by the entry-point
+    symmetry check to prove an override actually routes through the
+    canonical dispatch.
+
+    The check requires an invocation, not a bare mention: a reference
+    that is never called — in a dead branch, as a ``getattr`` argument,
+    or assigned to an unused local — does not satisfy it. (Attribute
+    references inside comments or docstrings are already excluded, since
+    those are not ``ast.Attribute`` nodes.)
+
+    Raises:
+        AssertionError: If the override source cannot be read.
+    """
+    raw = consumer_cls.__dict__[method_name]
+    if isinstance(raw, (classmethod, staticmethod)):
+        raw = raw.__func__
+    try:
+        src = textwrap.dedent(inspect.getsource(raw))
+    except (OSError, TypeError) as e:
+        raise AssertionError(
+            f"Cannot read source of {consumer_cls.__name__}.{method_name}: {e}"
+        ) from e
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == attr_name
+        for node in ast.walk(ast.parse(src))
+    )
+
+
 def assert_structured_config_consumer(
     consumer_cls: type,
     *,
@@ -347,10 +387,16 @@ def assert_structured_config_consumer(
        — proving the mixin precedes any other base that defines a
        competing ``__init__``. A consumer that overrides ``__init__``
        (the documented back-compat shortcut) is exempt.
-    5. **Async-entry symmetry.** If ``consumer_cls`` overrides
-       ``from_config_async``, the override must route through
-       ``_coerce_config`` (the same guard ``from_config`` uses) — catches
-       an async factory that bypasses the typed-config dispatch.
+    5. **Entry-point symmetry.** An overridden ``from_config_async``
+       must route through ``_coerce_config`` (the same guard
+       ``from_config`` uses) — catches an async factory that bypasses
+       the typed-config dispatch. An overridden ``from_config`` is held
+       to the matching rule: a *sync* override must route through
+       ``_coerce_config``; an *async* override (the blessed back-compat
+       shim for an object whose canonical construction is async) must
+       delegate to ``from_config_async`` so both the typed-config guard
+       and the ``_ainit`` lifecycle run rather than returning a
+       half-built instance.
     6. (Optional) If ``expected_factory`` is supplied, its body
        delegates to ``consumer_cls.from_config(config)`` (delegates to
        :func:`assert_factory_kwargs_match_ctor`) — proves the registry
@@ -419,29 +465,49 @@ def assert_structured_config_consumer(
                 "List StructuredConfigConsumer first among the bases."
             )
 
-    # Check 5 — async-entry symmetry. An overridden ``from_config_async``
-    # must route through ``_coerce_config`` like ``from_config`` does.
+    # Check 5 — entry-point symmetry. Overrides of the construction entry
+    # points must preserve the typed-config dispatch:
+    #   * ``from_config_async`` (always async) must route through
+    #     ``_coerce_config`` like ``from_config`` does.
+    #   * an ``async`` ``from_config`` override (the back-compat shim for
+    #     an object whose canonical construction is async — it exposes a
+    #     public ``await X.from_config(...)`` API) must delegate to
+    #     ``from_config_async``, so ``_coerce_config`` AND the ``_ainit``
+    #     lifecycle still run. A direct ``cls(...)`` build would skip
+    #     ``_ainit`` and silently return a half-built object.
+    #   * a ``sync`` ``from_config`` override must route through
+    #     ``_coerce_config``, the same rule the default sync path follows.
     if "from_config_async" in consumer_cls.__dict__:
-        raw = consumer_cls.__dict__["from_config_async"]
-        if isinstance(raw, classmethod):
-            raw = raw.__func__
-        try:
-            src = textwrap.dedent(inspect.getsource(raw))
-        except (OSError, TypeError) as e:
-            raise AssertionError(
-                f"Cannot read source of "
-                f"{consumer_cls.__name__}.from_config_async: {e}"
-            ) from e
-        routes_through_guard = any(
-            isinstance(node, ast.Attribute)
-            and node.attr == "_coerce_config"
-            for node in ast.walk(ast.parse(src))
-        )
-        if not routes_through_guard:
+        if not _override_calls_attr(
+            consumer_cls, "from_config_async", "_coerce_config"
+        ):
             raise AssertionError(
                 f"{consumer_cls.__name__}.from_config_async does not route "
                 "through _coerce_config; it must use the same typed-config "
                 "guard as from_config so a wrong-subclass config is rejected."
+            )
+    if "from_config" in consumer_cls.__dict__:
+        raw_from_config = consumer_cls.__dict__["from_config"]
+        if isinstance(raw_from_config, (classmethod, staticmethod)):
+            raw_from_config = raw_from_config.__func__
+        if inspect.iscoroutinefunction(raw_from_config):
+            if not _override_calls_attr(
+                consumer_cls, "from_config", "from_config_async"
+            ):
+                raise AssertionError(
+                    f"{consumer_cls.__name__}.from_config is async but does "
+                    "not delegate to from_config_async; an async from_config "
+                    "override must delegate to from_config_async so the "
+                    "typed-config guard and the _ainit lifecycle both run."
+                )
+        elif not _override_calls_attr(
+            consumer_cls, "from_config", "_coerce_config"
+        ):
+            raise AssertionError(
+                f"{consumer_cls.__name__}.from_config override does not route "
+                "through _coerce_config; a sync from_config override must use "
+                "the same typed-config guard so a wrong-subclass config is "
+                "rejected."
             )
 
     # Check 7 — collaborator-hook safety. An override of ``_ainit`` /
