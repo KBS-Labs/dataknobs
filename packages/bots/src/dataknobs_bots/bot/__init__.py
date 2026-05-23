@@ -10,6 +10,7 @@ from .base import (
     UndoResult,
     normalize_wizard_state,
 )
+from .config import DynaBotConfig
 from .context import BotContext
 from .turn import ToolExecution, TurnMode, TurnState
 from .manager import BotManager
@@ -20,6 +21,7 @@ __all__ = [
     "BotManager",
     "BotRegistry",
     "DynaBot",
+    "DynaBotConfig",
     "InMemoryBotRegistry",
     "PROVIDER_ROLE_EXTRACTION",
     "PROVIDER_ROLE_KB_EMBEDDING",

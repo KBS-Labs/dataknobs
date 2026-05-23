@@ -10,6 +10,7 @@ from .bot import (
     BotManager,
     BotRegistry,
     DynaBot,
+    DynaBotConfig,
     UndoResult,
     normalize_wizard_state,
 )
@@ -93,6 +94,7 @@ __all__ = [
     "CostTrackingMiddleware",
     "DraftMetadata",
     "DynaBot",
+    "DynaBotConfig",
     "DynaBotConfigBuilder",
     "DynaBotConfigSchema",
     "GetTemplateDetailsTool",
