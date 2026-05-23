@@ -479,7 +479,12 @@ class StructuredConfigConsumer(Generic[ConfigT]):
     bot threading its main LLM and middleware through). Note the
     footgun: an async ``from_config`` override *removes* the synchronous
     half-built path for that class — ``X.from_config(...)`` now returns a
-    coroutine — which is exactly what an async-built object wants. The
+    coroutine — which is exactly what an async-built object wants. A
+    caller that forgets the ``await`` is not left without a signal: a
+    static type checker flags any use of the result as an instance (its
+    inferred type is ``Coroutine[..., Self]``, not ``Self``), and the
+    interpreter emits ``RuntimeWarning: coroutine '...from_config' was
+    never awaited`` when the orphaned coroutine is garbage-collected. The
     parity guard
     (:func:`dataknobs_common.testing.assert_structured_config_consumer`)
     requires an async ``from_config`` override to delegate to

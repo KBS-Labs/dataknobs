@@ -230,9 +230,11 @@ class _GoodAsyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
 class _BadAsyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
     """Async ``from_config`` that builds directly, skipping ``_ainit``.
 
-    It routes through ``_coerce_config`` but never delegates to
-    ``from_config_async``, so the returned object is half-built (no
-    ``_ainit``). The guard must reject it on the missing delegation.
+    It calls ``_coerce_config`` (which alone would satisfy a *sync*
+    override) but never delegates to ``from_config_async``, so ``_ainit``
+    never runs and the returned object is half-built. The guard rejects
+    it specifically on the missing ``from_config_async`` delegation that
+    an async override requires — not on the ``_coerce_config`` call.
     """
 
     CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
@@ -274,10 +276,21 @@ class _BadSyncFromConfig(StructuredConfigConsumer[_AsyncCfg]):
         return cls(config)  # type: ignore[arg-type]
 
 
+class _PlainConsumer(StructuredConfigConsumer[_AsyncCfg]):
+    """Minimal consumer with no ``from_config`` override.
+
+    Dedicated to the "no override" symmetry case so this test stays a
+    true no-override fixture even if a shared fixture elsewhere gains a
+    ``from_config`` override later.
+    """
+
+    CONFIG_CLS: ClassVar[type[_AsyncCfg]] = _AsyncCfg
+
+
 class TestFromConfigOverrideSymmetry:
     def test_no_from_config_override_passes(self) -> None:
         """A plain consumer (no ``from_config`` override) is unaffected."""
-        assert_structured_config_consumer(_GoodConsumer)
+        assert_structured_config_consumer(_PlainConsumer)
 
     def test_async_delegator_passes(self) -> None:
         assert_structured_config_consumer(_GoodAsyncFromConfig)
