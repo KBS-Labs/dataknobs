@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from dataknobs_common.structured_config import StructuredConfig
 
 
 @dataclass
@@ -257,8 +260,8 @@ class GroundedResultProcessingConfig:
         return cls(**filtered)
 
 
-@dataclass
-class GroundedSourceConfig:
+@dataclass(frozen=True)
+class GroundedSourceConfig(StructuredConfig):
     """Configuration for a single grounded source.
 
     Used by the config-driven source factory to construct
@@ -266,6 +269,7 @@ class GroundedSourceConfig:
 
     Attributes:
         source_type: Source type key — ``"vector_kb"``, ``"database"``.
+            Accepts the ``type`` key as an alias on ``from_dict``.
         name: Unique source name for provenance tracking.
         weight: Relative weight for round-robin result merging.
             A source with ``weight: 3`` contributes 3 results per
@@ -275,6 +279,10 @@ class GroundedSourceConfig:
         options: Source-specific options passed to the constructor.
             For ``"database"``: ``backend``, ``connection``,
             ``content_field``, ``text_search_fields``, ``schema``.
+            On ``from_dict``, any keys outside the reserved set
+            (``type``/``source_type``, ``name``, ``weight``,
+            ``topic_index``, ``options``) are collected here, preserving
+            the legacy flat declaration shape.
         topic_index: Optional topic index configuration for this source.
             When present, the source uses heading-tree or cluster-based
             retrieval instead of (or in addition to) text_queries.
@@ -289,19 +297,33 @@ class GroundedSourceConfig:
     topic_index: dict[str, Any] | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> GroundedSourceConfig:
-        """Build from a config dict."""
-        topic_index = data.get("topic_index")
-        return cls(
-            source_type=data.get("type", "vector_kb"),
-            name=data.get("name", "knowledge_base"),
-            weight=int(data.get("weight", 1)),
-            options={
-                k: v for k, v in data.items()
-                if k not in ("type", "name", "weight", "topic_index")
-            },
-            topic_index=topic_index,
-        )
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Map ``type``→``source_type`` and collect leftover keys into options.
+
+        Preserves the legacy flat declaration shape (``backend``,
+        ``content_field``, … as top-level keys) by routing every key
+        outside the reserved set into ``options``. An explicit ``options``
+        mapping (the round-trip shape) is merged on top.
+        """
+        reserved = {
+            "type",
+            "source_type",
+            "name",
+            "weight",
+            "topic_index",
+            "options",
+        }
+        options = {k: v for k, v in raw.items() if k not in reserved}
+        explicit = raw.get("options")
+        if isinstance(explicit, Mapping):
+            options.update(explicit)
+        return {
+            "source_type": raw.get("source_type", raw.get("type", "vector_kb")),
+            "name": raw.get("name", "knowledge_base"),
+            "weight": int(raw.get("weight", 1)),
+            "options": options,
+            "topic_index": raw.get("topic_index"),
+        }
 
 
 @dataclass

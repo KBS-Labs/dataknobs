@@ -28,8 +28,21 @@ from .config import (
     create_default_catalog,
     default_catalog,
 )
-from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
-from .memory import BufferMemory, CompositeMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
+from .knowledge import (
+    RAGKnowledgeBase,
+    create_knowledge_base_from_config,
+    register_knowledge_base_backend,
+)
+from .knowledge.sources import register_source_backend
+from .memory import (
+    BufferMemory,
+    CompositeMemory,
+    Memory,
+    SummaryMemory,
+    VectorMemory,
+    create_memory_from_config,
+    register_memory_backend,
+)
 from .prompts.resolver import PromptResolver
 from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
 from .reasoning import (
@@ -126,5 +139,8 @@ __all__ = [
     "default_catalog",
     "inject_providers",
     "normalize_wizard_state",
+    "register_knowledge_base_backend",
+    "register_memory_backend",
+    "register_source_backend",
     "register_strategy",
 ]

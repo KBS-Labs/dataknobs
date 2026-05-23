@@ -33,6 +33,14 @@ from .query import (
     is_ambiguous_query,
 )
 from .rag import RAGKnowledgeBase
+from .registry import (
+    create_knowledge_base_from_config,
+    get_knowledge_base_backend_factory,
+    is_knowledge_base_backend_registered,
+    knowledge_base_backends,
+    list_knowledge_base_backends,
+    register_knowledge_base_backend,
+)
 from .registry_mixin import AutoIngestionMixin
 from .retrieval import (
     ChunkMerger,
@@ -65,6 +73,11 @@ __all__ = [
     "KnowledgeBase",
     "RAGKnowledgeBase",
     "create_knowledge_base_from_config",
+    "register_knowledge_base_backend",
+    "get_knowledge_base_backend_factory",
+    "is_knowledge_base_backend_registered",
+    "list_knowledge_base_backends",
+    "knowledge_base_backends",
     # Retrieval utilities
     "ChunkMerger",
     "MergedChunk",
@@ -126,46 +139,3 @@ def __getattr__(name: str) -> Any:
 
         return S3KnowledgeBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-async def create_knowledge_base_from_config(config: dict[str, Any]) -> KnowledgeBase:
-    """Create knowledge base from configuration.
-
-    Args:
-        config: Knowledge base configuration with:
-            - type: Type of knowledge base (currently only 'rag' supported)
-            - vector_store: Vector store configuration
-            - embedding_provider: LLM provider for embeddings
-            - embedding_model: Model to use for embeddings
-            - chunking: Optional chunking configuration
-            - documents_path: Optional path to load documents
-            - document_pattern: Optional file pattern
-
-    Returns:
-        Configured knowledge base instance
-
-    Raises:
-        ValueError: If knowledge base type is not supported
-
-    Example:
-        ```python
-        config = {
-            "type": "rag",
-            "vector_store": {
-                "backend": "memory",
-                "dimensions": 384
-            },
-            "embedding_provider": "echo",
-            "embedding_model": "test"
-        }
-        kb = await create_knowledge_base_from_config(config)
-        ```
-    """
-    kb_type = config.get("type", "rag").lower()
-
-    if kb_type == "rag":
-        return await RAGKnowledgeBase.from_config(config)
-    else:
-        raise ValueError(
-            f"Unknown knowledge base type: {kb_type}. " f"Available types: rag"
-        )

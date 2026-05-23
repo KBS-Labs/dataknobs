@@ -409,7 +409,7 @@ class TestTopicIndexFilterPassthrough:
                 "min_heading_depth": 1,
             },
         )
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert source.topic_index is not None
         await source.topic_index.resolve(
@@ -449,7 +449,7 @@ class TestTopicIndexFilterPassthrough:
                 "min_heading_depth": 1,
             },
         )
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert source.topic_index is not None
         await source.topic_index.resolve(
@@ -576,7 +576,7 @@ class TestFactoryResolution:
                 "_dedup_by_entity_ref"
             ),
         )
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert isinstance(source, VectorKnowledgeSource)
         assert source._dedup_key is _dedup_by_entity_ref
@@ -589,7 +589,7 @@ class TestFactoryResolution:
                 "_id_by_entity_ref"
             ),
         )
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert isinstance(source, VectorKnowledgeSource)
         assert source._source_id_fn is _id_by_entity_ref
@@ -602,7 +602,7 @@ class TestFactoryResolution:
                 "_md_by_entity_ref"
             ),
         )
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert isinstance(source, VectorKnowledgeSource)
         assert source._metadata_fn is _md_by_entity_ref
@@ -612,7 +612,7 @@ class TestFactoryResolution:
         cfg = self._config(dedup_key="nonexistent.module:missing_fn")
 
         with pytest.raises(ValueError) as exc_info:
-            _create_vector_kb_source(cfg, kb)
+            _create_vector_kb_source(cfg, knowledge_base=kb)
 
         msg = str(exc_info.value)
         assert "'test_kb'" in msg
@@ -621,7 +621,7 @@ class TestFactoryResolution:
     def test_factory_omitted_callables_use_defaults(self) -> None:
         kb = ScriptedKnowledgeBase([])
         cfg = self._config()
-        source = _create_vector_kb_source(cfg, kb)
+        source = _create_vector_kb_source(cfg, knowledge_base=kb)
 
         assert isinstance(source, VectorKnowledgeSource)
         assert source._dedup_key is default_dedup_key

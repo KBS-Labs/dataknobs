@@ -16,7 +16,14 @@ from dataknobs_data.sources import (
 from dataknobs_llm.sources import compose_intent_schema, parse_intent
 
 # Bot-specific sources
-from .factory import create_source_from_config
+from .factory import (
+    create_source_from_config,
+    get_source_backend_factory,
+    is_source_backend_registered,
+    list_source_backends,
+    register_source_backend,
+    source_backends,
+)
 from .heading_tree import HeadingTreeConfig, HeadingTreeIndex
 from .vector import VectorKnowledgeSource
 
@@ -34,4 +41,9 @@ __all__ = [
     "HeadingTreeIndex",
     "VectorKnowledgeSource",
     "create_source_from_config",
+    "register_source_backend",
+    "get_source_backend_factory",
+    "is_source_backend_registered",
+    "list_source_backends",
+    "source_backends",
 ]
