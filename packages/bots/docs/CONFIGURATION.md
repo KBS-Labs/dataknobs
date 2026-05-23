@@ -77,6 +77,50 @@ bot = await DynaBot.from_config(config)
 }
 ```
 
+### Construction shapes and the typed `DynaBotConfig`
+
+`DynaBot.from_config()` accepts either a config mapping (the dict/YAML/JSON
+shape above) or a typed `DynaBotConfig` snapshot. Construction runs through
+the shared structured-config lifecycle, so the bot always carries a typed
+`bot.config: DynaBotConfig`:
+
+```python
+from dataknobs_bots.bot.config import DynaBotConfig
+
+# Equivalent — a typed config snapshot or a raw mapping.
+cfg = DynaBotConfig.from_dict({
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
+    "conversation_storage": {"backend": "memory"},
+})
+bot = await DynaBot.from_config(cfg)            # typed
+bot = await DynaBot.from_config(cfg.to_dict())  # mapping — same result
+```
+
+`DynaBotConfig` is a deliberately thin envelope: typed scalars plus the
+documented config sections. The polymorphic sections (`memory`,
+`knowledge_base`, `reasoning`) and the provider section (`llm`) stay raw
+mappings — their concrete type is selected by a discriminator key in the
+subsystem registries, not rebuilt from the static field graph.
+
+For programmatic construction with pre-built collaborators, the direct
+constructor and its named alias `from_components()` are equivalent:
+
+```python
+bot = DynaBot(
+    llm=provider,                       # an AsyncLLMProvider instance
+    prompt_builder=prompt_builder,
+    conversation_storage=storage,
+)
+# Same, named:
+bot = DynaBot.from_components(
+    llm=provider, prompt_builder=prompt_builder, conversation_storage=storage,
+)
+```
+
+`DynaBotConfig` is distinct from the `DynaBotConfigBuilder` /
+`DynaBotConfigSchema` config toolkit (which *produces* config mappings —
+see [Config Toolkit](config-toolkit.md)).
+
 ---
 
 ## Configuration Structure

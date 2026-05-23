@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-23T03:11:25Z",
+  "timestamp": "2026-05-23T16:04:49Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/async-canonical-from-config",
-  "git_commit": "08667dc6ba8e52401683280b86140c3d54377887",
+  "git_branch": "sbk/bots-dynabot-config-adoption",
+  "git_commit": "cb617789ef8c1576960815f4c5858273dec4bb5a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `CompositeMemoryConfig` (`StructuredConfig` subclasses, exported from
   `dataknobs_bots.memory`). The memory factory projects each backend's
   config dict through the matching typed config before construction.
+- **Typed `DynaBotConfig`** (`StructuredConfig` subclass,
+  `dataknobs_bots.bot.config`). A `DynaBot` now carries a typed
+  `bot.config: DynaBotConfig` snapshot — a thin top-level envelope of typed
+  scalars plus the documented config sections. The polymorphic subsystem
+  sections (`memory`, `knowledge_base`, `reasoning`) and the provider
+  section (`llm`) stay raw mappings, dispatched by their discriminator in
+  the subsystem registries. `DynaBot.from_config()` accepts either a config
+  mapping or a `DynaBotConfig`.
+- **`DynaBot.from_components(...)`**, the named alias of the pre-built
+  collaborator constructor (`DynaBot(llm=provider, prompt_builder=...,
+  conversation_storage=...)`), for assembling a bot from already-built
+  collaborators.
 
 ### Changed
 
@@ -43,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signatures (`create_memory_from_config`,
   `create_knowledge_base_from_config`, `create_source_from_config`) and the
   `ValueError` raised on an unknown type are unchanged.
+- **`DynaBot` is now a `StructuredConfigConsumer` and builds through the
+  shared async construction lifecycle** (`from_config` → `from_config_async`
+  → `__init__` → `_setup` → `_ainit`). `DynaBot.from_config(config, *,
+  llm=None, middleware=None)` keeps its exact signature and behavior (now a
+  parity-guarded async delegator); the direct constructor
+  `DynaBot(llm=provider, prompt_builder=..., conversation_storage=..., ...)`
+  is preserved verbatim as the pre-built collaborator shape. Construction is
+  a typing/contract refactor only — no runtime, reasoning, or dispatch
+  behavior changes.
 - **`config/` subcomponent dataclasses now subclass `StructuredConfig`.**
   `ToolEntry`, `TemplateVariable`, `ConfigTemplate`, `ConfigVersion`,
   `DraftMetadata`, `ComponentSchema`, and the wizard-builder configs

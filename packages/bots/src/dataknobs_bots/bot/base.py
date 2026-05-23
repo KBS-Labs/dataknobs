@@ -6,30 +6,30 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
 
+from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
-
 from dataknobs_llm.conversations import (
     ConversationManager,
     ConversationStorage,
     DataknobsConversationStorage,
 )
-from dataknobs_llm.conversations.storage import get_node_by_id, ConversationNode
+from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 from dataknobs_llm.tools.context import ToolExecutionContext
 
-from dataknobs_common.exceptions import NotFoundError
-
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from ..middleware.base import Middleware
+from .config import DynaBotConfig
 from .context import BotContext
 from .turn import ToolExecution, TurnMode, TurnState
 
@@ -116,7 +116,7 @@ def _node_depth(node_id: str) -> int:
     return len(node_id.split(".")) if node_id else 0
 
 
-class DynaBot:
+class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     """Configuration-driven chatbot leveraging the DataKnobs ecosystem.
 
     DynaBot provides a flexible, configuration-driven bot that can be customized
@@ -143,6 +143,8 @@ class DynaBot:
         default_max_tokens: Default max tokens for LLM generation
     """
 
+    CONFIG_CLS = DynaBotConfig
+
     _DEFAULT_MAX_TOOL_ITERATIONS = 5
     """Default maximum number of tool execution rounds before returning."""
 
@@ -154,9 +156,9 @@ class DynaBot:
 
     def __init__(
         self,
-        llm: AsyncLLMProvider,
-        prompt_builder: AsyncPromptBuilder,
-        conversation_storage: ConversationStorage,
+        llm: AsyncLLMProvider | DynaBotConfig | Mapping[str, Any] | None = None,
+        prompt_builder: AsyncPromptBuilder | None = None,
+        conversation_storage: ConversationStorage | None = None,
         tool_registry: ToolRegistry | None = None,
         memory: Memory | None = None,
         knowledge_base: KnowledgeBase | None = None,
@@ -173,13 +175,33 @@ class DynaBot:
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
         tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
         prompt_resolver: PromptResolver | None = None,
+        *,
+        _components: Mapping[str, Any] | None = None,
+        **kwargs: Any,
     ):
         """Initialize DynaBot.
 
+        This is a **dual-input** constructor with two distinct shapes:
+
+        - **Pre-built collaborators** (``llm`` is an
+          :class:`~dataknobs_llm.llm.AsyncLLMProvider` instance):
+          ``DynaBot(llm=provider, prompt_builder=..., conversation_storage=...)``
+          assigns the already-built collaborators directly. This is the
+          public programmatic constructor used by tests, ``BotTestHarness``,
+          and advanced callers; :meth:`from_components` is its canonical
+          named alias.
+        - **Config-driven** (``llm`` is a ``DynaBotConfig`` or ``Mapping``):
+          the typed-config construction lifecycle established by
+          ``StructuredConfigConsumer`` runs — ``self._config`` is set and
+          :meth:`_setup` is called, with the collaborators built later by
+          :meth:`_ainit`. This path is normally reached through
+          :meth:`from_config` / ``from_config_async``, not called directly.
+
         Args:
-            llm: LLM provider instance
-            prompt_builder: Prompt builder instance
-            conversation_storage: Conversation storage backend
+            llm: A pre-built LLM provider (pre-built shape) or a
+                ``DynaBotConfig`` / config mapping (config-driven shape).
+            prompt_builder: Prompt builder instance (pre-built shape).
+            conversation_storage: Conversation storage backend (pre-built shape).
             tool_registry: Optional tool registry
             memory: Optional memory implementation
             knowledge_base: Optional knowledge base
@@ -220,6 +242,161 @@ class DynaBot:
                 by ``from_config()``; pass explicitly only when constructing
                 bots programmatically with custom libraries.
         """
+        # Config-driven shape: from_config / from_config_async / from_components
+        # deliver a typed DynaBotConfig (or a config Mapping) in the first
+        # positional slot. Route it through the structured-config mixin, which
+        # establishes self._config and runs _setup; collaborators are built
+        # later by _ainit (or adopted by _adopt_components).
+        if isinstance(llm, (DynaBotConfig, Mapping)):
+            stray = {
+                name: value
+                for name, value in (
+                    ("prompt_builder", prompt_builder),
+                    ("conversation_storage", conversation_storage),
+                    ("tool_registry", tool_registry),
+                    ("memory", memory),
+                    ("knowledge_base", knowledge_base),
+                    ("reasoning_strategy", reasoning_strategy),
+                    ("middleware", middleware),
+                    ("system_prompt_name", system_prompt_name),
+                    ("system_prompt_content", system_prompt_content),
+                    ("system_prompt_rag_configs", system_prompt_rag_configs),
+                    ("context_transform", context_transform),
+                    ("prompt_resolver", prompt_resolver),
+                )
+                if value is not None
+            }
+            if stray:
+                raise TypeError(
+                    f"{type(self).__name__}: cannot mix a config "
+                    f"({type(llm).__name__}) with pre-built collaborator "
+                    f"arguments {sorted(stray)}. Pass the config alone "
+                    "(collaborators are built from it) or use the pre-built "
+                    "constructor form with an AsyncLLMProvider."
+                )
+            super().__init__(llm, _components=_components, **kwargs)
+            return
+
+        # Pre-built shape: an AsyncLLMProvider (or None) in the first slot.
+        if llm is None:
+            raise TypeError(
+                f"{type(self).__name__}: `llm` is required — pass an "
+                "AsyncLLMProvider for direct construction, or a DynaBotConfig "
+                "/ config mapping for config-driven construction."
+            )
+        # Build a typed snapshot of the scalar knobs for self.config. The
+        # effective default temperature / max tokens live in the llm section
+        # (mirroring the config-driven path), so _setup derives them from
+        # there for both shapes. A callable context_transform is not
+        # serializable, so it is omitted from the snapshot and assigned to
+        # the live attribute below.
+        snapshot = DynaBotConfig(
+            llm={
+                "temperature": default_temperature,
+                "max_tokens": default_max_tokens,
+            },
+            max_tool_iterations=max_tool_iterations,
+            tool_timeout=tool_timeout,
+            tool_loop_timeout=tool_loop_timeout,
+            context_transform=(
+                context_transform if isinstance(context_transform, str) else None
+            ),
+        )
+        super().__init__(snapshot, _components=_components)
+        self._prebuilt = True
+        self._assign_collaborators(
+            llm=llm,
+            prompt_builder=prompt_builder,
+            conversation_storage=conversation_storage,
+            tool_registry=tool_registry,
+            memory=memory,
+            knowledge_base=knowledge_base,
+            kb_auto_context=kb_auto_context,
+            reasoning_strategy=reasoning_strategy,
+            middleware=middleware,
+            system_prompt_name=system_prompt_name,
+            system_prompt_content=system_prompt_content,
+            system_prompt_rag_configs=system_prompt_rag_configs,
+            context_transform=context_transform,
+            prompt_resolver=prompt_resolver,
+            owns_llm=True,
+        )
+
+    def _setup(self) -> None:
+        """Derive cheap, sync state from ``self.config`` (both shapes).
+
+        Runs during ``__init__`` for both the pre-built and config-driven
+        shapes. Establishes only derived scalars and empty per-conversation
+        caches — no provider/KB/memory construction. Those collaborators are
+        built by the async :meth:`_ainit` body (config-driven shape) or
+        assigned by :meth:`_assign_collaborators` (pre-built shape), both of
+        which run after ``__init__``; nothing reads them in between.
+        """
+        llm_config = self.config.llm or {}
+        self.default_temperature = llm_config.get("temperature", 0.7)
+        self.default_max_tokens = llm_config.get("max_tokens", 1000)
+        self._max_tool_iterations = self.config.max_tool_iterations
+        self._tool_timeout = self.config.tool_timeout
+        self._tool_loop_timeout = self.config.tool_loop_timeout
+        # Resolve the dotted-path context_transform now (cheap, sync). The
+        # pre-built shape overrides this with a directly-supplied callable.
+        self._context_transform = self._resolve_context_transform(
+            self.config.context_transform
+        )
+        self._conversation_managers: dict[str, ConversationManager] = {}
+        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
+        self._providers: dict[str, AsyncLLMProvider] = {}
+
+    def _assign_collaborators(
+        self,
+        *,
+        llm: AsyncLLMProvider,
+        prompt_builder: AsyncPromptBuilder | None = None,
+        conversation_storage: ConversationStorage | None = None,
+        tool_registry: ToolRegistry | None = None,
+        memory: Memory | None = None,
+        knowledge_base: KnowledgeBase | None = None,
+        kb_auto_context: bool = True,
+        reasoning_strategy: Any | None = None,
+        middleware: list[Middleware] | None = None,
+        system_prompt_name: str | None = None,
+        system_prompt_content: str | None = None,
+        system_prompt_rag_configs: list[dict[str, Any]] | None = None,
+        context_transform: Callable[[str], str] | str | None = None,
+        prompt_resolver: PromptResolver | None = None,
+        owns_llm: bool = True,
+    ) -> None:
+        """Bind fully-built collaborators onto ``self``.
+
+        Shared by the pre-built ``__init__`` shape and
+        :meth:`_adopt_components` so the two pre-built entry points cannot
+        drift. Scalar derived state is set by :meth:`_setup`; this method
+        only assigns the collaborator objects.
+
+        ``prompt_builder`` and ``conversation_storage`` are required: a
+        functioning bot drives every conversation through a
+        :class:`~dataknobs_llm.conversations.ConversationManager`, which
+        needs both. Pre-built construction that omits either yields a bot
+        that would fail on the first :meth:`chat`, so it is rejected up
+        front (mirroring the ``llm`` requirement). The config-driven shape
+        builds these in :meth:`_build_collaborators` instead and never
+        reaches this method.
+        """
+        missing = [
+            name
+            for name, value in (
+                ("prompt_builder", prompt_builder),
+                ("conversation_storage", conversation_storage),
+            )
+            if value is None
+        ]
+        if missing:
+            raise TypeError(
+                f"{type(self).__name__}: pre-built construction requires "
+                f"{' and '.join(missing)} — a built bot needs a prompt "
+                "builder and conversation storage. Provide them, or use "
+                "config-driven construction via from_config()."
+            )
         self.llm = llm
         self.prompt_builder = prompt_builder
         self.conversation_storage = conversation_storage
@@ -228,30 +405,97 @@ class DynaBot:
         self.knowledge_base = knowledge_base
         self._kb_auto_context = kb_auto_context
         self.reasoning_strategy = reasoning_strategy
-        self.middleware: list[Middleware] = middleware or []
+        self.middleware = middleware or []
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
         self.system_prompt_rag_configs = system_prompt_rag_configs
-        self.default_temperature = default_temperature
-        self.default_max_tokens = default_max_tokens
-        self._context_transform = context_transform
-        self._max_tool_iterations = max_tool_iterations
-        if tool_timeout < 0:
-            raise ValueError(
-                f"tool_timeout must be non-negative, got {tool_timeout}"
+        if context_transform is not None:
+            # A directly-supplied callable wins over the dotted-path form
+            # already resolved by _setup; a string is resolved here.
+            self._context_transform = (
+                self._resolve_context_transform(context_transform)
+                if isinstance(context_transform, str)
+                else context_transform
             )
-        if tool_loop_timeout < 0:
-            raise ValueError(
-                f"tool_loop_timeout must be non-negative, got "
-                f"{tool_loop_timeout}"
-            )
-        self._tool_timeout = tool_timeout
-        self._tool_loop_timeout = tool_loop_timeout
         self._prompt_resolver = prompt_resolver
-        self._owns_llm = True  # Set False by from_config() when llm= injected
-        self._conversation_managers: dict[str, ConversationManager] = {}
-        self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
-        self._providers: dict[str, AsyncLLMProvider] = {}
+        self._owns_llm = owns_llm
+
+    def _adopt_components(
+        self,
+        *,
+        llm: AsyncLLMProvider | None = None,
+        prompt_builder: AsyncPromptBuilder | None = None,
+        conversation_storage: ConversationStorage | None = None,
+        tool_registry: ToolRegistry | None = None,
+        memory: Memory | None = None,
+        knowledge_base: KnowledgeBase | None = None,
+        kb_auto_context: bool = True,
+        reasoning_strategy: Any | None = None,
+        middleware: list[Middleware] | None = None,
+        system_prompt_name: str | None = None,
+        system_prompt_content: str | None = None,
+        system_prompt_rag_configs: list[dict[str, Any]] | None = None,
+        context_transform: Callable[[str], str] | str | None = None,
+        prompt_resolver: PromptResolver | None = None,
+        **_: Any,
+    ) -> None:
+        """Adopt pre-built collaborators injected via :meth:`from_components`.
+
+        The named alias of the pre-built ``__init__`` shape — delegates to
+        :meth:`_assign_collaborators` so both share one assignment path.
+        """
+        if llm is None:
+            raise TypeError(
+                f"{type(self).__name__}.from_components requires a built `llm` "
+                "collaborator (an AsyncLLMProvider)."
+            )
+        self._assign_collaborators(
+            llm=llm,
+            prompt_builder=prompt_builder,
+            conversation_storage=conversation_storage,
+            tool_registry=tool_registry,
+            memory=memory,
+            knowledge_base=knowledge_base,
+            kb_auto_context=kb_auto_context,
+            reasoning_strategy=reasoning_strategy,
+            middleware=middleware,
+            system_prompt_name=system_prompt_name,
+            system_prompt_content=system_prompt_content,
+            system_prompt_rag_configs=system_prompt_rag_configs,
+            context_transform=context_transform,
+            prompt_resolver=prompt_resolver,
+            owns_llm=True,
+        )
+
+    @staticmethod
+    def _resolve_context_transform(
+        ref: Callable[[str], str] | str | None,
+    ) -> Callable[[str], str] | None:
+        """Resolve a context_transform reference to a callable (or ``None``).
+
+        A callable passes through; a dotted import string is resolved; any
+        other value is ignored with a warning.
+        """
+        if ref is None:
+            return None
+        if callable(ref):
+            return ref
+        if isinstance(ref, str):
+            from dataknobs_bots.tools.resolve import resolve_callable
+            from dataknobs_common.exceptions import ConfigurationError
+
+            try:
+                return resolve_callable(ref)
+            except (ImportError, AttributeError, ValueError) as exc:
+                raise ConfigurationError(
+                    f"context_transform: could not resolve '{ref}': {exc}"
+                ) from exc
+        logger.warning(
+            "context_transform must be a callable or dotted import "
+            "string, got %s — ignoring",
+            type(ref).__name__,
+        )
+        return None
 
     @property
     def prompt_resolver(self) -> PromptResolver | None:
@@ -308,9 +552,9 @@ class DynaBot:
         return result
 
     @classmethod
-    async def from_config(
+    async def from_config(  # type: ignore[override]
         cls,
-        config: dict[str, Any],
+        config: Mapping[str, Any] | DynaBotConfig,
         *,
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
@@ -381,60 +625,100 @@ class DynaBot:
             bot = await DynaBot.from_config(config, middleware=[my_middleware])
             ```
         """
+        components: dict[str, Any] = {}
+        if llm is not None:
+            components["llm"] = llm
+        if middleware is not None:
+            components["middleware"] = middleware
+        # Async-canonical construction: route through the structured-config
+        # lifecycle (from_config_async → __init__ → _setup → _ainit) rather
+        # than returning a half-built instance. The `llm` / `middleware`
+        # kwargs travel the injected-collaborator channel to _ainit.
+        return await cls.from_config_async(config, **components)
+
+    async def _ainit(
+        self,
+        *,
+        llm: AsyncLLMProvider | None = None,
+        middleware: list[Middleware] | None = None,
+        **_: Any,
+    ) -> None:
+        """Async build: create/adopt the provider, then build collaborators.
+
+        The body of construction for the config-driven shape. When ``llm`` is
+        injected the caller owns its lifecycle; otherwise a provider is
+        created from ``self.config.llm`` and closed if any later build step
+        raises (so a failed build never leaks an initialized provider).
+        Short-circuits for the pre-built shape (collaborators already wired).
+        """
+        if self._prebuilt:
+            return
+
         if llm is not None:
             # Caller-owned provider — skip creation/initialization.
-            # Caller is responsible for lifecycle (initialize/close).
-            llm_config = config.get("llm", {})
-            bot = await cls._build_from_config(
-                config, llm, llm_config, middleware_override=middleware
-            )
-            bot._owns_llm = False  # Caller owns lifecycle
-            return bot
+            self.llm = llm
+            self._owns_llm = False
+            await self._build_collaborators(middleware_override=middleware)
+            return
 
-        # Create LLM provider from config
-        llm_config = config["llm"]
+        if not self.config.llm:
+            from dataknobs_common.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "DynaBot config-driven construction requires an 'llm' "
+                "section (at minimum 'provider' and 'model'), or a pre-built "
+                "provider passed as from_config(config, llm=...). Neither was "
+                "provided."
+            )
 
         from dataknobs_llm.llm import LLMProviderFactory
 
-        created_llm = LLMProviderFactory(is_async=True).create(llm_config)
+        created_llm = LLMProviderFactory(is_async=True).create(self.config.llm)
         await created_llm.initialize()
+        self.llm = created_llm
+        self._owns_llm = True
 
         # Everything below can fail; ensure the provider is closed on error
         # so we don't leak aiohttp sessions or other resources.
         try:
-            return await cls._build_from_config(
-                config, created_llm, llm_config,
-                middleware_override=middleware,
-            )
+            await self._build_collaborators(middleware_override=middleware)
         except Exception:
             await created_llm.close()
             raise
 
-    @classmethod
-    async def _build_from_config(
-        cls,
-        config: dict[str, Any],
-        llm: Any,
-        llm_config: dict[str, Any],
+    async def _build_collaborators(
+        self,
         *,
         middleware_override: list[Middleware] | None = None,
-    ) -> DynaBot:
-        """Build a DynaBot after the LLM provider is initialized.
+    ) -> None:
+        """Build and bind the configured collaborators onto ``self``.
 
-        Separated from from_config() so the caller can guarantee cleanup
-        of the LLM provider if anything here raises.
+        Runs after the main LLM provider is set (by :meth:`_ainit`).
+        Populates conversation storage, the composed prompt library and
+        resolver, memory, knowledge base, tools, reasoning strategy,
+        middleware, and the system-prompt fields from ``self.config``.
+        Separated so :meth:`_ainit` can guarantee cleanup of an
+        internally-created provider if anything here raises.
         """
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
 
         from ..memory import create_memory_from_config
 
+        llm = self.llm
+
         # Validate capability requirements (Layer 2 — startup check)
         # Only check main LLM requirements here; extraction LLM requirements
         # are validated when WizardReasoning sets up its extractor.
         from .validation import infer_main_capability_requirements
 
-        requirements = infer_main_capability_requirements(config)
+        requirements = infer_main_capability_requirements(
+            {
+                "reasoning": self.config.reasoning or {},
+                "tools": self.config.tools,
+                "llm": self.config.llm,
+            }
+        )
         if requirements:
             capabilities = llm.get_capabilities()
             capability_values = {cap.value for cap in capabilities}
@@ -442,7 +726,7 @@ class DynaBot:
             if missing:
                 from dataknobs_common.exceptions import ConfigurationError
 
-                model_name = llm_config.get("model", "unknown")
+                model_name = self.config.llm.get("model", "unknown")
                 raise ConfigurationError(
                     f"Bot requires capabilities {missing} but model "
                     f"'{model_name}' provides "
@@ -452,7 +736,7 @@ class DynaBot:
                 )
 
         # Create conversation storage
-        storage_config = config["conversation_storage"].copy()
+        storage_config = dict(self.config.conversation_storage)
         storage_class_path = storage_config.pop("storage_class", None)
         has_backend = "backend" in storage_config
 
@@ -486,7 +770,7 @@ class DynaBot:
             )
 
         # Build composed prompt library with precedence:
-        #   1. Inline prompts (config["prompts"]) — highest priority
+        #   1. Inline prompts (config.prompts) — highest priority
         #   2. Configured prompt_libraries — consumer file/config overrides
         #   3. Bots default library — all built-in prompt fragments
         #   4. Extraction default library — extraction prompts (lowest)
@@ -496,8 +780,8 @@ class DynaBot:
         library_names = []
 
         # 1. Inline prompts from config (highest priority)
-        if "prompts" in config:
-            prompts_config = config["prompts"]
+        if self.config.prompts is not None:
+            prompts_config = self.config.prompts
 
             if isinstance(prompts_config, dict):
                 structured_config = {"system": {}, "user": {}}
@@ -516,9 +800,9 @@ class DynaBot:
                 library_names.append("inline_config")
 
         # 2. Configured prompt_libraries (consumer overrides)
-        if "prompt_libraries" in config:
+        if self.config.prompt_libraries:
             for lib_config in sorted(
-                config["prompt_libraries"],
+                self.config.prompt_libraries,
                 key=lambda c: c.get("priority", 50),
             ):
                 lib_type = lib_config.get("type", "config")
@@ -570,21 +854,24 @@ class DynaBot:
 
         # Create memory (pass llm so summary memory can use it)
         memory = None
-        if "memory" in config:
+        if self.config.memory is not None:
             memory = await create_memory_from_config(
-                config["memory"], llm_provider=llm,
+                self.config.memory, llm_provider=llm,
                 prompt_resolver=prompt_resolver,
             )
 
         # Create knowledge base BEFORE tools — tools may declare a
         # dependency on knowledge_base via catalog_metadata().requires
         knowledge_base = None
-        kb_config = config.get("knowledge_base", {})
+        kb_config = self.config.knowledge_base or {}
         kb_auto_context = kb_config.get("auto_context", True)
         if kb_config.get("enabled"):
             from ..knowledge import create_knowledge_base_from_config
 
-            logger.info("Initializing knowledge base with config: %s", kb_config.get("type", "unknown"))
+            logger.info(
+                "Initializing knowledge base with config: %s",
+                kb_config.get("type", "unknown"),
+            )
             knowledge_base = await create_knowledge_base_from_config(kb_config)
             logger.info("Knowledge base initialized successfully")
 
@@ -593,33 +880,39 @@ class DynaBot:
         if knowledge_base is not None:
             tool_dependencies["knowledge_base"] = knowledge_base
 
-        # Create tools (after KB so dependencies can be injected)
+        # Create tools (after KB so dependencies can be injected). Tool xref
+        # resolution reads only ``tool_definitions`` from the surrounding
+        # config, so a minimal context dict is sufficient.
+        tool_ctx = {"tool_definitions": self.config.tool_definitions}
         tool_registry = ToolRegistry()
-        if "tools" in config:
-            for tool_config in config["tools"]:
-                tool = cls._resolve_tool(tool_config, config, tool_dependencies or None)
+        if self.config.tools:
+            for tool_config in self.config.tools:
+                tool = self._resolve_tool(
+                    tool_config, tool_ctx, tool_dependencies or None
+                )
                 if tool:
                     tool_registry.register_tool(tool)
 
         # Create reasoning strategy
         reasoning_strategy = None
-        if "reasoning" in config:
+        if self.config.reasoning is not None:
             from ..reasoning import create_reasoning_from_config
 
-            reasoning_config = config["reasoning"]
+            reasoning_config = self.config.reasoning
             # Propagate config_base_path to reasoning if set at bot level
-            if "config_base_path" in config:
+            config_base_path = self.config.config_base_path
+            if config_base_path is not None:
                 if "config_base_path" not in reasoning_config:
                     reasoning_config = {
                         **reasoning_config,
-                        "config_base_path": config["config_base_path"],
+                        "config_base_path": config_base_path,
                     }
-                elif reasoning_config["config_base_path"] != config["config_base_path"]:
+                elif reasoning_config["config_base_path"] != config_base_path:
                     logger.debug(
                         "Reasoning config has its own config_base_path=%r; "
                         "ignoring bot-level config_base_path=%r",
                         reasoning_config["config_base_path"],
-                        config["config_base_path"],
+                        config_base_path,
                     )
             reasoning_strategy = create_reasoning_from_config(
                 reasoning_config,
@@ -672,9 +965,9 @@ class DynaBot:
             middleware = list(middleware_override)
         else:
             middleware = []
-            if "middleware" in config:
-                for mw_config in config["middleware"]:
-                    mw = cls._create_middleware(mw_config)
+            if self.config.middleware:
+                for mw_config in self.config.middleware:
+                    mw = self._create_middleware(mw_config)
                     if mw:
                         middleware.append(mw)
 
@@ -682,8 +975,8 @@ class DynaBot:
         system_prompt_name = None
         system_prompt_content = None
         system_prompt_rag_configs = None
-        if "system_prompt" in config:
-            system_prompt_config = config["system_prompt"]
+        if self.config.system_prompt is not None:
+            system_prompt_config = self.config.system_prompt
             if isinstance(system_prompt_config, dict):
                 # Explicit dict format: {name: "template"} or {content: "inline..."}
                 system_prompt_name = system_prompt_config.get("name")
@@ -705,75 +998,38 @@ class DynaBot:
                 else:
                     system_prompt_content = system_prompt_config
 
-        # Resolve context_transform callable (if configured)
-        context_transform: Callable[[str], str] | None = None
-        context_transform_ref = config.get("context_transform")
-        if context_transform_ref is not None:
-            if callable(context_transform_ref):
-                context_transform = context_transform_ref
-            elif isinstance(context_transform_ref, str):
-                from dataknobs_bots.tools.resolve import resolve_callable
-                from dataknobs_common.exceptions import ConfigurationError
+        # The effective context_transform (dotted path → callable) was
+        # resolved in _setup; the scalar knobs (default temperature /
+        # max tokens, tool iteration / timeout limits) were also derived
+        # there from self.config.
 
-                try:
-                    context_transform = resolve_callable(context_transform_ref)
-                except (ImportError, AttributeError, ValueError) as exc:
-                    raise ConfigurationError(
-                        f"context_transform: could not resolve "
-                        f"'{context_transform_ref}': {exc}"
-                    ) from exc
-            else:
-                logger.warning(
-                    "context_transform must be a callable or dotted import "
-                    "string, got %s — ignoring",
-                    type(context_transform_ref).__name__,
-                )
+        # Bind the built collaborators onto self.
+        self.prompt_builder = prompt_builder
+        self.conversation_storage = conversation_storage
+        self.tool_registry = tool_registry
+        self.memory = memory
+        self.knowledge_base = knowledge_base
+        self._kb_auto_context = kb_auto_context
+        self.reasoning_strategy = reasoning_strategy
+        self.middleware = middleware
+        self.system_prompt_name = system_prompt_name
+        self.system_prompt_content = system_prompt_content
+        self.system_prompt_rag_configs = system_prompt_rag_configs
+        self._prompt_resolver = prompt_resolver
 
         # Collect subsystem providers for catalog registration.
         # Each subsystem declares its own providers via providers().
-        subsystem_providers: dict[str, AsyncLLMProvider] = {}
-
         if memory is not None:
-            subsystem_providers.update(memory.providers())
+            for role, provider in memory.providers().items():
+                self.register_provider(role, provider)
 
         if knowledge_base is not None:
-            subsystem_providers.update(knowledge_base.providers())
+            for role, provider in knowledge_base.providers().items():
+                self.register_provider(role, provider)
 
         if reasoning_strategy is not None:
-            subsystem_providers.update(reasoning_strategy.providers())
-
-        bot = cls(
-            llm=llm,
-            prompt_builder=prompt_builder,
-            conversation_storage=conversation_storage,
-            tool_registry=tool_registry,
-            memory=memory,
-            knowledge_base=knowledge_base,
-            kb_auto_context=kb_auto_context,
-            reasoning_strategy=reasoning_strategy,
-            middleware=middleware,
-            system_prompt_name=system_prompt_name,
-            system_prompt_content=system_prompt_content,
-            system_prompt_rag_configs=system_prompt_rag_configs,
-            default_temperature=llm_config.get("temperature", 0.7),
-            default_max_tokens=llm_config.get("max_tokens", 1000),
-            context_transform=context_transform,
-            max_tool_iterations=config.get(
-                "max_tool_iterations", cls._DEFAULT_MAX_TOOL_ITERATIONS
-            ),
-            tool_timeout=config.get(
-                "tool_timeout", cls._DEFAULT_TOOL_TIMEOUT
-            ),
-            tool_loop_timeout=config.get(
-                "tool_loop_timeout", cls._DEFAULT_TOOL_LOOP_TIMEOUT
-            ),
-            prompt_resolver=prompt_resolver,
-        )
-
-        for role, provider in subsystem_providers.items():
-            bot.register_provider(role, provider)
-
-        return bot
+            for role, provider in reasoning_strategy.providers().items():
+                self.register_provider(role, provider)
 
     @classmethod
     async def from_environment_aware_config(
