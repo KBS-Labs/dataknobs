@@ -117,6 +117,8 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
                 embedding_provider=self.config.embedding_provider,
                 embedding_model=self.config.embedding_model,
                 dimensions=self.config.dimensions,
+                api_base=self.config.api_base,
+                api_key=self.config.api_key,
             )
         )
         self._owns_embedding_provider = True

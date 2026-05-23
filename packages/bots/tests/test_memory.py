@@ -282,6 +282,31 @@ class TestVectorMemory:
         context = await memory.get_context("test")
         assert isinstance(context, list)
 
+    @pytest.mark.asyncio
+    async def test_from_config_legacy_embedding_passthrough(self):
+        """Legacy flat api_base/api_key reach the embedding provider.
+
+        Regression guard: before StructuredConfig adoption, from_config
+        forwarded the whole config dict to create_embedding_provider,
+        whose legacy-flat branch reads top-level api_base/api_key. The
+        typed config must preserve that passthrough rather than silently
+        dropping the embedder endpoint/key.
+        """
+        config = {
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+            "api_base": "https://proxy.example/v1",
+            "api_key": "sk-test-key",
+        }
+
+        memory = await VectorMemory.from_config(config)
+        assert memory.embedding_provider.config.api_base == (
+            "https://proxy.example/v1"
+        )
+        assert memory.embedding_provider.config.api_key == "sk-test-key"
+
 
 class TestSummaryMemory:
     """Tests for SummaryMemory."""

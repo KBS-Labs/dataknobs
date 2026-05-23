@@ -749,6 +749,21 @@ class TestCompositeMemoryValidation:
         assert composite.strategies[0] is buf1
         assert composite.strategies[1] is buf2
 
+    def test_from_components_primary_index_reflected_in_config(self):
+        """The config snapshot must record the pre-built primary_index.
+
+        Otherwise composite.config.primary_index reports the default 0 even
+        when from_components selected a different primary, making the config
+        snapshot disagree with the live primary.
+        """
+        buf1 = BufferMemory(max_messages=10)
+        buf2 = BufferMemory(max_messages=10)
+        composite = CompositeMemory.from_components(
+            strategies=[buf1, buf2], primary_index=1
+        )
+
+        assert composite.config.primary_index == 1
+
 
 # ===========================================================================
 # CompositeMemory — factory (create_memory_from_config)

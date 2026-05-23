@@ -36,6 +36,12 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
             raw mapping — embedder config is owned by ``dataknobs-llm``.
         embedding_provider: Legacy flat embedding-provider key.
         embedding_model: Legacy flat embedding-model key.
+        dimensions: Embedder dimension, forwarded to the embedding
+            provider as a legacy flat passthrough.
+        api_base: Custom embedder endpoint, forwarded to the embedding
+            provider as a legacy flat passthrough.
+        api_key: Embedder credential, forwarded to the embedding provider
+            as a legacy flat passthrough.
         chunking: Chunking config forwarded to ``create_chunker``.
         merger: Optional chunk-merger config (raw mapping projected onto
             ``MergerConfig``).
@@ -49,6 +55,9 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     embedding: dict[str, Any] | None = None
     embedding_provider: str | None = None
     embedding_model: str | None = None
+    dimensions: int | None = None
+    api_base: str | None = None
+    api_key: str | None = None
     chunking: dict[str, Any] = field(default_factory=dict)
     merger: dict[str, Any] | None = None
     formatter: dict[str, Any] | None = None

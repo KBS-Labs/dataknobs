@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.exceptions import DataknobsError
@@ -159,8 +160,15 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
         An empty (or omitted) ``strategies`` list raises ``ValueError``
         via :meth:`_validate_and_bind` — the same contract the legacy
         ``CompositeMemory([])`` ctor enforced.
+
+        The ``primary_index`` arrives as a collaborator kwarg (live
+        ``Memory`` strategies cannot be folded into the frozen
+        ``strategies`` config field), so the config snapshot is rebuilt to
+        record it — otherwise ``config.primary_index`` would misreport the
+        default ``0`` while ``self.primary`` reads the real index.
         """
         self._validate_and_bind(strategies or [], primary_index)
+        self._config = replace(self._config, primary_index=primary_index)
 
     @property
     def primary(self) -> Memory:

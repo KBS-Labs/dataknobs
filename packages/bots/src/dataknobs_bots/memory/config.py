@@ -69,6 +69,10 @@ class VectorMemoryConfig(StructuredConfig):
         embedding_model: Legacy flat embedding-model key.
         dimensions: Embedder dimension (plural). Forwarded to the
             embedding provider, NOT the vector store.
+        api_base: Custom embedder endpoint, forwarded to the embedding
+            provider as a legacy flat passthrough.
+        api_key: Embedder credential, forwarded to the embedding provider
+            as a legacy flat passthrough.
         max_results: Maximum number of similar messages returned.
         similarity_threshold: Minimum similarity score (0-1) for results.
         default_metadata: Metadata merged into every ``add_message``.
@@ -86,6 +90,8 @@ class VectorMemoryConfig(StructuredConfig):
     embedding_provider: str | None = None
     embedding_model: str | None = None
     dimensions: int | None = None
+    api_base: str | None = None
+    api_key: str | None = None
     max_results: int = 5
     similarity_threshold: float = 0.7
     default_metadata: dict[str, Any] | None = None
