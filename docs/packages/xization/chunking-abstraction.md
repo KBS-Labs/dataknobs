@@ -318,7 +318,7 @@ kb = await RAGKnowledgeBase.from_config({
 # Or inject a pre-built chunker directly
 from my_project.chunkers import RFCChunker
 
-kb = RAGKnowledgeBase(
+kb = RAGKnowledgeBase.from_components(
     vector_store=vs,
     embedding_provider=ep,
     chunker=RFCChunker(max_chunk_size=1200),

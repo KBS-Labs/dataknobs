@@ -41,7 +41,6 @@ from dataknobs_common.registry import PluginRegistry
 from .base import Memory
 from .buffer import BufferMemory
 from .composite import CompositeMemory
-from .config import BufferMemoryConfig, CompositeMemoryConfig, SummaryMemoryConfig
 from .summary import SummaryMemory
 from .vector import VectorMemory
 
@@ -56,136 +55,23 @@ MemoryFactory = type[Memory] | Callable[..., Memory]
 
 
 # ------------------------------------------------------------------
-# Built-in backend builders
+# Built-in backend registration
 # ------------------------------------------------------------------
 
 
-def _build_buffer(config: dict[str, Any], **_: Any) -> Memory:
-    """Build a :class:`BufferMemory` from config."""
-    cfg = BufferMemoryConfig.from_dict(config)
-    return BufferMemory(max_messages=cfg.max_messages)
-
-
-async def _build_vector(config: dict[str, Any], **_: Any) -> Memory:
-    """Build a :class:`VectorMemory` (async warmup) from config."""
-    return await VectorMemory.from_config(config)
-
-
-async def _build_summary(
-    config: dict[str, Any],
-    *,
-    llm_provider: Any | None = None,
-    prompt_resolver: PromptResolver | None = None,
-    **_: Any,
-) -> Memory:
-    """Build a :class:`SummaryMemory` from config.
-
-    Resolves the summary LLM from the optional dedicated ``llm`` config
-    section, falling back to the injected ``llm_provider`` (the bot's main
-    LLM). Ownership of the provider's lifecycle follows which source was
-    used.
-    """
-    cfg = SummaryMemoryConfig.from_dict(config)
-    has_dedicated_llm = cfg.llm is not None
-    summary_llm = await _resolve_summary_llm(cfg.llm, llm_provider)
-    return SummaryMemory(
-        llm_provider=summary_llm,
-        recent_window=cfg.recent_window,
-        summary_prompt=cfg.summary_prompt,
-        owns_llm_provider=has_dedicated_llm,
-        prompt_resolver=prompt_resolver,
-    )
-
-
-async def _build_composite(
-    config: dict[str, Any],
-    *,
-    llm_provider: Any | None = None,
-    prompt_resolver: PromptResolver | None = None,
-    **_: Any,
-) -> Memory:
-    """Build a :class:`CompositeMemory`, recursing over child strategies.
-
-    Each child spec is dispatched through the public factory so it gets the
-    same error contract and collaborator threading. On any failure the
-    already-built strategies are closed before the error propagates.
-    """
-    cfg = CompositeMemoryConfig.from_dict(config)
-    strategies: list[Memory] = []
-    try:
-        for child in cfg.strategies:
-            strategies.append(
-                await create_memory_from_config(
-                    child, llm_provider, prompt_resolver=prompt_resolver,
-                )
-            )
-        if not strategies:
-            raise ValueError(
-                "Composite memory requires at least one strategy "
-                "in 'strategies' list"
-            )
-        return CompositeMemory(
-            strategies=strategies,
-            primary_index=cfg.primary_index,
-        )
-    except Exception:
-        # Clean up any already-initialized strategies
-        for s in strategies:
-            try:
-                await s.close()
-            except Exception:
-                logger.warning(
-                    "Failed to close strategy during cleanup: %s",
-                    type(s).__name__,
-                    exc_info=True,
-                )
-        raise
-
-
-async def _resolve_summary_llm(
-    llm_config: dict[str, Any] | None,
-    fallback_provider: Any | None,
-) -> Any:
-    """Resolve the LLM provider for summary memory.
-
-    If ``llm_config`` is provided, a dedicated provider is created and
-    initialized from it. Otherwise the ``fallback_provider`` (typically the
-    bot's own LLM) is used.
-
-    Args:
-        llm_config: Optional dedicated LLM-provider config.
-        fallback_provider: Provider to use when no dedicated LLM is configured.
-
-    Returns:
-        An initialised ``AsyncLLMProvider``.
-
-    Raises:
-        ValueError: If neither a dedicated LLM config nor a fallback is available.
-    """
-    if llm_config is not None:
-        from dataknobs_llm.llm import LLMProviderFactory
-
-        factory = LLMProviderFactory(is_async=True)
-        provider = factory.create(llm_config)
-        await provider.initialize()
-        return provider
-
-    if fallback_provider is not None:
-        return fallback_provider
-
-    raise ValueError(
-        "Summary memory requires an LLM provider. Either include an 'llm' "
-        "section in the memory config or pass llm_provider to "
-        "create_memory_from_config()."
-    )
-
-
 def _register_builtins(registry: PluginRegistry[Memory]) -> None:
-    """Register the built-in memory backends (lazy, on first access)."""
-    registry.register("buffer", _build_buffer)
-    registry.register("vector", _build_vector)
-    registry.register("summary", _build_summary)
-    registry.register("composite", _build_composite)
+    """Register the built-in memory backends (lazy, on first access).
+
+    Each backend is a ``StructuredConfigConsumer`` class registered
+    directly: the registry's ``create_async`` calls each class's
+    ``from_config_async`` and threads the injected ``llm_provider`` /
+    ``prompt_resolver`` collaborators into its ``_ainit`` (buffer and
+    vector ignore them; summary and composite consume them).
+    """
+    registry.register("buffer", BufferMemory)
+    registry.register("vector", VectorMemory)
+    registry.register("summary", SummaryMemory)
+    registry.register("composite", CompositeMemory)
 
 
 # Module-level singleton — data-driven dispatch replaces the former

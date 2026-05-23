@@ -22,7 +22,6 @@ from dataknobs_bots.knowledge import (
 from dataknobs_data.vector.stores import VectorStoreFactory
 from dataknobs_llm.llm import LLMProviderFactory
 
-
 # ============================================================================
 # Fixtures - Real implementations
 # ============================================================================
@@ -51,10 +50,10 @@ async def echo_provider():
 @pytest.fixture
 async def real_knowledge_base(memory_vector_store, echo_provider):
     """Create a real RAGKnowledgeBase with in-memory components."""
-    kb = RAGKnowledgeBase(
+    kb = RAGKnowledgeBase.from_components(
+        {"chunking": {"max_chunk_size": 500}},
         vector_store=memory_vector_store,
         embedding_provider=echo_provider,
-        chunking_config={"max_chunk_size": 500},
     )
     yield kb
     # Note: Don't close here since we yield the vector store/provider separately

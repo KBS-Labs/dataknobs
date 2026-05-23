@@ -29,7 +29,7 @@ class TestRAGKnowledgeBase:
         await embedding_provider.initialize()
 
         # Create knowledge base
-        kb = RAGKnowledgeBase(
+        kb = RAGKnowledgeBase.from_components(
             vector_store=vector_store, embedding_provider=embedding_provider
         )
 
@@ -497,7 +497,7 @@ class TestLoadFromDirectory:
     @pytest.mark.asyncio
     async def test_load_from_directory_with_config(self):
         """Test loading from directory with explicit config."""
-        from dataknobs_bots.knowledge import KnowledgeBaseConfig, FilePatternConfig
+        from dataknobs_bots.knowledge import FilePatternConfig, KnowledgeBaseConfig
 
         config = {
             "vector_store": {"backend": "memory", "dimensions": 384},

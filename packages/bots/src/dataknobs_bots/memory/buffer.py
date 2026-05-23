@@ -1,31 +1,39 @@
 """Buffer memory implementation for simple FIFO message storage."""
 
 from collections import deque
-from typing import Any
+from typing import Any, ClassVar
+
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .base import Memory
+from .config import BufferMemoryConfig
 
 
-class BufferMemory(Memory):
+class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
     """Simple buffer memory keeping last N messages.
 
     This implementation uses a fixed-size buffer that keeps the most recent
     messages in memory. When the buffer is full, the oldest messages are
     automatically removed.
 
+    Construct from config (``BufferMemory.from_config({"max_messages": 5})``)
+    or directly with loose kwargs (``BufferMemory(max_messages=5)`` /
+    ``BufferMemory()`` for the default of 10) — both route through the
+    structured-config dispatch.
+
     Attributes:
         max_messages: Maximum number of messages to keep in buffer
         messages: Deque containing the messages
     """
 
-    def __init__(self, max_messages: int = 10):
-        """Initialize buffer memory.
+    CONFIG_CLS: ClassVar[type[BufferMemoryConfig]] = BufferMemoryConfig
 
-        Args:
-            max_messages: Maximum number of messages to keep
-        """
-        self.max_messages = max_messages
-        self.messages: deque[dict[str, Any]] = deque(maxlen=max_messages)
+    def _setup(self) -> None:
+        """Build the FIFO buffer from the validated config."""
+        self.max_messages = self.config.max_messages
+        self.messages: deque[dict[str, Any]] = deque(
+            maxlen=self.config.max_messages
+        )
 
     async def add_message(
         self, content: str, role: str, metadata: dict[str, Any] | None = None

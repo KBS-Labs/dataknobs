@@ -18,6 +18,7 @@ from dataknobs_xization.ingestion import (
 )
 
 from .base import KnowledgeBase
+from .config import RAGKnowledgeBaseConfig
 from .ingestion import (
     IngestionResult,
     IngestSwapMode,
@@ -72,6 +73,7 @@ __all__ = [
     # Main knowledge base
     "KnowledgeBase",
     "RAGKnowledgeBase",
+    "RAGKnowledgeBaseConfig",
     "create_knowledge_base_from_config",
     "register_knowledge_base_backend",
     "get_knowledge_base_backend_factory",

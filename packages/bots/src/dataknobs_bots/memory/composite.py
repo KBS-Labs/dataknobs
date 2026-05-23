@@ -1,12 +1,20 @@
 """Composite memory strategy combining multiple memory implementations."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.exceptions import DataknobsError
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .base import Memory
+from .config import CompositeMemoryConfig
+
+if TYPE_CHECKING:
+    from dataknobs_bots.prompts.resolver import PromptResolver
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +37,7 @@ _STRATEGY_ERRORS = (
 )
 
 
-class CompositeMemory(Memory):
+class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
     """Combines multiple memory strategies into one.
 
     All sub-strategies receive every ``add_message()`` call independently.
@@ -40,25 +48,50 @@ class CompositeMemory(Memory):
     the composite logs a warning and continues with the remaining
     strategies.
 
+    Construct from config (``await CompositeMemory.from_config({...})`` —
+    each child spec in ``strategies`` is built recursively through the
+    memory factory) or from pre-built children
+    (``CompositeMemory.from_components(strategies=[m1, m2],
+    primary_index=0)``).
+
     Attributes:
         primary: The primary memory strategy (results appear first).
         strategies: All sub-strategies in order.
     """
 
-    def __init__(
-        self,
-        strategies: list[Memory],
-        *,
-        primary_index: int = 0,
-    ) -> None:
-        """Initialize composite memory.
+    CONFIG_CLS: ClassVar[type[CompositeMemoryConfig]] = CompositeMemoryConfig
 
-        Args:
-            strategies: List of memory strategy instances.
-            primary_index: Index of the primary strategy in the list.
+    @classmethod
+    async def from_config(  # type: ignore[override]
+        cls, config: Any, **components: Any
+    ) -> CompositeMemory:
+        """Create CompositeMemory from configuration (async warmup).
+
+        Construction is asynchronous — each child strategy is built
+        recursively through the memory factory — so ``from_config``
+        delegates to :meth:`from_config_async` to run ``_ainit``. The
+        injected ``llm_provider`` / ``prompt_resolver`` collaborators are
+        threaded into each child build.
+        """
+        return await cls.from_config_async(config, **components)
+
+    def _setup(self) -> None:
+        """Placeholder until strategies are bound.
+
+        The child strategies are bound by :meth:`_ainit` (config-driven
+        recursion) or :meth:`_adopt_components` (pre-built injection).
+        """
+        self._strategies: list[Memory] = []
+        self._primary_index = 0
+
+    def _validate_and_bind(
+        self, strategies: list[Memory], primary_index: int
+    ) -> None:
+        """Validate non-empty + in-range, then bind the strategies.
 
         Raises:
-            ValueError: If strategies is empty or primary_index is out of range.
+            ValueError: If ``strategies`` is empty or ``primary_index``
+                is out of range.
         """
         if not strategies:
             raise ValueError("CompositeMemory requires at least one strategy")
@@ -69,6 +102,73 @@ class CompositeMemory(Memory):
             )
         self._strategies = strategies
         self._primary_index = primary_index
+
+    async def _ainit(
+        self,
+        *,
+        llm_provider: Any = None,
+        prompt_resolver: PromptResolver | None = None,
+        **_: Any,
+    ) -> None:
+        """Build child strategies from config, recursing through the factory.
+
+        Each child spec is dispatched through the public factory so it
+        gets the same error contract and collaborator threading. On any
+        failure the already-built strategies are closed before the error
+        propagates.
+        """
+        if self._prebuilt:
+            return
+        from .registry import create_memory_from_config
+
+        strategies: list[Memory] = []
+        try:
+            for child in self.config.strategies:
+                strategies.append(
+                    await create_memory_from_config(
+                        child, llm_provider, prompt_resolver=prompt_resolver,
+                    )
+                )
+            if not strategies:
+                raise ValueError(
+                    "Composite memory requires at least one strategy "
+                    "in 'strategies' list"
+                )
+            self._validate_and_bind(strategies, self.config.primary_index)
+        except Exception:
+            # Clean up any already-initialized strategies
+            for s in strategies:
+                try:
+                    await s.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close strategy during cleanup: %s",
+                        type(s).__name__,
+                        exc_info=True,
+                    )
+            raise
+
+    def _adopt_components(
+        self,
+        *,
+        strategies: list[Memory] | None = None,
+        primary_index: int = 0,
+        **_: Any,
+    ) -> None:
+        """Adopt pre-built child strategies for ``from_components``.
+
+        An empty (or omitted) ``strategies`` list raises ``ValueError``
+        via :meth:`_validate_and_bind` — the same contract the legacy
+        ``CompositeMemory([])`` ctor enforced.
+
+        The ``primary_index`` arrives as a collaborator kwarg (live
+        ``Memory`` strategies cannot be folded into the frozen
+        ``strategies`` config field), so the config snapshot is rebuilt to
+        record it — otherwise ``config.primary_index`` would misreport the
+        default ``0`` while ``self.primary`` reads the real index.
+        """
+        self._validate_and_bind(strategies or [], primary_index)
+        self._config = replace(self._config, primary_index=primary_index)
 
     @property
     def primary(self) -> Memory:

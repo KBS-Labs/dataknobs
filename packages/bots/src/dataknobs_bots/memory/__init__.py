@@ -27,6 +27,7 @@ from .config import (
     BufferMemoryConfig,
     CompositeMemoryConfig,
     SummaryMemoryConfig,
+    VectorMemoryConfig,
 )
 from .registry import (
     create_memory_from_config,
@@ -56,6 +57,7 @@ __all__ = [
     "SummaryMemoryConfig",
     "SyncBankProtocol",
     "VectorMemory",
+    "VectorMemoryConfig",
     "append_to_book",
     "create_memory_from_config",
     "get_memory_backend_factory",

@@ -12,7 +12,6 @@ from dataknobs_bots.memory.base import Memory
 from dataknobs_data.vector.stores import VectorStoreFactory
 from dataknobs_llm.llm import LLMProviderFactory
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -34,17 +33,17 @@ async def _make_vector_memory(
     provider = llm_factory.create({"provider": "echo", "model": "test"})
     await provider.initialize()
 
-    kwargs: dict = {
-        "vector_store": store,
-        "embedding_provider": provider,
+    config: dict = {
         "max_results": 10,
         "similarity_threshold": similarity_threshold,
         "default_metadata": default_metadata,
         "default_filter": default_filter,
     }
     if immutable_metadata_keys is not None:
-        kwargs["immutable_metadata_keys"] = immutable_metadata_keys
-    return VectorMemory(**kwargs)
+        config["immutable_metadata_keys"] = list(immutable_metadata_keys)
+    return VectorMemory.from_components(
+        config, vector_store=store, embedding_provider=provider
+    )
 
 
 class _FailingMemory(Memory):
@@ -369,21 +368,25 @@ class TestVectorMemoryScoping:
         provider = llm_factory.create({"provider": "echo", "model": "test"})
         await provider.initialize()
 
-        mem_u1 = VectorMemory(
+        mem_u1 = VectorMemory.from_components(
+            {
+                "max_results": 10,
+                "similarity_threshold": -1.0,
+                "default_metadata": {"user_id": "u1"},
+                "default_filter": {"user_id": "u1"},
+            },
             vector_store=store,
             embedding_provider=provider,
-            max_results=10,
-            similarity_threshold=-1.0,
-            default_metadata={"user_id": "u1"},
-            default_filter={"user_id": "u1"},
         )
-        mem_u2 = VectorMemory(
+        mem_u2 = VectorMemory.from_components(
+            {
+                "max_results": 10,
+                "similarity_threshold": -1.0,
+                "default_metadata": {"user_id": "u2"},
+                "default_filter": {"user_id": "u2"},
+            },
             vector_store=store,
             embedding_provider=provider,
-            max_results=10,
-            similarity_threshold=-1.0,
-            default_metadata={"user_id": "u2"},
-            default_filter={"user_id": "u2"},
         )
 
         await mem_u1.add_message("u1 msg", "user")
@@ -415,7 +418,7 @@ class TestCompositeMemoryBasics:
         """add_message() is forwarded to every strategy."""
         buf1 = BufferMemory(max_messages=10)
         buf2 = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf1, buf2])
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2])
 
         await composite.add_message("hello", "user")
 
@@ -435,7 +438,7 @@ class TestCompositeMemoryBasics:
         await buf_primary.add_message("primary-msg", "user")
         await buf_secondary.add_message("secondary-msg", "assistant")
 
-        composite = CompositeMemory([buf_primary, buf_secondary])
+        composite = CompositeMemory.from_components(strategies=[buf_primary, buf_secondary])
 
         context = await composite.get_context("x")
         assert len(context) == 2
@@ -447,7 +450,7 @@ class TestCompositeMemoryBasics:
         """Same message in multiple strategies appears only once."""
         buf1 = BufferMemory(max_messages=10)
         buf2 = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf1, buf2])
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2])
 
         # Add same message via composite — both buffers get it
         await composite.add_message("duplicate", "user")
@@ -465,7 +468,7 @@ class TestCompositeMemoryBasics:
         await buf1.add_message("from-buf1", "user")
         await buf2.add_message("from-buf2", "assistant")
 
-        composite = CompositeMemory([buf1, buf2])
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2])
 
         context = await composite.get_context("x")
         contents = [m["content"] for m in context]
@@ -477,7 +480,7 @@ class TestCompositeMemoryBasics:
         """clear() clears all strategies."""
         buf1 = BufferMemory(max_messages=10)
         buf2 = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf1, buf2])
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2])
 
         await composite.add_message("hello", "user")
         await composite.clear()
@@ -492,7 +495,7 @@ class TestCompositeMemoryBasics:
         """pop_messages() only affects the primary strategy."""
         buf_primary = BufferMemory(max_messages=10)
         buf_secondary = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf_primary, buf_secondary])
+        composite = CompositeMemory.from_components(strategies=[buf_primary, buf_secondary])
 
         await composite.add_message("msg1", "user")
         await composite.add_message("msg2", "assistant")
@@ -516,7 +519,7 @@ class TestCompositeMemoryBasics:
         buf = BufferMemory(max_messages=10)
 
         # VectorMemory is primary — it doesn't support pop
-        composite = CompositeMemory([vec, buf])
+        composite = CompositeMemory.from_components(strategies=[vec, buf])
 
         with pytest.raises(NotImplementedError, match="VectorMemory"):
             await composite.pop_messages(1)
@@ -535,7 +538,7 @@ class TestCompositeMemoryDegradation:
         """One strategy raises, others still receive the message."""
         buf = BufferMemory(max_messages=10)
         failing = _FailingMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         # Should not raise
         await composite.add_message("hello", "user")
@@ -550,7 +553,7 @@ class TestCompositeMemoryDegradation:
         await buf.add_message("buffered", "user")
 
         failing = _FailingMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         context = await composite.get_context("x")
         assert len(context) == 1
@@ -561,7 +564,7 @@ class TestCompositeMemoryDegradation:
         """One strategy's clear fails, others still cleared."""
         buf = BufferMemory(max_messages=10)
         failing = _FailingMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         await composite.add_message("hello", "user")
 
@@ -576,7 +579,7 @@ class TestCompositeMemoryDegradation:
         """One strategy's close fails, others still closed."""
         buf = BufferMemory(max_messages=10)
         failing = _FailingMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         # Should not raise even though failing.close() throws
         await composite.close()
@@ -595,7 +598,7 @@ class TestCompositeMemoryNarrowedExceptions:
         """AttributeError is NOT caught — it surfaces as a programming bug."""
         buf = BufferMemory(max_messages=10)
         broken = _BrokenAttributeMemory()
-        composite = CompositeMemory([buf, broken])
+        composite = CompositeMemory.from_components(strategies=[buf, broken])
 
         with pytest.raises(AttributeError, match="typo"):
             await composite.add_message("hello", "user")
@@ -604,7 +607,7 @@ class TestCompositeMemoryNarrowedExceptions:
     async def test_attribute_error_propagates_from_get_context(self):
         buf = BufferMemory(max_messages=10)
         broken = _BrokenAttributeMemory()
-        composite = CompositeMemory([buf, broken])
+        composite = CompositeMemory.from_components(strategies=[buf, broken])
 
         with pytest.raises(AttributeError, match="typo"):
             await composite.get_context("x")
@@ -613,7 +616,7 @@ class TestCompositeMemoryNarrowedExceptions:
     async def test_attribute_error_propagates_from_clear(self):
         buf = BufferMemory(max_messages=10)
         broken = _BrokenAttributeMemory()
-        composite = CompositeMemory([buf, broken])
+        composite = CompositeMemory.from_components(strategies=[buf, broken])
 
         with pytest.raises(AttributeError, match="typo"):
             await composite.clear()
@@ -622,7 +625,7 @@ class TestCompositeMemoryNarrowedExceptions:
     async def test_attribute_error_propagates_from_close(self):
         buf = BufferMemory(max_messages=10)
         broken = _BrokenAttributeMemory()
-        composite = CompositeMemory([buf, broken])
+        composite = CompositeMemory.from_components(strategies=[buf, broken])
 
         with pytest.raises(AttributeError, match="typo"):
             await composite.close()
@@ -646,7 +649,7 @@ class TestCompositeMemoryNarrowedExceptions:
 
         buf = BufferMemory(max_messages=10)
         failing = _ConnectionFailMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         # Should NOT raise — ConnectionError is in the caught set
         await composite.add_message("hello", "user")
@@ -676,7 +679,7 @@ class TestCompositeMemoryNarrowedExceptions:
 
         buf = BufferMemory(max_messages=10)
         failing = _DataknobsFailMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         # Should NOT raise — DataknobsError hierarchy is in the caught set
         await composite.add_message("hello", "user")
@@ -706,7 +709,7 @@ class TestCompositeMemoryNarrowedExceptions:
 
         buf = BufferMemory(max_messages=10)
         failing = _AsyncTimeoutMemory()
-        composite = CompositeMemory([buf, failing])
+        composite = CompositeMemory.from_components(strategies=[buf, failing])
 
         # Should NOT raise — asyncio.TimeoutError is in the caught set
         await composite.add_message("hello", "user")
@@ -724,27 +727,42 @@ class TestCompositeMemoryValidation:
 
     def test_empty_strategies_raises(self):
         with pytest.raises(ValueError, match="at least one strategy"):
-            CompositeMemory([])
+            CompositeMemory.from_components(strategies=[])
 
     def test_invalid_primary_index_raises(self):
         buf = BufferMemory(max_messages=10)
         with pytest.raises(ValueError, match="out of range"):
-            CompositeMemory([buf], primary_index=5)
+            CompositeMemory.from_components(strategies=[buf], primary_index=5)
 
     def test_negative_primary_index_raises(self):
         buf = BufferMemory(max_messages=10)
         with pytest.raises(ValueError, match="out of range"):
-            CompositeMemory([buf], primary_index=-1)
+            CompositeMemory.from_components(strategies=[buf], primary_index=-1)
 
     def test_properties(self):
         buf1 = BufferMemory(max_messages=10)
         buf2 = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf1, buf2], primary_index=1)
+        composite = CompositeMemory.from_components(strategies=[buf1, buf2], primary_index=1)
 
         assert composite.primary is buf2
         assert len(composite.strategies) == 2
         assert composite.strategies[0] is buf1
         assert composite.strategies[1] is buf2
+
+    def test_from_components_primary_index_reflected_in_config(self):
+        """The config snapshot must record the pre-built primary_index.
+
+        Otherwise composite.config.primary_index reports the default 0 even
+        when from_components selected a different primary, making the config
+        snapshot disagree with the live primary.
+        """
+        buf1 = BufferMemory(max_messages=10)
+        buf2 = BufferMemory(max_messages=10)
+        composite = CompositeMemory.from_components(
+            strategies=[buf1, buf2], primary_index=1
+        )
+
+        assert composite.config.primary_index == 1
 
 
 # ===========================================================================
@@ -817,7 +835,7 @@ class TestCompositeMemoryProviders:
         """providers() returns union of all sub-strategy providers."""
         vec = await _make_vector_memory()
         buf = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf, vec])
+        composite = CompositeMemory.from_components(strategies=[buf, vec])
 
         providers = composite.providers()
         # VectorMemory exposes its embedding provider
@@ -831,7 +849,7 @@ class TestCompositeMemoryProviders:
         """set_provider() is forwarded; returns True if any accepted."""
         vec = await _make_vector_memory()
         buf = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf, vec])
+        composite = CompositeMemory.from_components(strategies=[buf, vec])
 
         from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
 
@@ -842,7 +860,7 @@ class TestCompositeMemoryProviders:
 
     def test_set_provider_returns_false_for_unknown_role(self):
         buf = BufferMemory(max_messages=10)
-        composite = CompositeMemory([buf])
+        composite = CompositeMemory.from_components(strategies=[buf])
 
         result = composite.set_provider("nonexistent_role", object())
         assert result is False
