@@ -32,12 +32,24 @@ Four structural patterns exist across the dataknobs registries:
    :func:`assert_structured_config_consumer`. Bundles patterns 1 and
    2 for adopters of the structured-config primitives.
 
-The AST-walking helpers (1, 2, 3) do not instantiate the target class,
-so backends with optional dependencies (asyncpg, aioboto3, ...) can be
-parity-tested without those dependencies installed.
-:func:`assert_structured_config_roundtrip` exercises a config instance
-directly — it asserts a serialization property, not a structural
-contract.
+A fifth guard covers the *body-access* direction, orthogonal to the
+ctor-surface direction patterns 1-4 protect:
+
+5. **Typed-config reads match the config type.** A consumer reads
+   ``self.config.<attr>`` in its body (LLM providers, any typed-config
+   consumer). Drift = it reads an attribute that isn't a field or method
+   of the config type — an ``AttributeError`` waiting on an un-CI'd code
+   path. Guard: :func:`assert_config_attribute_access_matches_dataclass`.
+   Where :func:`assert_dataclass_config_matches_ctor` proves every config
+   field has a ctor param, this proves every *consumed* attribute lives
+   on the config type.
+
+The AST-walking helpers (1, 2, 3, 5) do not instantiate the target
+class, so backends/consumers with optional dependencies (asyncpg,
+aioboto3, provider SDKs, ...) can be parity-tested without those
+dependencies installed. :func:`assert_structured_config_roundtrip`
+exercises a config instance directly — it asserts a serialization
+property, not a structural contract.
 """
 
 from __future__ import annotations
@@ -323,6 +335,111 @@ def assert_ctor_reads_documented_keys(
         )
 
 
+def assert_config_attribute_access_matches_dataclass(
+    consumer_cls: type,
+    config_cls: type,
+    *,
+    config_attr: str = "config",
+    ignore_attrs: frozenset[str] = frozenset(),
+) -> None:
+    """Assert every ``self.<config_attr>.<name>`` read resolves to ``config_cls``.
+
+    The body-access counterpart to
+    :func:`assert_dataclass_config_matches_ctor`. The ctor-surface guard
+    proves every config field has a matching ctor param; this guard
+    proves every attribute the consumer *reads* off its typed config
+    actually lives on the config type. The drift it catches: a consumer
+    reads ``self.config.foo`` where ``foo`` is neither a dataclass field
+    nor any attribute/method of the config type — an ``AttributeError``
+    waiting for the first time that (often provider-specific, un-CI'd)
+    code path runs.
+
+    AST-walks every class in ``consumer_cls.__mro__`` (so inherited
+    base-class reads are covered, not just the leaf class body) for
+    ``self.<config_attr>.<name>`` accesses, and asserts each ``<name>``
+    is a field of ``config_cls`` *or* any attribute/method resolvable on
+    it (``dir(config_cls)``). Config dataclasses legitimately expose
+    helper methods (``clone``, ``generation_params``, ``to_dict``)
+    alongside data fields, so methods are valid reads — a field-only
+    check would false-positive on them.
+
+    Scoped to ``self.<config_attr>.<name>`` deliberately: bare
+    ``config.<name>`` reads from method parameters are *not* walked,
+    because they routinely operate on other types (a dataknobs ``Config``
+    object, a plain dict) and would produce unavoidable false positives.
+
+    The walk does not instantiate ``consumer_cls``, so consumers with
+    optional dependencies (provider SDKs, asyncpg, ...) are audited
+    without those dependencies installed. Classes whose source cannot be
+    read (C extensions, dynamically built types) are skipped.
+
+    Args:
+        consumer_cls: The class (and its MRO) to audit. Reads off
+            ``self.<config_attr>`` are checked against ``config_cls``.
+        config_cls: A ``@dataclass`` config type. Its
+            ``dataclasses.fields()`` plus ``dir()`` are the valid
+            attribute surface.
+        config_attr: Name of the instance attribute holding the typed
+            config (default ``"config"`` — e.g.
+            ``self.config = normalize_llm_config(config)``).
+        ignore_attrs: Additional attribute names to treat as valid (for
+            documented intentional reads that aren't on the config type).
+
+    Raises:
+        AssertionError: If ``config_cls`` is not a dataclass, or any
+            read attribute is neither a field nor an attribute of it.
+    """
+    if not dataclasses.is_dataclass(config_cls):
+        raise AssertionError(
+            f"{getattr(config_cls, '__name__', config_cls)!r} is not a "
+            "dataclass; assert_config_attribute_access_matches_dataclass "
+            "checks reads against a dataclass field/attribute surface."
+        )
+
+    valid = (
+        {f.name for f in dataclasses.fields(config_cls)}
+        | set(dir(config_cls))
+        | set(ignore_attrs)
+    )
+
+    # ``cls.__name__: [(attr, lineno), ...]`` for every offending read,
+    # aggregated across the MRO so one failure reports them all.
+    gaps: list[str] = []
+    for cls in consumer_cls.__mro__:
+        if cls is object:
+            continue
+        try:
+            src = textwrap.dedent(inspect.getsource(cls))
+        except (OSError, TypeError):
+            # C extension / dynamically built / no source — nothing to walk.
+            continue
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            # Match ``self.<config_attr>.<name>``: an Attribute whose value
+            # is itself ``self.<config_attr>``.
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == config_attr
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "self"
+                and node.attr not in valid
+            ):
+                gaps.append(
+                    f"{cls.__name__}:{node.lineno} "
+                    f"self.{config_attr}.{node.attr}"
+                )
+
+    if gaps:
+        raise AssertionError(
+            f"{consumer_cls.__name__} reads attributes off "
+            f"self.{config_attr} that are not fields or attributes of "
+            f"{config_cls.__name__}: {sorted(set(gaps))}. Add the field to "
+            f"{config_cls.__name__}, route it through an existing field, or "
+            "pass it in ignore_attrs if the read is intentional."
+        )
+
+
 def _override_calls_attr(
     consumer_cls: type, method_name: str, attr_name: str
 ) -> bool:
@@ -591,6 +708,7 @@ def assert_structured_config_roundtrip(config: Any) -> None:
 
 
 __all__ = [
+    "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",

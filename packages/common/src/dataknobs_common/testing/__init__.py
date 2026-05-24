@@ -73,6 +73,7 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
     wait_for_elasticsearch,
 )
 from dataknobs_common.testing.factory_parity import (
+    assert_config_attribute_access_matches_dataclass,
     assert_ctor_reads_documented_keys,
     assert_dataclass_config_matches_ctor,
     assert_factory_kwargs_match_ctor,
@@ -91,6 +92,7 @@ from dataknobs_common.testing.postgres_fixtures import (
 )
 
 __all__ = [
+    "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",

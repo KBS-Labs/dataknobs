@@ -22,6 +22,9 @@ import inspect
 
 import pytest
 
+from dataknobs_common.testing import (
+    assert_config_attribute_access_matches_dataclass,
+)
 from dataknobs_llm.llm.base import LLMConfig
 from dataknobs_llm.llm.providers import (
     AnthropicProvider,
@@ -84,6 +87,30 @@ def test_provider_init_accepts_llm_config(
         "calls provider_class(LLMConfig) — fix the ctor signature or "
         "update this parity test to reflect the new convention."
     )
+
+
+@pytest.mark.parametrize(
+    "name, provider_cls",
+    PROVIDERS,
+    ids=[name for name, _ in PROVIDERS],
+)
+def test_provider_config_access_within_llmconfig(
+    name: str, provider_cls: type
+) -> None:
+    """Every ``self.config.<attr>`` a provider reads is an :class:`LLMConfig` field.
+
+    The body-access direction, complementary to
+    ``test_provider_init_accepts_llm_config`` (which guards the
+    ctor-surface direction). A provider could read
+    ``self.config.custom_extension`` — accepted by the permissive ctor
+    signature check, but an ``AttributeError`` the first time that
+    (often un-CI'd, provider-specific) path runs. This AST-walks the
+    provider's MRO for such reads against ``LLMConfig``'s field +
+    attribute surface. Config methods (``clone``, ``generation_params``)
+    are valid reads; reads off the base classes are covered by the MRO
+    walk.
+    """
+    assert_config_attribute_access_matches_dataclass(provider_cls, LLMConfig)
 
 
 def test_llm_config_dataclass_is_complete() -> None:
