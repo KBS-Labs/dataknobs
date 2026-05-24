@@ -9,7 +9,7 @@ Coverage extends across all three Postgres consumers that flow user
 config into ``quote_ident()``:
 
 - ``Async/SyncPostgresDatabase`` via ``PostgresBaseConfig._parse_postgres_config``
-- ``PgVectorStore._parse_backend_config`` (the third call site that
+- ``PgVectorStoreConfig.__post_init__`` (the third call site that
   bypasses ``_parse_postgres_config`` entirely)
 
 Both go through the shared ``validate_pg_identifier`` helper.
@@ -82,9 +82,9 @@ class TestPostgresConfigValidation:
 class TestPgVectorStoreConfigValidation:
     """Validation of the ``schema`` / ``table_name`` keys on ``PgVectorStore``.
 
-    The third Postgres consumer.  ``PgVectorStore._parse_backend_config``
-    reads ``schema`` and ``table_name`` from its config dict directly
-    and passes them to ``quote_ident()`` — the same hazard as the
+    The third Postgres consumer.  ``PgVectorStoreConfig.__post_init__``
+    validates ``schema`` and ``table_name`` before they reach
+    ``quote_ident()`` in the store's ``_setup`` — the same hazard as the
     records backend, on a separate code path.  These tests pin that
     the same ``validate_pg_identifier`` defense applies.
     """

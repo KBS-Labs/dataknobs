@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **All four vector stores now construct through typed configuration
+  dataclasses.** `MemoryVectorStore`, `FaissVectorStore`,
+  `ChromaVectorStore`, and `PgVectorStore` each grow a
+  `<Backend>VectorStoreConfig` frozen dataclass (a
+  `dataknobs_common.structured_config.StructuredConfig` subclass, in
+  `dataknobs_data.vector.stores.config`) and are built via the
+  `StructuredConfigConsumer` mixin. As a result, **`store.config` is now
+  the typed config object, not a dict** — read fields as attributes
+  (`store.config.dimensions`) rather than dict lookups. Every existing
+  construction shape is preserved: `Backend(config_dict)`,
+  `Backend.from_config(config_dict)`, and the `VectorStoreFactory` all
+  continue to accept the same dict keys (projected onto the typed
+  config), and a typed config may now be passed directly. The common
+  keys (dimensions, metric, persistence, batch size, parameter
+  sub-dicts, `domain_id`, and a nested `timestamps` config) live on the
+  shared `VectorStoreConfig` base; each backend's leaf config adds only
+  its own keys. Per-field validation (`id_type`, `index_type`,
+  identifier shape, timestamp format) and pgvector connection
+  resolution (`connection_string` / `DATABASE_URL` / `POSTGRES_*`)
+  surface at construction exactly as before. Mixing a typed `config=`
+  with loose keyword arguments raises `TypeError`.
+- **The empty-list filter contract is now documented and enforced
+  across backends.** An empty-list filter value (`{key: []}`) is an
+  unsatisfiable predicate — it matches no record on any vector-store
+  backend. This was already true (it backs the deliberate no-op
+  `VectorMemory.clear()` uses for tenant isolation) but rested on four
+  independent implementations with no shared test; a parametrized
+  cross-backend conformance test now guards it so a regression in any
+  one backend's filter translation is caught.
 - **All 14 database backends now construct through typed configuration
   dataclasses.** Every `SyncDatabase` / `AsyncDatabase` backend (memory,
   sqlite, postgres, elasticsearch, s3, duckdb, file — sync and async)

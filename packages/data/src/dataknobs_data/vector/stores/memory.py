@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 import pickle
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import numpy as np
 
 from .base import VectorStore
+from .config import MemoryVectorStoreConfig
+
+if TYPE_CHECKING:
+    from typing import ClassVar
 
 
 class MemoryVectorStore(VectorStore):
@@ -21,9 +25,11 @@ class MemoryVectorStore(VectorStore):
     and testing scenarios.
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize memory vector store."""
-        super().__init__(config)
+    CONFIG_CLS: ClassVar[type[MemoryVectorStoreConfig]] = MemoryVectorStoreConfig
+
+    def _setup(self) -> None:
+        """Initialize in-memory runtime state."""
+        super()._setup()
         self.vectors: dict[str, np.ndarray] = {}  # id -> vector
         self.metadata_store: dict[str, dict[str, Any]] = {}  # id -> metadata
         # id -> (created_at, updated_at). Aware UTC datetimes. Pickle-

@@ -8,8 +8,11 @@ from uuid import uuid4
 
 from ..types import DistanceMetric
 from .base import VectorStore
+from .config import ChromaVectorStoreConfig
 
 if TYPE_CHECKING:
+    from typing import ClassVar
+
     import numpy as np
 
 try:
@@ -30,25 +33,21 @@ class ChromaVectorStore(VectorStore):
     - Multi-tenancy support
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize Chroma vector store."""
+    CONFIG_CLS: ClassVar[type[ChromaVectorStoreConfig]] = ChromaVectorStoreConfig
+
+    def _setup(self) -> None:
+        """Initialize Chroma-specific derived config and runtime state."""
         if not CHROMA_AVAILABLE:
             raise ImportError(
                 "ChromaDB is not installed. Install with: pip install chromadb"
             )
 
-        super().__init__(config)
-        self.client = None
-        self.collection = None
+        super()._setup()
+        cfg = self.config
 
-    def _parse_backend_config(self) -> None:
-        """Parse Chroma-specific configuration."""
-        # Set default dimensions if not provided
-        if self.dimensions == 0:
-            self.dimensions = 384  # Default for sentence-transformers
-
-        # Chroma-specific configuration
-        self.collection_name = self.config.get("collection_name", "vectors")
+        # ``dimensions`` defaults to 384 in ChromaVectorStoreConfig, so
+        # ``self.dimensions`` is already resolved by the base ``_setup``.
+        self.collection_name = cfg.collection_name
 
         # Opt-in declaration of metadata keys whose stored values are
         # always scalar (never list-valued). For declared scalar keys
@@ -58,16 +57,14 @@ class ChromaVectorStore(VectorStore):
         # scoping pattern (e.g. ``{"domain_id": "x"}``).
         # Defaults to empty (current post-filter behavior preserved).
         # See ``VECTOR_FILTER_SEMANTICS.md`` for the partition rules.
-        scalar_keys = self.config.get("scalar_metadata_keys")
-        if scalar_keys is None:
-            self.scalar_metadata_keys: frozenset[str] = frozenset()
-        else:
-            self.scalar_metadata_keys = frozenset(scalar_keys)
+        self.scalar_metadata_keys: frozenset[str] = (
+            cfg.scalar_metadata_keys or frozenset()
+        )
 
         # Handle embedding function
         self.embedding_function = None
-        if "embedding_function" in self.config:
-            ef = self.config["embedding_function"]
+        ef = cfg.embedding_function
+        if ef is not None:
             if isinstance(ef, str):
                 # Map string to Chroma embedding functions
                 if ef == "default":
@@ -75,8 +72,7 @@ class ChromaVectorStore(VectorStore):
                     self.embedding_function = embedding_functions.DefaultEmbeddingFunction()
                 elif ef == "openai":
                     from chromadb.utils import embedding_functions
-                    api_key = self.config.get("openai_api_key")
-                    self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(api_key=api_key)
+                    self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(api_key=cfg.openai_api_key)
                 # Add more as needed
             else:
                 self.embedding_function = ef
@@ -90,6 +86,9 @@ class ChromaVectorStore(VectorStore):
             DistanceMetric.INNER_PRODUCT: "ip",
         }
         self.chroma_metric = metric_map.get(self.metric, "cosine")
+
+        self.client = None
+        self.collection = None
 
     # chromadb's metadata contract is scalar-only (str/int/float/bool).
     # It rejects an empty/``None`` metadata dict outright, and — worse —

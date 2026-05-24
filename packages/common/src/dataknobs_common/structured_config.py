@@ -239,7 +239,48 @@ class StructuredConfig:
     of several concrete sub-configs (``A | B`` where both are
     ``StructuredConfig`` subclasses) is likewise left untouched — only a
     single-config ``SubCfg | None`` is auto-coerced.
+
+    Secret redaction: a subclass carrying a credential-bearing field
+    (an API key, a connection string with an embedded password) lists
+    those field names in ``_SENSITIVE_FIELDS`` and defines a one-line
+    ``__repr__`` delegating to :meth:`_redacted_repr`::
+
+        def __repr__(self) -> str:
+            return self._redacted_repr()
+
+    The ``__repr__`` MUST live in the subclass body (not be inherited):
+    a ``@dataclass`` base anywhere between the leaf and this class
+    generates its own ``__repr__`` that would shadow an inherited one in
+    the MRO. ``to_dict`` is deliberately *not* redacted (it must
+    round-trip back into an identical config); redaction is a
+    display-only concern that keeps secrets out of logs interpolating
+    ``repr(config)``.
     """
+
+    #: Field names masked by :meth:`_redacted_repr`. Empty by default,
+    #: so a config with no secrets behaves exactly like a plain
+    #: dataclass.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset()
+
+    def _redacted_repr(self) -> str:
+        """Dataclass-style repr that masks ``_SENSITIVE_FIELDS`` values.
+
+        Mirrors the auto-generated dataclass repr for every ``repr=True``
+        field, substituting ``'***'`` for a non-``None`` sensitive value
+        so credentials never reach logs through ``repr(config)`` or an
+        f-string. ``None`` is shown verbatim — an unset secret is not a
+        secret. A secret-bearing config wires this in as its ``__repr__``
+        (see the class docstring).
+        """
+        parts: list[str] = []
+        for f in dataclasses.fields(self):
+            if not f.repr:
+                continue
+            value = getattr(self, f.name)
+            if f.name in self._SENSITIVE_FIELDS and value is not None:
+                value = "***"
+            parts.append(f"{f.name}={value!r}")
+        return f"{type(self).__name__}({', '.join(parts)})"
 
     @classmethod
     def from_dict(cls, config: Mapping[str, Any]) -> Self:

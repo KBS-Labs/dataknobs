@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -346,3 +346,84 @@ class TestFlatConfigUnchanged:
         # The non-config gate avoids the coercion path entirely, so the
         # value is the same object the caller supplied (no rebuild).
         assert cfg.items is original
+
+
+@dataclass(frozen=True)
+class _WithSecret(StructuredConfig):
+    """Opts into redaction: ``_SENSITIVE_FIELDS`` + a delegating ``__repr__``."""
+
+    host: str = "db"
+    api_key: str | None = None
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
+
+    def __repr__(self) -> str:
+        return self._redacted_repr()
+
+
+@dataclass(frozen=True)
+class _SecretBase(StructuredConfig):
+    """An intermediate ``@dataclass`` base (generates its own repr)."""
+
+    shared: str = "s"
+
+
+@dataclass(frozen=True)
+class _SecretLeaf(_SecretBase):
+    """Multi-level leaf: must define ``__repr__`` to beat the base's repr."""
+
+    token: str | None = None
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"token"})
+
+    def __repr__(self) -> str:
+        return self._redacted_repr()
+
+
+class TestSensitiveFieldRedaction:
+    """``__repr__`` masks ``_SENSITIVE_FIELDS``; ``to_dict`` does not."""
+
+    def test_repr_masks_set_secret(self) -> None:
+        rendered = repr(_WithSecret(host="db", api_key="sk-super-secret"))
+        assert "sk-super-secret" not in rendered
+        assert "api_key='***'" in rendered
+        # Non-sensitive fields render normally.
+        assert "host='db'" in rendered
+
+    def test_repr_shows_none_secret_verbatim(self) -> None:
+        """An unset secret is not masked — absence is not a secret."""
+        assert "api_key=None" in repr(_WithSecret(host="db", api_key=None))
+
+    def test_to_dict_is_not_redacted(self) -> None:
+        """Redaction is display-only; serialization keeps the real value."""
+        cfg = _WithSecret(host="db", api_key="sk-super-secret")
+        assert cfg.to_dict()["api_key"] == "sk-super-secret"
+
+    def test_roundtrip_preserved_with_secret(self) -> None:
+        """``from_dict(to_dict())`` reconstructs the real secret."""
+        cfg = _WithSecret(host="db", api_key="sk-super-secret")
+        assert_structured_config_roundtrip(cfg)
+        assert _WithSecret.from_dict(cfg.to_dict()).api_key == "sk-super-secret"
+
+    def test_sensitive_fields_is_not_a_dataclass_field(self) -> None:
+        """The ``ClassVar`` marker stays off the field set (and the ctor)."""
+        names = {f.name for f in dataclasses.fields(_WithSecret)}
+        assert "_SENSITIVE_FIELDS" not in names
+
+    def test_default_config_repr_unchanged(self) -> None:
+        """A config with no sensitive fields renders like a plain dataclass."""
+        # ``_Simple`` uses the default ``@dataclass`` repr (no opt-in); its
+        # repr is the standard generated one, proving the base mechanism is
+        # inert unless a subclass opts in.
+        assert repr(_Simple(required="x")) == (
+            "_Simple(required='x', optional_default=5, optional_none=None)"
+        )
+
+    def test_multilevel_leaf_redacts_and_shows_inherited_fields(self) -> None:
+        """A leaf under an intermediate dataclass base masks its secret and
+        still renders the inherited field (the generated base repr would
+        have dropped the leaf's own fields)."""
+        rendered = repr(_SecretLeaf(shared="abc", token="t-secret"))
+        assert "t-secret" not in rendered
+        assert "token='***'" in rendered
+        assert "shared='abc'" in rendered  # inherited field still present

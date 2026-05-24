@@ -11,10 +11,13 @@ from uuid import uuid4
 
 from ..types import DistanceMetric
 from .base import VectorStore
+from .config import FaissVectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from typing import ClassVar
+
     import numpy as np
 
 try:
@@ -34,14 +37,32 @@ class FaissVectorStore(VectorStore):
     - HNSW: Hierarchical navigable small world, good for large datasets
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize Faiss vector store."""
+    CONFIG_CLS: ClassVar[type[FaissVectorStoreConfig]] = FaissVectorStoreConfig
+
+    def _setup(self) -> None:
+        """Initialize Faiss-specific derived config and runtime state."""
         if not FAISS_AVAILABLE:
             raise ImportError(
                 "Faiss is not installed. Install with: pip install faiss-cpu"
             )
 
-        super().__init__(config)
+        super()._setup()
+
+        # Determine index type. The explicit ``index_type`` config key
+        # wins; otherwise fall back to ``index_params["type"]`` (default
+        # ``"auto"``), preserving the legacy dual-source precedence.
+        self.index_type = (
+            self.config.index_type
+            if self.config.index_type is not None
+            else self.index_params.get("type", "auto")
+        )
+
+        self.nlist = self.index_params.get("nlist", 100)  # For IVF
+        self.m = self.index_params.get("m", 32)  # For HNSW
+        self.ef_construction = self.index_params.get("ef_construction", 200)  # For HNSW
+        self.ef_search = self.index_params.get("ef_search", 50)  # For HNSW search
+        self.nprobe = self.search_params.get("nprobe", 10)  # For IVF search
+
         self.index = None
         self.id_map = {}  # Map from our IDs to Faiss internal indices
         self.metadata_store = {}  # Store metadata separately
@@ -74,19 +95,6 @@ class FaissVectorStore(VectorStore):
         # load ``False`` (a persisted IVF index is necessarily trained,
         # since pre-fix a sub-``nlist`` first batch could not be added).
         self._deferred_ivf: bool = False
-
-    def _parse_backend_config(self) -> None:
-        """Parse Faiss-specific configuration."""
-        # Determine index type
-        self.index_type = self.index_params.get("type", "auto")
-        if "index_type" in self.config:
-            self.index_type = self.config["index_type"]
-
-        self.nlist = self.index_params.get("nlist", 100)  # For IVF
-        self.m = self.index_params.get("m", 32)  # For HNSW
-        self.ef_construction = self.index_params.get("ef_construction", 200)  # For HNSW
-        self.ef_search = self.index_params.get("ef_search", 50)  # For HNSW search
-        self.nprobe = self.search_params.get("nprobe", 10)  # For IVF search
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""

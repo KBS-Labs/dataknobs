@@ -404,6 +404,41 @@ class TestVectorMemoryScoping:
             "escaped the tenant scope. Composition must prevent this."
         )
 
+    @pytest.mark.asyncio
+    async def test_clear_contradiction_is_a_total_no_op(self):
+        """The materialized contradiction removes ZERO rows, not just others'.
+
+        When a caller filter key collides with ``default_filter`` at a
+        different value, ``clear()`` materializes an empty-list value
+        (``{key: []}``) for that key. This complements
+        ``test_clear_explicit_filter_cannot_escape_tenant_scope`` (which
+        asserts the *other* tenant survives) by asserting the *backend*
+        contract directly: an empty-list filter is unsatisfiable, so the
+        clear is a total no-op — even the calling tenant's own rows are
+        untouched. This is the vector-store invariant the consumer relies
+        on; if a backend broke it, the clear would remove a non-empty
+        (and possibly cross-tenant) set instead.
+        """
+        mem = await _make_vector_memory(
+            similarity_threshold=-1.0,
+            default_metadata={"user_id": "u1"},
+            default_filter={"user_id": "u1"},
+        )
+        await mem.add_message("first", "user")
+        await mem.add_message("second", "user")
+        before = await mem.get_context("query")
+        assert len(before) == 2  # sanity: corpus is present
+
+        # Colliding key at a different value → effective filter
+        # ``{"user_id": []}`` (the unsatisfiable contradiction).
+        await mem.clear(filter_metadata={"user_id": "u2"})
+
+        after = await mem.get_context("query")
+        assert len(after) == 2, (
+            "the empty-list contradiction removed rows — the backend's "
+            "unsatisfiable-predicate contract was violated."
+        )
+
 
 # ===========================================================================
 # CompositeMemory — basics
@@ -790,7 +825,7 @@ class TestCompositeMemoryFromConfig:
 
     @pytest.mark.asyncio
     async def test_composite_from_config_with_primary(self):
-        """primary key selects the correct strategy."""
+        """Primary key selects the correct strategy."""
         config = {
             "type": "composite",
             "primary": 1,
