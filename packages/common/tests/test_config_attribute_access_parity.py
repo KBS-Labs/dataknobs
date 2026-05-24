@@ -17,6 +17,8 @@ deterministic:
   clean and the drifted direction;
 * ``ignore_attrs`` whitelists an intentional off-config read;
 * ``config_attr`` retargets the audited attribute name;
+* ``config_attr`` scoping is isolated in both directions — auditing one
+  attribute name flags only that scope's drift, never another's;
 * a non-dataclass config type is rejected with a clear error.
 """
 
@@ -173,6 +175,56 @@ def test_default_config_attr_ignores_other_attrs() -> None:
     a dict) are never false-flagged.
     """
     assert_config_attribute_access_matches_dataclass(_CustomAttrBad, _Cfg)
+
+
+class _DualScopeConsumer:
+    """Reads a drifted attr off each of two differently-named config attrs.
+
+    ``self.config.ghost_a`` and ``self.cfg.ghost_b`` are both non-fields.
+    Used to prove that ``config_attr`` scopes the walk: targeting one
+    attribute name must flag only that scope's drift and leave the
+    other's untouched.
+    """
+
+    def __init__(self, config: _Cfg) -> None:
+        self.config = config
+        self.cfg = config
+
+    def use(self) -> object:
+        return self.config.ghost_a, self.cfg.ghost_b
+
+
+def test_config_attr_scope_is_isolated_to_default() -> None:
+    """Default ``config_attr="config"`` flags only the ``config`` scope.
+
+    With both ``self.config.ghost_a`` and ``self.cfg.ghost_b`` present,
+    auditing the default scope catches ``ghost_a`` and must not report
+    ``ghost_b`` (which lives off the unaudited ``cfg`` attr).
+    """
+    with pytest.raises(AssertionError) as excinfo:
+        assert_config_attribute_access_matches_dataclass(
+            _DualScopeConsumer, _Cfg
+        )
+    message = str(excinfo.value)
+    assert "ghost_a" in message
+    assert "ghost_b" not in message
+
+
+def test_config_attr_scope_is_isolated_to_override() -> None:
+    """Retargeted ``config_attr="cfg"`` flags only the ``cfg`` scope.
+
+    The mirror of the default case: auditing ``cfg`` catches ``ghost_b``
+    and must not report ``ghost_a`` (which lives off the unaudited
+    ``config`` attr). Together the two tests pin scope isolation in both
+    directions.
+    """
+    with pytest.raises(AssertionError) as excinfo:
+        assert_config_attribute_access_matches_dataclass(
+            _DualScopeConsumer, _Cfg, config_attr="cfg"
+        )
+    message = str(excinfo.value)
+    assert "ghost_b" in message
+    assert "ghost_a" not in message
 
 
 class _NotADataclass:

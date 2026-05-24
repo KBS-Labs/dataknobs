@@ -336,12 +336,19 @@ parity test to catch the original failure mode that motivated the
 helpers: a factory that enumerates a fixed allowlist of kwargs and
 silently drops the next ctor knob added to the target class.
 
-The four AST-based helpers (all below except
+The five AST-based helpers (all below except
 `assert_structured_config_roundtrip`) are import-only — they read source
-via `inspect` and parse it with `ast`, so backends with optional runtime
-dependencies (asyncpg, aioboto3, ...) can be parity-tested without those
-dependencies installed. `assert_structured_config_roundtrip` is a
-runtime property assertion that takes a config instance.
+via `inspect` and parse it with `ast`, so backends and consumers with
+optional runtime dependencies (asyncpg, aioboto3, provider SDKs, ...) can
+be parity-tested without those dependencies installed.
+`assert_structured_config_roundtrip` is a runtime property assertion that
+takes a config instance.
+
+The first four guards (and the `assert_structured_config_consumer` bundle)
+pin the **ctor-surface** direction — every config field has a matching
+constructor parameter. `assert_config_attribute_access_matches_dataclass`
+pins the orthogonal **body-access** direction — every attribute the
+consumer *reads* off its typed config actually exists on the config type.
 
 ### `assert_dataclass_config_matches_ctor`
 
@@ -474,6 +481,47 @@ def test_redis_config_roundtrips() -> None:
     )
 ```
 
+### `assert_config_attribute_access_matches_dataclass`
+
+The body-access counterpart to `assert_dataclass_config_matches_ctor`.
+Where the ctor-surface guard proves every config *field* has a matching
+constructor parameter, this proves every attribute the consumer *reads*
+off its typed config actually lives on the config type. The drift it
+catches: a consumer reads `self.config.foo` where `foo` is neither a
+dataclass field nor any attribute/method of the config type — an
+`AttributeError` waiting for the first time that (often provider-specific,
+un-CI'd) code path runs.
+
+It AST-walks every class in the consumer's `__mro__` (so inherited
+base-class reads are covered, not just the leaf body) for
+`self.<config_attr>.<name>` accesses, and asserts each `<name>` is a field
+of the config *or* any attribute/method resolvable on it (`dir(config_cls)`
+— so config helper methods like `clone`, `generation_params`, `to_dict`
+are valid reads and don't false-positive). It does not instantiate the
+consumer, so provider classes with optional SDK dependencies are audited
+without those installed.
+
+```python
+from dataknobs_common.testing import (
+    assert_config_attribute_access_matches_dataclass,
+)
+from dataknobs_llm.llm.base import LLMConfig
+from dataknobs_llm.llm.providers import OllamaProvider
+
+def test_ollama_reads_match_llm_config() -> None:
+    assert_config_attribute_access_matches_dataclass(
+        OllamaProvider, LLMConfig
+    )
+```
+
+The walk is scoped to `self.<config_attr>.<name>` deliberately: bare
+`config.<name>` reads from method parameters are *not* walked, because
+they routinely operate on other types (a dataknobs `Config`, a plain dict)
+and would produce unavoidable false positives. Pass `config_attr="..."`
+when the typed config lives on a differently-named attribute, and
+`ignore_attrs=frozenset({...})` for documented intentional off-config
+reads.
+
 ### When to Use Which
 
 | Factory pattern | Helper |
@@ -482,6 +530,7 @@ def test_redis_config_roundtrips() -> None:
 | Factory names kwargs in its body — `cls(k=cfg.get("k"))` or `cls.from_config(cfg)` | `assert_factory_kwargs_match_ctor` |
 | Ctor reads `config.get("X")` / `config["X"]` directly | `assert_ctor_reads_documented_keys` |
 | Class mixes in `StructuredConfigConsumer` | `assert_structured_config_consumer` |
+| Consumer reads `self.config.<attr>` in its body | `assert_config_attribute_access_matches_dataclass` |
 | Round-trip a `StructuredConfig` instance — `from_dict(to_dict())` | `assert_structured_config_roundtrip` |
 
 When a registry uses the dataclass + `from_config` pattern, pair the

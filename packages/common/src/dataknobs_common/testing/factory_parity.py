@@ -402,18 +402,25 @@ def assert_config_attribute_access_matches_dataclass(
         | set(ignore_attrs)
     )
 
-    # ``cls.__name__: [(attr, lineno), ...]`` for every offending read,
-    # aggregated across the MRO so one failure reports them all.
-    gaps: list[str] = []
+    # ``(cls.__name__, attr) -> {absolute file linenos}`` for every
+    # offending read, aggregated across the MRO so one failure reports
+    # them all. Keying on ``(class, attr)`` collapses repeated reads of
+    # the same drifted attribute into a single entry (with all the lines
+    # it appears on) rather than one noisy line per occurrence.
+    gaps: dict[tuple[str, str], set[int]] = {}
     for cls in consumer_cls.__mro__:
         if cls is object:
             continue
         try:
-            src = textwrap.dedent(inspect.getsource(cls))
+            # ``getsourcelines`` yields the file line the class source
+            # starts on; ``ast`` line numbers are relative to that start,
+            # so we offset them to absolute file lines (``dedent`` strips
+            # leading whitespace only and does not change line counts).
+            source_lines, start_line = inspect.getsourcelines(cls)
         except (OSError, TypeError):
             # C extension / dynamically built / no source — nothing to walk.
             continue
-        tree = ast.parse(src)
+        tree = ast.parse(textwrap.dedent("".join(source_lines)))
         for node in ast.walk(tree):
             # Match ``self.<config_attr>.<name>``: an Attribute whose value
             # is itself ``self.<config_attr>``.
@@ -425,16 +432,20 @@ def assert_config_attribute_access_matches_dataclass(
                 and node.value.value.id == "self"
                 and node.attr not in valid
             ):
-                gaps.append(
-                    f"{cls.__name__}:{node.lineno} "
-                    f"self.{config_attr}.{node.attr}"
+                abs_lineno = node.lineno + start_line - 1
+                gaps.setdefault((cls.__name__, node.attr), set()).add(
+                    abs_lineno
                 )
 
     if gaps:
+        rendered = sorted(
+            f"{cls_name}:{sorted(linenos)} self.{config_attr}.{attr}"
+            for (cls_name, attr), linenos in gaps.items()
+        )
         raise AssertionError(
             f"{consumer_cls.__name__} reads attributes off "
             f"self.{config_attr} that are not fields or attributes of "
-            f"{config_cls.__name__}: {sorted(set(gaps))}. Add the field to "
+            f"{config_cls.__name__}: {rendered}. Add the field to "
             f"{config_cls.__name__}, route it through an existing field, or "
             "pass it in ignore_attrs if the read is intentional."
         )
