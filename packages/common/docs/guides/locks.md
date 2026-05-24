@@ -147,6 +147,32 @@ host/port/database/user/password keys, `DATABASE_URL`, and
 lock = create_lock({"backend": "postgres"})  # resolves from env
 ```
 
+For direct (non-factory) construction, `PostgresAdvisoryLock` accepts a
+typed `PostgresLockConfig`, a config dict, or the legacy positional
+`connection_string`, and exposes a `from_config(...)` classmethod and a
+read-only `lock.config`:
+
+```python
+from dataknobs_common.locks import PostgresAdvisoryLock, PostgresLockConfig
+
+# Typed config (recommended for direct construction)
+lock = PostgresAdvisoryLock.from_config(
+    PostgresLockConfig(connection_string="postgresql://user:pass@host/db")
+)
+# Dict (normalized through the shared Postgres-config helper)
+lock = PostgresAdvisoryLock.from_config(
+    {"host": "h", "port": 5432, "database": "db", "user": "u", "password": "p"}
+)
+# Legacy positional (still supported)
+lock = PostgresAdvisoryLock(connection_string="postgresql://user:pass@host/db")
+
+assert lock.config.connection_string  # resolved DSN
+```
+
+Mixing a typed `PostgresLockConfig` with the legacy positional
+`connection_string` raises `TypeError`; a config from which no DSN is
+resolvable raises `ConfigurationError`.
+
 **Properties:**
 
 - **Session-level, not transaction-level.** A critical section (e.g.
@@ -386,6 +412,8 @@ from dataknobs_common.locks import (
     InProcessLock,
     # Cross-replica implementation
     PostgresAdvisoryLock,
+    # Typed config for the Postgres backend
+    PostgresLockConfig,
 )
 
 # Also re-exported from the top-level namespace:

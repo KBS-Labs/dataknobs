@@ -129,6 +129,52 @@ class StrictConfig(StructuredConfig):
 `from_dict({})` will trigger the validator just like direct
 construction does.
 
+### Secret redaction (`_SENSITIVE_FIELDS`)
+
+A config that carries a credential — an API key, or a connection string
+that embeds a password — masks it in `repr` by listing the field
+name(s) in a `_SENSITIVE_FIELDS` class variable:
+
+```python
+@dataclass(frozen=True)
+class ServiceConfig(StructuredConfig):
+    host: str = "localhost"
+    api_key: str | None = None
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
+
+repr(ServiceConfig(host="db", api_key="sk-live-123"))
+# "ServiceConfig(host='db', api_key='***')"  ← masked
+```
+
+That declaration is the **only** thing required — redaction is
+automatic. `StructuredConfig.__init_subclass__` installs a redacting
+`__repr__` on every subclass *before* its `@dataclass` decorator runs,
+so:
+
+- a dataclass-*generated* (plaintext) `__repr__` is never produced, and
+- the redacting repr is **inheritance-safe** — it is reinstalled at
+  every level, so an intermediate `@dataclass` base in the MRO cannot
+  shadow it. Declaring `_SENSITIVE_FIELDS` on a shared base
+  (e.g. `S3DatabaseConfigBase`) covers every leaf that inherits it.
+
+Semantics:
+
+- A non-empty value of a listed field renders as `'***'`.
+- `None` and `""` render verbatim — an unset credential is not a secret,
+  and masking `""` would falsely imply one is configured.
+- `to_dict()` is **never** redacted (round-trip must reconstruct the
+  real value); redaction is display-only, keeping secrets out of logs
+  that interpolate `repr(config)`, tracebacks, and pytest failure output.
+- A config with no `_SENSITIVE_FIELDS` renders byte-for-byte identically
+  to the standard dataclass repr — the mechanism is inert unless a
+  subclass opts in.
+
+Field-name redaction does not reach into a *raw mapping* field (e.g. an
+`embedding: dict[str, Any]` that happens to hold an `api_key`); promote
+the credential to its own typed field, or redact at the mapping's own
+boundary, if it must be masked.
+
 ## `StructuredConfigConsumer[ConfigT]` API
 
 ### `CONFIG_CLS` (ClassVar)

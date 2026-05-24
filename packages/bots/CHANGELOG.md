@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collaborator constructor (`DynaBot(llm=provider, prompt_builder=...,
   conversation_storage=...)`), for assembling a bot from already-built
   collaborators.
+- **Embedder credentials are redacted from config `repr`.** Via the
+  `StructuredConfig._SENSITIVE_FIELDS` mechanism in `dataknobs-common`,
+  `VectorMemoryConfig.api_key` and `RAGKnowledgeBaseConfig.api_key` are
+  masked as `'***'` in `repr(config)` (and therefore in logs, tracebacks,
+  and pytest failure output). `to_dict()` is never redacted, so
+  round-trip construction is unaffected. (A secret nested inside the raw
+  `embedding` mapping is not reached by field-name redaction.)
 
 ### Changed
 

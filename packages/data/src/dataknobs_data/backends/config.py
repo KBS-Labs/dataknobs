@@ -24,7 +24,7 @@ knobs shared by every backend except DuckDB (which has no vector support).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_common.structured_config import StructuredConfig
@@ -217,6 +217,7 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     Attributes:
         host/port/database/user/password: Connection parameters
             (resolved from env / ``connection_string`` / explicit keys).
+            ``password`` is redacted from ``repr``.
         ssl: SSL configuration (asyncpg-native; sync translates to ``sslmode``).
         command_timeout: asyncpg command timeout in seconds. **Async-only**
             (psycopg2 has no equivalent connect-time knob).
@@ -241,6 +242,9 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     schema_name: str = "public"
     ensure_database: bool = True
     auto_create_table: bool = True
+
+    # Redacted from ``repr`` by the StructuredConfig base.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -380,8 +384,9 @@ class AsyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
         hosts: Explicit list of Elasticsearch host URLs.
         host: Single host (composed with ``port`` when ``hosts`` is unset).
         port: Port for the single-host form.
-        api_key: API key for authentication.
-        basic_auth: ``(user, password)`` tuple for basic auth.
+        api_key: API key for authentication. Redacted from ``repr``.
+        basic_auth: ``(user, password)`` tuple for basic auth. Redacted
+            from ``repr``.
         verify_certs: Verify TLS certificates.
         ca_certs: Path to a CA bundle.
         client_cert: Path to a client certificate.
@@ -399,6 +404,13 @@ class AsyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
     client_cert: str | None = None
     client_key: str | None = None
     ssl_show_warn: bool = True
+
+    # Redacted from ``repr`` by the StructuredConfig base. ``basic_auth``
+    # is a ``(user, password)`` tuple — masking the whole field hides the
+    # password (and the username) in one shot.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"api_key", "basic_auth"}
+    )
 
 
 @dataclass(frozen=True)
@@ -419,8 +431,11 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         bucket: S3 bucket name (required).
         region_name: AWS region (alias: ``region``).
         aws_access_key_id: AWS access key (alias: ``access_key_id``).
+            Redacted from ``repr``.
         aws_secret_access_key: AWS secret key (alias: ``secret_access_key``).
+            Redacted from ``repr``.
         aws_session_token: AWS session token (alias: ``session_token``).
+            Redacted from ``repr``.
         endpoint_url: Custom S3 endpoint (LocalStack / MinIO / etc.).
     """
 
@@ -430,6 +445,12 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     endpoint_url: str | None = None
+
+    # Redacted from ``repr`` by the StructuredConfig base. Declared on the
+    # shared base so both Sync/AsyncS3DatabaseConfig inherit the masking.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"}
+    )
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

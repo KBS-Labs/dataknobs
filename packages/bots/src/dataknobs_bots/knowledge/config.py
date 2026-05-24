@@ -17,7 +17,7 @@ being baked into this static field graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -41,7 +41,7 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
         api_base: Custom embedder endpoint, forwarded to the embedding
             provider as a legacy flat passthrough.
         api_key: Embedder credential, forwarded to the embedding provider
-            as a legacy flat passthrough.
+            as a legacy flat passthrough. Redacted from ``repr``.
         chunking: Chunking config forwarded to ``create_chunker``.
         merger: Optional chunk-merger config (raw mapping projected onto
             ``MergerConfig``).
@@ -63,3 +63,8 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     formatter: dict[str, Any] | None = None
     documents_path: str | None = None
     document_pattern: str = "**/*.md"
+
+    # Redacted from ``repr`` by the StructuredConfig base. (A secret
+    # nested inside the raw ``embedding`` mapping is not reached by
+    # field-name redaction — see the embedder-config note in the docs.)
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})

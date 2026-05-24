@@ -339,3 +339,41 @@ class TestSqsEventBusConfigDataclass:
         assert issubclass(RedisEventBusConfig, EventBusConfig)
         assert issubclass(MemoryEventBusConfig, EventBusConfig)
         assert issubclass(PostgresEventBusConfig, EventBusConfig)
+
+
+class TestEventBusConfigRedaction:
+    """Credential fields are masked in ``repr`` but preserved in ``to_dict``.
+
+    Pins that each config declares the right ``_SENSITIVE_FIELDS`` names —
+    a typo would silently leave the secret in plaintext.
+    """
+
+    def test_redis_password_masked(self) -> None:
+        cfg = RedisEventBusConfig(password="sup3r-secret")
+        rendered = repr(cfg)
+        assert "sup3r-secret" not in rendered
+        assert "password='***'" in rendered
+        assert cfg.to_dict()["password"] == "sup3r-secret"
+
+    def test_postgres_connection_string_masked(self) -> None:
+        dsn = "postgresql://user:pa55w0rd@host:5432/db"
+        cfg = PostgresEventBusConfig(connection_string=dsn)
+        rendered = repr(cfg)
+        assert "pa55w0rd" not in rendered
+        assert "connection_string='***'" in rendered
+        assert cfg.to_dict()["connection_string"] == dsn
+
+    def test_sqs_aws_keys_masked(self) -> None:
+        cfg = SqsEventBusConfig(
+            queue_url="https://sqs/q",
+            aws_access_key_id="AKIA-XYZ",
+            aws_secret_access_key="sk-secret",
+        )
+        rendered = repr(cfg)
+        assert "AKIA-XYZ" not in rendered
+        assert "sk-secret" not in rendered
+        assert "aws_access_key_id='***'" in rendered
+        assert "aws_secret_access_key='***'" in rendered
+        # Migrated off ``repr=False`` — the keys still round-trip via to_dict.
+        assert cfg.to_dict()["aws_access_key_id"] == "AKIA-XYZ"
+        assert cfg.to_dict()["aws_secret_access_key"] == "sk-secret"

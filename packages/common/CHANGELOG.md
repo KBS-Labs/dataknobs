@@ -45,6 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `__init__` is the construction entry point. The four event-bus
   backends are the first adopters; downstream packages (data, vector
   stores, bots) follow over subsequent releases.
+- `StructuredConfig` automatically redacts credential fields from
+  `repr`. A subclass declares its credential field names in a
+  `_SENSITIVE_FIELDS: ClassVar[frozenset[str]]` and the base masks each
+  non-empty value as `'***'` in `repr(config)` — no per-subclass
+  `__repr__` needed. The redacting repr is installed by
+  `__init_subclass__` (before the subclass's `@dataclass` decorator
+  runs, so a dataclass-generated plaintext repr is never produced and an
+  intermediate base's generated repr cannot shadow it), making the
+  redaction inheritance-safe at every level of the config hierarchy.
+  `None` and `""` render verbatim (an unset credential is not a secret);
+  `to_dict()` is never redacted, so round-trip is preserved. This keeps
+  secrets out of logs that interpolate `repr(config)`, tracebacks, and
+  pytest failure output. In `dataknobs-common`, `RedisEventBusConfig`
+  (`password`), `PostgresEventBusConfig` (`connection_string`),
+  `SqsEventBusConfig` (`aws_access_key_id` / `aws_secret_access_key`,
+  migrated off the prior `repr=False` field flag), and `PostgresLockConfig`
+  (`connection_string`) adopt it.
 - `dataknobs_common.testing.assert_structured_config_consumer(cls)` —
   unified parity guard combining structural checks: `CONFIG_CLS`
   declared, is a `StructuredConfig` subclass, dataclass field set
@@ -183,6 +200,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Mixing a typed config with loose kwargs raises `TypeError` —
   ambiguity is surfaced loudly rather than resolved by implicit
   precedence.
+- `PostgresAdvisoryLock` exposes a typed `PostgresLockConfig` (new,
+  exported from `dataknobs_common.locks`) via a read-only `lock.config`,
+  and is a `StructuredConfigConsumer[PostgresLockConfig]`.
+  `PostgresLockConfig` is a `StructuredConfig` whose `_normalize_dict`
+  routes every input shape through
+  `normalize_postgres_connection_config(require=True)` — the same
+  canonical DSN resolution `PostgresEventBus` uses (`connection_string`,
+  individual host/port/database/user/password keys, `DATABASE_URL`,
+  `POSTGRES_*` env-var fallbacks) — and lists `connection_string` in
+  `_SENSITIVE_FIELDS`, so the password-bearing DSN is masked as `'***'`
+  in `repr(config)`. Construction shapes: legacy positional
+  `PostgresAdvisoryLock(connection_string=...)`, loose dict
+  `PostgresAdvisoryLock(config={...})`, typed
+  `PostgresAdvisoryLock(config=PostgresLockConfig(...))`, and
+  `PostgresAdvisoryLock.from_config(...)`; the `_create_postgres_lock`
+  registry factory is a one-line `from_config(config)` wrapper. Mixing a
+  typed config with the legacy positional raises `TypeError`. Lock
+  semantics (session-scoped `pg_advisory_lock`, the `blake2b` key
+  mapping, the connect/wait timeout policy) are unchanged.
 
 ## v1.3.14 - 2026-05-20
 

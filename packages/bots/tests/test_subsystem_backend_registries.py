@@ -577,3 +577,21 @@ class TestConstructionCitizenship:
         assert isinstance(composite, CompositeMemory)
         assert len(composite.strategies) == 2
         assert composite.primary.max_messages == 10
+
+
+class TestSubsystemConfigRedaction:
+    """Embedder credentials are masked in ``repr`` (not in ``to_dict``)."""
+
+    def test_vector_memory_api_key_masked(self) -> None:
+        cfg = VectorMemoryConfig(api_key="sk-embed-secret")
+        rendered = repr(cfg)
+        assert "sk-embed-secret" not in rendered
+        assert "api_key='***'" in rendered
+        assert cfg.to_dict()["api_key"] == "sk-embed-secret"
+
+    def test_rag_knowledge_base_api_key_masked(self) -> None:
+        cfg = RAGKnowledgeBaseConfig(api_key="sk-embed-secret")
+        rendered = repr(cfg)
+        assert "sk-embed-secret" not in rendered
+        assert "api_key='***'" in rendered
+        assert cfg.to_dict()["api_key"] == "sk-embed-secret"

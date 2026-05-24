@@ -37,12 +37,19 @@ import asyncio
 import hashlib
 import logging
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.structured_config import StructuredConfigConsumer
+
+from .config import PostgresLockConfig
 from .lock import _hold
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import asyncpg
+
+    from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +62,7 @@ caller (and, transitively, ``close()``) indefinitely.
 """
 
 
-class PostgresAdvisoryLock:
+class PostgresAdvisoryLock(StructuredConfigConsumer[PostgresLockConfig]):
     """Cross-replica :class:`DistributedLock` via ``pg_advisory_lock``.
 
     One dedicated asyncpg connection is held per currently-locked key
@@ -91,13 +98,30 @@ class PostgresAdvisoryLock:
             (``pip install 'dataknobs-common[postgres]'``).
     """
 
+    CONFIG_CLS: ClassVar[type[PostgresLockConfig]] = PostgresLockConfig
+
     def __init__(
         self,
         connection_string: str | None = None,
         *,
-        config: dict[str, Any] | None = None,
+        config: PostgresLockConfig | Mapping[str, Any] | None = None,
     ) -> None:
         """Resolve and store the Postgres DSN.
+
+        Three construction shapes are supported:
+
+        - **Typed config** (recommended): pass a
+          :class:`PostgresLockConfig` via ``config=``.
+        - **Loose dict config**: pass a dict via ``config=`` (normalized
+          through :func:`normalize_postgres_connection_config`, so every
+          input shape is supported: individual host/port/... keys,
+          ``DATABASE_URL``, ``POSTGRES_*`` env-var fallbacks). May be
+          combined with the legacy ``connection_string`` positional —
+          which takes precedence.
+        - **Legacy positional**: pass ``connection_string`` directly.
+
+        Mixing a typed :class:`PostgresLockConfig` with the legacy
+        positional ``connection_string`` raises ``TypeError``.
 
         Args:
             connection_string: PostgreSQL connection string. Retained
@@ -105,33 +129,49 @@ class PostgresAdvisoryLock:
                 prefer ``config`` for the unified resolution (individual
                 keys + env fallbacks). An explicit value here wins over
                 any ``connection_string`` inside ``config``.
-            config: Optional dict accepted by
-                ``normalize_postgres_connection_config`` — supports
-                ``connection_string``, individual host/port/database/
-                user/password keys, ``DATABASE_URL``, and ``POSTGRES_*``
-                env-var fallbacks. This is the *same* resolution path
-                ``PostgresEventBus`` uses.
+            config: Optional typed :class:`PostgresLockConfig` or dict
+                accepted by ``normalize_postgres_connection_config`` —
+                supports ``connection_string``, individual host/port/
+                database/user/password keys, ``DATABASE_URL``, and
+                ``POSTGRES_*`` env-var fallbacks. This is the *same*
+                resolution path ``PostgresEventBus`` uses.
 
         Raises:
             ConfigurationError: If no Postgres connection is resolvable
                 from ``config``, ``connection_string``, or env vars.
+            TypeError: If a typed :class:`PostgresLockConfig` is passed
+                alongside the legacy positional ``connection_string``.
         """
-        from dataknobs_common.postgres_config import (
-            normalize_postgres_connection_config,
-        )
-
-        merged: dict[str, Any] = dict(config or {})
         if connection_string is not None:
+            if isinstance(config, PostgresLockConfig):
+                raise TypeError(
+                    "PostgresAdvisoryLock: cannot mix typed "
+                    "`PostgresLockConfig` with the legacy positional "
+                    "`connection_string`."
+                )
+            merged: dict[str, Any] = dict(config or {})
             merged["connection_string"] = connection_string
-        # ``require=True`` raises ``ConfigurationError`` when nothing is
-        # resolvable; the cast narrows the return type for the type
-        # checker without the runtime-stripped ``assert`` idiom (mirrors
-        # PostgresEventBus exactly).
-        normalized = cast(
-            "dict[str, Any]",
-            normalize_postgres_connection_config(merged, require=True),
-        )
-        self._dsn: str = normalized["connection_string"]
+            config = merged
+        super().__init__(config=config)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any] | StructuredConfig,
+    ) -> PostgresAdvisoryLock:
+        """Construct from a config dict or typed config.
+
+        Overrides
+        :meth:`~dataknobs_common.structured_config.StructuredConfigConsumer.from_config`
+        so the typed config is delivered via the keyword-only ``config=``
+        slot rather than the legacy ``connection_string`` positional.
+        Reuses the inherited ``_coerce_config`` guard so a config of the
+        wrong ``StructuredConfig`` subclass raises a clear ``TypeError``.
+        """
+        return cls(config=cls._coerce_config(config))
+
+    def _setup(self) -> None:
+        self._dsn: str = self._config.connection_string
         # One held asyncpg connection per currently-locked key.
         self._held: dict[str, asyncpg.Connection] = {}
         self._guard = asyncio.Lock()  # protects ``_held``

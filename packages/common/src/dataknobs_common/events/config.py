@@ -19,8 +19,8 @@ intentionally unsupported.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any, ClassVar, cast
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -64,6 +64,9 @@ class RedisEventBusConfig(EventBusConfig):
     ssl: bool = False
     channel_prefix: str = "events"
 
+    # Redacted from ``repr`` by the StructuredConfig base.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
+
 
 @dataclass(frozen=True)
 class PostgresEventBusConfig(EventBusConfig):
@@ -87,13 +90,17 @@ class PostgresEventBusConfig(EventBusConfig):
     ``ValueError``.
 
     Attributes:
-        connection_string: Resolved PostgreSQL DSN.
+        connection_string: Resolved PostgreSQL DSN. Embeds the password;
+            redacted from ``repr``.
         channel_prefix: Prefix applied to every LISTEN/NOTIFY channel.
             Sanitized to ``[a-zA-Z0-9_]`` at construction.
     """
 
     connection_string: str
     channel_prefix: str = "events"
+
+    # The DSN embeds the password; redacted from ``repr`` by the base.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"connection_string"})
 
     def __post_init__(self) -> None:
         safe_prefix = re.sub(r"[^a-zA-Z0-9_]", "", self.channel_prefix)
@@ -160,8 +167,8 @@ class SqsEventBusConfig(EventBusConfig):
             (single-topic bridge mode for AWS-native event sources).
         aws_access_key_id: Explicit access key (paired with
             ``aws_secret_access_key``); ``None`` defers to boto's
-            default credential chain.
-        aws_secret_access_key: Explicit secret key.
+            default credential chain. Redacted from ``repr``.
+        aws_secret_access_key: Explicit secret key. Redacted from ``repr``.
     """
 
     queue_url: str = ""
@@ -171,14 +178,17 @@ class SqsEventBusConfig(EventBusConfig):
     visibility_timeout: int = 60
     topic_attribute: str = "topic"
     require_topic_attribute: bool = True
-    # AWS credential fields use ``repr=False`` so they are omitted from
-    # the auto-generated ``__repr__`` — the ``bus.config`` accessor
-    # makes it much easier to accidentally log the full config (pytest
-    # failure output, debug logging, exception formatting) than the
-    # legacy kwarg-only construction shape, and an IAM access/secret
-    # key pair must not appear in those streams.
-    aws_access_key_id: str | None = field(default=None, repr=False)
-    aws_secret_access_key: str | None = field(default=None, repr=False)
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+
+    # The ``bus.config`` accessor makes it far easier to accidentally log
+    # the full config (pytest failure output, debug logging, exception
+    # formatting) than the legacy kwarg-only construction shape, and an
+    # IAM access/secret key pair must never appear in those streams. The
+    # StructuredConfig base masks both as ``'***'`` in ``repr``.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"aws_access_key_id", "aws_secret_access_key"}
+    )
 
     def __post_init__(self) -> None:
         if not self.queue_url:

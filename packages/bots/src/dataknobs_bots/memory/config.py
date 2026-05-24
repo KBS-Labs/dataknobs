@@ -15,7 +15,7 @@ rather than being baked into the static field graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -72,7 +72,7 @@ class VectorMemoryConfig(StructuredConfig):
         api_base: Custom embedder endpoint, forwarded to the embedding
             provider as a legacy flat passthrough.
         api_key: Embedder credential, forwarded to the embedding provider
-            as a legacy flat passthrough.
+            as a legacy flat passthrough. Redacted from ``repr``.
         max_results: Maximum number of similar messages returned.
         similarity_threshold: Minimum similarity score (0-1) for results.
         default_metadata: Metadata merged into every ``add_message``.
@@ -97,6 +97,11 @@ class VectorMemoryConfig(StructuredConfig):
     default_metadata: dict[str, Any] | None = None
     default_filter: dict[str, Any] | None = None
     immutable_metadata_keys: list[str] | None = None
+
+    # Redacted from ``repr`` by the StructuredConfig base. (A secret
+    # nested inside the raw ``embedding`` mapping is not reached by
+    # field-name redaction — see the embedder-config note in the docs.)
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
 
 
 @dataclass(frozen=True)
