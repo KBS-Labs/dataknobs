@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-23T18:28:21Z",
+  "timestamp": "2026-05-24T01:33:03Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/bots-subsystem-class-citizenship",
-  "git_commit": "54f9f758680bd8960b1feaad8cf21ddb645fa661",
+  "git_branch": "sbk/vector-stores-structured-config",
+  "git_commit": "cd9e446cb134c4d48149eb2da93206b00d4777b8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
