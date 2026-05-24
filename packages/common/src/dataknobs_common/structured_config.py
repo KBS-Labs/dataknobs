@@ -242,19 +242,30 @@ class StructuredConfig:
 
     Secret redaction: a subclass carrying a credential-bearing field
     (an API key, a connection string with an embedded password) lists
-    those field names in ``_SENSITIVE_FIELDS`` and defines a one-line
-    ``__repr__`` delegating to :meth:`_redacted_repr`::
+    those field names in ``_SENSITIVE_FIELDS``::
 
-        def __repr__(self) -> str:
-            return self._redacted_repr()
+        _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
 
-    The ``__repr__`` MUST live in the subclass body (not be inherited):
-    a ``@dataclass`` base anywhere between the leaf and this class
-    generates its own ``__repr__`` that would shadow an inherited one in
-    the MRO. ``to_dict`` is deliberately *not* redacted (it must
-    round-trip back into an identical config); redaction is a
-    display-only concern that keeps secrets out of logs interpolating
-    ``repr(config)``.
+    That declaration is the *only* thing required — redaction is
+    automatic. A ``__repr__`` that masks every listed field (and renders
+    every other field exactly as the dataclass would) is installed on
+    each subclass by :meth:`__init_subclass__`, which runs *before* the
+    subclass's ``@dataclass`` decorator and writes the repr into the
+    subclass ``__dict__`` so the decorator's own ``repr=True`` generation
+    is suppressed for it. This sidesteps both failure modes of the naive
+    approaches: a dataclass-*generated* repr cannot be redacted, and an
+    *inherited* redacting repr would be shadowed by the generated repr of
+    any intermediate ``@dataclass`` base in the MRO. A non-empty value of
+    a listed field renders as ``'***'``; ``None`` and ``""`` (an unset
+    credential) render verbatim, since absence is not a secret.
+    ``to_dict`` is deliberately *not* redacted (it must round-trip back
+    into an identical config) — redaction is display-only, keeping
+    secrets out of logs that interpolate ``repr(config)``, tracebacks,
+    and pytest failure output.
+
+    A subclass that needs a genuinely custom ``__repr__`` may still
+    define one in its body; :meth:`__init_subclass__` leaves an
+    explicitly-defined repr untouched.
     """
 
     #: Field names masked by :meth:`_redacted_repr`. Empty by default,
@@ -262,25 +273,50 @@ class StructuredConfig:
     #: dataclass.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset()
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Install the redacting ``__repr__`` on every subclass.
+
+        Runs at class-creation time, *before* the subclass's
+        ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
+        subclass ``__dict__`` here makes ``dataclasses``' ``repr=True``
+        generation a no-op for it — ``dataclasses._set_new_attribute``
+        skips an attribute already present in the class dict — so every
+        ``StructuredConfig`` subclass renders through
+        :meth:`_redacted_repr` and honours ``_SENSITIVE_FIELDS`` with no
+        per-leaf boilerplate. A subclass that defines its own ``__repr__``
+        in its body keeps it (it is already in ``cls.__dict__`` when this
+        runs). See the class docstring for why neither an inherited repr
+        nor the generated one can do this on their own.
+        """
+        super().__init_subclass__(**kwargs)
+        if "__repr__" not in cls.__dict__:
+            # ``setattr`` (not ``cls.__repr__ =``) keeps mypy from flagging
+            # a method reassignment; the effect — an entry in
+            # ``cls.__dict__`` — is what suppresses dataclass generation.
+            cls.__repr__ = StructuredConfig._redacted_repr
+
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks ``_SENSITIVE_FIELDS`` values.
 
         Mirrors the auto-generated dataclass repr for every ``repr=True``
-        field, substituting ``'***'`` for a non-``None`` sensitive value
-        so credentials never reach logs through ``repr(config)`` or an
-        f-string. ``None`` is shown verbatim — an unset secret is not a
-        secret. A secret-bearing config wires this in as its ``__repr__``
-        (see the class docstring).
+        field, substituting ``'***'`` for a non-empty sensitive value so
+        credentials never reach logs through ``repr(config)`` or an
+        f-string. A falsy value (``None`` / ``""``) is shown verbatim — an
+        unset credential is not a secret, and masking ``""`` would falsely
+        imply one is configured. ``type(self).__qualname__`` (matching the
+        dataclass-generated repr) makes this a byte-for-byte drop-in for
+        configs with no sensitive fields. Installed as the ``__repr__`` of
+        every subclass by :meth:`__init_subclass__`.
         """
         parts: list[str] = []
         for f in dataclasses.fields(self):
             if not f.repr:
                 continue
             value = getattr(self, f.name)
-            if f.name in self._SENSITIVE_FIELDS and value is not None:
+            if f.name in self._SENSITIVE_FIELDS and value:
                 value = "***"
             parts.append(f"{f.name}={value!r}")
-        return f"{type(self).__name__}({', '.join(parts)})"
+        return f"{type(self).__qualname__}({', '.join(parts)})"
 
     @classmethod
     def from_dict(cls, config: Mapping[str, Any]) -> Self:

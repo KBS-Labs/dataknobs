@@ -1247,3 +1247,46 @@ class TestFileFactory:
             assert isinstance(db.config, FileDatabaseConfig)
         finally:
             asyncio.run(db.close())
+
+
+class TestBackendConfigRedaction:
+    """Backend-config credential fields are masked in ``repr`` (not ``to_dict``).
+
+    Pins that each config declares the right ``_SENSITIVE_FIELDS`` names —
+    a typo would silently leave the secret in plaintext.
+    """
+
+    def test_postgres_password_masked(self) -> None:
+        cfg = PostgresDatabaseConfig(password="pa55w0rd")
+        rendered = repr(cfg)
+        assert "pa55w0rd" not in rendered
+        assert "password='***'" in rendered
+        assert cfg.to_dict()["password"] == "pa55w0rd"
+
+    def test_elasticsearch_api_key_and_basic_auth_masked(self) -> None:
+        cfg = AsyncElasticsearchDatabaseConfig(
+            api_key="es-key-XYZ", basic_auth=("user", "pa55w0rd")
+        )
+        rendered = repr(cfg)
+        assert "es-key-XYZ" not in rendered
+        assert "pa55w0rd" not in rendered
+        assert "api_key='***'" in rendered
+        assert "basic_auth='***'" in rendered
+        assert cfg.to_dict()["api_key"] == "es-key-XYZ"
+        assert cfg.to_dict()["basic_auth"] == ("user", "pa55w0rd")
+
+    def test_s3_credentials_masked(self) -> None:
+        # Declared on S3DatabaseConfigBase so both backend configs inherit it.
+        cfg = S3DatabaseConfigBase(
+            bucket="b",
+            aws_access_key_id="AKIA-XYZ",
+            aws_secret_access_key="sk-secret",
+            aws_session_token="tok-123",
+        )
+        rendered = repr(cfg)
+        for secret in ("AKIA-XYZ", "sk-secret", "tok-123"):
+            assert secret not in rendered
+        assert "aws_access_key_id='***'" in rendered
+        assert "aws_secret_access_key='***'" in rendered
+        assert "aws_session_token='***'" in rendered
+        assert cfg.to_dict()["aws_secret_access_key"] == "sk-secret"

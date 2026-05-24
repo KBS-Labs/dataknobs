@@ -139,9 +139,9 @@ class ChromaVectorStoreConfig(VectorStoreConfig):
 
     ``scalar_metadata_keys`` is normalized to a ``frozenset`` so
     ``store.config`` is canonical and round-trips. ``openai_api_key`` is a
-    credential, so this config lists it in ``_SENSITIVE_FIELDS`` and
-    delegates ``__repr__`` to ``StructuredConfig._redacted_repr`` — keeping
-    the key out of any log that interpolates ``repr(config)``.
+    credential, so this config lists it in ``_SENSITIVE_FIELDS``; the
+    ``StructuredConfig`` base then redacts it from ``repr`` automatically,
+    keeping the key out of any log that interpolates ``repr(config)``.
 
     Attributes:
         dimensions: Vector dimensions. ``0`` is a sentinel meaning "use the
@@ -164,10 +164,9 @@ class ChromaVectorStoreConfig(VectorStoreConfig):
     embedding_function: Any = None
     openai_api_key: str | None = None
 
+    # Redaction is automatic: the StructuredConfig base installs a
+    # repr that masks every field named here (see _redacted_repr).
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"openai_api_key"})
-
-    def __repr__(self) -> str:
-        return self._redacted_repr()
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -198,9 +197,9 @@ class PgVectorStoreConfig(VectorStoreConfig):
     validated in ``__post_init__``.
 
     The resolved ``connection_string`` embeds the database password, so
-    this config lists it in ``_SENSITIVE_FIELDS`` and delegates
-    ``__repr__`` to ``StructuredConfig._redacted_repr`` — keeping the DSN
-    out of any log that interpolates ``repr(config)``.
+    this config lists it in ``_SENSITIVE_FIELDS``; the ``StructuredConfig``
+    base then redacts it from ``repr`` automatically, keeping the DSN out
+    of any log that interpolates ``repr(config)``.
 
     Attributes:
         connection_string: Resolved PostgreSQL connection URL (populated by
@@ -232,10 +231,9 @@ class PgVectorStoreConfig(VectorStoreConfig):
     auto_create_index: bool = False
     min_rows_for_index: int = 1000
 
+    # Redaction is automatic: the StructuredConfig base installs a
+    # repr that masks every field named here (see _redacted_repr).
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"connection_string"})
-
-    def __repr__(self) -> str:
-        return self._redacted_repr()
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

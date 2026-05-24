@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error message** (`"S3 backend requires 'bucket' in configuration"`);
   the sync backend previously raised a different string. Both report the
   same message now that bucket validation lives in the shared config.
+- **Credential fields are redacted from config `repr`.** Building on the
+  `StructuredConfig._SENSITIVE_FIELDS` mechanism in `dataknobs-common`,
+  the backend and vector-store configs mask their credentials as `'***'`
+  in `repr(config)` (and therefore in logs, tracebacks, and pytest
+  failure output): `PostgresDatabaseConfig.password`,
+  `AsyncElasticsearchDatabaseConfig.api_key` / `.basic_auth`,
+  `S3DatabaseConfigBase.aws_access_key_id` / `.aws_secret_access_key` /
+  `.aws_session_token` (inherited by both S3 backend configs),
+  `PgVectorStoreConfig.connection_string`, and
+  `ChromaVectorStoreConfig.openai_api_key`. `to_dict()` is never redacted,
+  so round-trip construction is unaffected.
 
 ### Fixed
 

@@ -131,6 +131,15 @@ class TestPostgresLockConfig:
             PostgresLockConfig(connection_string=self.DSN)
         )
 
+    def test_connection_string_redacted_from_repr(self) -> None:
+        """The DSN embeds the password; ``repr`` masks it, ``to_dict`` keeps it."""
+        dsn = "postgresql://user:pa55w0rd@host:5432/db"
+        cfg = PostgresLockConfig(connection_string=dsn)
+        rendered = repr(cfg)
+        assert "pa55w0rd" not in rendered
+        assert "connection_string='***'" in rendered
+        assert cfg.to_dict()["connection_string"] == dsn
+
     def test_frozen_dataclass_rejects_mutation(self) -> None:
         cfg = PostgresLockConfig(connection_string=self.DSN)
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -150,7 +159,6 @@ class TestPostgresAdvisoryLockConstructionShapes:
     def test_positional_connection_string(self) -> None:
         lock = PostgresAdvisoryLock(self.DSN)
         assert lock.config.connection_string == self.DSN
-        assert lock._dsn == self.DSN
 
     def test_keyword_connection_string(self) -> None:
         lock = PostgresAdvisoryLock(connection_string=self.DSN)

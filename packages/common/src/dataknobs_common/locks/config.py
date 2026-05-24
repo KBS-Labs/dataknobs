@@ -22,7 +22,7 @@ unsupported.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -35,9 +35,13 @@ class PostgresLockConfig(StructuredConfig):
         connection_string: Resolved PostgreSQL DSN. ``from_dict`` fills
             this from any shape ``normalize_postgres_connection_config``
             accepts; direct construction expects an already-resolved DSN.
+            Embeds the password; redacted from ``repr``.
     """
 
     connection_string: str
+
+    # The DSN embeds the password; redacted from ``repr`` by the base.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"connection_string"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

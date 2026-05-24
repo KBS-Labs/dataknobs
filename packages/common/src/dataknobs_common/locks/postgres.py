@@ -39,10 +39,7 @@ import logging
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.structured_config import (
-    StructuredConfig,
-    StructuredConfigConsumer,
-)
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .config import PostgresLockConfig
 from .lock import _hold
@@ -51,6 +48,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     import asyncpg
+
+    from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
 

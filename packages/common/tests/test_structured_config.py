@@ -350,15 +350,25 @@ class TestFlatConfigUnchanged:
 
 @dataclass(frozen=True)
 class _WithSecret(StructuredConfig):
-    """Opts into redaction: ``_SENSITIVE_FIELDS`` + a delegating ``__repr__``."""
+    """Opts into redaction with ONLY ``_SENSITIVE_FIELDS`` — no ``__repr__``.
+
+    Proves the base installs the redacting repr automatically: a leaf
+    needs no boilerplate beyond naming its secret fields.
+    """
 
     host: str = "db"
     api_key: str | None = None
 
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
 
-    def __repr__(self) -> str:
-        return self._redacted_repr()
+
+@dataclass(frozen=True)
+class _WithEmptyDefaultSecret(StructuredConfig):
+    """A non-optional credential that defaults to ``""`` (e.g. a password)."""
+
+    password: str = ""
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
 
 
 @dataclass(frozen=True)
@@ -370,18 +380,34 @@ class _SecretBase(StructuredConfig):
 
 @dataclass(frozen=True)
 class _SecretLeaf(_SecretBase):
-    """Multi-level leaf: must define ``__repr__`` to beat the base's repr."""
+    """Multi-level leaf — also needs no hand-written ``__repr__``.
+
+    The intermediate ``_SecretBase`` is a ``@dataclass`` whose generated
+    repr would shadow an *inherited* redacting repr; the base installs the
+    redacting repr into every subclass dict (this leaf included), so
+    redaction survives the extra inheritance level automatically.
+    """
 
     token: str | None = None
 
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"token"})
 
-    def __repr__(self) -> str:
-        return self._redacted_repr()
-
 
 class TestSensitiveFieldRedaction:
-    """``__repr__`` masks ``_SENSITIVE_FIELDS``; ``to_dict`` does not."""
+    """``__repr__`` masks ``_SENSITIVE_FIELDS``; ``to_dict`` does not.
+
+    No leaf defines its own ``__repr__`` — the ``StructuredConfig`` base
+    installs the redacting repr on every subclass via ``__init_subclass__``.
+    """
+
+    def test_repr_auto_installed_from_base(self) -> None:
+        """``__init_subclass__`` writes the redacting repr into each subclass
+        dict (before ``@dataclass`` runs), so no per-leaf boilerplate is
+        needed — even on a no-secret config and a multi-level leaf."""
+        assert _WithSecret.__dict__["__repr__"] is StructuredConfig._redacted_repr
+        assert _SecretLeaf.__dict__["__repr__"] is StructuredConfig._redacted_repr
+        # Inert (empty _SENSITIVE_FIELDS) but still installed.
+        assert _Simple.__dict__["__repr__"] is StructuredConfig._redacted_repr
 
     def test_repr_masks_set_secret(self) -> None:
         rendered = repr(_WithSecret(host="db", api_key="sk-super-secret"))
@@ -393,6 +419,15 @@ class TestSensitiveFieldRedaction:
     def test_repr_shows_none_secret_verbatim(self) -> None:
         """An unset secret is not masked — absence is not a secret."""
         assert "api_key=None" in repr(_WithSecret(host="db", api_key=None))
+
+    def test_repr_shows_empty_secret_verbatim(self) -> None:
+        """An empty-string credential renders verbatim — masking ``""`` would
+        falsely imply a secret is configured."""
+        assert "password=''" in repr(_WithEmptyDefaultSecret())
+        # A real value is still masked.
+        rendered = repr(_WithEmptyDefaultSecret(password="hunter2"))
+        assert "hunter2" not in rendered
+        assert "password='***'" in rendered
 
     def test_to_dict_is_not_redacted(self) -> None:
         """Redaction is display-only; serialization keeps the real value."""
@@ -412,9 +447,10 @@ class TestSensitiveFieldRedaction:
 
     def test_default_config_repr_unchanged(self) -> None:
         """A config with no sensitive fields renders like a plain dataclass."""
-        # ``_Simple`` uses the default ``@dataclass`` repr (no opt-in); its
-        # repr is the standard generated one, proving the base mechanism is
-        # inert unless a subclass opts in.
+        # ``_Simple`` renders through ``_redacted_repr`` (auto-installed on
+        # every subclass) with an empty ``_SENSITIVE_FIELDS``, which produces
+        # output byte-identical to the standard dataclass repr -- proving the
+        # mechanism is *safe* (not inert) for configs with no secrets.
         assert repr(_Simple(required="x")) == (
             "_Simple(required='x', optional_default=5, optional_none=None)"
         )
