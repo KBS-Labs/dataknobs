@@ -461,7 +461,9 @@ class PgVectorStore(VectorStore):
 
         # Check if index already exists
         if if_not_exists and await self._check_index_exists():
-            logger.info(f"Index already exists on {self.schema}.{self.table_name}")
+            logger.info(
+                "Index already exists on %s.%s", self.schema, self.table_name
+            )
             return False
 
         col_embedding = self._col("embedding")
@@ -525,7 +527,9 @@ class PgVectorStore(VectorStore):
         if self._initialized:
             return
 
-        logger.info(f"Initializing pgvector store: {self.schema}.{self.table_name}")
+        logger.info(
+            "Initializing pgvector store: %s.%s", self.schema, self.table_name
+        )
 
         # Create connection pool
         self._pool = await asyncpg.create_pool(
@@ -656,7 +660,9 @@ class PgVectorStore(VectorStore):
                 USING hnsw ({col_embedding} {operator_class})
                 WITH (m = {m}, ef_construction = {ef_construction})
             """)
-            logger.info(f"Created HNSW index on {self.schema}.{self.table_name}")
+            logger.info(
+                "Created HNSW index on %s.%s", self.schema, self.table_name
+            )
 
         # Note: IVFFlat index is not created here because it requires existing data.
         # It will be auto-created during search() if auto_create_index=True and
@@ -801,7 +807,7 @@ class PgVectorStore(VectorStore):
                     vec_id=vec_id,
                 )
 
-        logger.debug(f"Added {len(ids)} vectors to pgvector")
+        logger.debug("Added %d vectors to pgvector", len(ids))
         return ids
 
     async def get_vectors(
@@ -919,7 +925,7 @@ class PgVectorStore(VectorStore):
             # Parse "DELETE n" to get count
             count = int(result.split()[-1])
 
-        logger.debug(f"Deleted {count} vectors from pgvector")
+        logger.debug("Deleted %d vectors from pgvector", count)
         return count
 
     def _validate_uuid_ids(self, ids: list[str]) -> None:

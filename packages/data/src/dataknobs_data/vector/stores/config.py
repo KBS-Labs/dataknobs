@@ -23,7 +23,7 @@ its own keys.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_common.structured_config import StructuredConfig
@@ -137,11 +137,18 @@ class FaissVectorStoreConfig(VectorStoreConfig):
 class ChromaVectorStoreConfig(VectorStoreConfig):
     """Configuration for ``ChromaVectorStore``.
 
-    ``dimensions`` defaults to 384 (sentence-transformers) when left at 0,
-    matching the legacy backend. ``scalar_metadata_keys`` is normalized to
-    a ``frozenset`` so ``store.config`` is canonical and round-trips.
+    ``scalar_metadata_keys`` is normalized to a ``frozenset`` so
+    ``store.config`` is canonical and round-trips. ``openai_api_key`` is a
+    credential, so this config lists it in ``_SENSITIVE_FIELDS`` and
+    delegates ``__repr__`` to ``StructuredConfig._redacted_repr`` — keeping
+    the key out of any log that interpolates ``repr(config)``.
 
     Attributes:
+        dimensions: Vector dimensions. ``0`` is a sentinel meaning "use the
+            384-dimension sentence-transformers default"; it is resolved to
+            384 in ``__post_init__`` (matching the legacy backend), so an
+            explicit ``dimensions=0`` cannot be used to request a
+            zero-dimension store.
         collection_name: Chroma collection name.
         scalar_metadata_keys: Opt-in set of metadata keys whose values are
             always scalar; lets the store push a Chroma-native ``$eq``
@@ -149,12 +156,18 @@ class ChromaVectorStoreConfig(VectorStoreConfig):
         embedding_function: Embedding-function name (``"default"`` /
             ``"openai"``) or a pre-built Chroma embedding function object.
         openai_api_key: API key used when ``embedding_function="openai"``.
+            Redacted from ``repr``.
     """
 
     collection_name: str = "vectors"
     scalar_metadata_keys: frozenset[str] | None = None
     embedding_function: Any = None
     openai_api_key: str | None = None
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"openai_api_key"})
+
+    def __repr__(self) -> str:
+        return self._redacted_repr()
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -184,9 +197,15 @@ class PgVectorStoreConfig(VectorStoreConfig):
     construction (the public contract consumers rely on). Identifiers are
     validated in ``__post_init__``.
 
+    The resolved ``connection_string`` embeds the database password, so
+    this config lists it in ``_SENSITIVE_FIELDS`` and delegates
+    ``__repr__`` to ``StructuredConfig._redacted_repr`` — keeping the DSN
+    out of any log that interpolates ``repr(config)``.
+
     Attributes:
         connection_string: Resolved PostgreSQL connection URL (populated by
-            ``_normalize_dict``).
+            ``_normalize_dict``). Embeds the password; redacted from
+            ``repr``.
         table_name: Embeddings table name.
         schema: SQL schema name.
         pool_min_size/pool_max_size: asyncpg pool bounds.
@@ -212,6 +231,11 @@ class PgVectorStoreConfig(VectorStoreConfig):
     index_type: str = "none"
     auto_create_index: bool = False
     min_rows_for_index: int = 1000
+
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"connection_string"})
+
+    def __repr__(self) -> str:
+        return self._redacted_repr()
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

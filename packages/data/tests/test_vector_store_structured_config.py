@@ -68,7 +68,7 @@ def clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(
         "dataknobs_common.postgres_config._load_dotenv_fallbacks",
-        lambda _start_path=None: {},
+        lambda start_path=None: {},
     )
 
 
@@ -269,6 +269,25 @@ class TestChromaConfig:
             )
         )
 
+    def test_openai_api_key_redacted_from_repr(self) -> None:
+        cfg = ChromaVectorStoreConfig.from_dict(
+            {"embedding_function": "openai", "openai_api_key": "sk-live-XYZ"}
+        )
+        rendered = repr(cfg)
+        assert "sk-live-XYZ" not in rendered
+        assert "openai_api_key='***'" in rendered
+        # Non-secret fields still render.
+        assert "collection_name='vectors'" in rendered
+
+    def test_openai_api_key_preserved_in_to_dict(self) -> None:
+        """Redaction is display-only — serialization keeps the real key."""
+        cfg = ChromaVectorStoreConfig.from_dict({"openai_api_key": "sk-live-XYZ"})
+        assert cfg.to_dict()["openai_api_key"] == "sk-live-XYZ"
+        assert (
+            ChromaVectorStoreConfig.from_dict(cfg.to_dict()).openai_api_key
+            == "sk-live-XYZ"
+        )
+
     @requires_chromadb
     def test_construct_sets_collection_and_metric(self) -> None:
         from dataknobs_data.vector.stores.chroma import ChromaVectorStore
@@ -321,6 +340,22 @@ class TestPgVectorConfig:
                 {"connection_string": _PG_DSN, "dimensions": 768, "id_type": "uuid"}
             )
         )
+
+    def test_connection_string_redacted_from_repr(self) -> None:
+        """The DSN embeds the password, so repr must mask it."""
+        cfg = PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN})
+        rendered = repr(cfg)
+        # Neither the whole DSN nor its embedded password leaks.
+        assert _PG_DSN not in rendered
+        assert "pass" not in rendered
+        assert "connection_string='***'" in rendered
+        # Non-secret identifiers still render.
+        assert "table_name='knowledge_embeddings'" in rendered
+
+    def test_connection_string_preserved_in_to_dict(self) -> None:
+        """Redaction is display-only — serialization keeps the real DSN."""
+        cfg = PgVectorStoreConfig.from_dict({"connection_string": _PG_DSN})
+        assert cfg.to_dict()["connection_string"] == _PG_DSN
 
     @requires_package("asyncpg")
     def test_construct_merges_columns_and_quotes_identifiers(self) -> None:
