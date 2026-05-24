@@ -11,8 +11,6 @@ import asyncio
 from dataknobs_fsm import __version__
 from dataknobs_fsm.cli.main import cli
 from dataknobs_fsm.api.simple import SimpleFSM
-from dataknobs_fsm.api.advanced import AdvancedFSM
-from dataknobs_fsm.config.loader import ConfigLoader
 
 
 @pytest.fixture
@@ -734,23 +732,51 @@ class TestHistoryCLICommands:
         parent.mkdir(parents=True, exist_ok=True)
         return parent / 'history.json'
 
+    @pytest.fixture(autouse=True)
+    def _wide_console(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin the CLI's Rich console to a wide, deterministic width.
+
+        The history table has 7 columns; at the 80-col default it
+        truncates the FSM-name and status cells with ``…``, so the
+        full-value assertions (``'etl_pipeline' in output``,
+        ``'in_progress' in output``) become terminal-width-dependent and
+        fail under CI / piped output.
+
+        Setting ``COLUMNS`` via the ``CliRunner`` env does NOT fix this:
+        Rich snapshots ``os.environ`` when the ``Console`` is constructed,
+        and the CLI's ``console`` is a module global built at import time
+        (with whatever ambient ``COLUMNS`` was set then). A later runtime
+        env change is invisible to it. Replacing the module console with
+        one built with an explicit ``width`` bypasses the environ snapshot
+        entirely, so the render width is deterministic regardless of the
+        ambient terminal.
+        """
+        import sys
+
+        from rich.console import Console
+
+        # Fetch the module from ``sys.modules`` rather than
+        # ``import dataknobs_fsm.cli.main`` / a string monkeypatch target:
+        # the ``cli`` package re-exports a ``main`` *function*, so both
+        # attribute-walking forms resolve ``dataknobs_fsm.cli.main`` to
+        # that function instead of the submodule. The submodule is already
+        # imported (top-of-file ``from dataknobs_fsm.cli.main import cli``),
+        # so it is present in ``sys.modules`` under its full path.
+        cli_main = sys.modules["dataknobs_fsm.cli.main"]
+        monkeypatch.setattr(cli_main, "console", Console(width=200))
+
     @pytest.fixture
     def home_env(self, tmp_path: Path) -> dict[str, str]:
         """Env overlay that points ``Path.home()`` at ``tmp_path``."""
         # ``Path.home()`` consults ``HOME`` on POSIX and ``USERPROFILE``
-        # on Windows.  Set both so the test is platform-agnostic.
-        #
-        # ``COLUMNS`` pins the Rich render width: under ``CliRunner`` the
-        # module-level ``Console`` writes to a non-TTY buffer, so Rich
-        # falls back to whatever ``COLUMNS`` is in the ambient environment
-        # (80 when unset, as in CI). At 80 cols the 7-column history table
-        # truncates the FSM-name and status cells with ``…``, so the
-        # full-value assertions become environment-dependent. Pin a wide,
-        # deterministic width so the rendered cells are never truncated.
+        # on Windows.  Set both so the test is platform-agnostic. (The
+        # Rich render width is pinned separately by the ``_wide_console``
+        # fixture — a ``COLUMNS`` env entry here would be ignored because
+        # the CLI's module-level ``Console`` snapshots ``os.environ`` at
+        # import, before this env applies.)
         return {
             'HOME': str(tmp_path),
             'USERPROFILE': str(tmp_path),
-            'COLUMNS': '200',
         }
 
     @staticmethod
