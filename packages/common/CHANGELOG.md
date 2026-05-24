@@ -183,6 +183,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Mixing a typed config with loose kwargs raises `TypeError` —
   ambiguity is surfaced loudly rather than resolved by implicit
   precedence.
+- `PostgresAdvisoryLock` now builds through a typed `PostgresLockConfig`
+  (new, exported from `dataknobs_common.locks`) and inherits from
+  `StructuredConfigConsumer[PostgresLockConfig]`. `PostgresLockConfig`
+  inherits from `StructuredConfig` and keeps a `_normalize_dict`
+  override that routes every input shape through
+  `normalize_postgres_connection_config(require=True)` — the same
+  canonical DSN resolution `PostgresEventBus` uses
+  (`connection_string`, individual host/port/database/user/password
+  keys, `DATABASE_URL`, `POSTGRES_*` env-var fallbacks). The lock
+  exposes a read-only `lock.config` and a `PostgresAdvisoryLock.from_config(...)`
+  classmethod, and the `_create_postgres_lock` registry factory collapses
+  to a one-line `from_config(config)` wrapper. All three historical
+  construction shapes are preserved — legacy positional
+  `PostgresAdvisoryLock(connection_string=...)`, loose dict
+  `PostgresAdvisoryLock(config={...})`, and typed
+  `PostgresAdvisoryLock(config=PostgresLockConfig(...))`. Mixing a typed
+  config with the legacy positional raises `TypeError`. Lock semantics
+  (session-scoped `pg_advisory_lock`, the `blake2b` key mapping, the
+  connect/wait timeout policy) are unchanged.
 
 ## v1.3.14 - 2026-05-20
 

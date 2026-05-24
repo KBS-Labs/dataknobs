@@ -29,6 +29,7 @@ Postgres advisory-lock backend, registry-pluggable via
 
 from __future__ import annotations
 
+from .config import PostgresLockConfig
 from .factory import LockFactory, create_lock, lock_backends
 from .lock import DistributedLock
 from .memory import InProcessLock
@@ -46,4 +47,6 @@ __all__ = [
     "InProcessLock",
     # Cross-replica implementation
     "PostgresAdvisoryLock",
+    # Typed config
+    "PostgresLockConfig",
 ]

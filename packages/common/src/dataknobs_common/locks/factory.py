@@ -57,7 +57,10 @@ def _create_postgres_lock(config: dict[str, Any]) -> DistributedLock:
     # only required when this backend is actually selected.
     from .postgres import PostgresAdvisoryLock
 
-    return PostgresAdvisoryLock(config=config)
+    # ``from_config`` routes the dict through ``PostgresLockConfig.from_dict``
+    # → ``_normalize_dict`` → ``normalize_postgres_connection_config``,
+    # identical resolution to direct ``PostgresAdvisoryLock(config=config)``.
+    return PostgresAdvisoryLock.from_config(config)
 
 
 lock_backends.register("memory", _create_in_process_lock)
