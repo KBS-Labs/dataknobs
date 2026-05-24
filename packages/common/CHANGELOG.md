@@ -75,6 +75,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `assert_dataclass_config_matches_ctor` /
   `assert_factory_kwargs_match_ctor` checks for adopters of the
   structured-config primitives.
+- `dataknobs_common.testing.assert_config_attribute_access_matches_dataclass(consumer_cls, config_cls)`
+  — AST drift guard for the *body-access* direction: asserts every
+  `self.config.<attr>` a consumer reads (walked across its full MRO, so
+  inherited base-class reads are covered) is a field or attribute of its
+  typed config dataclass. Complements
+  `assert_dataclass_config_matches_ctor` (which guards the ctor-surface
+  direction). Config *methods* (`clone`, `generation_params`) are valid
+  reads; the walk is scoped to `self.<config_attr>.<attr>` (configurable
+  via `config_attr=`) so reads off other types — a dataknobs `Config`, a
+  dict — are not false-flagged. Does not instantiate the consumer, so
+  optional-dependency consumers (provider SDKs, asyncpg) are audited
+  without those installed.
 - `dataknobs_common.testing.assert_structured_config_roundtrip(cfg)`
   — property assertion that `type(cfg).from_dict(cfg.to_dict()) == cfg`.
   Holds for flat configs and for nested configs alike: `to_dict`
