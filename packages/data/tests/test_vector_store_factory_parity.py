@@ -1,24 +1,27 @@
 """Drift guards for the ``dataknobs-data`` vector store registry.
 
 ``VectorStoreFactory.create`` dispatches via ``backend_class(config)``
-— the whole-dict-pass shape. Drift modes:
+— the whole-dict-pass shape, now backed by
+:class:`~dataknobs_common.structured_config.StructuredConfigConsumer`.
+Drift modes:
 
-- A registered backend is no longer constructable from a dict
-  (constructor signature regressed to direct kwargs).
-- A backend no longer reads its documented config keys via the
-  base-class chain.
+- A registered backend stops being a ``StructuredConfigConsumer`` (its
+  ``CONFIG_CLS`` field set drifts from the documented surface, or the
+  consumer mixin stops being the construction entry point).
+- A backend's config dataclass loses round-trip symmetry.
 
 These structural checks run without instantiating backends, so
 optional-dependency backends (faiss, chroma, pgvector) are still
 audited. Behavioural coverage of each vector store lives in its own
-test module.
+test module; construction-parity coverage lives in
+``test_vector_store_structured_config.py``.
 """
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_common.testing import assert_structured_config_consumer
 
 from dataknobs_data.vector.stores import vector_backends
 
@@ -41,37 +44,21 @@ VECTOR_BACKENDS = _registered_backend_classes()
     VECTOR_BACKENDS,
     ids=[name for name, _ in VECTOR_BACKENDS],
 )
-def test_vector_store_accepts_dict_config(
+def test_vector_store_is_structured_config_consumer(
     name: str, backend_cls: type
 ) -> None:
-    """Every registered vector backend's ``__init__`` accepts a dict.
+    """Every registered vector backend applies the structured-config pattern.
 
-    ``VectorStoreFactory.create`` calls ``backend_class(config)`` with
-    ``config`` being a dict. If a backend's ctor regresses to direct
-    kwargs (``backend_class(dimensions=768)``), the factory dispatch
-    breaks. This pins the dict-config contract structurally.
+    Pins, without instantiating the backend (so optional-dependency
+    backends are still audited): a declared ``CONFIG_CLS`` that is a
+    ``StructuredConfig`` subclass, a config field set matching the
+    construction surface, the consumer mixin preceding other bases in the
+    MRO (so its ``__init__`` is the construction entry point), and
+    entry-point / collaborator-hook safety. This is what keeps the
+    factory's ``backend_class(config)`` dict dispatch working.
     """
-    sig = inspect.signature(backend_cls.__init__)
-    params = list(sig.parameters.values())
-    # Skip ``self``; the next positional must be the config dict
-    # (or keyword with a sensible default).
-    assert len(params) >= 2, (
-        f"{backend_cls.__name__}.__init__ must accept a config "
-        "positional/keyword argument after `self`."
-    )
-    first_real = params[1]
-    # The convention is ``__init__(self, config: dict | None = None)``
-    # — either positional ``config`` or first-positional with default.
-    default = first_real.default
-    accepts_dict_default = (
-        default is None
-        or default is inspect.Parameter.empty
-        or isinstance(default, dict)
-    )
-    assert accepts_dict_default, (
-        f"{backend_cls.__name__}.__init__'s first parameter "
-        f"{first_real.name!r} should default to None or accept a dict."
-    )
+    assert issubclass(backend_cls, StructuredConfigConsumer)
+    assert_structured_config_consumer(backend_cls)
 
 
 def test_memory_vector_store_constructs_from_empty_config() -> None:
@@ -85,8 +72,9 @@ def test_memory_vector_store_constructs_from_empty_config() -> None:
 def test_registered_vector_backends_audit_set() -> None:
     """The audit matrix above must cover every registered built-in.
 
-    A new built-in vector backend → add a row to the per-backend tests
-    above so the parity guard continues to cover the registry.
+    A new built-in vector backend → it is auto-discovered by
+    ``_registered_backend_classes`` and audited by the parametrized
+    guard above; this asserts the canonical built-ins remain registered.
     """
     keys = set(vector_backends.list_keys())
     # The set of canonical backend names that MUST exist as built-ins.

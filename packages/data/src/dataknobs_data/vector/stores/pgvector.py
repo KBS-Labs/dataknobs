@@ -7,15 +7,16 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_utils.sql_utils import quote_ident
 
-from ...backends.postgres_mixins import validate_pg_identifier
 from ..types import DistanceMetric
 from .base import VectorStore
+from .config import PgVectorStoreConfig
 
 if TYPE_CHECKING:
+    from typing import ClassVar
+
     import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -134,85 +135,51 @@ class PgVectorStore(VectorStore):
         "updated_at": "updated_at",
     }
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        """Initialize pgvector store."""
+    CONFIG_CLS: ClassVar[type[PgVectorStoreConfig]] = PgVectorStoreConfig
+
+    def _setup(self) -> None:
+        """Initialize pgvector-specific derived config and runtime state.
+
+        Connection resolution (``connection_string`` / ``DATABASE_URL`` /
+        ``POSTGRES_*`` env vars) and identifier / enum validation already
+        happened in :class:`PgVectorStoreConfig`. This computes the quoted
+        identifiers, merges the column mapping, and sets the deferred pool
+        placeholder.
+        """
         if not ASYNCPG_AVAILABLE:
             raise ImportError(
                 "asyncpg is not installed. Install with: pip install asyncpg"
             )
 
-        super().__init__(config)
-        self._pool: asyncpg.Pool | None = None
+        super()._setup()
+        cfg = self.config
 
-    def _parse_backend_config(self) -> None:
-        """Parse pgvector-specific configuration."""
-        # Route through the shared normalizer so pgvector accepts every
-        # input shape the rest of dataknobs supports (``connection_string``,
-        # individual host/port/database/user/password keys, ``DATABASE_URL``
-        # env var, ``POSTGRES_*`` env vars, and ``.env`` / ``.project_vars``
-        # files). We call with ``require=False`` + manual ``ValueError``
-        # on ``None`` to preserve the public ``ValueError`` contract (the
-        # normalizer itself raises ``ConfigurationError``); consumers and
-        # tests rely on the ``ValueError`` type for this construction
-        # failure mode.
-        normalized = normalize_postgres_connection_config(
-            self.config, require=False,
-        )
-        if normalized is None:
-            raise ValueError(
-                "PgVectorStore requires a postgres connection. Provide one of: "
-                "'connection_string', individual host/port/database/user/password "
-                "keys, 'DATABASE_URL' env var, or POSTGRES_HOST/POSTGRES_PORT/"
-                "POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD env vars."
-            )
-        self.connection_string = normalized["connection_string"]
-
-        # Validate identifier shape early so misconfiguration surfaces
-        # as ``ConfigurationError`` at construction rather than as a
-        # ``PostgresSyntaxError`` at first DDL.  Same defense-in-depth
-        # the records backends apply via ``_parse_postgres_config``;
-        # this Postgres consumer applies the same identifier
-        # validation independently.
-        self.table_name = validate_pg_identifier(
-            self.config.get("table_name", "knowledge_embeddings"),
-            "table_name",
-        )
-        self.schema = validate_pg_identifier(
-            self.config.get("schema", "public"),
-            "schema",
-        )
+        self.connection_string = cfg.connection_string
+        self.table_name = cfg.table_name
+        self.schema = cfg.schema
         self._q_schema = quote_ident(self.schema)
         self._q_table = quote_ident(self.table_name)
         self._q_qualified = f"{self._q_schema}.{self._q_table}"
-        self.pool_min_size = self.config.get("pool_min_size", 2)
-        self.pool_max_size = self.config.get("pool_max_size", 10)
-
-        # Domain filtering (optional - for multi-tenant isolation)
-        self.domain_id = self.config.get("domain_id")
+        self.pool_min_size = cfg.pool_min_size
+        self.pool_max_size = cfg.pool_max_size
 
         # Column mappings - merge user config with defaults
-        user_columns = self.config.get("columns", {})
-        self.columns = {**self.DEFAULT_COLUMNS, **user_columns}
+        self.columns = {**self.DEFAULT_COLUMNS, **cfg.columns}
 
         # Table creation options
-        self.auto_create_table = self.config.get("auto_create_table", True)
+        self.auto_create_table = cfg.auto_create_table
         # Defect A: default is ``"text"`` so RAG consumers passing chunk ids
         # like ``"01-fundamentals_0"`` work without any config override.
         # Pre-flip consumers using server-generated UUIDs must set
         # ``id_type="uuid"`` explicitly.
-        self.id_type = self.config.get("id_type", "text")
-        if self.id_type not in ("uuid", "text"):
-            raise ValueError(f"id_type must be 'uuid' or 'text', got: {self.id_type}")
+        self.id_type = cfg.id_type
 
         # Index configuration
-        self.index_type = self.config.get("index_type", "none")
-        if self.index_type not in ("none", "hnsw", "ivfflat"):
-            raise ValueError(
-                f"index_type must be 'none', 'hnsw', or 'ivfflat', got: {self.index_type}"
-            )
-        self.auto_create_index = self.config.get("auto_create_index", False)
-        self.min_rows_for_index = self.config.get("min_rows_for_index", 1000)
-        self.index_params = self.config.get("index_params", {})
+        self.index_type = cfg.index_type
+        self.auto_create_index = cfg.auto_create_index
+        self.min_rows_for_index = cfg.min_rows_for_index
+
+        self._pool: asyncpg.Pool | None = None
 
     def _col(self, name: str) -> str:
         """Get the actual column name for a logical field name."""

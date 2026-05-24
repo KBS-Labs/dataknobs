@@ -1,7 +1,8 @@
 """Config-parsing tests for PgVectorStore.
 
-These tests exercise ``_parse_backend_config`` and the Defect A / C
-behavior at the layer that does not require a running postgres:
+These tests exercise ``PgVectorStoreConfig`` construction (via
+``PgVectorStore(config)`` / ``_setup``) and the Defect A / C behavior at
+the layer that does not require a running postgres:
 
 - Config-shape parity: ``connection_string``, individual keys,
   ``DATABASE_URL`` env var, ``POSTGRES_*`` env vars all reach the
@@ -50,7 +51,7 @@ def _clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(
         "dataknobs_common.postgres_config._load_dotenv_fallbacks",
-        lambda start_path=None: {},
+        lambda _start_path=None: {},
     )
 
 

@@ -6,11 +6,12 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from dataknobs_config import ConfigurableBase
+from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..types import DistanceMetric
+from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -18,74 +19,62 @@ if TYPE_CHECKING:
     import numpy as np
 
 
+logger = logging.getLogger(__name__)
 
 
-class VectorStoreBase(ConfigurableBase):
+class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
     """Base implementation with common functionality for all vector stores.
-    
-    This class provides:
-    - Configuration parsing following the database pattern
-    - Common parameter extraction
-    - Shared utility methods
+
+    Constructed through a :class:`VectorStoreConfig` subclass via
+    :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`:
+    each concrete store declares its leaf ``CONFIG_CLS`` and the typed
+    config drives construction. ``store.config`` is the typed config (not
+    a dict). This class provides the shared derived-attribute computation
+    (in :meth:`_setup`) plus the common similarity / filter / timestamp
+    helpers.
     """
 
-    def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize vector store with configuration.
-        
-        Args:
-            config: Configuration dictionary with backend-specific parameters
+    CONFIG_CLS: ClassVar[type[VectorStoreConfig]] = VectorStoreConfig
+
+    def _setup(self) -> None:
+        """Derive shared attributes from the typed config.
+
+        Runs once during construction (the mixin calls it after
+        ``self._config`` is established). Subclasses override and call
+        ``super()._setup()`` first, then compute their backend-specific
+        derived attributes. Field parsing already happened in
+        :meth:`VectorStoreConfig.from_dict`; this only computes attributes
+        that are not pure field storage (metric→enum, path expansion,
+        timestamp-key resolution) and initializes shared runtime state.
         """
-        # ConfigurableBase doesn't have __init__, so don't call super().__init__()
-        self.config = config or {}
-        self._parse_common_config()
-        self._parse_backend_config()
-        self._initialized = False
-        # Per-instance set of configured timestamp keys for which a
-        # collision warning has already been emitted. Lives on the
-        # instance (not module scope) so lifetime matches the store —
-        # avoids the CPython id() reuse hazard where a new store could
-        # inherit a dead store's warning state at the same memory
-        # address.
-        self._timestamp_collision_warned: set[str] = set()
+        cfg = self.config
 
-    def _parse_common_config(self) -> None:
-        """Parse common configuration parameters.
-        
-        Extracts parameters that are common to all vector stores:
-        - dimensions: Vector dimensions
-        - metric: Distance metric
-        - persist_path: Path for persistent storage
-        - batch_size: Batch size for operations
-        - index_params: Index-specific parameters
-        - search_params: Search-specific parameters
-        """
-        # Extract dimensions (required for most stores)
-        self.dimensions = self.config.get("dimensions", 0)
+        self.dimensions = cfg.dimensions
 
-        # Extract and parse metric
-        metric = self.config.get("metric", "cosine")
-        if isinstance(metric, str):
-            self.metric = DistanceMetric(metric)
-        else:
-            self.metric = metric
+        # Distance metric: keep the string in config, derive the enum here.
+        self.metric = (
+            cfg.metric
+            if isinstance(cfg.metric, DistanceMetric)
+            else DistanceMetric(cfg.metric)
+        )
 
-        # Extract paths and sizes (expand ~ to home directory)
-        persist_path = self.config.get("persist_path")
-        self.persist_path = Path(persist_path).expanduser() if persist_path else None
-        self.batch_size = self.config.get("batch_size", 100)
+        # Expand ~ to home directory for persistent storage.
+        self.persist_path = (
+            Path(cfg.persist_path).expanduser() if cfg.persist_path else None
+        )
+        self.batch_size = cfg.batch_size
 
-        # Debug logging for path resolution
-        import logging
-        logger = logging.getLogger(__name__)
-        if persist_path:
-            logger.info(f"VectorStore persist_path: {persist_path} -> {self.persist_path} (exists: {os.path.exists(self.persist_path) if self.persist_path else False})")
+        if cfg.persist_path:
+            logger.info(
+                "VectorStore persist_path: %s -> %s (exists: %s)",
+                cfg.persist_path,
+                self.persist_path,
+                os.path.exists(self.persist_path) if self.persist_path else False,
+            )
 
-        # Extract parameter dictionaries
-        self.index_params = self.config.get("index_params", {})
-        self.search_params = self.config.get("search_params", {})
-
-        # Store any additional metadata
-        self.metadata = self.config.get("metadata", {})
+        self.index_params = cfg.index_params
+        self.search_params = cfg.search_params
+        self.metadata = cfg.metadata
 
         # Config-level multi-tenant scoping. When set, every
         # read/count/clear/update_metadata_where is implicitly scoped
@@ -95,7 +84,7 @@ class VectorStoreBase(ConfigurableBase):
         # behavior; Memory/FAISS/Chroma honor it through the shared
         # helpers so a runtime backend swap preserves isolation
         # semantics. None ⇒ no implicit scoping (prior behavior).
-        self.domain_id = self.config.get("domain_id")
+        self.domain_id = cfg.domain_id
 
         # Timestamp exposure config. All vector stores expose
         # created_at / updated_at metadata via include_timestamps=True
@@ -103,27 +92,21 @@ class VectorStoreBase(ConfigurableBase):
         # persist timestamps (MVS, FAISS) track them in-process. Format
         # and key names are configurable; defaults are consistent
         # across backends so runtime-swap produces identical metadata
-        # surfaces.
-        ts_cfg = self.config.get("timestamps", {})
-        self.timestamps_format: str = ts_cfg.get("format", "iso")
-        if self.timestamps_format not in ("iso", "epoch", "datetime"):
-            raise ValueError(
-                "timestamps.format must be 'iso', 'epoch', or 'datetime'; "
-                f"got {self.timestamps_format!r}"
-            )
-        self.timestamps_created_key: str = ts_cfg.get(
-            "created_key", "_created_at"
-        )
-        self.timestamps_updated_key: str = ts_cfg.get(
-            "updated_key", "_updated_at"
-        )
+        # surfaces. The format is validated in
+        # VectorStoreTimestampConfig.__post_init__.
+        ts = cfg.timestamps or VectorStoreTimestampConfig()
+        self.timestamps_format: str = ts.format
+        self.timestamps_created_key: str = ts.created_key
+        self.timestamps_updated_key: str = ts.updated_key
 
-    def _parse_backend_config(self) -> None:
-        """Parse backend-specific configuration.
-        
-        Override this method in subclasses to handle backend-specific parameters.
-        """
-        pass
+        self._initialized = False
+        # Per-instance set of configured timestamp keys for which a
+        # collision warning has already been emitted. Lives on the
+        # instance (not module scope) so lifetime matches the store —
+        # avoids the CPython id() reuse hazard where a new store could
+        # inherit a dead store's warning state at the same memory
+        # address.
+        self._timestamp_collision_warned: set[str] = set()
 
     def _validate_dimensions(self) -> None:
         """Validate vector dimensions.
@@ -344,6 +327,15 @@ class VectorStoreBase(ConfigurableBase):
         absence). All keys must match (AND across keys). An empty
         filter dict matches everything.
 
+        Empty-list contract: an empty-list filter value is unsatisfiable —
+        ``{key: []}`` matches no record on any backend (here, neither the
+        list/list intersection nor the list/scalar IN branch can succeed
+        against ``[]``). Backends that translate filters natively (chroma,
+        pgvector) MUST preserve this; consumers (e.g.
+        ``VectorMemory.clear()`` and :meth:`_effective_filter`) rely on it
+        to express a deliberate no-op / unsatisfiable cross-tenant
+        request.
+
         Elements of list filter values and list metadata values must be
         hashable. Nested dicts or lists are unsupported; consumers
         storing such values should compose a separate filter source.
@@ -455,7 +447,7 @@ class VectorStoreBase(ConfigurableBase):
             # dependent — pgvector uses naive server time, MVS/FAISS
             # use aware UTC.
             return dt.timestamp()
-        # Unreachable — validated in _parse_common_config.
+        # Unreachable — validated in VectorStoreTimestampConfig.__post_init__.
         raise ValueError(
             f"Unknown timestamps.format: {self.timestamps_format!r}"
         )

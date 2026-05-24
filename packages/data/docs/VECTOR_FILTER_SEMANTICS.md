@@ -132,6 +132,17 @@ record. A key missing from the record's metadata fails the filter.
 Empty-list filter values (`{"key": []}`) never match — intersection
 with the empty set is empty.
 
+This is a **backend-conformance contract**, not an accident of the
+Python matcher: `{key: []}` is an unsatisfiable predicate that MUST
+match zero rows on *every* backend, including those that translate
+filters natively (Chroma's `$in`/`$eq` push-down, pgvector's JSONB SQL,
+which emits a literal `FALSE`). Consumers rely on it to express a
+deliberate no-op — e.g. `VectorMemory.clear()` AND-merges a `{key: []}`
+contradiction into a caller filter so a cross-tenant clear removes
+nothing rather than another tenant's rows. A parametrized cross-backend
+conformance test pins this so a future backend (or a refactor of an
+existing one) cannot silently break it.
+
 ## Examples
 
 ```python
