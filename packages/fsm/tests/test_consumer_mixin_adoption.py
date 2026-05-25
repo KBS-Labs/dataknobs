@@ -318,6 +318,12 @@ def test_resource_pool_default_and_dict_and_kwargs_config() -> None:
     """provider-positional with default, dict, and loose-kwarg config."""
     provider = _FakeResourceProvider()
 
+    # The default case deliberately omits ``min_size=0`` (used by the sibling
+    # tests to skip pool pre-fill): here we want the default ``PoolConfig()``
+    # to flow through unchanged, which means ``_initialize_pool`` runs with the
+    # default ``min_size=1`` and calls ``_FakeResourceProvider.acquire()``.
+    # The assertion is therefore coupled to ``PoolConfig()``'s field defaults
+    # by design — it pins that the no-config path yields the canonical default.
     default = ResourcePool(provider)
     assert default.config == PoolConfig()
 

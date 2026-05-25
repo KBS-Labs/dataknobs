@@ -1,5 +1,6 @@
 """Resource pooling implementation."""
 
+import logging
 import queue
 import threading
 from collections.abc import Mapping
@@ -17,6 +18,8 @@ from dataknobs_fsm.resources.base import (
     IResourceProvider,
     ResourceMetrics,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -143,8 +146,16 @@ class ResourcePool(StructuredConfigConsumer[PoolConfig]):
                 )
                 self._resource_map[id(resource)] = pooled
                 self._pool.put(pooled)
-            except Exception:
-                pass  # Continue with fewer resources
+            except Exception as e:
+                # Continue with fewer resources, but record the failure so a
+                # provider that cannot satisfy ``min_size`` is diagnosable
+                # rather than silently producing an undersized pool.
+                self.metrics.record_failure()
+                logger.warning(
+                    "Failed to pre-initialise resource for pool %s: %s",
+                    self.provider.name,
+                    e,
+                )
     
     def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a resource from the pool.
@@ -306,18 +317,28 @@ class ResourcePool(StructuredConfigConsumer[PoolConfig]):
         Args:
             pooled: The pooled resource to release.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
         resource_id = id(pooled.resource)
         try:
             # Attempt to properly release the resource
             self.provider.release(pooled.resource)
-            logger.debug(f"Successfully released pooled resource {resource_id} from pool {self.provider.name}")
+            logger.debug(
+                "Successfully released pooled resource %s from pool %s",
+                resource_id,
+                self.provider.name,
+            )
         except AttributeError as e:
-            logger.warning(f"Resource provider {self.provider.name} missing release method: {e}")
+            logger.warning(
+                "Resource provider %s missing release method: %s",
+                self.provider.name,
+                e,
+            )
         except Exception as e:
-            logger.error(f"Error releasing pooled resource {resource_id} from pool {self.provider.name}: {e}")
+            logger.error(
+                "Error releasing pooled resource %s from pool %s: %s",
+                resource_id,
+                self.provider.name,
+                e,
+            )
             # Track the error for debugging
             self.metrics.record_failure()
             # Still remove from map even if release failed to prevent memory leak
