@@ -6,7 +6,7 @@ dataknobs_data's file backend.
 
 from __future__ import annotations
 
-import copy
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
@@ -49,24 +49,23 @@ class FileStorage(UnifiedDatabaseStorage):
             database: Optional pre-built AsyncDatabase instance.
             steps_database: Optional separate AsyncDatabase for step records.
         """
-        # Copy config to avoid mutating the caller's object
-        config = copy.copy(config)
-        config.connection_params = dict(config.connection_params)
-
+        # Build a local working copy of the connection params and apply
+        # file-backend defaults, leaving the (immutable) caller config
+        # untouched.
+        #
         # Backend selection is now driven by ``StorageConfig.backend``
         # (the canonical enum), so no ``'type'`` injection is needed.
         # This class is registered for
         # ``StorageBackend.FILE`` and the parent's ``_setup_backend``
         # reads from the enum, so the file backend is selected
         # automatically.
+        params = dict(config.connection_params)
 
         # Set default file path if not provided
-        if 'path' not in config.connection_params:
-            config.connection_params['path'] = './fsm_history'
+        params.setdefault('path', './fsm_history')
 
         # Set file format (json or yaml)
-        if 'format' not in config.connection_params:
-            config.connection_params['format'] = 'json'
+        params.setdefault('format', 'json')
 
         # Forward FSM ``StorageConfig.compression`` to the data
         # backend's ``compression`` config key (the established
@@ -75,10 +74,9 @@ class FileStorage(UnifiedDatabaseStorage):
         # implementation injected ``'compress'`` here, which the data
         # backend silently ignored, so file storage was effectively
         # uncompressed regardless of ``StorageConfig.compression``.
-        if 'compression' not in config.connection_params:
-            config.connection_params['compression'] = (
-                'gzip' if config.compression else None
-            )
+        params.setdefault('compression', 'gzip' if config.compression else None)
+
+        config = replace(config, connection_params=params)
 
         super().__init__(config, database=database, steps_database=steps_database)
 

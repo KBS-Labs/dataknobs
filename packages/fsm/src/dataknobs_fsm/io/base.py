@@ -6,10 +6,9 @@ This module provides the base abstractions for unified I/O operations.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import (
-    Any, Dict, List, Union, AsyncIterator, Iterator,
-    Callable, TypeVar, Protocol
-)
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Protocol, TypeVar, Union
+
+from dataknobs_common.structured_config import StructuredConfig
 
 T = TypeVar('T')
 
@@ -36,8 +35,8 @@ class IOFormat(Enum):
     API = "api"
 
 
-@dataclass
-class IOConfig:
+@dataclass(frozen=True)
+class IOConfig(StructuredConfig):
     """Configuration for I/O operations."""
     mode: IOMode
     format: IOFormat

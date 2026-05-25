@@ -565,8 +565,7 @@ class TestStorageFactory:
     def test_invalid_backend(self):
         """Test creating storage with invalid backend."""
         # Create a backend that doesn't exist
-        config = StorageConfig(backend=None)  # type: ignore
-        config.backend = "invalid"  # type: ignore
+        config = StorageConfig(backend="invalid")  # type: ignore
         
         with pytest.raises(ValueError, match="Unknown storage backend"):
             StorageFactory.create(config)

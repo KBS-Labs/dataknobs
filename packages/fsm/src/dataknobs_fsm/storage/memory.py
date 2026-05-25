@@ -6,7 +6,7 @@ dataknobs_data's memory backend with sensible defaults.
 
 from __future__ import annotations
 
-import copy
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
@@ -40,25 +40,25 @@ class InMemoryStorage(UnifiedDatabaseStorage):
             steps_database: Optional separate AsyncDatabase for step records.
             owns_databases: Explicit ownership override (see base class).
         """
-        # Copy config to avoid mutating the caller's object
-        config = copy.copy(config)
-        config.connection_params = dict(config.connection_params)
-        config.mode_specific_config = dict(config.mode_specific_config)
-
+        # Build a local working copy of the connection params and apply
+        # memory-backend defaults, leaving the (immutable) caller config
+        # untouched.
+        #
         # Backend selection is now driven by ``StorageConfig.backend``
         # (the canonical enum), so no ``'type'`` injection is needed.
         # This class is registered for
         # ``StorageBackend.MEMORY`` and the parent's ``_setup_backend``
         # reads from the enum, so the memory backend is selected
         # automatically.
+        params = dict(config.connection_params)
 
         # Set memory-specific defaults
-        if 'max_size' not in config.connection_params:
-            config.connection_params['max_size'] = 1000
+        params.setdefault('max_size', 1000)
 
         # Enable indexing for fast queries
-        if 'enable_indexing' not in config.connection_params:
-            config.connection_params['enable_indexing'] = True
+        params.setdefault('enable_indexing', True)
+
+        config = replace(config, connection_params=params)
 
         super().__init__(
             config,
