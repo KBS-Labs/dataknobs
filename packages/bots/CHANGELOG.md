@@ -136,6 +136,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modified copy with `dataclasses.replace(...)` instead of assigning to
   attributes.
 
+### Security
+
+- Bumped minimum `starlette` requirement (extra: `server`, and the
+  matching dev dependency) from `>=0.49.1` to `>=1.0.1` to exclude
+  PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr — missing Host-header
+  validation that poisons `request.url.path` and can bypass
+  path-based authentication. Flagged at the floor resolve by the
+  `dependency-update` workflow. Because `1.0.1` is a major release and
+  `fastapi <0.133.0` capped `starlette<1.0.0`, the coupled `fastapi`
+  floor was bumped from `>=0.120.1` to `>=0.133.0` (the lowest fastapi
+  whose starlette constraint permits 1.x) in both the `[server]` extra
+  and the dev group. `registry.server` uses only FastAPI's own API
+  surface and never imports `starlette` directly, so the major bump is
+  insulated. The new floor preserves the prior sweep of
+  GHSA-7f5h-v6xp-fcq8 (CVSS 7.5) and GHSA-2c2j-9gv5-cj73 (CVSS 5.3,
+  0.49.1).
+
 ## v0.6.22 - 2026-05-19
 
 ### Added

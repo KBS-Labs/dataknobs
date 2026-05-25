@@ -60,7 +60,7 @@ dev = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
     "markdown>=3.8.1",  # GHSA-5wmx-573v-2qwq (XSS, CVSS 7.5) fixed in 3.8.1 — transitive via mkdocs-material; explicit floor required
-    "pymdown-extensions>=10.16.1",  # GHSA-r6h4-mm7h-8pmq (CVSS 2.7) fixed in 10.16.1 — transitive via mkdocs-material; explicit floor required
+    "pymdown-extensions>=10.21.3",  # GHSA-62q4-447f-wv8h (CVSS 4.3) fixed in 10.21.3; also sweeps GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1) — transitive via mkdocs-material; explicit floor required
 ]
 
 [project.scripts]

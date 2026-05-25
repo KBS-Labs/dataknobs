@@ -93,6 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connecting without TLS. (Requires `dataknobs-utils` with the new
   `sslmode` connector parameter.)
 
+### Security
+
+- Bumped minimum `pyarrow` requirement (extra: `parquet`) from
+  `>=17.0.0` to `>=23.0.1` to exclude PYSEC-2026-113 (CVSS 7.0),
+  flagged at the floor resolve by the `dependency-update` workflow.
+  The bump preserves the prior sweep of PYSEC-2023-238 (CVSS 9.8) and
+  PYSEC-2024-161 (both fixed by 17.0.0).
+
 ## v0.4.20 - 2026-05-20
 
 ### Fixed
