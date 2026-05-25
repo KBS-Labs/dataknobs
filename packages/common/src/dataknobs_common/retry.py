@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from dataknobs_common.structured_config import StructuredConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +52,8 @@ class BackoffStrategy(Enum):
     """Decorrelated jitter: each delay is random between initial_delay and 3x previous delay."""
 
 
-@dataclass
-class RetryConfig:
+@dataclass(frozen=True)
+class RetryConfig(StructuredConfig):
     """Configuration for retry behavior.
 
     Attributes:

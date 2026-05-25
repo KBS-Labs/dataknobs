@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from dataknobs_common.structured_config import StructuredConfig
+
 
 @dataclass(frozen=True)
-class RateLimit:
+class RateLimit(StructuredConfig):
     """A single rate limit rule.
 
     Defines the maximum number of operations (or total weight) allowed
@@ -30,8 +32,8 @@ class RateLimit:
     interval: float
 
 
-@dataclass
-class RateLimiterConfig:
+@dataclass(frozen=True)
+class RateLimiterConfig(StructuredConfig):
     """Configuration for a rate limiter.
 
     Supports per-category rate overrides. When ``acquire()`` is called

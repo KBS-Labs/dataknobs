@@ -1,6 +1,7 @@
 """Tests for the rate limiting abstraction."""
 
 import asyncio
+import dataclasses
 
 import pytest
 
@@ -13,7 +14,11 @@ from dataknobs_common.ratelimit import (
     RateLimitStatus,
     create_rate_limiter,
 )
-from dataknobs_common.testing import requires_package
+from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.testing import (
+    assert_structured_config_roundtrip,
+    requires_package,
+)
 
 
 class TestRateLimitTypes:
@@ -647,3 +652,61 @@ class TestPyrateRateLimiterBehavior:
         """close() completes without error."""
         limiter = self._make_limiter()
         await limiter.close()
+
+
+class TestRateLimitStructured:
+    """RateLimit / RateLimiterConfig are frozen StructuredConfig subclasses."""
+
+    def test_are_structured_configs(self):
+        assert issubclass(RateLimit, StructuredConfig)
+        assert issubclass(RateLimiterConfig, StructuredConfig)
+
+    def test_rate_limit_construction_parity(self):
+        assert RateLimit.from_dict({"limit": 100, "interval": 60}) == RateLimit(
+            limit=100, interval=60
+        )
+
+    def test_rate_limit_roundtrip(self):
+        assert_structured_config_roundtrip(RateLimit(limit=10, interval=1))
+
+    def test_rate_limit_still_frozen(self):
+        rate = RateLimit(limit=10, interval=60)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rate.limit = 20  # type: ignore[misc]
+
+    def test_config_frozen(self):
+        config = RateLimiterConfig(default_rates=[RateLimit(limit=1, interval=1)])
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            config.default_rates = []  # type: ignore[misc]
+
+    def test_config_nested_collection_from_dict(self):
+        """default_rates (list[RateLimit]) and categories (dict[str, list[RateLimit]])
+        rebuild into typed RateLimit instances with no _normalize_dict override —
+        the StructuredConfig base recursion handles the nested-collection shape.
+        """
+        config = RateLimiterConfig.from_dict(
+            {
+                "default_rates": [{"limit": 100, "interval": 60}],
+                "categories": {
+                    "api_read": [
+                        {"limit": 100, "interval": 6},
+                        {"limit": 1000, "interval": 3600},
+                    ],
+                },
+            }
+        )
+        assert isinstance(config.default_rates[0], RateLimit)
+        assert config.default_rates[0].limit == 100
+        read_rates = config.categories["api_read"]
+        assert all(isinstance(r, RateLimit) for r in read_rates)
+        assert read_rates[1].interval == 3600
+
+    def test_config_nested_collection_roundtrip(self):
+        config = RateLimiterConfig(
+            default_rates=[RateLimit(limit=100, interval=60)],
+            categories={
+                "api_read": [RateLimit(limit=50, interval=10)],
+                "api_write": [RateLimit(limit=5, interval=10)],
+            },
+        )
+        assert_structured_config_roundtrip(config)

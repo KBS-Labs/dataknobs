@@ -1,5 +1,7 @@
 """Test unified batch processing improvements."""
 
+import dataclasses
+
 import pytest
 from typing import List
 from dataknobs_data import (
@@ -124,8 +126,9 @@ class TestBatchProcessingWithIndices:
                 raise ValueError(f"Failed to create {rec.id}")
             return rec.id
         
-        # Error handler that continues processing
-        config.on_error = lambda exc, rec: True
+        # Error handler that continues processing (StreamConfig is frozen —
+        # build a modified copy rather than mutating the field)
+        config = dataclasses.replace(config, on_error=lambda exc, rec: True)
         
         success = process_batch_with_fallback(
             records,
