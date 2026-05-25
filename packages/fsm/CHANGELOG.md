@@ -32,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loader schema (`config/schema.py`) is the separate declarative layer and is
   unchanged.
 
+- The resources/IO/storage/streaming/functions runtime configs — `PoolConfig`
+  (`resources.pool`), `IOConfig` (`io.base`), `StreamConfig` (`streaming.core`),
+  `ResourceConfig` (`functions.base`), and `StorageConfig` (`storage.base`) —
+  are now frozen `StructuredConfig` subclasses, gaining `from_dict()` /
+  `to_dict()` and symmetric round-tripping, and are **immutable** (use
+  `dataclasses.replace(...)`). Their `Enum` fields (`IOConfig.mode`/`format`,
+  `StorageConfig.backend`) load from raw strings and survive a JSON round-trip
+  via `to_json_dict()`; `IOConfig.error_handler` and other live-callable fields
+  round-trip by identity (in-process, not JSON). `StorageConfig` was converted
+  from a plain class to a frozen dataclass (its `get_mode_config()` helper is
+  retained); the in-memory and file storage backends now build a local working
+  copy of `connection_params` and reconstruct the config via
+  `dataclasses.replace(...)` instead of mutating the caller's config in place.
+  Existing constructor call sites are unaffected; the Pydantic FSM loader
+  schema (`config/schema.py`) remains the separate declarative layer.
+
 ### Security
 
 - `APIEndpoint.headers` (`patterns.api_orchestration`) is masked as `'***'`

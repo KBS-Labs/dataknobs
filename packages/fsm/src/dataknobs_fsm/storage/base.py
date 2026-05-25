@@ -2,11 +2,13 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from dataknobs_data import SortSpec
+from dataknobs_common.structured_config import StructuredConfig
 
+from dataknobs_data import SortSpec
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep
 
@@ -23,34 +25,27 @@ class StorageBackend(Enum):
     ELASTICSEARCH = "elasticsearch"
 
 
-class StorageConfig:
-    """Configuration for history storage."""
+@dataclass(frozen=True)
+class StorageConfig(StructuredConfig):
+    """Configuration for history storage.
 
-    def __init__(
-        self,
-        backend: StorageBackend = StorageBackend.MEMORY,
-        connection_params: dict[str, Any] | None = None,
-        retention_policy: dict[str, Any] | None = None,
-        compression: bool = False,
-        batch_size: int = 100,
-        mode_specific_config: dict[DataHandlingMode, dict[str, Any]] | None = None,
-    ):
-        """Initialize storage configuration.
+    Attributes:
+        backend: Storage backend to use.
+        connection_params: Backend-specific connection parameters.
+        retention_policy: Policy for data retention.
+        compression: Whether to compress stored data.
+        batch_size: Batch size for bulk operations.
+        mode_specific_config: Configuration per data mode.
+    """
 
-        Args:
-            backend: Storage backend to use.
-            connection_params: Backend-specific connection parameters.
-            retention_policy: Policy for data retention.
-            compression: Whether to compress stored data.
-            batch_size: Batch size for bulk operations.
-            mode_specific_config: Configuration per data mode.
-        """
-        self.backend = backend
-        self.connection_params = connection_params or {}
-        self.retention_policy = retention_policy or {}
-        self.compression = compression
-        self.batch_size = batch_size
-        self.mode_specific_config = mode_specific_config or {}
+    backend: StorageBackend = StorageBackend.MEMORY
+    connection_params: dict[str, Any] = field(default_factory=dict)
+    retention_policy: dict[str, Any] = field(default_factory=dict)
+    compression: bool = False
+    batch_size: int = 100
+    mode_specific_config: dict[DataHandlingMode, dict[str, Any]] = field(
+        default_factory=dict
+    )
 
     def get_mode_config(self, mode: DataHandlingMode) -> dict[str, Any]:
         """Get configuration for a specific data mode.

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from dataknobs_common.structured_config import StructuredConfig
+
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
     IResourceProvider,
@@ -13,8 +15,8 @@ from dataknobs_fsm.resources.base import (
 )
 
 
-@dataclass
-class PoolConfig:
+@dataclass(frozen=True)
+class PoolConfig(StructuredConfig):
     """Configuration for resource pools."""
     
     min_size: int = 1

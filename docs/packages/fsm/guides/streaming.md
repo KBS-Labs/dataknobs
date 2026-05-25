@@ -419,11 +419,16 @@ if not results['success']:
 The file processing pattern uses streaming internally:
 
 ```python
-from dataknobs_fsm.patterns.file_processing import FileProcessor, ProcessingMode
+from dataknobs_fsm.patterns.file_processing import (
+    FileProcessingConfig,
+    FileProcessor,
+    ProcessingMode,
+)
 
-# Stream mode for large files
+# Stream mode for large files (set on the immutable config at construction;
+# ``ProcessingMode.STREAM`` is in fact the default).
+config = FileProcessingConfig(input_path="large.csv", mode=ProcessingMode.STREAM)
 processor = FileProcessor(config)
-processor.config.mode = ProcessingMode.STREAM  # Uses streaming
 
 # This automatically:
 # - Creates FileStreamSource

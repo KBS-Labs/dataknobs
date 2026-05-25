@@ -9,9 +9,11 @@ This module defines the interfaces for:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, TypeVar
-from enum import Enum
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Tuple, TypeVar
+
+from dataknobs_common.structured_config import StructuredConfig
 
 T = TypeVar("T")
 
@@ -222,8 +224,8 @@ class ResourceStatus(Enum):
     SHUTDOWN = "shutdown"
 
 
-@dataclass
-class ResourceConfig:
+@dataclass(frozen=True)
+class ResourceConfig(StructuredConfig):
     """Configuration for a resource."""
     
     name: str

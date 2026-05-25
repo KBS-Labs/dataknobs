@@ -238,7 +238,7 @@ from dataknobs_fsm.resources.pool import ResourcePool, PoolConfig
 pool_config = PoolConfig(
     min_size=2,
     max_size=10,
-    max_idle_time=300,  # 5 minutes
+    idle_timeout=300,  # 5 minutes
     acquire_timeout=30
 )
 
@@ -279,10 +279,21 @@ networks:
 ```python
 from dataknobs_fsm.functions.base import ResourceConfig
 
-# Define resource requirements
+# Define resource requirements. ``configure_from_requirements`` acquires each
+# resource by ``name`` (honoring its ``timeout``) from the providers already
+# registered on the manager.
 requirements = [
-    ResourceConfig(name="database", required=True, timeout=30),
-    ResourceConfig(name="cache", required=False)
+    ResourceConfig(
+        name="database",
+        type="postgresql",
+        connection_params={"host": "localhost", "port": 5432},
+        timeout=30,
+    ),
+    ResourceConfig(
+        name="cache",
+        type="redis",
+        connection_params={"host": "localhost", "port": 6379},
+    ),
 ]
 
 # Configure resources from requirements
@@ -586,7 +597,7 @@ pool_config = PoolConfig(
 pool_config = PoolConfig(
     min_size=1,
     max_size=5,
-    max_idle_time=600  # Longer idle time
+    idle_timeout=600  # Longer idle time
 )
 ```
 

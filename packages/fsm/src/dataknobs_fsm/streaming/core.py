@@ -7,8 +7,20 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Protocol, Union, runtime_checkable
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 from uuid import uuid4
+
+from dataknobs_common.structured_config import StructuredConfig
 
 
 class StreamStatus(Enum):
@@ -20,8 +32,8 @@ class StreamStatus(Enum):
     ERROR = "error"
 
 
-@dataclass
-class StreamConfig:
+@dataclass(frozen=True)
+class StreamConfig(StructuredConfig):
     """Configuration for stream processing.
     
     Attributes:

@@ -55,9 +55,13 @@ class TestDatabaseStorageFactory:
             connection_params={'database': temp_db.name},
         )
 
-        # Store temp file path for cleanup
-        config._temp_db_path = temp_db.name
-        return config
+        try:
+            yield config
+        finally:
+            # The fixture owns the temp-file lifecycle (the frozen config is
+            # not a scratch namespace for the path).
+            if os.path.exists(temp_db.name):
+                os.unlink(temp_db.name)
     
     @pytest.fixture
     def sample_history(self):
@@ -110,22 +114,17 @@ class TestDatabaseStorageFactory:
     async def test_database_factory_with_sqlite_backend(self, sqlite_config):
         """Test factory with SQLite backend using real implementation."""
         storage = UnifiedDatabaseStorage(sqlite_config)
-        
-        try:
-            # Initialize with real SQLite backend
-            await storage.initialize()
-            
-            # Verify storage is initialized
-            assert storage._initialized
-            assert storage._db is not None
-            
-            # Clean up
-            await storage.cleanup()
-        finally:
-            # Cleanup temp file
-            if hasattr(sqlite_config, '_temp_db_path'):
-                if os.path.exists(sqlite_config._temp_db_path):
-                    os.unlink(sqlite_config._temp_db_path)
+
+        # Initialize with real SQLite backend (temp file cleaned up by the
+        # ``sqlite_config`` fixture teardown).
+        await storage.initialize()
+
+        # Verify storage is initialized
+        assert storage._initialized
+        assert storage._db is not None
+
+        # Clean up
+        await storage.cleanup()
     
     # Note: a former ``test_database_factory_with_invalid_backend`` was
     # removed in the fix.  It relied on the buggy

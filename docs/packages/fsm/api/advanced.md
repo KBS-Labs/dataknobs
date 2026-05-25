@@ -305,11 +305,8 @@ History is persisted via pluggable storage backends. All backends use the
 ```python
 from dataknobs_fsm.storage.base import StorageConfig, StorageBackend, StorageFactory
 
-# Config-driven creation (factory selects the backend)
-config = StorageConfig(
-    backend=StorageBackend.MEMORY,
-    connection_params={'type': 'memory'}
-)
+# Config-driven creation (factory selects the backend from the enum)
+config = StorageConfig(backend=StorageBackend.MEMORY)
 storage = StorageFactory.create(config)
 await storage.initialize()
 
@@ -317,10 +314,21 @@ advanced_fsm.enable_history(storage=storage)
 ```
 
 Available backends: `MEMORY`, `FILE`, `SQLITE`, `POSTGRES`, `MONGODB`,
-`ELASTICSEARCH`, `S3`.
+`ELASTICSEARCH`, `S3`. Backend selection is driven by `StorageConfig.backend`
+(the enum), so no redundant `'type'` key in `connection_params` is needed.
 
 Convenience subclasses `InMemoryStorage` and `FileStorage` apply
 backend-specific defaults automatically.
+
+`StorageConfig` — along with the other FSM runtime configs (`PoolConfig`,
+`IOConfig`, the streaming `StreamConfig`, and `ResourceConfig`) — is a frozen
+`StructuredConfig` subclass: it is **dict-loadable** (`StorageConfig.from_dict({"backend": "file", ...})`,
+where `Enum` fields accept their raw string value) and **immutable** (use
+`dataclasses.replace(config, batch_size=500)` to derive a modified copy).
+`to_dict()` gives an in-process round-trip; `to_json_dict()` renders `Enum`
+members as values for a JSON round-trip. These imperative config objects are
+distinct from the declarative Pydantic FSM loader schema (`config/schema.py`),
+which is unchanged.
 
 ### Database Injection
 

@@ -1077,11 +1077,8 @@ the `UnifiedDatabaseStorage` implementation, which works with any `dataknobs_dat
 ```python
 from dataknobs_fsm.storage.base import StorageConfig, StorageBackend, StorageFactory
 
-# Config-driven creation (factory selects the backend)
-config = StorageConfig(
-    backend=StorageBackend.MEMORY,
-    connection_params={'type': 'memory'}
-)
+# Config-driven creation (factory selects the backend from the enum)
+config = StorageConfig(backend=StorageBackend.MEMORY)
 storage = StorageFactory.create(config)
 await storage.initialize()
 
@@ -1089,10 +1086,37 @@ advanced_fsm.enable_history(storage=storage)
 ```
 
 Available backends: `MEMORY`, `FILE`, `SQLITE`, `POSTGRES`, `MONGODB`,
-`ELASTICSEARCH`, `S3`.
+`ELASTICSEARCH`, `S3`. Backend selection is driven by `StorageConfig.backend`
+(the enum), so no redundant `'type'` key in `connection_params` is needed.
 
 Convenience subclasses `InMemoryStorage` and `FileStorage` apply
 backend-specific defaults automatically.
+
+### Immutable, dict-loadable runtime configs
+
+`StorageConfig` — along with the other FSM runtime configs (`PoolConfig`,
+`IOConfig`, the streaming `StreamConfig`, and `ResourceConfig`) — is a frozen
+`StructuredConfig` subclass. This means it is **dict-loadable** and
+**immutable**:
+
+```python
+from dataclasses import replace
+
+# Load from a config mapping (e.g. parsed YAML/JSON). Enum fields such as
+# ``backend`` accept their raw string value ("memory", "file", ...).
+config = StorageConfig.from_dict({"backend": "file", "compression": True})
+
+# Serialize back. ``to_dict()`` keeps Enum members (in-process round-trip);
+# ``to_json_dict()`` renders them as values for a JSON round-trip.
+as_dict = config.to_json_dict()
+
+# Immutable — derive a modified copy instead of mutating in place.
+larger_batches = replace(config, batch_size=500)
+```
+
+These runtime config objects are the imperative construction layer. The
+Pydantic FSM loader schema (`config/schema.py`) is the separate **declarative**
+layer used when loading a full FSM definition from a file; it is unchanged.
 
 ### Database Injection
 
