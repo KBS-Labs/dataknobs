@@ -57,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stores, bots) follow over subsequent releases.
 - `dataknobs_common.serialization.jsonify(value)` — public recursive
   utility that replaces every `Enum` member with its `.value`, descending
-  through `dict` / `list` / `tuple` containers and passing all other
+  through `dict` / `list` / `tuple` containers and into each member's
+  `.value` (so an enum-of-enum normalises fully), and passing all other
   values (callables, `type` objects, `set`s) through untouched. Lossless
   and narrow — the counterpart to the lossy, dropping `sanitize_for_json`.
   It is the engine behind `StructuredConfig.to_json_dict()` and is

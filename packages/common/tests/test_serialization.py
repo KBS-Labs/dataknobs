@@ -647,6 +647,16 @@ class _Priority(IntEnum):
     HIGH = 9
 
 
+class _Inner(Enum):
+    A = "a"
+
+
+class _OuterEnumOfEnum(Enum):
+    """An enum whose member value is itself an ``Enum`` member."""
+
+    WRAP = _Inner.A
+
+
 class TestJsonify:
     """Direct tests for the public ``jsonify`` enum-normaliser.
 
@@ -715,3 +725,17 @@ class TestJsonify:
             "many": ["red"],
             "p": 9,
         }
+
+    def test_enum_of_enum_fully_normalised(self) -> None:
+        # The member's ``.value`` is itself an Enum; jsonify recurses into it
+        # so the result is the innermost ``.value`` (a plain str), not the
+        # inner Enum instance — mirroring sanitize_for_json's recursion.
+        result = jsonify(_OuterEnumOfEnum.WRAP)
+        assert result == "a"
+        assert not isinstance(result, Enum)
+
+    def test_enum_of_enum_in_container(self) -> None:
+        result = jsonify({"k": _OuterEnumOfEnum.WRAP})
+        assert result == {"k": "a"}
+        # Survives json.dumps with no custom encoder.
+        assert json.loads(json.dumps(result)) == {"k": "a"}

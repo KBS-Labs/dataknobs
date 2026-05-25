@@ -66,7 +66,12 @@ class FileProcessingConfig(StructuredConfig):
 
 class FileProcessor:
     """File processor using FSM pattern."""
-    
+
+    # Resolved formats live on the processor, not the frozen config; set in
+    # ``_detect_format`` (always called from ``__init__``).
+    _format: FileFormat
+    _output_format: FileFormat
+
     def __init__(self, config: FileProcessingConfig):
         """Initialize file processor.
         
@@ -111,8 +116,8 @@ class FileProcessor:
 
             resolved_format = format_map.get(ext, FileFormat.BINARY)
 
-        self._format: FileFormat = resolved_format
-        self._output_format: FileFormat = self.config.output_format or resolved_format
+        self._format = resolved_format
+        self._output_format = self.config.output_format or resolved_format
 
     @property
     def resolved_format(self) -> FileFormat:

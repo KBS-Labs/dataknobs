@@ -506,8 +506,10 @@ def jsonify(value: Any) -> Any:
     """Recursively normalise ``Enum`` members to their ``.value``.
 
     Walks ``dict`` / ``list`` / ``tuple`` containers and replaces every
-    ``Enum`` member with its ``.value``; all other values pass through
-    unchanged. A *lossless* normaliser for data that is already JSON-shaped
+    ``Enum`` member with its ``.value``, recursing into that value as well
+    (so an enum whose ``.value`` is itself an enum — or a container of
+    enums — is fully normalised); all other values pass through unchanged.
+    A *lossless* normaliser for data that is already JSON-shaped
     except for enums — typically the output of ``dataclasses.asdict`` or
     :meth:`~dataknobs_common.structured_config.StructuredConfig.to_dict`.
     ``StrEnum`` / ``IntEnum`` members collapse to plain ``str`` / ``int`` so
@@ -532,7 +534,10 @@ def jsonify(value: Any) -> Any:
         ``.value``.
     """
     if isinstance(value, Enum):
-        return value.value
+        # Recurse into the member's value so an enum whose ``.value`` is
+        # itself an ``Enum`` (or a container of enums) is fully normalised,
+        # matching ``sanitize_for_json``'s ``_sanitize_recursive(value.value)``.
+        return jsonify(value.value)
     if isinstance(value, dict):
         return {k: jsonify(v) for k, v in value.items()}
     if isinstance(value, list):

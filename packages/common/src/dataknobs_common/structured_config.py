@@ -665,8 +665,12 @@ class StructuredConfig:
         This is the *in-process* serialization: ``Enum`` fields render as
         their members (not their ``.value``) and any live callables/types
         round-trip by identity, so the output is not necessarily
-        JSON-serialisable. Use :meth:`to_json_dict` when you need a dict
-        that survives ``json.dumps`` (and reloads via ``from_dict``).
+        JSON-serialisable. Note that ``IntEnum`` / ``StrEnum`` members *are*
+        instances of their ``int`` / ``str`` base and so survive
+        ``json.dumps`` as-is; only a plain ``Enum`` member is non-native.
+        Use :meth:`to_json_dict` when any field may hold a plain ``Enum``
+        (or when the field type is uncertain) and you need a dict that
+        survives ``json.dumps`` and reloads via ``from_dict``.
         """
         return dataclasses.asdict(self)
 

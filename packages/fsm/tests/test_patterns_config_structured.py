@@ -20,6 +20,7 @@ Real constructs only — no mocks.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import tempfile
 
@@ -157,9 +158,13 @@ class TestErrorRecoveryConfigStructured:
     def test_error_recovery_nested_composition_typed(self):
         # D2: the five Optional sub-config fields are rebuilt as typed
         # instances by the base from_dict recursion — no _normalize_dict.
+        # Strategy fields are given as raw strings (the shape a YAML/JSON
+        # load produces) so the string -> enum coercion path is exercised
+        # for both the scalar and the list[Enum] field.
         cfg = ErrorRecoveryConfig.from_dict(
             {
-                "primary_strategy": RecoveryStrategy.RETRY,
+                "primary_strategy": "retry",
+                "secondary_strategies": ["fallback", "circuit_breaker"],
                 "retry_config": {"max_attempts": 7, "initial_delay": 0.25},
                 "circuit_breaker_config": {"failure_threshold": 9},
                 "fallback_config": {"use_cache": True},
@@ -167,6 +172,12 @@ class TestErrorRecoveryConfigStructured:
                 "bulkhead_config": {"max_concurrent": 3},
             }
         )
+        # Raw strings coerced to enum members.
+        assert cfg.primary_strategy is RecoveryStrategy.RETRY
+        assert cfg.secondary_strategies == [
+            RecoveryStrategy.FALLBACK,
+            RecoveryStrategy.CIRCUIT_BREAKER,
+        ]
         assert isinstance(cfg.retry_config, RetryConfig)
         assert cfg.retry_config.max_attempts == 7
         assert cfg.retry_config.initial_delay == 0.25
@@ -298,6 +309,21 @@ class TestETLConfigStructured:
             key_columns=["id"],
         )
         restored = ETLConfig.from_dict(cfg.to_dict())
+        assert restored == cfg
+        assert restored.mode is ETLMode.INCREMENTAL
+
+    def test_json_roundtrip_with_enum_mode(self):
+        # The motivating path for Enum coercion: to_json_dict produces a
+        # dict that survives json.dumps (the ETLMode member becomes its
+        # .value), and from_dict coerces the reloaded string back to the
+        # member — a full JSON round-trip on a real FSM config.
+        cfg = ETLConfig(
+            source_db={"backend": "memory"},
+            target_db={"backend": "sqlite"},
+            mode=ETLMode.INCREMENTAL,
+            key_columns=["id"],
+        )
+        restored = ETLConfig.from_dict(json.loads(json.dumps(cfg.to_json_dict())))
         assert restored == cfg
         assert restored.mode is ETLMode.INCREMENTAL
 
