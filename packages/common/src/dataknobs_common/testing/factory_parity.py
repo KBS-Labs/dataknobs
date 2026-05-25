@@ -686,6 +686,55 @@ def assert_structured_config_consumer(
         )
 
 
+def assert_polymorphic_bindings_resolve(cls: type) -> None:
+    """Assert every binding a config declares is registered for validation.
+
+    Companion guard to :meth:`StructuredConfig.validate
+    <dataknobs_common.structured_config.StructuredConfig.validate>`. A
+    config adopts polymorphic-section validation by declaring
+    ``_polymorphic_fields = {field_name: binding_name}`` and relying on the
+    field's owning package to register a resolver under ``binding_name`` in
+    :data:`~dataknobs_common.structured_config.config_registries`. Those two
+    sides live in different packages, so a rename or a dropped registration
+    would silently turn ``validate`` into a skip-and-``debug`` no-op (the
+    fail-soft behavior chosen so validation is never brittle to import
+    order — see ``validate``'s contract).
+
+    This guard makes the wiring explicit at test time: with every package
+    imported, every binding a config declares must resolve to a registered
+    resolver. Run it from each adopting package's test suite so a real
+    wiring regression fails in CI rather than at a consumer's runtime.
+
+    Args:
+        cls: A :class:`StructuredConfig` subclass declaring
+            ``_polymorphic_fields``. A class with no declarations passes
+            trivially.
+
+    Raises:
+        AssertionError: If any declared binding name is absent from
+            ``config_registries``.
+    """
+    # Lazy import to keep ``testing.factory_parity`` from importing the
+    # abstraction it helps test at module load.
+    from dataknobs_common.structured_config import config_registries
+
+    bindings: dict[str, str] = dict(getattr(cls, "_polymorphic_fields", {}))
+    unresolved = sorted(
+        f"{field}->{binding}"
+        for field, binding in bindings.items()
+        if config_registries.get_optional(binding) is None
+    )
+    if unresolved:
+        raise AssertionError(
+            f"{cls.__name__} declares _polymorphic_fields whose binding "
+            f"name(s) are not registered in config_registries: "
+            f"{unresolved}. Registered bindings: "
+            f"{sorted(config_registries.list_keys())}. Import the package "
+            "that owns the section so it registers its resolver, or fix the "
+            "binding name."
+        )
+
+
 def assert_structured_config_roundtrip(config: Any) -> None:
     """Assert ``type(cfg).from_dict(cfg.to_dict()) == cfg``.
 
@@ -723,6 +772,7 @@ __all__ = [
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
+    "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",
     "assert_structured_config_roundtrip",
 ]

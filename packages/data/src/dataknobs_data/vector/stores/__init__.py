@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Type
+from collections.abc import Mapping
+from typing import Any, Type
 
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import StructuredConfig, config_registries
 
 from .base import VectorStore
 
@@ -127,6 +129,41 @@ VectorBackendRegistry = PluginRegistry
 
 # Now import factory (which will import vector_backends from this module)
 from .factory import VectorStoreFactory  # noqa: E402
+
+
+def _resolve_vector_store_config_cls(
+    raw: Mapping[str, Any],
+) -> type[StructuredConfig] | None:
+    """Resolve a ``vector_store`` section's dict to its config class.
+
+    The resolver registered for the ``"vector_store"`` binding in
+    :data:`~dataknobs_common.structured_config.config_registries`, used by
+    :meth:`StructuredConfig.validate
+    <dataknobs_common.structured_config.StructuredConfig.validate>` to
+    validate a raw ``vector_store`` config without constructing the store.
+
+    Delegates to ``vector_backends`` — the same registry the construction
+    path uses — by reading ``CONFIG_CLS`` off the registered store class
+    for the ``"backend"`` discriminator (defaulting to ``"memory"``, the
+    factory's own default). Holding no independent backend→config-class
+    table is the no-drift guarantee. Returns ``None`` for an unknown
+    backend, which ``validate`` surfaces as a ``ConfigurationError``.
+    """
+    backend = raw.get("backend", "memory")
+    store_cls = vector_backends.get_factory(backend)
+    config_cls = getattr(store_cls, "CONFIG_CLS", None)
+    if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+        return config_cls
+    return None
+
+
+# Eager registration (not on_first_access): importing this package is what
+# makes the ``vector_store`` binding resolvable, and any parent config that
+# holds a vector-store section already depends on this package. ``override``
+# keeps re-import idempotent.
+config_registries.register(
+    "vector_store", _resolve_vector_store_config_cls, allow_overwrite=True
+)
 
 
 __all__ = [
