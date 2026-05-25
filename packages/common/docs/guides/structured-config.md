@@ -139,9 +139,9 @@ Enum normalisation is the only transformation it adds: configs carrying
 live callables or `type` objects still hold those verbatim and remain no
 more JSON-serialisable than via `to_dict()`, and `set` / `frozenset`
 fields are left untouched (JSON has no set type). The enum normalisation
-is performed by the shared
-[`dataknobs_common.serialization.jsonify`](serialization-usage-guide.md#jsonify-recursive-enum-to-value-normalisation)
-utility, reusable on any JSON-shaped structure.
+is performed by the shared `dataknobs_common.serialization.jsonify`
+utility (re-exported as `dataknobs_common.jsonify`), reusable on any
+JSON-shaped structure.
 
 ### `__post_init__` validation
 
