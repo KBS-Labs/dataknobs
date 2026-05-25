@@ -357,6 +357,30 @@ class Task:
         )
 ```
 
+#### `jsonify` — recursive enum-to-value normalisation
+
+When you already hold a JSON-shaped structure (e.g. the output of
+`dataclasses.asdict`) whose only non-JSON-native values are enums, the
+`jsonify` utility replaces every `Enum` member with its `.value`,
+recursing through `dict` / `list` / `tuple` containers — so you don't
+hand-write the conversion per field:
+
+```python
+from dataknobs_common import jsonify
+
+jsonify({"status": Status.ACTIVE, "tags": [Status.PENDING]})
+# {"status": "active", "tags": ["pending"]}
+```
+
+`jsonify` is *lossless and narrow*: it only normalises enums and passes
+everything else (callables, `type` objects, `set`s) through untouched. It
+is the engine behind
+[`StructuredConfig.to_json_dict()`](structured-config.md#to_json_dict).
+For lossy best-effort JSON safety that also converts dataclasses /
+`Serializable` objects and **drops** anything non-representable, use
+`sanitize_for_json` instead (note: `sanitize_for_json` currently drops
+enums rather than emitting their `.value`).
+
 ### Pattern 2: Datetime Handling
 
 Use ISO format for datetime:

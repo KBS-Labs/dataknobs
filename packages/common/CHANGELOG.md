@@ -23,7 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   static field-type graph; values already typed pass through;
   polymorphic selection — a discriminator key, or a union of several
   concrete sub-configs — stays in the subsystem registry / object-graph
-  layer and passes through uncoerced). `StructuredConfigConsumer[ConfigT]` is the generic
+  layer and passes through uncoerced). `from_dict` likewise rebuilds
+  `Enum`-typed fields from a raw member value (`{"mode": "fast"}` →
+  `Mode.FAST`) through the same container / `| None` shapes, so configs
+  load cleanly from YAML/JSON where enums arrive as strings; an
+  unrecognised value passes through for the constructor to reject.
+  `to_dict()` is the in-process form (enum members verbatim, callables by
+  identity), and the companion `to_json_dict()` renders enum members as
+  their `.value` at every depth so
+  `from_dict(json.loads(json.dumps(cfg.to_json_dict())))` round-trips for
+  configs whose other fields are JSON-native.
+  `StructuredConfigConsumer[ConfigT]` is the generic
   mixin for classes constructed from a `StructuredConfig` subclass: it
   provides `__init__(config: ConfigT | Mapping | None, **kwargs)`
   typed/dict/loose dispatch (mixing typed `config=` with loose kwargs
@@ -45,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `__init__` is the construction entry point. The four event-bus
   backends are the first adopters; downstream packages (data, vector
   stores, bots) follow over subsequent releases.
+- `dataknobs_common.serialization.jsonify(value)` — public recursive
+  utility that replaces every `Enum` member with its `.value`, descending
+  through `dict` / `list` / `tuple` containers and passing all other
+  values (callables, `type` objects, `set`s) through untouched. Lossless
+  and narrow — the counterpart to the lossy, dropping `sanitize_for_json`.
+  It is the engine behind `StructuredConfig.to_json_dict()` and is
+  re-exported at the top level as `dataknobs_common.jsonify`.
 - `StructuredConfig` automatically redacts credential fields from
   `repr`. A subclass declares its credential field names in a
   `_SENSITIVE_FIELDS: ClassVar[frozenset[str]]` and the base masks each

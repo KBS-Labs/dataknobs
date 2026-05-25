@@ -79,8 +79,14 @@ shallow-copied before normalization, so it isn't mutated.
 
 A field whose declared type is (or contains) a `StructuredConfig`
 subclass is rebuilt recursively from its raw dict shape — see
-[Nested-config composition](#nested-config-composition). All other
-fields are assigned verbatim.
+[Nested-config composition](#nested-config-composition). A field whose
+declared type is (or contains) an `Enum` subclass is rebuilt from its
+member value, so `{"mode": "fast"}` loaded from YAML/JSON becomes
+`Mode.FAST` rather than the bare string `"fast"` (this works through the
+same container and `| None` shapes as nested-config recursion; an
+unrecognised value passes through unchanged so the constructor /
+`__post_init__` owns the diagnostic). `StrEnum` / `IntEnum` members pass
+through unchanged. All other fields are assigned verbatim.
 
 ### `_normalize_dict(cls, raw)` (classmethod, override hook)
 
@@ -111,6 +117,31 @@ and `from_dict` recurses back into the matching field types, so the two
 are symmetric for every statically-typed nesting shape (see
 [Nested-config composition](#nested-config-composition)). No
 `_normalize_dict` override is required for nesting.
+
+This is the *in-process* form: `Enum` fields render as their members
+(not their `.value`), and live callables / `type` objects round-trip by
+identity — so the output is not necessarily JSON-serialisable.
+
+### `to_json_dict()`
+
+Like `to_dict()`, but every `Enum` member (at any depth, including inside
+list/tuple/dict containers and nested configs) is rendered as its
+`.value`. Because `from_dict` coerces those raw values back to members,
+the round-trip survives JSON:
+
+```python
+import json
+restored = type(cfg).from_dict(json.loads(json.dumps(cfg.to_json_dict())))
+assert restored == cfg   # for configs whose other fields are JSON-native
+```
+
+Enum normalisation is the only transformation it adds: configs carrying
+live callables or `type` objects still hold those verbatim and remain no
+more JSON-serialisable than via `to_dict()`, and `set` / `frozenset`
+fields are left untouched (JSON has no set type). The enum normalisation
+is performed by the shared
+[`dataknobs_common.serialization.jsonify`](serialization-usage-guide.md#jsonify-recursive-enum-to-value-normalisation)
+utility, reusable on any JSON-shaped structure.
 
 ### `__post_init__` validation
 

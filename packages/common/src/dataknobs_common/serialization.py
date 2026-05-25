@@ -41,6 +41,7 @@ Example:
 
 import dataclasses
 import logging
+from enum import Enum
 from typing import Any, Dict, Protocol, Type, TypeVar, runtime_checkable
 
 from dataknobs_common.exceptions import SerializationError
@@ -486,6 +487,46 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
     return [f"{path_label} (type={type(value).__name__})"]
 
 
+def jsonify(value: Any) -> Any:
+    """Recursively normalise ``Enum`` members to their ``.value``.
+
+    Walks ``dict`` / ``list`` / ``tuple`` containers and replaces every
+    ``Enum`` member with its ``.value``; all other values pass through
+    unchanged. A *lossless* normaliser for data that is already JSON-shaped
+    except for enums — typically the output of ``dataclasses.asdict`` or
+    :meth:`~dataknobs_common.structured_config.StructuredConfig.to_dict`.
+    ``StrEnum`` / ``IntEnum`` members collapse to plain ``str`` / ``int`` so
+    ``json.dumps`` needs no custom encoder.
+
+    Unlike :func:`sanitize_for_json`, ``jsonify`` does **not** drop
+    non-serializable values, convert dataclasses / ``to_dict`` objects, or
+    descend into arbitrary objects: callables, ``type`` objects, ``set``s,
+    etc. pass through untouched (a structure still holding them is no more
+    JSON-serialisable afterwards than before). Reach for
+    :func:`sanitize_for_json` when you want lossy best-effort JSON safety
+    with dataclass / ``Serializable`` conversion and drop semantics; reach
+    for ``jsonify`` when you have a known-shaped structure whose only
+    non-JSON-native values are enums and you need an exact round-trip.
+
+    Args:
+        value: Any value; commonly a ``dict`` / ``list`` tree from
+            ``dataclasses.asdict``.
+
+    Returns:
+        The same structure with every ``Enum`` member replaced by its
+        ``.value``.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {k: jsonify(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [jsonify(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(jsonify(v) for v in value)
+    return value
+
+
 # Internal sentinel to distinguish "value was dropped" from "value is None"
 _SENTINEL = object()
 
@@ -494,6 +535,7 @@ __all__ = [
     "Serializable",
     "sanitize_for_json",
     "validate_json_safe",
+    "jsonify",
     "serialize",
     "deserialize",
     "serialize_list",
