@@ -595,3 +595,45 @@ class TestSubsystemConfigRedaction:
         assert "sk-embed-secret" not in rendered
         assert "api_key='***'" in rendered
         assert cfg.to_dict()["api_key"] == "sk-embed-secret"
+
+    def test_rag_vector_store_connection_string_masked(self) -> None:
+        """A pgvector password nested in the raw ``vector_store`` mapping is
+        masked by interior-key descent (no per-class ``_SENSITIVE_FIELDS``
+        entry for ``connection_string`` — the module default set covers it)."""
+        cfg = RAGKnowledgeBaseConfig(
+            vector_store={
+                "backend": "pgvector",
+                "connection_string": "postgresql://u:pw@h/db",
+            }
+        )
+        rendered = repr(cfg)
+        assert "pw" not in rendered
+        assert "postgresql://" not in rendered
+        assert "'connection_string': '***'" in rendered
+        # Display-only — the real value survives for the factory to consume.
+        assert (
+            cfg.to_dict()["vector_store"]["connection_string"]
+            == "postgresql://u:pw@h/db"
+        )
+
+    def test_rag_embedding_api_key_masked(self) -> None:
+        """An embedder credential nested in the raw ``embedding`` mapping."""
+        cfg = RAGKnowledgeBaseConfig(embedding={"provider": "openai", "api_key": "sk-x"})
+        rendered = repr(cfg)
+        assert "sk-x" not in rendered
+        assert "'api_key': '***'" in rendered
+
+    def test_vector_memory_embedding_api_key_masked(self) -> None:
+        cfg = VectorMemoryConfig(embedding={"provider": "openai", "api_key": "sk-x"})
+        rendered = repr(cfg)
+        assert "sk-x" not in rendered
+        assert "'api_key': '***'" in rendered
+
+    def test_summary_memory_llm_api_key_masked(self) -> None:
+        """``SummaryMemoryConfig`` declares NO ``_SENSITIVE_FIELDS`` at all,
+        yet a credential in its raw ``llm`` mapping is masked by the module
+        default set — the zero-config benefit."""
+        cfg = SummaryMemoryConfig(llm={"provider": "openai", "api_key": "sk-x"})
+        rendered = repr(cfg)
+        assert "sk-x" not in rendered
+        assert "'api_key': '***'" in rendered

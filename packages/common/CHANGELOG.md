@@ -61,7 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`password`), `PostgresEventBusConfig` (`connection_string`),
   `SqsEventBusConfig` (`aws_access_key_id` / `aws_secret_access_key`,
   migrated off the prior `repr=False` field flag), and `PostgresLockConfig`
-  (`connection_string`) adopt it.
+  (`connection_string`) adopt it. Redaction also descends into raw
+  `Mapping`/`list` field values, masking any interior key in a module
+  default set (`api_key`, `password`, `connection_string`, `secret`,
+  `token`, the AWS keys) unioned with the class's `_SENSITIVE_FIELDS`. This
+  closes the gap where a credential nested inside an intentionally-untyped
+  polymorphic section (a `vector_store` / `embedding` / `llm` dict held raw
+  because its schema is owned by another package and dispatched by a
+  discriminator key) printed in cleartext. Interior matching is exact and
+  case-insensitive (a benign `token_count` is untouched), truthy-only, and
+  depth-bounded — and likewise display-only, so `to_dict()` and round-trip
+  are unchanged.
 - `dataknobs_common.testing.assert_structured_config_consumer(cls)` —
   unified parity guard combining structural checks: `CONFIG_CLS`
   declared, is a `StructuredConfig` subclass, dataclass field set

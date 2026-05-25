@@ -81,6 +81,71 @@ _UNION_ORIGINS = (Union, types.UnionType)
 # ``StructuredConfig`` subclass and therefore need element-wise coercion.
 _SEQUENCE_ORIGINS = (list, tuple, set, frozenset)
 
+# Interior ``Mapping``/``list`` keys whose (truthy) values ``_redacted_repr``
+# masks regardless of the parent field name. Polymorphic/discriminated config
+# sections (``vector_store``, ``embedding``, ``llm``, ...) are held as raw
+# mappings whose schema is owned by another package and dispatched by a
+# discriminator key, so the parent has no typed field to redact — key-name is
+# the only handle available at that layer (exactly as the subsystem registries
+# dispatch on a key-name discriminator). These are matched case-insensitively
+# and *exactly* (not as a substring), so a benign ``token_count`` is never
+# masked. A class needing a non-default interior key masked adds it to its
+# ``_SENSITIVE_FIELDS``. Display-only: ``to_dict`` is never redacted.
+_DEFAULT_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "api_key",
+        "password",
+        "connection_string",
+        "secret",
+        "token",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
+)
+
+# Safety bound on ``_redact_value`` recursion. Config sections are shallow
+# (the deepest known shape nests ~2-3 levels); 6 is ample headroom while
+# bounding pathological or cyclic structures. Beyond it the value renders via
+# the caller's plain ``repr`` — a stop, not an expected path.
+_MAX_REDACT_DEPTH = 6
+
+
+def _redact_value(value: Any, sensitive_keys: frozenset[str], depth: int) -> Any:
+    """Build a display copy of ``value`` with sensitive interior keys masked.
+
+    Descends into ``Mapping`` and ``list``/``tuple`` values, replacing the
+    value under any key in ``sensitive_keys`` (matched case-insensitively and
+    exactly, not as a substring) whose value is truthy with ``'***'``, and
+    recursing into every other value. A falsy nested credential (``None`` /
+    ``""``) renders verbatim — absence is not a secret. Scalars (and anything
+    that is not a mapping/sequence) are returned unchanged, so a config with
+    no sensitive interior keys renders byte-for-byte as the plain-dataclass
+    repr would.
+
+    The real config value is never mutated — the returned copy is for
+    ``repr`` only. Recursion stops at ``_MAX_REDACT_DEPTH``, beyond which
+    ``value`` is returned as-is (the caller renders it via plain ``repr``).
+    """
+    if depth >= _MAX_REDACT_DEPTH:
+        return value
+    if isinstance(value, Mapping):
+        redacted: dict[Any, Any] = {}
+        for k, v in value.items():
+            if isinstance(k, str) and k.lower() in sensitive_keys and v:
+                redacted[k] = "***"
+            else:
+                redacted[k] = _redact_value(v, sensitive_keys, depth + 1)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_value(v, sensitive_keys, depth + 1) for v in value]
+    # Only a plain ``tuple`` is rebuilt as a tuple; a ``tuple`` subclass
+    # (e.g. a namedtuple) can't be faithfully reconstructed from an iterable,
+    # so it is left verbatim rather than risk altering its repr.
+    if type(value) is tuple:
+        return tuple(_redact_value(v, sensitive_keys, depth + 1) for v in value)
+    return value
+
 
 @functools.cache
 def _resolved_hints(cls: type) -> Mapping[str, Any]:
@@ -263,6 +328,21 @@ class StructuredConfig:
     secrets out of logs that interpolate ``repr(config)``, tracebacks,
     and pytest failure output.
 
+    Redaction also descends into raw ``Mapping``/``list`` field values:
+    a credential nested inside an intentionally-untyped polymorphic
+    section (``vector_store``, ``embedding``, ``llm`` — sections held as
+    raw dicts because their schema is owned by another package and
+    dispatched by a discriminator key) is masked by *interior key name*.
+    The interior key set is ``_DEFAULT_SENSITIVE_KEYS`` (``api_key``,
+    ``password``, ``connection_string``, ``secret``, ``token``, the AWS
+    keys) unioned with the class's ``_SENSITIVE_FIELDS`` — so the known
+    leaks are closed with zero per-class configuration. Interior matching
+    is exact and case-insensitive (a benign ``token_count`` is untouched)
+    and truthy-only, depth-bounded, and likewise display-only. This is the
+    redaction-side complement to the subsystem registries: both dispatch
+    on a key-name handle because the section schema is opaque at the
+    parent layer. See :func:`_redact_value`.
+
     A subclass that needs a genuinely custom ``__repr__`` may still
     define one in its body; :meth:`__init_subclass__` leaves an
     explicitly-defined repr untouched.
@@ -296,26 +376,46 @@ class StructuredConfig:
             cls.__repr__ = StructuredConfig._redacted_repr
 
     def _redacted_repr(self) -> str:
-        """Dataclass-style repr that masks ``_SENSITIVE_FIELDS`` values.
+        """Dataclass-style repr that masks sensitive values, scalar and nested.
 
         Mirrors the auto-generated dataclass repr for every ``repr=True``
-        field, substituting ``'***'`` for a non-empty sensitive value so
-        credentials never reach logs through ``repr(config)`` or an
-        f-string. A falsy value (``None`` / ``""``) is shown verbatim — an
-        unset credential is not a secret, and masking ``""`` would falsely
-        imply one is configured. ``type(self).__qualname__`` (matching the
-        dataclass-generated repr) makes this a byte-for-byte drop-in for
-        configs with no sensitive fields. Installed as the ``__repr__`` of
+        field, redacting at two levels so credentials never reach logs
+        through ``repr(config)`` or an f-string:
+
+        1. **Scalar field-name redaction** — a field whose *name* is in
+           ``_SENSITIVE_FIELDS`` and whose value is truthy renders as
+           ``'***'`` (the original mechanism). A falsy value (``None`` /
+           ``""``) is shown verbatim — an unset credential is not a secret,
+           and masking ``""`` would falsely imply one is configured.
+        2. **Nested interior-key redaction** — for every other field, the
+           value is rendered through :func:`_redact_value`, which descends
+           into raw ``Mapping``/``list`` values and masks any interior key in
+           ``_DEFAULT_SENSITIVE_KEYS | _SENSITIVE_FIELDS`` (exact,
+           case-insensitive, truthy-only). This reaches credentials nested
+           inside the intentionally-untyped polymorphic sections
+           (``vector_store``/``embedding``/``llm``) that field-name redaction
+           alone cannot see — the display-side complement to the subsystem
+           registries on the construction side.
+
+        Display-only: the real field values and ``to_dict`` are untouched, so
+        round-trip is preserved exactly. ``type(self).__qualname__`` (matching
+        the dataclass-generated repr) keeps this a byte-for-byte drop-in for
+        configs with no sensitive content. Installed as the ``__repr__`` of
         every subclass by :meth:`__init_subclass__`.
         """
+        sensitive = _DEFAULT_SENSITIVE_KEYS | {
+            name.lower() for name in self._SENSITIVE_FIELDS
+        }
         parts: list[str] = []
         for f in dataclasses.fields(self):
             if not f.repr:
                 continue
             value = getattr(self, f.name)
             if f.name in self._SENSITIVE_FIELDS and value:
-                value = "***"
-            parts.append(f"{f.name}={value!r}")
+                rendered: Any = "***"
+            else:
+                rendered = _redact_value(value, sensitive, 0)
+            parts.append(f"{f.name}={rendered!r}")
         return f"{type(self).__qualname__}({', '.join(parts)})"
 
     @classmethod

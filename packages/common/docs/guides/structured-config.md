@@ -170,10 +170,47 @@ Semantics:
   to the standard dataclass repr — the mechanism is inert unless a
   subclass opts in.
 
-Field-name redaction does not reach into a *raw mapping* field (e.g. an
-`embedding: dict[str, Any]` that happens to hold an `api_key`); promote
-the credential to its own typed field, or redact at the mapping's own
-boundary, if it must be masked.
+#### Nested-mapping redaction (raw polymorphic sections)
+
+Redaction also descends into raw `Mapping`/`list` field values. A
+polymorphic/discriminated section is held as a raw `dict` at the parent
+layer because its schema is owned by another package and dispatched by a
+discriminator key (e.g. `vector_store={"backend": "pgvector",
+"connection_string": "postgresql://u:pw@h/db"}`,
+`embedding={"provider": "openai", "api_key": "sk-…"}`, an `llm` provider
+dict). The parent has no typed field for the credential, so it is masked
+by **interior key name** instead:
+
+```python
+@dataclass(frozen=True)
+class RAGConfig(StructuredConfig):
+    vector_store: dict[str, Any] = field(default_factory=dict)
+    # no _SENSITIVE_FIELDS entry needed for connection_string
+
+repr(RAGConfig(vector_store={"backend": "pgvector",
+                             "connection_string": "postgresql://u:pw@h/db"}))
+# "RAGConfig(vector_store={'backend': 'pgvector',
+#  'connection_string': '***'})"  ← masked, no per-class config
+```
+
+The interior key set is a module default —
+`{api_key, password, connection_string, secret, token,
+aws_access_key_id, aws_secret_access_key, aws_session_token}` — unioned
+with the class's `_SENSITIVE_FIELDS`, so the known leaks close with zero
+per-class configuration. Interior matching is **exact and
+case-insensitive** (a benign `token_count` is *not* masked, despite
+containing `token`), **truthy-only** (an empty/absent nested credential
+renders verbatim), and **depth-bounded**. Like the scalar path it is
+**display-only** — `to_dict()` and round-trip are unchanged. This is the
+redaction-side complement to the subsystem registries: both act on a
+key-name handle because the section schema is opaque at the parent
+layer. A class needing a non-default interior key masked adds it to its
+`_SENSITIVE_FIELDS`.
+
+Schema-*precise* redaction for these sections (typing them so the
+constructed child self-redacts) is the future typed-nesting work; until
+then the interior-key descent is the standing mechanism, and would remain
+as defense-in-depth.
 
 ## `StructuredConfigConsumer[ConfigT]` API
 

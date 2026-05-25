@@ -64,7 +64,9 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     documents_path: str | None = None
     document_pattern: str = "**/*.md"
 
-    # Redacted from ``repr`` by the StructuredConfig base. (A secret
-    # nested inside the raw ``embedding`` mapping is not reached by
-    # field-name redaction — see the embedder-config note in the docs.)
+    # Redacted from ``repr`` by the StructuredConfig base. A secret nested
+    # inside a raw mapping section (``embedding``'s ``api_key``,
+    # ``vector_store``'s ``connection_string``) is also masked: the base's
+    # repr descends into raw ``Mapping``/``list`` fields and masks interior
+    # keys in its default sensitive-key set unioned with this set.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
