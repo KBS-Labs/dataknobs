@@ -32,6 +32,14 @@ config = FileProcessingConfig(
 )
 ```
 
+`FileProcessingConfig` is a frozen
+[`StructuredConfig`](../../common/structured-config.md) subclass: it has a
+`from_dict()` / `to_dict()` pair and is **immutable** (derive a modified copy
+with `dataclasses.replace(...)`). When `format` (or `output_format`) is left
+unset, the format is auto-detected from the file extension by the
+`FileProcessor` and stored on the processor — the config itself keeps the
+caller-supplied value (`None`, meaning "auto-detect"); it is never mutated.
+
 ### File Formats
 
 ```python

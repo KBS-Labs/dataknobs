@@ -65,6 +65,30 @@ config = APIOrchestrationConfig(
 )
 ```
 
+### Loading and immutability
+
+`APIEndpoint` and `APIOrchestrationConfig` are frozen
+[`StructuredConfig`](../../common/structured-config.md) subclasses with a
+`from_dict()` / `to_dict()` pair; they are **immutable** (derive a modified copy
+with `dataclasses.replace(...)`). `APIOrchestrationConfig.from_dict()` rebuilds
+the nested `endpoints` list as typed `APIEndpoint` instances:
+
+```python
+config = APIOrchestrationConfig.from_dict({
+    "endpoints": [
+        {"name": "users", "url": "https://api.example.com/users"},
+        {"name": "posts", "url": "https://api.example.com/posts", "method": "POST"},
+    ],
+    "mode": OrchestrationMode.PARALLEL,
+})
+assert all(isinstance(ep, APIEndpoint) for ep in config.endpoints)
+```
+
+Endpoint callables (`response_parser`, `error_handler`, `transform_input`) and
+the config's result hooks round-trip by identity, so `to_dict()` on a
+callable-bearing config is for in-process round-tripping, not JSON
+serialization.
+
 ## Basic Usage
 
 ### APIOrchestrator

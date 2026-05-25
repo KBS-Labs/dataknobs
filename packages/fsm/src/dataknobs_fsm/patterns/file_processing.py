@@ -4,17 +4,20 @@ This module provides pre-configured FSM patterns for processing files,
 including CSV, JSON, XML, and other formats with streaming support.
 """
 
-from typing import Any, Dict, List, Callable, AsyncIterator
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-import re
+from typing import Any, AsyncIterator, Callable, Dict, List
+
+from dataknobs_common.structured_config import StructuredConfig
+
 from dataknobs_data import Record
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 from ..api.simple import SimpleFSM
-from dataknobs_fsm.core.data_modes import DataHandlingMode
-from ..streaming.file_stream import FileStreamSource, FileStreamSink
 from ..functions.library.validators import SchemaValidator
+from ..streaming.file_stream import FileStreamSink, FileStreamSource
 
 
 class FileFormat(Enum):
@@ -34,8 +37,8 @@ class ProcessingMode(Enum):
     WHOLE = "whole"  # Load entire file
 
 
-@dataclass
-class FileProcessingConfig:
+@dataclass(frozen=True)
+class FileProcessingConfig(StructuredConfig):
     """Configuration for file processing."""
     input_path: str
     output_path: str | None = None
@@ -82,11 +85,20 @@ class FileProcessor:
         }
         
     def _detect_format(self) -> None:
-        """Auto-detect file format if not specified."""
-        if not self.config.format:
+        """Resolve the effective input/output formats onto the processor.
+
+        Auto-detects the input format from the file extension when the
+        config leaves ``format`` unset, and mirrors it to the output format
+        when ``output_format`` is unset. The resolved values are stored on
+        the processor (``self._format`` / ``self._output_format``) rather
+        than written back to the immutable config — the config keeps the
+        caller-supplied values (often ``None``, meaning "auto-detect").
+        """
+        resolved_format = self.config.format
+        if not resolved_format:
             path = Path(self.config.input_path)
             ext = path.suffix.lower()
-            
+
             format_map = {
                 '.json': FileFormat.JSON,
                 '.jsonl': FileFormat.JSON,
@@ -96,13 +108,12 @@ class FileProcessor:
                 '.parquet': FileFormat.PARQUET,
                 '.txt': FileFormat.TEXT
             }
-            
-            self.config.format = format_map.get(ext, FileFormat.BINARY)
-            
-        # Set output format if not specified
-        if not self.config.output_format:
-            self.config.output_format = self.config.format
-            
+
+            resolved_format = format_map.get(ext, FileFormat.BINARY)
+
+        self._format: FileFormat = resolved_format
+        self._output_format: FileFormat = self.config.output_format or resolved_format
+
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for file processing."""
         # Determine data mode based on processing mode
@@ -259,9 +270,9 @@ class FileProcessor:
         
     def _get_parser_code(self) -> str:
         """Get parser code for file format."""
-        if self.config.format == FileFormat.JSON:
+        if self._format == FileFormat.JSON:
             return "import json; json.loads(data) if isinstance(data, str) else data"
-        elif self.config.format == FileFormat.CSV:
+        elif self._format == FileFormat.CSV:
             return """
 import csv
 from io import StringIO
@@ -271,7 +282,7 @@ if isinstance(data, str):
     data = rows[0] if rows else {}
 data
 """
-        elif self.config.format == FileFormat.XML:
+        elif self._format == FileFormat.XML:
             return """
 import xml.etree.ElementTree as ET
 if isinstance(data, str):
@@ -350,10 +361,10 @@ data
     
     def _create_parser(self) -> Callable:
         """Create parser for file format."""
-        if self.config.format == FileFormat.JSON:
+        if self._format == FileFormat.JSON:
             import json
             return lambda data: json.loads(data) if isinstance(data, str) else data
-        elif self.config.format == FileFormat.CSV:
+        elif self._format == FileFormat.CSV:
             import csv
             from io import StringIO
             
@@ -363,7 +374,7 @@ data
                     return next(iter(reader)) if reader else {}
                 return data
             return parse_csv
-        elif self.config.format == FileFormat.XML:
+        elif self._format == FileFormat.XML:
             import xml.etree.ElementTree as ET
             
             def parse_xml(data):
@@ -506,10 +517,10 @@ data
             content = f.read()
             
         # Parse content
-        if self.config.format == FileFormat.JSON:
+        if self._format == FileFormat.JSON:
             import json
             data = json.loads(content)
-        elif self.config.format == FileFormat.CSV:
+        elif self._format == FileFormat.CSV:
             import csv
             from io import StringIO
             reader = csv.DictReader(StringIO(content))
@@ -542,7 +553,7 @@ data
                 self._metrics['lines_read'] += 1
                 
                 # Parse line based on format
-                if self.config.format == FileFormat.JSON:
+                if self._format == FileFormat.JSON:
                     import json
                     try:
                         record = json.loads(line)
@@ -565,10 +576,10 @@ data
         output_data = [r['data'] for r in results if r['success']]
         
         with open(self.config.output_path, 'w', encoding=self.config.encoding) as f:  # type: ignore
-            if self.config.output_format == FileFormat.JSON:
+            if self._output_format == FileFormat.JSON:
                 import json
                 json.dump(output_data, f, indent=2)
-            elif self.config.output_format == FileFormat.CSV:
+            elif self._output_format == FileFormat.CSV:
                 import csv
                 if output_data:
                     writer = csv.DictWriter(f, fieldnames=output_data[0].keys())

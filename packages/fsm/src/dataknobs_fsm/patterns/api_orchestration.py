@@ -4,18 +4,19 @@ This module provides pre-configured FSM patterns for orchestrating API calls,
 including parallel requests, sequential workflows, rate limiting, and retries.
 """
 
-from typing import Any, Dict, List, Union, Callable
-from dataclasses import dataclass
-from enum import Enum
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Dict, List, Union
 
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
+from dataknobs_common.structured_config import StructuredConfig
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
-from ..io.base import IOConfig, IOMode, IOFormat
-from ..io.utils import create_io_provider, retry_io_operation, IOMetrics
+from ..io.base import IOConfig, IOFormat, IOMode
+from ..io.utils import IOMetrics, create_io_provider, retry_io_operation
 
 
 class OrchestrationMode(Enum):
@@ -28,8 +29,8 @@ class OrchestrationMode(Enum):
     HYBRID = "hybrid"  # Mix of above patterns
 
 
-@dataclass
-class APIEndpoint:
+@dataclass(frozen=True)
+class APIEndpoint(StructuredConfig):
     """Configuration for a single API endpoint."""
     name: str
     url: str
@@ -54,8 +55,8 @@ class APIEndpoint:
     transform_input: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None
 
 
-@dataclass
-class APIOrchestrationConfig:
+@dataclass(frozen=True)
+class APIOrchestrationConfig(StructuredConfig):
     """Configuration for API orchestration."""
     endpoints: List[APIEndpoint]
     mode: OrchestrationMode = OrchestrationMode.SEQUENTIAL

@@ -145,6 +145,13 @@ config = ETLConfig(
 etl = DatabaseETL(config)
 ```
 
+`ETLConfig` is a frozen [`StructuredConfig`](../../common/structured-config.md)
+subclass: it has a `from_dict()` / `to_dict()` pair and is **immutable** (derive
+a modified copy with `dataclasses.replace(...)`). The `source_db` / `target_db`
+mappings and any `transformations` callables round-trip by identity, so
+`to_dict()` on a transformation-bearing config is for in-process round-tripping,
+not JSON serialization.
+
 ## ETL Modes
 
 ### Available Modes

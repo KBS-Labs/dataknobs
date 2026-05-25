@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The pattern-family runtime configs — `CircuitBreakerConfig`,
+  `FallbackConfig`, `CompensationConfig`, `BulkheadConfig`,
+  `ErrorRecoveryConfig` (`patterns.error_recovery`), `APIEndpoint` +
+  `APIOrchestrationConfig` (`patterns.api_orchestration`), `ETLConfig`
+  (`patterns.etl`), and `FileProcessingConfig` (`patterns.file_processing`) —
+  are now frozen `StructuredConfig` subclasses. They gain `from_dict()` /
+  `to_dict()` and symmetric round-tripping, and are **immutable** (use
+  `dataclasses.replace(...)` to derive a modified copy). `ErrorRecoveryConfig`
+  rebuilds its five nested sub-configs (including the `dataknobs_common`
+  `RetryConfig`) as typed instances from a nested mapping, and
+  `APIOrchestrationConfig` rebuilds its `endpoints` list as typed `APIEndpoint`
+  instances. Configs carrying live callables round-trip by identity, so
+  `to_dict()` on such a config is for in-process round-tripping, not JSON
+  serialization. `CompensationConfig.compensation_actions` now defaults to an
+  empty list (previously a required field). `FileProcessor` format
+  auto-detection now resolves onto the processor rather than writing back to
+  the (now immutable) config, which keeps its caller-supplied "auto-detect"
+  value. Existing constructor call sites are unaffected; the Pydantic FSM
+  loader schema (`config/schema.py`) is the separate declarative layer and is
+  unchanged.
+
 ### Security
 
 - Bumped minimum `pymdown-extensions` requirement (docs dev

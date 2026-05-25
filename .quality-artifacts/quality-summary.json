@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-05-25T18:08:14Z",
+  "timestamp": "2026-05-25T18:28:11Z",
   "overall_status": "PASS",
-  "run_mode": "all",
+  "run_mode": "pr",
   "environment": "host",
-  "packages": "all",
-  "tested_packages": [],
+  "packages": "bots fsm",
+  "tested_packages": ["bots", "fsm"],
   "package_hashes": {
   "bots": "a822c84db3502233e3ed5da4d3df5632d74f5e802ef8d5246b5508246b53d300",
   "common": "14c66fe3882667da36d435ac57cc74f8af5d2264ae4b2e4cf65fd19848fc9606",
   "config": "1cba16240d9dfae40bf8dfaf5d13844edb8f503b4761cac2b682fd5d3f4c5aa8",
   "data": "2a4a9520bfd5febd30424135255a224600184c09d5c155a838edfbb73f8260ef",
-  "fsm": "e66668b3c66a6263141af6ab09d4bba4bad1c3c4bb6cb4cf99e1b42bb57a3447",
+  "fsm": "7d5d1b053e19b8f31002be95ce691d369fcfe4c33cde83d2b8432a37985c3fae",
   "legacy": "ddc6bd0d83e9e40ea4107cd6db0f40f7fcdbe5f5814c0814aabeb050d1ed039c",
   "llm": "d8b48ef78a405a1bee59fcb6ced0eda899427e5bf3fd4bcd271fdc21db18652f",
   "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
@@ -22,7 +22,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {
