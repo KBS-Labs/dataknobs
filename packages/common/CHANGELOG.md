@@ -253,6 +253,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed config with the legacy positional raises `TypeError`. Lock
   semantics (session-scoped `pg_advisory_lock`, the `blake2b` key
   mapping, the connect/wait timeout policy) are unchanged.
+- `RetryConfig`, `RateLimit`, and `RateLimiterConfig` are now
+  `StructuredConfig` subclasses — they gain `from_dict()` / `to_dict()`
+  and symmetric round-tripping, including `RateLimiterConfig`'s nested
+  `default_rates: list[RateLimit]` and `categories: dict[str,
+  list[RateLimit]]` shapes, which rebuild into typed `RateLimit`
+  instances through the base recursion (no `_normalize_dict` override).
+  `RetryConfig` and `RateLimiterConfig` are now frozen (immutable);
+  construct a modified copy with `dataclasses.replace(...)`. `RateLimit`
+  was already frozen. Field names, defaults, and all existing
+  constructor call shapes are unchanged. `RetryConfig.to_dict()` on a
+  config carrying live callable hooks (`retry_on_result`, `on_retry`,
+  `on_failure`) or exception types remains an in-process dict (those
+  fields round-trip by object identity) and is not JSON-serializable —
+  matching the pre-existing semantics of those runtime-hook fields.
 
 ## v1.3.14 - 2026-05-20
 

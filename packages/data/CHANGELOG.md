@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`StreamConfig` is now a frozen `StructuredConfig`.** It gains
+  `from_dict()` / `to_dict()` and round-tripping; its existing
+  `__post_init__` validation (`batch_size > 0`, `prefetch >= 0`,
+  positive `timeout`) is preserved and now also fires on the
+  `from_dict()` path. All `StreamConfig(...)` constructors are
+  unchanged, but instances are immutable — construct a modified copy
+  with `dataclasses.replace(...)` instead of assigning fields.
+  `StreamResult` (runtime data) is unaffected.
 - **All four vector stores now construct through typed configuration
   dataclasses.** `MemoryVectorStore`, `FaissVectorStore`,
   `ChromaVectorStore`, and `PgVectorStore` each grow a
