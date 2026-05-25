@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `torch` requirement (extra: `embeddings`) from
+  `>=2.8.0` to `>=2.9.0` to exclude PYSEC-2025-203 (CVSS 7.5),
+  PYSEC-2025-204 (CVSS 7.5), and PYSEC-2025-206 (CVSS 5.3), flagged at
+  the floor resolve by the `dependency-update` workflow. The bump
+  preserves the prior sweep of GHSA-887c-mr87-cxwp (CVSS 4.8, 2.8.0),
+  GHSA-3749-ghw9-m3mg (CVSS 3.3, 2.7.1), and CVE-2025-32434 (RCE in
+  `torch.load`, 2.6.0). PYSEC-2026-139 (CVSS 7.8) has no upstream fix
+  yet and remains flagged; it will be addressed when a fixed release
+  ships.
+
 ## v0.5.14 - 2026-05-20
 
 ## v0.5.13 - 2026-05-18

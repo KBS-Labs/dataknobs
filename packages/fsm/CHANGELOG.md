@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `pymdown-extensions` requirement (docs dev
+  dependency) from `>=10.16.1` to `>=10.21.3` to exclude
+  GHSA-62q4-447f-wv8h (CVSS 4.3), flagged at the floor resolve by the
+  `dependency-update` workflow. The floor preserves the prior sweep of
+  GHSA-r6h4-mm7h-8pmq (CVSS 2.7, 10.16.1). `pymdown-extensions` is a
+  transitive dependency of `mkdocs-material` whose own constraint
+  permits the vulnerable version, so an explicit floor is required; the
+  identical floor in the workspace-root docs dev dependencies was
+  bumped in lockstep.
+
 ## v0.1.21 - 2026-05-20
 
 ## v0.1.20 - 2026-05-18
