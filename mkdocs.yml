@@ -72,6 +72,7 @@ nav:
       - packages/common/ratelimit.md
       - packages/common/locks.md
       - packages/common/structured-config.md
+      - packages/common/serialization.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:
