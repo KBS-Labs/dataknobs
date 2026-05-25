@@ -319,6 +319,9 @@ def sanitize_for_json(
     dataclass instances, Serializable objects, and live runtime objects.
 
     Conversion rules (in order):
+    - ``Enum`` member → its ``.value`` (recursively sanitized), so
+      ``StrEnum`` / ``IntEnum`` collapse to a plain ``str`` / ``int``
+      rather than leaking an enum instance into the output
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not convertible
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
@@ -366,6 +369,13 @@ def _sanitize_recursive(
     _dropped: list[str] | None,
 ) -> Any:
     """Inner recursive traversal for :func:`sanitize_for_json`."""
+    # Enum → its value, recursively sanitized. Checked before the primitive
+    # gate so IntEnum/StrEnum (which subclass int/str) normalise to a plain
+    # int/str instead of slipping through as the enum instance; a plain Enum
+    # (whose value is not a primitive) is now preserved rather than dropped.
+    if isinstance(value, Enum):
+        return _sanitize_recursive(value.value, on_drop, _path, _dropped)
+
     # JSON primitives
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -451,6 +461,11 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
         List of key paths to non-serializable values.  An empty list
         means *value* is fully JSON-safe.
     """
+    # Enum is representable via its value; descend into the value so an
+    # enum whose value is itself non-serializable is still reported.
+    if isinstance(value, Enum):
+        return validate_json_safe(value.value, _path)
+
     # JSON primitives
     if value is None or isinstance(value, (bool, int, float, str)):
         return []

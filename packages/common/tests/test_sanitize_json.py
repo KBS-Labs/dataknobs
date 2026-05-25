@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import Enum, IntEnum
 from typing import Any
 
 import pytest
@@ -156,3 +157,58 @@ class TestValidateJsonSafe:
         paths = validate_json_safe(lambda: None)
         assert len(paths) == 1
         assert "<root>" in paths[0]
+
+
+class _Color(Enum):
+    RED = "red"
+
+
+class _Level(IntEnum):
+    LOW = 1
+
+
+class _BadValue:
+    """Not JSON-representable; used as an enum value to test recursion."""
+
+
+class _ExoticEnum(Enum):
+    ODD = _BadValue()
+
+
+class TestEnumHandling:
+    """Enums are representable (-> .value), not dropped/flagged.
+
+    Regression guard: previously a plain ``Enum`` was silently dropped by
+    ``sanitize_for_json`` and flagged by ``validate_json_safe``, while
+    ``IntEnum`` / ``StrEnum`` leaked through as enum instances. Both now
+    normalise to the member's ``.value``.
+    """
+
+    def test_sanitize_plain_enum_to_value(self) -> None:
+        result = sanitize_for_json({"c": _Color.RED, "ok": 1})
+        # Previously "c" was dropped entirely.
+        assert result == {"c": "red", "ok": 1}
+
+    def test_sanitize_int_enum_normalised_to_plain_int(self) -> None:
+        result = sanitize_for_json({"lvl": _Level.LOW})
+        assert result == {"lvl": 1}
+        # Not the enum instance — a plain int.
+        assert type(result["lvl"]) is int
+
+    def test_sanitize_enum_in_list(self) -> None:
+        assert sanitize_for_json([_Color.RED, _Level.LOW]) == ["red", 1]
+
+    def test_sanitize_enum_with_non_serializable_value_still_dropped(self) -> None:
+        # The .value is itself non-representable, so it is dropped after
+        # unwrapping — proving enum handling recurses rather than blindly
+        # trusting .value.
+        result = sanitize_for_json({"x": _ExoticEnum.ODD, "ok": 1})
+        assert result == {"ok": 1}
+
+    def test_validate_enum_is_safe(self) -> None:
+        assert validate_json_safe({"c": _Color.RED, "lvl": _Level.LOW}) == []
+
+    def test_validate_enum_with_non_serializable_value_flagged(self) -> None:
+        paths = validate_json_safe({"x": _ExoticEnum.ODD})
+        assert len(paths) == 1
+        assert "x" in paths[0]

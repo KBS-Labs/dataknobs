@@ -207,6 +207,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented config dict.
 
 ### Fixed
+- `sanitize_for_json` / `validate_json_safe` now treat `Enum` members as
+  representable, normalising them to `.value` (recursively) instead of the
+  prior inconsistent handling: a plain `Enum` was silently **dropped**
+  (data loss — e.g. an enum stored in persisted wizard `state.data`), while
+  `IntEnum` / `StrEnum` slipped through the primitive gate and leaked the
+  enum *instance* into the supposedly JSON-safe output. Both kinds now
+  collapse to a plain `str` / `int`; an enum whose `.value` is itself
+  non-representable is still dropped / flagged, since the value is recursed.
 - `create_event_bus({"backend": "sqs", "require_topic_attribute":
   False, ...})` now forwards the flag to `SqsEventBus`. Previously
   the registry factory's explicit-allowlist enumeration dropped the

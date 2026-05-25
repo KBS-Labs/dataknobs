@@ -377,9 +377,10 @@ everything else (callables, `type` objects, `set`s) through untouched. It
 is the engine behind
 [`StructuredConfig.to_json_dict()`](structured-config.md#to_json_dict).
 For lossy best-effort JSON safety that also converts dataclasses /
-`Serializable` objects and **drops** anything non-representable, use
-`sanitize_for_json` instead (note: `sanitize_for_json` currently drops
-enums rather than emitting their `.value`).
+`Serializable` objects to dicts and **drops** anything non-representable,
+use `sanitize_for_json` instead — it likewise normalises enums to their
+`.value`, but additionally walks dataclasses and drops live objects
+(callables, sockets, tasks) that `jsonify` would leave in place.
 
 ### Pattern 2: Datetime Handling
 
