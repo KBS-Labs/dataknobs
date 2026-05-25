@@ -194,18 +194,60 @@ repr(RAGConfig(vector_store={"backend": "pgvector",
 ```
 
 The interior key set is a module default —
-`{api_key, password, connection_string, secret, token,
+`{api_key, password, connection_string, client_secret, secret_key,
+secret_access_key, access_token, refresh_token, auth_token, bearer_token,
 aws_access_key_id, aws_secret_access_key, aws_session_token}` — unioned
 with the class's `_SENSITIVE_FIELDS`, so the known leaks close with zero
 per-class configuration. Interior matching is **exact and
-case-insensitive** (a benign `token_count` is *not* masked, despite
-containing `token`), **truthy-only** (an empty/absent nested credential
-renders verbatim), and **depth-bounded**. Like the scalar path it is
+case-insensitive** (a benign `access_token_expiry` is *not* masked,
+despite containing `access_token`), **truthy-only** (an empty/absent
+nested credential renders verbatim), and **depth-bounded** (default 6,
+ample for the ~2-3-level real shapes). Like the scalar path it is
 **display-only** — `to_dict()` and round-trip are unchanged. This is the
 redaction-side complement to the subsystem registries: both act on a
-key-name handle because the section schema is opaque at the parent
-layer. A class needing a non-default interior key masked adds it to its
-`_SENSITIVE_FIELDS`.
+key-name handle because the section schema is opaque at the parent layer.
+
+**Why only unambiguous compound names, not bare `token` / `secret`.**
+Interior matching targets raw dict sections whose schema is owned by
+*another* package. A false positive there masks a benign key the consumer
+**cannot rename** (it is a third-party schema) and **cannot remove** from
+the default set (it is frozen; `_SENSITIVE_FIELDS` only *adds*). So the
+default set deliberately excludes the bare generics `token` (NLP tokens,
+pagination/page tokens, CSRF tokens) and `secret` (a `secret` flag, a
+`secret` name reference to a vault) in favour of the compound `*_token` /
+`*_secret*` names above, which are almost never benign.
+
+Extending the set:
+
+- **Per class** — a config whose own opaque section uses a non-default
+  credential key adds it to that class's `_SENSITIVE_FIELDS` (it doubles as
+  the scalar field-name set and the interior-key extension).
+- **Process-globally** — a consumer with custom opaque sections that share
+  a credential key calls `register_sensitive_interior_key("vault_ref")`
+  once at startup; it masks that key inside every `StructuredConfig`
+  subclass thereafter. Registration is **add-only** — there is no removal,
+  because redaction is a fail-closed security feature and configuration
+  must never be able to switch credential masking *off*.
+
+```python
+from dataknobs_common import register_sensitive_interior_key
+
+register_sensitive_interior_key("vault_ref")  # masked everywhere, add-only
+```
+
+Raising the depth bound: a subclass whose raw section nests deeper than the
+default 6 levels may raise its own bound via the `_MAX_REDACT_DEPTH` ClassVar.
+Like the key levers, this is **raise-only** — setting it *below* the floor
+shrinks the masked region (a configuration-time reduction of protection) and
+is rejected with `ValueError` at class definition:
+
+```python
+@dataclass(frozen=True)
+class DeepConfig(StructuredConfig):
+    section: dict[str, Any] = field(default_factory=dict)
+    _MAX_REDACT_DEPTH: ClassVar[int] = 8   # OK: deeper masking
+    # _MAX_REDACT_DEPTH: ClassVar[int] = 2 # ValueError: below the floor of 6
+```
 
 Schema-*precise* redaction for these sections (typing them so the
 constructed child self-redacts) is the future typed-nesting work; until

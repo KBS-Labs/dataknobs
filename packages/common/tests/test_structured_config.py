@@ -21,8 +21,12 @@ from typing import Any, ClassVar
 
 import pytest
 
+from dataknobs_common import structured_config as _sc
 from dataknobs_common.serialization import Serializable
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    register_sensitive_interior_key,
+)
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
 
@@ -409,6 +413,24 @@ class _WithRawMapping(StructuredConfig):
     items: list[dict[str, Any]] = field(default_factory=list)
 
 
+@pytest.fixture
+def isolate_interior_keys():
+    """Snapshot and restore the process-global interior-key registry.
+
+    ``register_sensitive_interior_key`` mutates module-global state with no
+    removal API (add-only by design). A test that registers a key must restore
+    the prior contents exactly — clearing the set would wipe any key registered
+    elsewhere — and invalidate the per-class cache on both entry and exit.
+    """
+    snapshot = set(_sc._EXTRA_SENSITIVE_INTERIOR_KEYS)
+    try:
+        yield
+    finally:
+        _sc._EXTRA_SENSITIVE_INTERIOR_KEYS.clear()
+        _sc._EXTRA_SENSITIVE_INTERIOR_KEYS.update(snapshot)
+        _sc._interior_sensitive_keys.cache_clear()
+
+
 class TestSensitiveFieldRedaction:
     """``__repr__`` masks ``_SENSITIVE_FIELDS``; ``to_dict`` does not.
 
@@ -533,11 +555,19 @@ class TestNestedMappingRedaction:
         assert "'connection_string': '***'" in rendered
 
     def test_exact_key_match_does_not_over_redact(self) -> None:
-        """A benign key that merely *contains* a sensitive substring
-        (``token_count`` contains ``token``) is NOT masked — match is exact,
+        """A benign key that merely *contains* a sensitive key as a substring
+        (``access_token_expiry`` contains ``access_token``; ``token_count``
+        contains the historical ``token``) is NOT masked — match is exact,
         not substring."""
-        cfg = _WithRawMapping(section={"token_count": 5, "model": "llama3.2"})
+        cfg = _WithRawMapping(
+            section={
+                "access_token_expiry": 3600,
+                "token_count": 5,
+                "model": "llama3.2",
+            }
+        )
         rendered = repr(cfg)
+        assert "'access_token_expiry': 3600" in rendered
         assert "'token_count': 5" in rendered
         assert "'model': 'llama3.2'" in rendered
         assert "***" not in rendered
@@ -572,15 +602,83 @@ class TestNestedMappingRedaction:
         assert "'custom_key': '***'" in rendered  # class-declared interior key
         assert "'api_key': '***'" in rendered  # default-set interior key
 
+    def test_depth_bound_masks_at_last_reachable_level(self) -> None:
+        """A secret at the deepest level still within the bound is masked.
+
+        The ``section`` field value is inspected at depth 0; each ``level``
+        wrapper adds one. Five wrappers place the credential mapping at depth
+        5 — the last level ``_MAX_REDACT_DEPTH`` (6) reaches, since recursion
+        stops only once ``depth >= 6``."""
+        nested: dict[str, Any] = {"password": "deep-secret"}
+        for _ in range(5):
+            nested = {"level": nested}
+        cfg = _WithRawMapping(section=nested)
+        rendered = repr(cfg)
+        assert "deep-secret" not in rendered
+        assert "'password': '***'" in rendered
+
+    def test_depth_bound_skips_secret_beyond_bound(self) -> None:
+        """A secret one level past the bound renders verbatim.
+
+        Six ``level`` wrappers place the credential mapping at depth 6, where
+        ``_redact_value`` returns the value untouched *before* inspecting its
+        keys. This is the deliberate safety-stop trade-off (bounding
+        pathological / cyclic structures), not a reachable config shape — real
+        sections nest ~2-3 levels."""
+        nested: dict[str, Any] = {"password": "too-deep"}
+        for _ in range(6):
+            nested = {"level": nested}
+        cfg = _WithRawMapping(section=nested)
+        rendered = repr(cfg)
+        assert "'password': 'too-deep'" in rendered
+
     def test_depth_bound_terminates_without_error(self) -> None:
-        """A structure nested deeper than the bound does not raise and
-        terminates (the bound is a safety stop, not an expected path)."""
+        """A structure nested far deeper than the bound does not raise and
+        terminates (the bound is a hard safety stop, not an expected path)."""
         nested: dict[str, Any] = {"password": "deep-secret"}
         for _ in range(12):
             nested = {"level": nested}
         cfg = _WithRawMapping(section=nested)
         rendered = repr(cfg)  # must not raise / recurse unbounded
         assert isinstance(rendered, str)
+
+    def test_subclass_can_raise_depth_bound(self) -> None:
+        """A subclass with an unusually deep raw section raises its own
+        ``_MAX_REDACT_DEPTH``. A secret at depth 6 — verbatim under the
+        default-6 floor (see ``test_depth_bound_skips_secret_beyond_bound``) —
+        is masked once the bound is raised to 8."""
+
+        @dataclass(frozen=True)
+        class _DeepConfig(StructuredConfig):
+            section: dict[str, Any] = field(default_factory=dict)
+            _MAX_REDACT_DEPTH: ClassVar[int] = 8
+
+        nested: dict[str, Any] = {"password": "deep"}
+        for _ in range(6):
+            nested = {"level": nested}
+        cfg = _DeepConfig(section=nested)
+        rendered = repr(cfg)
+        assert "deep" not in rendered
+        assert "'password': '***'" in rendered
+
+    def test_subclass_cannot_lower_depth_bound_below_floor(self) -> None:
+        """Lowering the bound below the fail-closed floor is rejected at class
+        definition — it would shrink the masked region (reduce protection)."""
+        with pytest.raises(ValueError, match="_MAX_REDACT_DEPTH"):
+
+            @dataclass(frozen=True)
+            class _Shallow(StructuredConfig):
+                section: dict[str, Any] = field(default_factory=dict)
+                _MAX_REDACT_DEPTH: ClassVar[int] = 2
+
+    def test_subclass_depth_bound_rejects_bool(self) -> None:
+        """``bool`` is an ``int`` subclass but a nonsensical depth; it is
+        rejected explicitly rather than silently treated as ``0``/``1``."""
+        with pytest.raises(ValueError, match="_MAX_REDACT_DEPTH"):
+
+            @dataclass(frozen=True)
+            class _BoolDepth(StructuredConfig):
+                _MAX_REDACT_DEPTH: ClassVar[int] = True
 
     def test_to_dict_keeps_real_nested_secret(self) -> None:
         """Display-only: ``to_dict`` returns the real nested value verbatim."""
@@ -614,3 +712,67 @@ class TestNestedMappingRedaction:
             "section={'backend': 'memory', 'dimension': 384}, "
             "items=[{'weight': 0.5}])"
         )
+
+    def test_repr_masks_compound_token_key_in_raw_mapping(self) -> None:
+        """A tightened compound credential name (``access_token``) is masked
+        by the default set with zero per-class config."""
+        cfg = _WithRawMapping(section={"access_token": "tok-secret"})
+        rendered = repr(cfg)
+        assert "tok-secret" not in rendered
+        assert "'access_token': '***'" in rendered
+
+    def test_repr_masks_compound_secret_key_in_raw_mapping(self) -> None:
+        """A tightened compound credential name (``client_secret``) is masked
+        by the default set with zero per-class config."""
+        cfg = _WithRawMapping(section={"client_secret": "cs-secret"})
+        rendered = repr(cfg)
+        assert "cs-secret" not in rendered
+        assert "'client_secret': '***'" in rendered
+
+    def test_bare_token_key_not_masked(self) -> None:
+        """The bare generic ``token`` is intentionally NOT a default interior
+        key. It collides with benign non-credential keys (NLP tokens,
+        pagination/page tokens) inside third-party opaque sections the
+        consumer can neither rename nor remove from the frozen default set, so
+        the default set carries only the unambiguous compound ``*_token``
+        names. A consumer that means a credential uses a compound name or
+        registers it explicitly."""
+        cfg = _WithRawMapping(section={"token": "next-page-cursor"})
+        rendered = repr(cfg)
+        assert "'token': 'next-page-cursor'" in rendered
+        assert "***" not in rendered
+
+    def test_bare_secret_key_not_masked(self) -> None:
+        """The bare generic ``secret`` is intentionally NOT a default interior
+        key — it collides with a benign ``secret`` flag or a ``secret`` name
+        reference to a vault. The compound names (``client_secret`` /
+        ``secret_key`` / ``secret_access_key``) cover the real credential
+        shapes without the false positive."""
+        cfg = _WithRawMapping(section={"secret": True})
+        rendered = repr(cfg)
+        assert "'secret': True" in rendered
+        assert "***" not in rendered
+
+    def test_runtime_registered_interior_key_is_masked(
+        self, isolate_interior_keys: None
+    ) -> None:
+        """``register_sensitive_interior_key`` extends the interior set
+        process-wide (and case-insensitively) so a consumer's custom
+        opaque-section credential is masked everywhere — the per-class cache is
+        invalidated on registration."""
+        register_sensitive_interior_key("Vault_Ref")  # mixed case on purpose
+        cfg = _WithRawMapping(section={"vault_ref": "v-secret"})
+        rendered = repr(cfg)
+        assert "v-secret" not in rendered
+        assert "'vault_ref': '***'" in rendered
+
+    def test_runtime_registered_interior_key_is_display_only(
+        self, isolate_interior_keys: None
+    ) -> None:
+        """A runtime-registered key follows the same display-only rule as the
+        defaults: ``to_dict`` returns the real value, so round-trip is
+        unaffected."""
+        register_sensitive_interior_key("vault_ref")
+        cfg = _WithRawMapping(section={"vault_ref": "v-secret"})
+        assert cfg.to_dict()["section"]["vault_ref"] == "v-secret"
+        assert_structured_config_roundtrip(cfg)

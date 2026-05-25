@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-25T15:51:44Z",
+  "timestamp": "2026-05-25T17:00:18Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/structured-config-nested-dict-secret-redaction",
-  "git_commit": "48b8e8ae1054a51986ea0aabfe6732269cc795d1",
+  "git_commit": "a8ad473779e6184da6d36d5ca57ac7faaef43d87",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

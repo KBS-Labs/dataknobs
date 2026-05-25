@@ -47,6 +47,7 @@ import dataclasses
 import functools
 import inspect
 import logging
+import threading
 import types
 from collections.abc import Callable, Mapping
 from typing import (
@@ -89,29 +90,128 @@ _SEQUENCE_ORIGINS = (list, tuple, set, frozenset)
 # the only handle available at that layer (exactly as the subsystem registries
 # dispatch on a key-name discriminator). These are matched case-insensitively
 # and *exactly* (not as a substring), so a benign ``token_count`` is never
-# masked. A class needing a non-default interior key masked adds it to its
-# ``_SENSITIVE_FIELDS``. Display-only: ``to_dict`` is never redacted.
+# masked.
+#
+# Why these names and not the bare generics ``token`` / ``secret``: interior
+# matching targets raw dict sections whose schema is owned by *another* package
+# (``vector_store``, ``embedding``, ``llm``). A false positive there masks a
+# benign key the consumer cannot rename (it's a third-party schema) and cannot
+# remove from this set (the default set is frozen, ``_SENSITIVE_FIELDS`` only
+# adds). So the default set holds only names that are almost never benign. Bare
+# ``token`` (NLP tokens, pagination/page tokens, CSRF tokens) and bare
+# ``secret`` (a ``secret`` boolean flag, a ``secret_name`` *reference* to a
+# vault) are deliberately excluded in favour of the unambiguous compound names
+# below.
+#
+# A class needing a non-default interior key masked adds it to its
+# ``_SENSITIVE_FIELDS``; a process that needs one masked globally across opaque
+# sections calls :func:`register_sensitive_interior_key`. Both only *add* —
+# there is no remove (redaction is fail-closed). Display-only: ``to_dict`` is
+# never redacted.
 _DEFAULT_SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "api_key",
         "password",
         "connection_string",
-        "secret",
-        "token",
+        "client_secret",
+        "secret_key",
+        "secret_access_key",
+        "access_token",
+        "refresh_token",
+        "auth_token",
+        "bearer_token",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
     }
 )
 
-# Safety bound on ``_redact_value`` recursion. Config sections are shallow
-# (the deepest known shape nests ~2-3 levels); 6 is ample headroom while
-# bounding pathological or cyclic structures. Beyond it the value renders via
-# the caller's plain ``repr`` — a stop, not an expected path.
-_MAX_REDACT_DEPTH = 6
+# Process-global interior keys registered at runtime via
+# :func:`register_sensitive_interior_key`. Add-only (never removed) so a
+# consumer cannot configuration-disable credential masking. Stored lowercase to
+# match the case-insensitive interior comparison; folded into the per-class
+# redaction set by :func:`_interior_sensitive_keys`, whose cache is cleared on
+# every registration.
+_EXTRA_SENSITIVE_INTERIOR_KEYS: set[str] = set()
+
+# Guards the read-check-update-clear of ``_EXTRA_SENSITIVE_INTERIOR_KEYS`` in
+# ``register_sensitive_interior_key`` and the snapshot read in
+# ``_interior_sensitive_keys``. Registration is typically a startup-time call,
+# but a ``repr`` (via ``_interior_sensitive_keys``) can run on any thread; the
+# lock keeps a concurrent registration from raising ``RuntimeError: Set changed
+# size during iteration`` while the snapshot ``frozenset(...)`` iterates the
+# live set. (The add-only invariant holds without the lock — ``update`` happens
+# before ``cache_clear``, so a recompute always sees the new keys — but the
+# iteration race is a real, if narrow, robustness defect in shared infra.)
+_sensitive_keys_lock = threading.Lock()
 
 
-def _redact_value(value: Any, sensitive_keys: frozenset[str], depth: int) -> Any:
+def register_sensitive_interior_key(*names: str) -> None:
+    """Add interior key name(s) to the process-global redaction set.
+
+    Extends the set of keys masked inside raw ``Mapping``/``list`` config
+    sections (see :func:`_redact_value`) for *every* ``StructuredConfig``
+    subclass — the global counterpart to a per-class ``_SENSITIVE_FIELDS``
+    entry. Intended for a consumer with custom opaque sections whose
+    credential key is not one of the unambiguous defaults (e.g. a private
+    ``vault_ref``).
+
+    Add-only by design: there is no corresponding removal. Redaction is a
+    fail-closed security feature — configuration must never be able to turn
+    credential masking *off*. Names are stored lowercase (interior matching is
+    case-insensitive) and matched exactly, not as substrings. Affects display
+    only; ``to_dict`` is never redacted.
+
+    Idempotent and cheap: registering an already-present name is a no-op, and
+    the per-class :func:`_interior_sensitive_keys` cache is invalidated only
+    when the set actually changes.
+    """
+    added = {name.lower() for name in names if name}
+    with _sensitive_keys_lock:
+        if added - _EXTRA_SENSITIVE_INTERIOR_KEYS:
+            _EXTRA_SENSITIVE_INTERIOR_KEYS.update(added)
+            _interior_sensitive_keys.cache_clear()
+
+
+@functools.cache
+def _interior_sensitive_keys(cls: type) -> frozenset[str]:
+    """Per-class interior-key redaction set, computed once and cached.
+
+    Unions the frozen module defaults, any runtime-registered extras
+    (:func:`register_sensitive_interior_key`), and the class's own
+    ``_SENSITIVE_FIELDS`` (lower-cased so interior matching is
+    case-insensitive). ``_SENSITIVE_FIELDS`` is a class-definition-time
+    ``ClassVar`` and the defaults are frozen, so the result is stable per class
+    except across a runtime registration — which clears this cache. Mirrors the
+    per-class caching of :func:`_resolved_hints`, keeping the union off the
+    ``repr`` hot path.
+    """
+    sensitive_fields = getattr(cls, "_SENSITIVE_FIELDS", frozenset())
+    # Snapshot the live mutable set under the lock so a concurrent
+    # ``register_sensitive_interior_key`` cannot mutate it mid-iteration.
+    with _sensitive_keys_lock:
+        extras = frozenset(_EXTRA_SENSITIVE_INTERIOR_KEYS)
+    return (
+        _DEFAULT_SENSITIVE_KEYS
+        | extras
+        | frozenset(name.lower() for name in sensitive_fields)
+    )
+
+
+# Default (and minimum) safety bound on ``_redact_value`` recursion. Config
+# sections are shallow (the deepest known shape nests ~2-3 levels); 6 is ample
+# headroom while bounding pathological or cyclic structures. Beyond the bound
+# the value renders via the caller's plain ``repr`` — a stop, not an expected
+# path. A subclass with an unusually deep raw section may *raise* its effective
+# bound via the ``_MAX_REDACT_DEPTH`` ClassVar; it can never go below this floor
+# (lowering would reduce credential protection — redaction is fail-closed), a
+# constraint enforced in :meth:`StructuredConfig.__init_subclass__`.
+_DEFAULT_MAX_REDACT_DEPTH = 6
+
+
+def _redact_value(
+    value: Any, sensitive_keys: frozenset[str], depth: int, max_depth: int
+) -> Any:
     """Build a display copy of ``value`` with sensitive interior keys masked.
 
     Descends into ``Mapping`` and ``list``/``tuple`` values, replacing the
@@ -124,10 +224,11 @@ def _redact_value(value: Any, sensitive_keys: frozenset[str], depth: int) -> Any
     repr would.
 
     The real config value is never mutated — the returned copy is for
-    ``repr`` only. Recursion stops at ``_MAX_REDACT_DEPTH``, beyond which
-    ``value`` is returned as-is (the caller renders it via plain ``repr``).
+    ``repr`` only. Recursion stops at ``max_depth`` (the calling config's
+    ``_MAX_REDACT_DEPTH``), beyond which ``value`` is returned as-is (the
+    caller renders it via plain ``repr``).
     """
-    if depth >= _MAX_REDACT_DEPTH:
+    if depth >= max_depth:
         return value
     if isinstance(value, Mapping):
         redacted: dict[Any, Any] = {}
@@ -135,15 +236,17 @@ def _redact_value(value: Any, sensitive_keys: frozenset[str], depth: int) -> Any
             if isinstance(k, str) and k.lower() in sensitive_keys and v:
                 redacted[k] = "***"
             else:
-                redacted[k] = _redact_value(v, sensitive_keys, depth + 1)
+                redacted[k] = _redact_value(v, sensitive_keys, depth + 1, max_depth)
         return redacted
     if isinstance(value, list):
-        return [_redact_value(v, sensitive_keys, depth + 1) for v in value]
+        return [_redact_value(v, sensitive_keys, depth + 1, max_depth) for v in value]
     # Only a plain ``tuple`` is rebuilt as a tuple; a ``tuple`` subclass
     # (e.g. a namedtuple) can't be faithfully reconstructed from an iterable,
     # so it is left verbatim rather than risk altering its repr.
     if type(value) is tuple:
-        return tuple(_redact_value(v, sensitive_keys, depth + 1) for v in value)
+        return tuple(
+            _redact_value(v, sensitive_keys, depth + 1, max_depth) for v in value
+        )
     return value
 
 
@@ -334,11 +437,21 @@ class StructuredConfig:
     raw dicts because their schema is owned by another package and
     dispatched by a discriminator key) is masked by *interior key name*.
     The interior key set is ``_DEFAULT_SENSITIVE_KEYS`` (``api_key``,
-    ``password``, ``connection_string``, ``secret``, ``token``, the AWS
-    keys) unioned with the class's ``_SENSITIVE_FIELDS`` — so the known
-    leaks are closed with zero per-class configuration. Interior matching
-    is exact and case-insensitive (a benign ``token_count`` is untouched)
-    and truthy-only, depth-bounded, and likewise display-only. This is the
+    ``password``, ``connection_string``, the compound ``*_secret*`` /
+    ``*_token`` credential names, and the AWS keys) unioned with the
+    class's ``_SENSITIVE_FIELDS`` and any process-global keys registered
+    via :func:`register_sensitive_interior_key` — so the known leaks are
+    closed with zero per-class configuration. The default set holds only
+    unambiguous credential names: the bare generics ``token`` and
+    ``secret`` are excluded because a false positive masks a benign key
+    inside a third-party opaque section that the consumer can neither
+    rename nor remove from the (frozen, add-only) set. Interior matching is
+    exact and case-insensitive (a benign ``token_count`` is untouched) and
+    truthy-only, depth-bounded, and likewise display-only. The depth bound
+    defaults to ``_DEFAULT_MAX_REDACT_DEPTH`` (6, ample for the ~2-3-level
+    real shapes); a subclass with an unusually deep raw section may raise it
+    via the ``_MAX_REDACT_DEPTH`` ClassVar but never lower it below the floor
+    (lowering would shrink the masked region — fail-closed). This is the
     redaction-side complement to the subsystem registries: both dispatch
     on a key-name handle because the section schema is opaque at the
     parent layer. See :func:`_redact_value`.
@@ -353,8 +466,15 @@ class StructuredConfig:
     #: dataclass.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset()
 
+    #: Maximum interior-redaction recursion depth (see :func:`_redact_value`).
+    #: Defaults to the module floor; a subclass with an unusually deep raw
+    #: section may *raise* it (``_MAX_REDACT_DEPTH: ClassVar[int] = 8``) but
+    #: never lower it below the floor — lowering would reduce credential
+    #: protection, which :meth:`__init_subclass__` rejects.
+    _MAX_REDACT_DEPTH: ClassVar[int] = _DEFAULT_MAX_REDACT_DEPTH
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Install the redacting ``__repr__`` on every subclass.
+        """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
 
         Runs at class-creation time, *before* the subclass's
         ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
@@ -367,13 +487,40 @@ class StructuredConfig:
         in its body keeps it (it is already in ``cls.__dict__`` when this
         runs). See the class docstring for why neither an inherited repr
         nor the generated one can do this on their own.
+
+        Also enforces the raise-only floor on ``_MAX_REDACT_DEPTH``: a
+        subclass may raise its effective interior-redaction depth above the
+        module default but never lower it below
+        ``_DEFAULT_MAX_REDACT_DEPTH``. Lowering would shrink the masked
+        region — a configuration-time reduction of credential protection,
+        which redaction's fail-closed posture forbids. A non-int or
+        below-floor value raises ``ValueError`` at class definition, so the
+        misuse surfaces immediately rather than as a silent leak at repr time.
         """
         super().__init_subclass__(**kwargs)
         if "__repr__" not in cls.__dict__:
-            # ``setattr`` (not ``cls.__repr__ =``) keeps mypy from flagging
-            # a method reassignment; the effect — an entry in
-            # ``cls.__dict__`` — is what suppresses dataclass generation.
+            # Assigning ``__repr__`` here puts an entry in ``cls.__dict__``
+            # *before* the ``@dataclass`` decorator runs, so dataclass sees a
+            # user-defined repr and skips generating one — that is what lets the
+            # redacting repr win over the generated one.
             cls.__repr__ = StructuredConfig._redacted_repr
+        # Validate an explicitly-overridden depth only (an inherited value is
+        # already known-valid). ``bool`` is an ``int`` subclass but a
+        # nonsensical depth, so reject it explicitly.
+        if "_MAX_REDACT_DEPTH" in cls.__dict__:
+            depth = cls.__dict__["_MAX_REDACT_DEPTH"]
+            if (
+                not isinstance(depth, int)
+                or isinstance(depth, bool)
+                or depth < _DEFAULT_MAX_REDACT_DEPTH
+            ):
+                raise ValueError(
+                    f"{cls.__qualname__}._MAX_REDACT_DEPTH must be an int "
+                    f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
+                    f"got {depth!r}. The depth bound may be raised for an "
+                    "unusually deep raw section but never lowered — lowering "
+                    "reduces credential masking."
+                )
 
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks sensitive values, scalar and nested.
@@ -390,8 +537,10 @@ class StructuredConfig:
         2. **Nested interior-key redaction** — for every other field, the
            value is rendered through :func:`_redact_value`, which descends
            into raw ``Mapping``/``list`` values and masks any interior key in
-           ``_DEFAULT_SENSITIVE_KEYS | _SENSITIVE_FIELDS`` (exact,
-           case-insensitive, truthy-only). This reaches credentials nested
+           the per-class set from :func:`_interior_sensitive_keys`
+           (``_DEFAULT_SENSITIVE_KEYS``, the class's ``_SENSITIVE_FIELDS``,
+           and any runtime-registered extras — exact, case-insensitive,
+           truthy-only). This reaches credentials nested
            inside the intentionally-untyped polymorphic sections
            (``vector_store``/``embedding``/``llm``) that field-name redaction
            alone cannot see — the display-side complement to the subsystem
@@ -403,9 +552,8 @@ class StructuredConfig:
         configs with no sensitive content. Installed as the ``__repr__`` of
         every subclass by :meth:`__init_subclass__`.
         """
-        sensitive = _DEFAULT_SENSITIVE_KEYS | {
-            name.lower() for name in self._SENSITIVE_FIELDS
-        }
+        sensitive = _interior_sensitive_keys(type(self))
+        max_depth = self._MAX_REDACT_DEPTH
         parts: list[str] = []
         for f in dataclasses.fields(self):
             if not f.repr:
@@ -414,7 +562,7 @@ class StructuredConfig:
             if f.name in self._SENSITIVE_FIELDS and value:
                 rendered: Any = "***"
             else:
-                rendered = _redact_value(value, sensitive, 0)
+                rendered = _redact_value(value, sensitive, 0, max_depth)
             parts.append(f"{f.name}={rendered!r}")
         return f"{type(self).__qualname__}({', '.join(parts)})"
 
@@ -937,4 +1085,5 @@ __all__ = [
     "ConfigT",
     "StructuredConfig",
     "StructuredConfigConsumer",
+    "register_sensitive_interior_key",
 ]

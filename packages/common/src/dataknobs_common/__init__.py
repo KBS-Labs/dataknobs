@@ -117,6 +117,7 @@ from dataknobs_common.serialization import (
 from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
+    register_sensitive_interior_key,
 )
 from dataknobs_common.testing import (
     create_test_json_files,
@@ -217,6 +218,7 @@ __all__ = [
     # Structured configuration
     "StructuredConfig",
     "StructuredConfigConsumer",
+    "register_sensitive_interior_key",
     # Testing - Availability Checks
     "is_ollama_available",
     "is_ollama_model_available",
