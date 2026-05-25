@@ -76,6 +76,13 @@ class TestStreamConfig:
     def test_roundtrip(self):
         assert_structured_config_roundtrip(StreamConfig(batch_size=500, timeout=30.0))
 
+    def test_roundtrip_preserves_callable_by_identity(self):
+        """The on_error callable round-trips by identity (not serialized)."""
+        def on_error(exc, rec):
+            return True
+
+        assert_structured_config_roundtrip(StreamConfig(on_error=on_error))
+
     def test_validation_preserved_from_dict(self):
         """__post_init__ validation fires on the from_dict path too."""
         with pytest.raises(ValueError, match="batch_size must be positive"):
