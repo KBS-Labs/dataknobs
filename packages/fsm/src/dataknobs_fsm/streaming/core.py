@@ -11,6 +11,7 @@ from typing import (
     Any,
     AsyncIterator,
     Callable,
+    ClassVar,
     Dict,
     Iterator,
     List,
@@ -20,7 +21,10 @@ from typing import (
 )
 from uuid import uuid4
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 
 class StreamStatus(Enum):
@@ -168,20 +172,20 @@ class IStreamSink(Protocol):
         ...
 
 
-class StreamContext:
+class StreamContext(StructuredConfigConsumer[StreamConfig]):
     """Context for managing stream processing.
-    
+
     This class coordinates stream sources, sinks, and processing
     with support for backpressure, parallelism, and metrics.
+
+    Constructed from :class:`StreamConfig`: ``StreamContext(cfg)``,
+    ``StreamContext.from_config({...})`` (dict-dispatch), or
+    ``StreamContext()`` for all-default config.
     """
-    
-    def __init__(self, config: StreamConfig | None = None):
-        """Initialize stream context.
-        
-        Args:
-            config: Stream configuration.
-        """
-        self.config = config or StreamConfig()
+
+    CONFIG_CLS: ClassVar[type[StreamConfig]] = StreamConfig
+
+    def _setup(self) -> None:
         self.status = StreamStatus.IDLE
         self.metrics = StreamMetrics()
         
@@ -482,16 +486,17 @@ class StreamContext:
         self.metrics.end_time = self.metrics.end_time or time.time()
 
 
-class AsyncStreamContext:
-    """Async version of StreamContext for async/await support."""
-    
-    def __init__(self, config: StreamConfig | None = None):
-        """Initialize async stream context.
-        
-        Args:
-            config: Stream configuration.
-        """
-        self.config = config or StreamConfig()
+class AsyncStreamContext(StructuredConfigConsumer[StreamConfig]):
+    """Async version of StreamContext for async/await support.
+
+    Constructed from :class:`StreamConfig`: ``AsyncStreamContext(cfg)``,
+    ``AsyncStreamContext.from_config({...})`` (dict-dispatch), or
+    ``AsyncStreamContext()`` for all-default config.
+    """
+
+    CONFIG_CLS: ClassVar[type[StreamConfig]] = StreamConfig
+
+    def _setup(self) -> None:
         self.status = StreamStatus.IDLE
         self.metrics = StreamMetrics()
         

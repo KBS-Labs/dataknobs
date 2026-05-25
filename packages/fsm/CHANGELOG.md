@@ -48,6 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing constructor call sites are unaffected; the Pydantic FSM loader
   schema (`config/schema.py`) remains the separate declarative layer.
 
+- The FSM pattern/runtime consumers built from those configs — `CircuitBreaker`,
+  `Bulkhead`, `ErrorRecoveryWorkflow` (`patterns.error_recovery`),
+  `APIOrchestrator` (`patterns.api_orchestration`), `DatabaseETL`
+  (`patterns.etl`), `FileProcessor` (`patterns.file_processing`),
+  `StreamContext`, `AsyncStreamContext` (`streaming.core`), and `ResourcePool`
+  (`resources.pool`) — now build through `StructuredConfigConsumer`. Each gains
+  a uniform construction surface: a dict-dispatch `Cls.from_config({...})`
+  classmethod alongside the existing typed-config constructor, and a typed
+  read-only `self.config` property. The previous typed-config and
+  `config=None`/all-default constructor calls are unchanged. `ResourcePool`
+  additionally carries a required `provider` collaborator (a live resource
+  provider, not config data); it keeps its back-compat
+  `ResourcePool(provider, config=None)` positional shortcut — the provider
+  travels through the mixin's collaborator channel while the config flows onto
+  `self.config` — and `ResourcePool.from_config(config, provider=...)` delivers
+  the provider alongside the config (mirroring `PostgresEventBus`'s
+  `connection_string` positional shortcut).
+
 ### Security
 
 - `APIEndpoint.headers` (`patterns.api_orchestration`) is masked as `'***'`

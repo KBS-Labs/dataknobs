@@ -2,11 +2,15 @@
 
 import queue
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
@@ -61,30 +65,69 @@ class PooledResource:
         return idle_time > idle_timeout
 
 
-class ResourcePool:
-    """Thread-safe resource pool implementation."""
-    
+class ResourcePool(StructuredConfigConsumer[PoolConfig]):
+    """Thread-safe resource pool implementation.
+
+    Built from :class:`PoolConfig` via ``StructuredConfigConsumer``. The
+    required ``provider`` is a live resource provider, not config data, so it
+    is supplied as an injected collaborator rather than a config field —
+    mirroring the back-compat positional shortcut documented for
+    ``PostgresEventBus``. Construct as ``ResourcePool(provider, config=None)``
+    (the positional shortcut) or
+    ``ResourcePool.from_config(config, provider=provider)``. ``self.config`` is
+    the typed :class:`PoolConfig`.
+    """
+
+    CONFIG_CLS: ClassVar[type[PoolConfig]] = PoolConfig
+
     def __init__(
         self,
         provider: IResourceProvider,
-        config: PoolConfig | None = None
-    ):
+        config: PoolConfig | Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Initialize the pool.
-        
+
         Args:
-            provider: Resource provider.
-            config: Pool configuration.
+            provider: Resource provider (a required live collaborator, not
+                config data).
+            config: Pool configuration — a typed :class:`PoolConfig`, a
+                config mapping, or omitted for all-default config. Loose
+                :class:`PoolConfig` field kwargs are also accepted (and may
+                not be combined with a typed ``config``).
         """
-        self.provider = provider
-        self.config = config or PoolConfig()
+        # ``provider`` travels through the mixin's collaborator channel; the
+        # config (typed / dict / loose kwargs) is projected onto self.config.
+        super().__init__(config, _components={"provider": provider}, **kwargs)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Mapping[str, Any] | StructuredConfig,
+        *,
+        provider: IResourceProvider,
+    ) -> "ResourcePool":
+        """Construct from a config dict/typed config plus the ``provider``.
+
+        Overrides the mixin ``from_config`` so the required ``provider``
+        collaborator is delivered alongside the config, routing the config
+        through the inherited ``_coerce_config`` guard (a wrong
+        ``StructuredConfig`` subclass raises a clear ``TypeError``).
+        ``ResourcePool``'s only collaborator is the ``provider``, so no
+        further ``**components`` channel is exposed.
+        """
+        return cls(provider, cls._coerce_config(config))
+
+    def _setup(self) -> None:
+        self.provider: IResourceProvider = self.components["provider"]
         self.metrics = ResourceMetrics()
-        
-        self._pool = queue.Queue(maxsize=self.config.max_size)
-        self._active_resources = set()
+
+        self._pool: queue.Queue = queue.Queue(maxsize=self.config.max_size)
+        self._active_resources: set = set()
         self._lock = threading.RLock()
         self._closed = False
-        self._resource_map = {}  # Maps resource to PooledResource
-        
+        self._resource_map: dict = {}  # Maps resource to PooledResource
+
         # Initialize minimum resources
         self._initialize_pool()
     

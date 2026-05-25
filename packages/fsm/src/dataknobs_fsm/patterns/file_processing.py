@@ -8,9 +8,12 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List
+from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode
@@ -64,21 +67,23 @@ class FileProcessingConfig(StructuredConfig):
     log_config: Dict[str, Any] = field(default_factory=dict)
 
 
-class FileProcessor:
-    """File processor using FSM pattern."""
+class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
+    """File processor using FSM pattern.
+
+    Constructed from :class:`FileProcessingConfig`: ``FileProcessor(cfg)`` or
+    ``FileProcessor.from_config({...})`` (dict-dispatch). The config has a
+    required ``input_path`` field, so an all-default ``FileProcessor()`` is
+    not valid.
+    """
+
+    CONFIG_CLS: ClassVar[type[FileProcessingConfig]] = FileProcessingConfig
 
     # Resolved formats live on the processor, not the frozen config; set in
-    # ``_detect_format`` (always called from ``__init__``).
+    # ``_detect_format`` (always called from ``_setup``).
     _format: FileFormat
     _output_format: FileFormat
 
-    def __init__(self, config: FileProcessingConfig):
-        """Initialize file processor.
-        
-        Args:
-            config: File processing configuration
-        """
-        self.config = config
+    def _setup(self) -> None:
         self._detect_format()
         self._fsm = self._build_fsm()
         self._metrics = {
@@ -830,11 +835,12 @@ def create_batch_file_processor(
     Returns:
         Configured FileProcessor
     """
-    # Use first input path for config, handle multiple paths in processor
-    config = FileProcessingConfig(  # type: ignore
+    # Use first input path for config, handle multiple paths in processor.
+    # ``patterns`` is currently unused — ``FileProcessingConfig`` has no
+    # pattern field (mirrors ``create_file_processor``'s unused ``pattern``).
+    config = FileProcessingConfig(
         input_path=input_paths[0] if input_paths else "",
         output_path=output_path,
-        pattern=patterns[0] if patterns else "*",
         format=FileFormat.TEXT,
         mode=ProcessingMode.BATCH,
         batch_size=batch_size

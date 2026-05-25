@@ -1118,6 +1118,50 @@ These runtime config objects are the imperative construction layer. The
 Pydantic FSM loader schema (`config/schema.py`) is the separate **declarative**
 layer used when loading a full FSM definition from a file; it is unchanged.
 
+### Constructing pattern consumers from config
+
+The consumers built from these configs — `CircuitBreaker`, `Bulkhead`,
+`ErrorRecoveryWorkflow`, `APIOrchestrator`, `DatabaseETL`, `FileProcessor`,
+`StreamContext`, `AsyncStreamContext`, and `ResourcePool` — build through
+`StructuredConfigConsumer`, so each accepts a config mapping directly via
+`from_config(...)` in addition to a typed config instance:
+
+```python
+from dataknobs_fsm.patterns.error_recovery import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+)
+
+# Typed config (unchanged):
+cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=3))
+
+# Dict-dispatch — the mapping is projected onto CircuitBreakerConfig:
+cb = CircuitBreaker.from_config({"failure_threshold": 3})
+
+# All-default config (only for configs with no required fields):
+cb = CircuitBreaker()
+
+# ``self.config`` is the typed config (read-only):
+assert cb.config.failure_threshold == 3
+```
+
+`ResourcePool` additionally carries a required `provider` collaborator (a live
+resource provider, not config data). It keeps its back-compat
+`ResourcePool(provider, config=None)` positional shortcut — the provider is
+threaded through the mixin's collaborator channel while the config flows onto
+`self.config` — and `ResourcePool.from_config(config, provider=provider)`
+delivers the provider alongside the config:
+
+```python
+from dataknobs_fsm.resources.pool import ResourcePool, PoolConfig
+
+# Back-compat positional (unchanged):
+pool = ResourcePool(provider, PoolConfig(max_size=5))
+
+# Dict/typed config with the provider as an injected collaborator:
+pool = ResourcePool.from_config({"max_size": 5}, provider=provider)
+```
+
 ### Database Injection
 
 `UnifiedDatabaseStorage` (and its subclasses `InMemoryStorage`, `FileStorage`)

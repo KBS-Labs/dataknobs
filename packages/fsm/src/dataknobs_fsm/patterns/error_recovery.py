@@ -13,10 +13,13 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, ClassVar, Dict, List
 
 from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
@@ -132,11 +135,17 @@ class CircuitBreakerState(Enum):
     HALF_OPEN = "half_open"  # Testing recovery
 
 
-class CircuitBreaker:
-    """Circuit breaker implementation."""
-    
-    def __init__(self, config: CircuitBreakerConfig):
-        self.config = config
+class CircuitBreaker(StructuredConfigConsumer[CircuitBreakerConfig]):
+    """Circuit breaker implementation.
+
+    Constructed from :class:`CircuitBreakerConfig`: ``CircuitBreaker(cfg)``,
+    ``CircuitBreaker.from_config({...})`` (dict-dispatch), or
+    ``CircuitBreaker()`` for all-default config.
+    """
+
+    CONFIG_CLS: ClassVar[type[CircuitBreakerConfig]] = CircuitBreakerConfig
+
+    def _setup(self) -> None:
         self.state = CircuitBreakerState.CLOSED
         self.failure_count = 0
         self.success_count = 0
@@ -144,7 +153,7 @@ class CircuitBreaker:
         self.window_start = time.time()
         self.window_failures = []
         self._lock = asyncio.Lock()
-        
+
     async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute function with circuit breaker protection."""
         async with self._lock:
@@ -217,11 +226,17 @@ class CircuitBreaker:
             raise
 
 
-class Bulkhead:
-    """Bulkhead isolation pattern."""
-    
-    def __init__(self, config: BulkheadConfig):
-        self.config = config
+class Bulkhead(StructuredConfigConsumer[BulkheadConfig]):
+    """Bulkhead isolation pattern.
+
+    Constructed from :class:`BulkheadConfig`: ``Bulkhead(cfg)``,
+    ``Bulkhead.from_config({...})``, or ``Bulkhead()`` for all-default config.
+    """
+
+    CONFIG_CLS: ClassVar[type[BulkheadConfig]] = BulkheadConfig
+
+    def _setup(self) -> None:
+        config = self.config
         self.semaphore = asyncio.Semaphore(config.max_concurrent)
         self.queue = asyncio.Queue(maxsize=config.max_queue_size)
         self.active_count = 0
@@ -231,7 +246,7 @@ class Bulkhead:
             'rejected': 0,
             'timeout': 0
         } if config.track_metrics else None
-        
+
     async def execute(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute function with bulkhead isolation."""
         # Try to acquire semaphore
@@ -265,16 +280,20 @@ class Bulkhead:
             self.semaphore.release()
 
 
-class ErrorRecoveryWorkflow:
-    """Error recovery workflow orchestrator."""
-    
-    def __init__(self, config: ErrorRecoveryConfig):
-        """Initialize error recovery workflow.
-        
-        Args:
-            config: Error recovery configuration
-        """
-        self.config = config
+class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
+    """Error recovery workflow orchestrator.
+
+    Constructed from :class:`ErrorRecoveryConfig`:
+    ``ErrorRecoveryWorkflow(cfg)`` or
+    ``ErrorRecoveryWorkflow.from_config({...})`` (dict-dispatch). The config
+    has a required ``primary_strategy`` field, so an all-default
+    ``ErrorRecoveryWorkflow()`` is not valid.
+    """
+
+    CONFIG_CLS: ClassVar[type[ErrorRecoveryConfig]] = ErrorRecoveryConfig
+
+    def _setup(self) -> None:
+        config = self.config
         self._fsm = self._build_fsm()
         self._retry_executor = None
         self._circuit_breaker = None
@@ -289,7 +308,7 @@ class ErrorRecoveryWorkflow:
             'fallbacks': 0,
             'compensations': 0
         }
-        
+
         # Initialize components
         if config.retry_config:
             self._retry_executor = RetryExecutor(config.retry_config)
@@ -297,7 +316,7 @@ class ErrorRecoveryWorkflow:
             self._circuit_breaker = CircuitBreaker(config.circuit_breaker_config)
         if config.bulkhead_config:
             self._bulkhead = Bulkhead(config.bulkhead_config)
-            
+
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for error recovery workflow."""
         # Add start state

@@ -330,6 +330,19 @@ members as values for a JSON round-trip. These imperative config objects are
 distinct from the declarative Pydantic FSM loader schema (`config/schema.py`),
 which is unchanged.
 
+The pattern/runtime consumers built from these configs — `CircuitBreaker`,
+`Bulkhead`, `ErrorRecoveryWorkflow`, `APIOrchestrator`, `DatabaseETL`,
+`FileProcessor`, `StreamContext`, `AsyncStreamContext`, and `ResourcePool` —
+build through `StructuredConfigConsumer`, so each accepts a config mapping
+directly via `Cls.from_config({...})` alongside the typed-config constructor,
+and exposes a typed read-only `self.config`. `ResourcePool` additionally
+carries a required `provider` collaborator (a live resource provider, not
+config data): it keeps its back-compat `ResourcePool(provider, config=None)`
+positional shortcut — the provider is threaded through the mixin's collaborator
+channel — and `ResourcePool.from_config(config, provider=provider)` delivers it
+alongside the config (mirroring `PostgresEventBus`'s `connection_string`
+shortcut).
+
 ### Database Injection
 
 `UnifiedDatabaseStorage` (and its subclasses `InMemoryStorage`, `FileStorage`)
