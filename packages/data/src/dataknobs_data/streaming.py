@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.structured_config import StructuredConfig
+
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
@@ -13,8 +15,8 @@ if TYPE_CHECKING:
     from .records import Record
 
 
-@dataclass
-class StreamConfig:
+@dataclass(frozen=True)
+class StreamConfig(StructuredConfig):
     """Configuration for streaming operations."""
 
     batch_size: int = 1000

@@ -87,6 +87,22 @@ rates = [
 ]
 ```
 
+`RateLimit` and `RateLimiterConfig` are
+[`StructuredConfig`](structured-config.md) subclasses: both are frozen
+(immutable — build a modified copy with `dataclasses.replace(...)`) and
+both load from a plain dict via `from_dict()`. `RateLimiterConfig.from_dict`
+rebuilds the nested `default_rates` (`list[RateLimit]`) and `categories`
+(`dict[str, list[RateLimit]]`) into typed `RateLimit` instances
+automatically:
+
+```python
+config = RateLimiterConfig.from_dict({
+    "default_rates": [{"limit": 100, "interval": 60}],
+    "categories": {"api_read": [{"limit": 100, "interval": 6}]},
+})
+assert isinstance(config.default_rates[0], RateLimit)
+```
+
 ### Categories
 
 A single rate limiter supports different rates for named categories. When `acquire()` or `try_acquire()` is called with a category name, the limiter looks up rates specific to that category, falling back to default rates for unknown categories.

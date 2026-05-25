@@ -1,6 +1,7 @@
 """Tests for dataknobs_common.retry module."""
 
 import asyncio
+import dataclasses
 import random
 from unittest.mock import AsyncMock
 
@@ -12,7 +13,8 @@ from dataknobs_common.retry import (
     RetryExecutor,
     compute_backoff_delay,
 )
-
+from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.testing import assert_structured_config_roundtrip
 
 # ---------------------------------------------------------------------------
 # BackoffStrategy delay calculation
@@ -525,3 +527,40 @@ class TestPackageImport:
         assert BS is BackoffStrategy
         assert RC is RetryConfig
         assert RE is RetryExecutor
+
+
+# ---------------------------------------------------------------------------
+# StructuredConfig migration
+# ---------------------------------------------------------------------------
+
+
+class TestRetryConfigStructured:
+    """RetryConfig is a frozen StructuredConfig (dict-loadable, immutable)."""
+
+    def test_is_structured_config(self):
+        assert issubclass(RetryConfig, StructuredConfig)
+
+    def test_construction_parity(self):
+        """from_dict produces a value equal to direct construction."""
+        from_dict = RetryConfig.from_dict({"max_attempts": 5, "initial_delay": 0.5})
+        direct = RetryConfig(max_attempts=5, initial_delay=0.5)
+        assert from_dict == direct
+
+    def test_roundtrip_default(self):
+        assert_structured_config_roundtrip(RetryConfig())
+
+    def test_roundtrip_with_exception_type(self):
+        """Callable / type fields round-trip by identity (deepcopy-atomic)."""
+        assert_structured_config_roundtrip(
+            RetryConfig(retry_on_exceptions=[ValueError])
+        )
+
+    def test_backoff_strategy_enum_roundtrips(self):
+        config = RetryConfig(backoff_strategy=BackoffStrategy.EXPONENTIAL)
+        recovered = RetryConfig.from_dict(config.to_dict())
+        assert recovered.backoff_strategy is BackoffStrategy.EXPONENTIAL
+
+    def test_frozen(self):
+        config = RetryConfig()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            config.max_attempts = 99  # type: ignore[misc]

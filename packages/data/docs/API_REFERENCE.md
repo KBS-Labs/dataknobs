@@ -185,7 +185,7 @@ from dataknobs_data import StreamConfig, StreamResult
 # Configure streaming
 config = StreamConfig(
     batch_size=100,
-    buffer_size=1000,
+    prefetch=2,
     on_error=lambda e, r: print(f"Error: {e}")
 )
 
@@ -199,6 +199,13 @@ print(f"Processed: {result.total_processed}")
 print(f"Successful: {result.successful}")
 print(f"Failed: {result.failed}")
 ```
+
+`StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
+it loads from a plain dict via `StreamConfig.from_dict({"batch_size":
+100})` and is immutable — build a modified copy with
+`dataclasses.replace(config, batch_size=200)` rather than assigning to a
+field. Its `batch_size > 0` / `prefetch >= 0` / positive-`timeout`
+validation fires on both direct construction and `from_dict`.
 
 ## Validation Module
 
