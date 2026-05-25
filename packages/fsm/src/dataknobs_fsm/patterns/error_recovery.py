@@ -7,15 +7,16 @@ The core retry primitives (BackoffStrategy, RetryConfig, RetryExecutor) are prov
 by ``dataknobs_common.retry`` and re-exported here for backward compatibility.
 """
 
-from typing import Any, Dict, List, Callable
-from dataclasses import dataclass
-from enum import Enum
 import asyncio
-import time
-from datetime import datetime
 import logging
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Dict, List
 
 from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
+from dataknobs_common.structured_config import StructuredConfig
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
@@ -34,8 +35,8 @@ class RecoveryStrategy(Enum):
     CACHE = "cache"  # Use cached results
 
 
-@dataclass
-class CircuitBreakerConfig:
+@dataclass(frozen=True)
+class CircuitBreakerConfig(StructuredConfig):
     """Configuration for circuit breaker."""
     failure_threshold: int = 5  # Failures to open circuit
     success_threshold: int = 2  # Successes to close circuit
@@ -51,8 +52,8 @@ class CircuitBreakerConfig:
     on_half_open: Callable[[], None] | None = None
 
 
-@dataclass
-class FallbackConfig:
+@dataclass(frozen=True)
+class FallbackConfig(StructuredConfig):
     """Configuration for fallback strategy."""
     fallback_value: Any | None = None
     fallback_function: Callable[[Exception], Any] | None = None
@@ -67,10 +68,10 @@ class FallbackConfig:
     fallback_on_timeout: bool = True
 
 
-@dataclass
-class CompensationConfig:
+@dataclass(frozen=True)
+class CompensationConfig(StructuredConfig):
     """Configuration for compensation strategy."""
-    compensation_actions: List[Callable[[Any], None]]
+    compensation_actions: List[Callable[[Any], None]] = field(default_factory=list)
     save_state: bool = True  # Save state before operation
     
     # Sagas pattern
@@ -82,8 +83,8 @@ class CompensationConfig:
     on_compensation_complete: Callable[[], None] | None = None
 
 
-@dataclass
-class BulkheadConfig:
+@dataclass(frozen=True)
+class BulkheadConfig(StructuredConfig):
     """Configuration for bulkhead isolation."""
     max_concurrent: int = 10
     max_queue_size: int = 100
@@ -97,8 +98,8 @@ class BulkheadConfig:
     track_metrics: bool = True
 
 
-@dataclass
-class ErrorRecoveryConfig:
+@dataclass(frozen=True)
+class ErrorRecoveryConfig(StructuredConfig):
     """Configuration for error recovery workflow."""
     primary_strategy: RecoveryStrategy
     secondary_strategies: List[RecoveryStrategy] | None = None

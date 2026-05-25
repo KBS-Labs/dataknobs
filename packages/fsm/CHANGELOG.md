@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The pattern-family runtime configs — `CircuitBreakerConfig`,
+  `FallbackConfig`, `CompensationConfig`, `BulkheadConfig`,
+  `ErrorRecoveryConfig` (`patterns.error_recovery`), `APIEndpoint` +
+  `APIOrchestrationConfig` (`patterns.api_orchestration`), `ETLConfig`
+  (`patterns.etl`), and `FileProcessingConfig` (`patterns.file_processing`) —
+  are now frozen `StructuredConfig` subclasses. They gain `from_dict()` /
+  `to_dict()` and symmetric round-tripping, and are **immutable** (use
+  `dataclasses.replace(...)` to derive a modified copy). `ErrorRecoveryConfig`
+  rebuilds its five nested sub-configs (including the `dataknobs_common`
+  `RetryConfig`) as typed instances from a nested mapping, and
+  `APIOrchestrationConfig` rebuilds its `endpoints` list as typed `APIEndpoint`
+  instances. Configs carrying live callables round-trip by identity, so
+  `to_dict()` on such a config is for in-process round-tripping, not JSON
+  serialization. `CompensationConfig.compensation_actions` now defaults to an
+  empty list (previously a required field). `FileProcessor` format
+  auto-detection now resolves onto the processor rather than writing back to
+  the (now immutable) config, which keeps its caller-supplied "auto-detect"
+  value; the resolved values are exposed as the read-only
+  `FileProcessor.resolved_format` / `resolved_output_format` properties.
+  Existing constructor call sites are unaffected; the Pydantic FSM
+  loader schema (`config/schema.py`) is the separate declarative layer and is
+  unchanged.
+
 ### Security
+
+- `APIEndpoint.headers` (`patterns.api_orchestration`) is masked as `'***'`
+  in `repr()` via `_SENSITIVE_FIELDS`. The mapping routinely carries
+  credentials (`Authorization`, `X-Api-Key`, `Cookie`) whose key names are
+  not in the `StructuredConfig` interior default set, so the whole field is
+  masked by name. Display-only — `to_dict()` round-trips the real value.
 
 - Bumped minimum `pymdown-extensions` requirement (docs dev
   dependency) from `>=10.16.1` to `>=10.21.3` to exclude

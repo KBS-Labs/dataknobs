@@ -16,7 +16,9 @@ stores, bots subsystems, FSM patterns, ...) build on:
 from __future__ import annotations
 
 import dataclasses
+import json
 from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 from typing import Any, ClassVar
 
 import pytest
@@ -350,6 +352,111 @@ class TestFlatConfigUnchanged:
         # The non-config gate avoids the coercion path entirely, so the
         # value is the same object the caller supplied (no rebuild).
         assert cfg.items is original
+
+
+class _Color(Enum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _Priority(IntEnum):
+    LOW = 1
+    HIGH = 9
+
+
+@dataclass(frozen=True)
+class _WithEnum(StructuredConfig):
+    color: _Color = _Color.RED
+    opt_color: _Color | None = None
+    colors: list[_Color] = field(default_factory=list)
+    by_name: dict[str, _Color] = field(default_factory=dict)
+    priority: _Priority = _Priority.LOW
+    label: str = "x"
+
+
+@dataclass(frozen=True)
+class _NestedEnum(StructuredConfig):
+    name: str = "n"
+    inner: _WithEnum | None = None
+
+
+class TestEnumCoercion:
+    """``from_dict`` maps raw member values to enum members (the JSON path)."""
+
+    def test_scalar_string_to_member(self) -> None:
+        cfg = _WithEnum.from_dict({"color": "green"})
+        assert cfg.color is _Color.GREEN
+
+    def test_member_passes_through(self) -> None:
+        cfg = _WithEnum.from_dict({"color": _Color.GREEN})
+        assert cfg.color is _Color.GREEN
+
+    def test_optional_enum_string(self) -> None:
+        assert _WithEnum.from_dict({"opt_color": "red"}).opt_color is _Color.RED
+        assert _WithEnum.from_dict({"opt_color": None}).opt_color is None
+
+    def test_list_of_enum_strings(self) -> None:
+        cfg = _WithEnum.from_dict({"colors": ["red", "green"]})
+        assert cfg.colors == [_Color.RED, _Color.GREEN]
+
+    def test_dict_of_enum_strings(self) -> None:
+        cfg = _WithEnum.from_dict({"by_name": {"a": "green"}})
+        assert cfg.by_name == {"a": _Color.GREEN}
+
+    def test_int_enum_from_value(self) -> None:
+        assert _WithEnum.from_dict({"priority": 9}).priority is _Priority.HIGH
+
+    def test_unrecognised_value_falls_through(self) -> None:
+        # No coercion is possible; the value is stored verbatim so the
+        # ctor / __post_init__ (not this layer) owns the diagnostic.
+        cfg = _WithEnum.from_dict({"color": "purple"})
+        assert cfg.color == "purple"
+
+    def test_nested_config_enum_string(self) -> None:
+        cfg = _NestedEnum.from_dict({"inner": {"color": "green"}})
+        assert isinstance(cfg.inner, _WithEnum)
+        assert cfg.inner.color is _Color.GREEN
+
+
+class TestToJsonDict:
+    """``to_json_dict`` emits enum values; pairs with ``from_dict`` for JSON."""
+
+    def test_enum_rendered_as_value(self) -> None:
+        cfg = _WithEnum(
+            color=_Color.GREEN,
+            opt_color=_Color.RED,
+            colors=[_Color.RED, _Color.GREEN],
+            by_name={"a": _Color.GREEN},
+            priority=_Priority.HIGH,
+        )
+        jd = cfg.to_json_dict()
+        assert jd["color"] == "green"
+        assert jd["opt_color"] == "red"
+        assert jd["colors"] == ["red", "green"]
+        assert jd["by_name"] == {"a": "green"}
+        assert jd["priority"] == 9
+        # JSON-encodable as-is (no custom encoder).
+        assert json.loads(json.dumps(jd))["color"] == "green"
+
+    def test_to_dict_still_holds_members(self) -> None:
+        # to_dict is the in-process form: members, not values.
+        cfg = _WithEnum(color=_Color.GREEN)
+        assert cfg.to_dict()["color"] is _Color.GREEN
+
+    def test_json_roundtrip(self) -> None:
+        cfg = _WithEnum(
+            color=_Color.GREEN,
+            colors=[_Color.RED],
+            by_name={"a": _Color.GREEN},
+            priority=_Priority.HIGH,
+        )
+        restored = _WithEnum.from_dict(json.loads(json.dumps(cfg.to_json_dict())))
+        assert restored == cfg
+
+    def test_nested_enum_json_roundtrip(self) -> None:
+        cfg = _NestedEnum(inner=_WithEnum(color=_Color.GREEN))
+        restored = _NestedEnum.from_dict(json.loads(json.dumps(cfg.to_json_dict())))
+        assert restored == cfg
 
 
 @dataclass(frozen=True)

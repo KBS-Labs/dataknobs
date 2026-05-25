@@ -5,17 +5,18 @@ including data extraction from source databases, transformation pipelines,
 and loading into target systems.
 """
 
-from typing import Any, Dict, List, Union, Callable, AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
-from dataknobs_data import AsyncDatabase, Record, Query
+from typing import Any, AsyncIterator, Callable, Dict, List, Union
+
+from dataknobs_common.structured_config import StructuredConfig
+
+from dataknobs_data import AsyncDatabase, Query, Record
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 from ..api.simple import SimpleFSM
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 from ..functions.library.database import DatabaseFetch, DatabaseUpsert
-from ..functions.library.transformers import (
-    FieldMapper, DataEnricher
-)
+from ..functions.library.transformers import DataEnricher, FieldMapper
 from ..functions.library.validators import SchemaValidator
 
 
@@ -27,8 +28,8 @@ class ETLMode(Enum):
     APPEND = "append"  # Always append, no updates
 
 
-@dataclass
-class ETLConfig:
+@dataclass(frozen=True)
+class ETLConfig(StructuredConfig):
     """Configuration for ETL pipeline."""
     source_db: Dict[str, Any]  # Source database config
     target_db: Dict[str, Any]  # Target database config
@@ -430,8 +431,8 @@ class DatabaseETL:
         
     async def _save_checkpoint(self) -> str:
         """Save checkpoint for resume capability."""
-        import json
         import hashlib
+        import json
         from datetime import datetime
         
         checkpoint = {

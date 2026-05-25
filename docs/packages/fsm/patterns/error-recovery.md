@@ -134,6 +134,34 @@ bulkhead_config = BulkheadConfig(
 )
 ```
 
+### Loading and immutability
+
+`CircuitBreakerConfig`, `FallbackConfig`, `CompensationConfig`, `BulkheadConfig`,
+and `ErrorRecoveryConfig` are frozen
+[`StructuredConfig`](../../common/structured-config.md) subclasses. They gain a
+`from_dict()` / `to_dict()` pair and are **immutable** — derive a modified copy
+with `dataclasses.replace(...)` rather than assigning to a field.
+
+`ErrorRecoveryConfig.from_dict()` rebuilds its nested sub-configs as typed
+instances (the `retry_config`, `circuit_breaker_config`, `fallback_config`,
+`compensation_config`, and `bulkhead_config` slots), so a single nested mapping
+loads the whole composition:
+
+```python
+config = ErrorRecoveryConfig.from_dict({
+    "primary_strategy": RecoveryStrategy.RETRY,
+    "retry_config": {"max_attempts": 5, "initial_delay": 0.5},
+    "circuit_breaker_config": {"failure_threshold": 10},
+})
+assert isinstance(config.retry_config, RetryConfig)
+```
+
+`CompensationConfig.compensation_actions` defaults to an empty list, so
+`CompensationConfig.from_dict({})` is valid. Configs carrying live callables
+(the `on_open` / `fallback_function` / `compensation_actions` hooks) round-trip
+by identity, so `to_dict()` on such a config holds the callables themselves —
+it is for in-process round-tripping, not JSON serialization.
+
 ## Basic Usage
 
 ### Error Recovery Workflow

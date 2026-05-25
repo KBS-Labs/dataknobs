@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 
 import pytest
 
@@ -12,6 +13,7 @@ from dataknobs_common.serialization import (
     deserialize_list,
     is_deserializable,
     is_serializable,
+    jsonify,
     sanitize_for_json,
     serialize,
     serialize_list,
@@ -633,3 +635,107 @@ class TestSanitizeForJson:
     def test_sanitize_empty_dict(self) -> None:
         """{} -> {}."""
         assert sanitize_for_json({}) == {}
+
+
+class _Color(Enum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _Priority(IntEnum):
+    LOW = 1
+    HIGH = 9
+
+
+class _Inner(Enum):
+    A = "a"
+
+
+class _OuterEnumOfEnum(Enum):
+    """An enum whose member value is itself an ``Enum`` member."""
+
+    WRAP = _Inner.A
+
+
+class TestJsonify:
+    """Direct tests for the public ``jsonify`` enum-normaliser.
+
+    ``StructuredConfig.to_json_dict`` delegates to this helper, so these
+    pin its contract independently of any consumer — a refactor or
+    relocation that changed the behaviour would fail here.
+    """
+
+    def test_scalar_enum_to_value(self) -> None:
+        assert jsonify(_Color.RED) == "red"
+
+    def test_int_enum_to_value(self) -> None:
+        result = jsonify(_Priority.HIGH)
+        assert result == 9
+        assert not isinstance(result, Enum)
+
+    def test_dict_recursion(self) -> None:
+        assert jsonify({"c": _Color.GREEN, "n": 1}) == {"c": "green", "n": 1}
+
+    def test_list_recursion(self) -> None:
+        assert jsonify([_Color.RED, _Color.GREEN, "x"]) == ["red", "green", "x"]
+
+    def test_tuple_recursion_preserves_type(self) -> None:
+        result = jsonify((_Color.RED, 2))
+        assert result == ("red", 2)
+        assert isinstance(result, tuple)
+
+    def test_nested_containers(self) -> None:
+        data = {"outer": [{"c": _Color.RED}, {"c": _Color.GREEN}], "p": _Priority.LOW}
+        assert jsonify(data) == {
+            "outer": [{"c": "red"}, {"c": "green"}],
+            "p": 1,
+        }
+
+    def test_non_enum_scalars_pass_through(self) -> None:
+        assert jsonify("plain") == "plain"
+        assert jsonify(42) == 42
+        assert jsonify(None) is None
+        assert jsonify(True) is True
+
+    def test_non_serializable_objects_pass_through_untouched(self) -> None:
+        # Unlike sanitize_for_json, jsonify does NOT drop or convert these —
+        # it only normalises enums. A callable survives by identity.
+        def fn() -> int:
+            return 1
+
+        result = jsonify({"fn": fn, "type": int, "c": _Color.RED})
+        assert result["fn"] is fn
+        assert result["type"] is int
+        assert result["c"] == "red"
+
+    def test_set_left_untouched(self) -> None:
+        # JSON has no set type; jsonify does not descend into sets.
+        s = {_Color.RED}
+        assert jsonify(s) is s
+
+    def test_empty_containers(self) -> None:
+        assert jsonify({}) == {}
+        assert jsonify([]) == []
+
+    def test_output_is_json_encodable(self) -> None:
+        data = {"c": _Color.GREEN, "many": [_Color.RED], "p": _Priority.HIGH}
+        # No custom encoder needed after jsonify.
+        assert json.loads(json.dumps(jsonify(data))) == {
+            "c": "green",
+            "many": ["red"],
+            "p": 9,
+        }
+
+    def test_enum_of_enum_fully_normalised(self) -> None:
+        # The member's ``.value`` is itself an Enum; jsonify recurses into it
+        # so the result is the innermost ``.value`` (a plain str), not the
+        # inner Enum instance — mirroring sanitize_for_json's recursion.
+        result = jsonify(_OuterEnumOfEnum.WRAP)
+        assert result == "a"
+        assert not isinstance(result, Enum)
+
+    def test_enum_of_enum_in_container(self) -> None:
+        result = jsonify({"k": _OuterEnumOfEnum.WRAP})
+        assert result == {"k": "a"}
+        # Survives json.dumps with no custom encoder.
+        assert json.loads(json.dumps(result)) == {"k": "a"}

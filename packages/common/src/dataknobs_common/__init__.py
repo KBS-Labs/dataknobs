@@ -111,6 +111,7 @@ from dataknobs_common.serialization import (
     deserialize_list,
     is_deserializable,
     is_serializable,
+    jsonify,
     serialize,
     serialize_list,
 )
@@ -215,6 +216,7 @@ __all__ = [
     "deserialize_list",
     "is_serializable",
     "is_deserializable",
+    "jsonify",
     # Structured configuration
     "StructuredConfig",
     "StructuredConfigConsumer",

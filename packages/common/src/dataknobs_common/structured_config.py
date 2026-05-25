@@ -50,6 +50,7 @@ import logging
 import threading
 import types
 from collections.abc import Callable, Mapping
+from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -62,6 +63,8 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
+from dataknobs_common.serialization import jsonify
 
 if TYPE_CHECKING:
     # ``Self`` is referenced only in (lazy, ``from __future__``-stringized)
@@ -282,22 +285,27 @@ def _resolved_hints(cls: type) -> Mapping[str, Any]:
         return {}
 
 
-def _type_contains_structured_config(declared: Any) -> bool:
-    """True if ``declared`` is (or its type graph contains) a config subclass.
+def _type_is_coercible(declared: Any) -> bool:
+    """True if ``declared`` is (or its type graph contains) a coercible type.
+
+    A type is *coercible* when projecting a raw value onto it can produce a
+    typed instance: a ``StructuredConfig`` subclass (rebuilt from its dict
+    shape) or an ``Enum`` subclass (rebuilt from its member value). Both
+    recurse through container element types and union arms.
 
     Used as a fast gate in ``from_dict``: a field whose declared type does
-    not reference any ``StructuredConfig`` subclass is assigned verbatim,
-    preserving the exact flat-projection behaviour (no new container
-    objects, identical identity for pass-through values). Only fields that
-    actually nest configs incur the recursive coercion path.
+    not reference any coercible type is assigned verbatim, preserving the
+    flat-projection behaviour for plain scalars (no new objects, identical
+    identity for pass-through values). Only fields that actually nest a
+    config or an enum incur the recursive coercion path.
     """
     if isinstance(declared, type):
-        return issubclass(declared, StructuredConfig)
+        return issubclass(declared, (StructuredConfig, Enum))
     origin = get_origin(declared)
     if origin is None:
         return False
     return any(
-        _type_contains_structured_config(arg)
+        _type_is_coercible(arg)
         for arg in get_args(declared)
         if arg is not type(None)
     )
@@ -321,15 +329,29 @@ def _coerce_field(declared: Any, value: Any) -> Any:
             return declared.from_dict(value)
         return value
 
+    # Direct ``Enum`` subclass: map a raw member value (e.g. the string
+    # ``"retry"`` loaded from YAML/JSON) to its member. An existing member
+    # passes through untouched (idempotence, including ``StrEnum`` /
+    # ``IntEnum`` whose members are themselves str/int). An unrecognised
+    # value falls through unchanged so the dataclass ctor / ``__post_init__``
+    # surfaces it, rather than this raising a less-contextual ``ValueError``.
+    if isinstance(declared, type) and issubclass(declared, Enum):
+        if isinstance(value, declared):
+            return value
+        try:
+            return declared(value)
+        except (ValueError, KeyError):
+            return value
+
     origin = get_origin(declared)
     if origin is None:
         return value
 
     args = get_args(declared)
 
-    # ``Optional[SubCfg]`` / ``SubCfg | None``. Only auto-coerce when
-    # exactly one non-``None`` arm is (or contains) a ``StructuredConfig``.
-    # A union with several config arms is a discriminated/polymorphic
+    # ``Optional[SubCfg]`` / ``Mode | None``. Only auto-coerce when exactly
+    # one non-``None`` arm is coercible (a ``StructuredConfig`` or ``Enum``).
+    # A union with several coercible arms is a discriminated/polymorphic
     # shape — selecting among them by inspecting the data is deliberately
     # out of scope here (it belongs in the subsystem registry /
     # object-graph layer), so the value passes through untouched rather
@@ -337,15 +359,15 @@ def _coerce_field(declared: Any, value: Any) -> Any:
     if origin in _UNION_ORIGINS:
         if value is None:
             return value
-        config_arms = [
+        coercible_arms = [
             arg
             for arg in args
             if arg is not type(None)
-            and _type_contains_structured_config(arg)
+            and _type_is_coercible(arg)
         ]
-        if len(config_arms) != 1:
+        if len(coercible_arms) != 1:
             return value
-        return _coerce_field(config_arms[0], value)
+        return _coerce_field(coercible_arms[0], value)
 
     # ``list``/``tuple``/``set``/``frozenset`` of configs.
     if origin in _SEQUENCE_ORIGINS:
@@ -399,7 +421,10 @@ class StructuredConfig:
     from their raw dict shape. Recursion is bounded by the static
     field-type graph (not by runtime data), so a config whose fields are
     all scalars terminates immediately. A field already holding a typed
-    instance passes through unchanged. Polymorphic/discriminated
+    instance passes through unchanged. ``Enum``-typed fields coerce the
+    same way — a raw member value (``"fast"`` from YAML) becomes its
+    member (``Mode.FAST``), through the same container/``| None`` shapes;
+    :meth:`to_json_dict` is the symmetric output side. Polymorphic/discriminated
     selection (a section whose concrete type is chosen by a discriminator
     key) is deliberately NOT handled here — that stays in the subsystem
     registry / object-graph layer; type a polymorphic field as its
@@ -578,8 +603,13 @@ class StructuredConfig:
 
         A field whose declared type is (or contains) a
         ``StructuredConfig`` subclass is rebuilt recursively from its raw
-        dict shape (see the class docstring's nested-composition note);
-        all other fields are assigned verbatim.
+        dict shape (see the class docstring's nested-composition note). A
+        field whose declared type is (or contains) an ``Enum`` subclass is
+        rebuilt from its member value — so ``{"mode": "fast"}`` loaded from
+        YAML/JSON becomes ``Mode.FAST``, not the bare string. An
+        unrecognised enum value passes through unchanged (the ctor /
+        ``__post_init__`` surfaces it). All other fields are assigned
+        verbatim.
 
         Pre-projection normalization happens in
         :meth:`_normalize_dict`; override that, not ``from_dict``.
@@ -600,9 +630,7 @@ class StructuredConfig:
                 continue
             declared = hints.get(f.name)
             value = normalized[f.name]
-            if declared is not None and _type_contains_structured_config(
-                declared
-            ):
+            if declared is not None and _type_is_coercible(declared):
                 kwargs[f.name] = _coerce_field(declared, value)
             else:
                 kwargs[f.name] = value
@@ -633,8 +661,39 @@ class StructuredConfig:
         nested-composition note), so the two are symmetric for every
         statically-typed nesting shape. Verified by
         :func:`dataknobs_common.testing.assert_structured_config_roundtrip`.
+
+        This is the *in-process* serialization: ``Enum`` fields render as
+        their members (not their ``.value``) and any live callables/types
+        round-trip by identity, so the output is not necessarily
+        JSON-serialisable. Note that ``IntEnum`` / ``StrEnum`` members *are*
+        instances of their ``int`` / ``str`` base and so survive
+        ``json.dumps`` as-is; only a plain ``Enum`` member is non-native.
+        Use :meth:`to_json_dict` when any field may hold a plain ``Enum``
+        (or when the field type is uncertain) and you need a dict that
+        survives ``json.dumps`` and reloads via ``from_dict``.
         """
         return dataclasses.asdict(self)
+
+    def to_json_dict(self) -> dict[str, Any]:
+        """JSON-serialisable projection: like :meth:`to_dict`, enums as values.
+
+        Identical to :meth:`to_dict` except every ``Enum`` member (at any
+        nesting depth, including inside list/tuple/dict containers and
+        nested configs) is replaced by its ``.value``. Because
+        :meth:`from_dict` coerces those raw values back to members, the
+        round-trip property holds through JSON too:
+        ``type(cfg).from_dict(json.loads(json.dumps(cfg.to_json_dict()))) == cfg``
+        — for configs whose remaining field values are JSON-native.
+
+        Configs carrying live callables or ``type`` objects (e.g. a
+        ``fallback_function`` hook or an exception-type list) still hold
+        those verbatim and are no more JSON-serialisable here than via
+        :meth:`to_dict`; enum normalisation is the one transformation this
+        adds. ``set`` / ``frozenset`` fields are likewise left untouched
+        (JSON has no set type). Delegates the enum normalisation to the
+        shared :func:`dataknobs_common.serialization.jsonify` utility.
+        """
+        return jsonify(dataclasses.asdict(self))
 
 
 ConfigT = TypeVar("ConfigT", bound=StructuredConfig)

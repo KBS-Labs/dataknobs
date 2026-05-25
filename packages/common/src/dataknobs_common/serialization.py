@@ -41,6 +41,7 @@ Example:
 
 import dataclasses
 import logging
+from enum import Enum
 from typing import Any, Dict, Protocol, Type, TypeVar, runtime_checkable
 
 from dataknobs_common.exceptions import SerializationError
@@ -318,6 +319,9 @@ def sanitize_for_json(
     dataclass instances, Serializable objects, and live runtime objects.
 
     Conversion rules (in order):
+    - ``Enum`` member → its ``.value`` (recursively sanitized), so
+      ``StrEnum`` / ``IntEnum`` collapse to a plain ``str`` / ``int``
+      rather than leaking an enum instance into the output
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not convertible
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
@@ -365,6 +369,13 @@ def _sanitize_recursive(
     _dropped: list[str] | None,
 ) -> Any:
     """Inner recursive traversal for :func:`sanitize_for_json`."""
+    # Enum → its value, recursively sanitized. Checked before the primitive
+    # gate so IntEnum/StrEnum (which subclass int/str) normalise to a plain
+    # int/str instead of slipping through as the enum instance; a plain Enum
+    # (whose value is not a primitive) is now preserved rather than dropped.
+    if isinstance(value, Enum):
+        return _sanitize_recursive(value.value, on_drop, _path, _dropped)
+
     # JSON primitives
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -450,6 +461,11 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
         List of key paths to non-serializable values.  An empty list
         means *value* is fully JSON-safe.
     """
+    # Enum is representable via its value; descend into the value so an
+    # enum whose value is itself non-serializable is still reported.
+    if isinstance(value, Enum):
+        return validate_json_safe(value.value, _path)
+
     # JSON primitives
     if value is None or isinstance(value, (bool, int, float, str)):
         return []
@@ -486,6 +502,51 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
     return [f"{path_label} (type={type(value).__name__})"]
 
 
+def jsonify(value: Any) -> Any:
+    """Recursively normalise ``Enum`` members to their ``.value``.
+
+    Walks ``dict`` / ``list`` / ``tuple`` containers and replaces every
+    ``Enum`` member with its ``.value``, recursing into that value as well
+    (so an enum whose ``.value`` is itself an enum — or a container of
+    enums — is fully normalised); all other values pass through unchanged.
+    A *lossless* normaliser for data that is already JSON-shaped
+    except for enums — typically the output of ``dataclasses.asdict`` or
+    :meth:`~dataknobs_common.structured_config.StructuredConfig.to_dict`.
+    ``StrEnum`` / ``IntEnum`` members collapse to plain ``str`` / ``int`` so
+    ``json.dumps`` needs no custom encoder.
+
+    Unlike :func:`sanitize_for_json`, ``jsonify`` does **not** drop
+    non-serializable values, convert dataclasses / ``to_dict`` objects, or
+    descend into arbitrary objects: callables, ``type`` objects, ``set``s,
+    etc. pass through untouched (a structure still holding them is no more
+    JSON-serialisable afterwards than before). Reach for
+    :func:`sanitize_for_json` when you want lossy best-effort JSON safety
+    with dataclass / ``Serializable`` conversion and drop semantics; reach
+    for ``jsonify`` when you have a known-shaped structure whose only
+    non-JSON-native values are enums and you need an exact round-trip.
+
+    Args:
+        value: Any value; commonly a ``dict`` / ``list`` tree from
+            ``dataclasses.asdict``.
+
+    Returns:
+        The same structure with every ``Enum`` member replaced by its
+        ``.value``.
+    """
+    if isinstance(value, Enum):
+        # Recurse into the member's value so an enum whose ``.value`` is
+        # itself an ``Enum`` (or a container of enums) is fully normalised,
+        # matching ``sanitize_for_json``'s ``_sanitize_recursive(value.value)``.
+        return jsonify(value.value)
+    if isinstance(value, dict):
+        return {k: jsonify(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [jsonify(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(jsonify(v) for v in value)
+    return value
+
+
 # Internal sentinel to distinguish "value was dropped" from "value is None"
 _SENTINEL = object()
 
@@ -494,6 +555,7 @@ __all__ = [
     "Serializable",
     "sanitize_for_json",
     "validate_json_safe",
+    "jsonify",
     "serialize",
     "deserialize",
     "serialize_list",
