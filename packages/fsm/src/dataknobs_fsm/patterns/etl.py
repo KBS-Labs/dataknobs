@@ -7,9 +7,12 @@ and loading into target systems.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Dict, List, Union
+from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List, Union
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 from dataknobs_data import AsyncDatabase, Query, Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode
@@ -49,16 +52,18 @@ class ETLConfig(StructuredConfig):
     enrichment_sources: List[Dict[str, Any]] | None = None
 
 
-class DatabaseETL:
-    """AsyncDatabase ETL pipeline using FSM pattern."""
-    
-    def __init__(self, config: ETLConfig):
-        """Initialize ETL pipeline.
-        
-        Args:
-            config: ETL configuration
-        """
-        self.config = config
+class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
+    """AsyncDatabase ETL pipeline using FSM pattern.
+
+    Constructed from :class:`ETLConfig`: ``DatabaseETL(cfg)`` or
+    ``DatabaseETL.from_config({...})`` (dict-dispatch). The config has
+    required ``source_db`` / ``target_db`` fields, so an all-default
+    ``DatabaseETL()`` is not valid.
+    """
+
+    CONFIG_CLS: ClassVar[type[ETLConfig]] = ETLConfig
+
+    def _setup(self) -> None:
         self._fsm = self._build_fsm()
         self._checkpoint_data = {}
         self._metrics = {

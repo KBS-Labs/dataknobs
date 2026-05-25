@@ -11,7 +11,10 @@ from enum import Enum
 from typing import Any, Callable, ClassVar, Dict, List, Union
 
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
@@ -163,16 +166,19 @@ class CircuitBreaker:
             raise
 
 
-class APIOrchestrator:
-    """API orchestrator using FSM pattern."""
-    
-    def __init__(self, config: APIOrchestrationConfig):
-        """Initialize API orchestrator.
-        
-        Args:
-            config: Orchestration configuration
-        """
-        self.config = config
+class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
+    """API orchestrator using FSM pattern.
+
+    Constructed from :class:`APIOrchestrationConfig`: ``APIOrchestrator(cfg)``
+    or ``APIOrchestrator.from_config({...})`` (dict-dispatch). The config has
+    a required ``endpoints`` field, so an all-default ``APIOrchestrator()``
+    is not valid.
+    """
+
+    CONFIG_CLS: ClassVar[type[APIOrchestrationConfig]] = APIOrchestrationConfig
+
+    def _setup(self) -> None:
+        config = self.config
         self._fsm = self._build_fsm()
         self._providers = {}
         self._circuit_breakers = {}
