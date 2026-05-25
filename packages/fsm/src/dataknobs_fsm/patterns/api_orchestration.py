@@ -8,7 +8,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, ClassVar, Dict, List, Union
 
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_common.structured_config import StructuredConfig
@@ -32,6 +32,13 @@ class OrchestrationMode(Enum):
 @dataclass(frozen=True)
 class APIEndpoint(StructuredConfig):
     """Configuration for a single API endpoint."""
+
+    # ``headers`` routinely carries credentials (``Authorization``,
+    # ``X-Api-Key``, ``Cookie``) whose key names are not in the interior
+    # default set, so mask the whole mapping by field name in ``repr`` —
+    # display-only, ``to_dict`` still round-trips the real value.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"headers"})
+
     name: str
     url: str
     method: str = "GET"

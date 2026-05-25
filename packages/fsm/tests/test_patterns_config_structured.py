@@ -60,6 +60,25 @@ ALL_PATTERN_CONFIGS = [
     FileProcessingConfig,
 ]
 
+# One representative, callable-free instance per config class for the
+# uniform round-trip assertion. Equality holds for every entry, so
+# ``assert_structured_config_roundtrip`` (the canonical
+# ``from_dict(to_dict()) == cfg`` property) applies across the whole family
+# rather than to a single class. Classes with required fields
+# (``ErrorRecoveryConfig``, ``APIEndpoint``, ``APIOrchestrationConfig``,
+# ``ETLConfig``, ``FileProcessingConfig``) get their minimal valid args.
+ROUNDTRIP_INSTANCES = [
+    CircuitBreakerConfig(),
+    FallbackConfig(),
+    CompensationConfig(),
+    BulkheadConfig(),
+    ErrorRecoveryConfig(primary_strategy=RecoveryStrategy.RETRY),
+    APIEndpoint(name="a", url="http://x"),
+    APIOrchestrationConfig(endpoints=[APIEndpoint(name="a", url="http://x")]),
+    ETLConfig(source_db={"backend": "memory"}, target_db={"backend": "memory"}),
+    FileProcessingConfig(input_path="in.json"),
+]
+
 
 class TestPatternsConfigsAreStructured:
     """All patterns-family configs are frozen ``StructuredConfig`` subclasses."""
@@ -71,6 +90,14 @@ class TestPatternsConfigsAreStructured:
     @pytest.mark.parametrize("config_cls", ALL_PATTERN_CONFIGS)
     def test_is_frozen(self, config_cls):
         assert config_cls.__dataclass_params__.frozen
+
+    @pytest.mark.parametrize(
+        "config", ROUNDTRIP_INSTANCES, ids=lambda c: type(c).__name__
+    )
+    def test_roundtrip(self, config):
+        # Uniform application of the canonical round-trip property across
+        # the whole patterns-family, not just one class.
+        assert_structured_config_roundtrip(config)
 
 
 class TestErrorRecoveryConfigStructured:
@@ -172,6 +199,13 @@ class TestErrorRecoveryConfigStructured:
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.max_total_attempts = 99  # type: ignore[misc]
 
+    def test_error_recovery_requires_primary_strategy(self):
+        # primary_strategy has no default — unlike its sibling configs,
+        # ErrorRecoveryConfig.from_dict({}) cannot be constructed without it.
+        # The dataclass ctor raises TypeError for the missing required field.
+        with pytest.raises(TypeError):
+            ErrorRecoveryConfig.from_dict({})
+
 
 class TestAPIOrchestrationConfigStructured:
     """API-orchestration family: endpoint parity and nested round-trip."""
@@ -223,6 +257,27 @@ class TestAPIOrchestrationConfigStructured:
         cfg = APIOrchestrationConfig(endpoints=[APIEndpoint(name="a", url="http://x")])
         with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.max_concurrent = 99  # type: ignore[misc]
+
+    def test_endpoint_headers_redacted_in_repr(self):
+        # Headers routinely carry credentials whose key names
+        # (``Authorization``) are not in the interior default set, so the
+        # whole mapping is masked by field name in repr. to_dict is
+        # display-untouched (it must round-trip).
+        secret = "Bearer sk-super-secret-token"
+        endpoint = APIEndpoint(
+            name="search",
+            url="https://api.example.com",
+            headers={"Authorization": secret, "Content-Type": "application/json"},
+        )
+        rendered = repr(endpoint)
+        assert secret not in rendered
+        assert "headers='***'" in rendered
+        # The real value is preserved off the repr path.
+        assert endpoint.headers == {
+            "Authorization": secret,
+            "Content-Type": "application/json",
+        }
+        assert endpoint.to_dict()["headers"]["Authorization"] == secret
 
 
 class TestETLConfigStructured:
@@ -292,9 +347,9 @@ class TestFileProcessingConfigStructured:
             # Config is untouched (stays "auto-detect").
             assert config.format is None
             assert config.output_format is None
-            # Resolved format lives on the processor.
-            assert processor._format == FileFormat.JSON
-            assert processor._output_format == FileFormat.JSON
+            # Resolved format lives on the processor (public, read-only).
+            assert processor.resolved_format == FileFormat.JSON
+            assert processor.resolved_output_format == FileFormat.JSON
 
     def test_processor_respects_explicit_format(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,5 +360,5 @@ class TestFileProcessingConfigStructured:
             config = FileProcessingConfig(input_path=path, format=FileFormat.CSV)
             processor = FileProcessor(config)
 
-            assert processor._format == FileFormat.CSV
-            assert processor._output_format == FileFormat.CSV
+            assert processor.resolved_format == FileFormat.CSV
+            assert processor.resolved_output_format == FileFormat.CSV

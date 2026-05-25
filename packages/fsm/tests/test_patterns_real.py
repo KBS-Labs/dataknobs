@@ -215,8 +215,8 @@ class TestFileProcessingPatternReal:
             json_processor = FileProcessor(json_config)
             # The detected format resolves onto the processor; the (frozen)
             # config keeps the caller-supplied "auto-detect" value.
-            assert json_processor._format == FileFormat.JSON
-            assert json_processor._output_format == FileFormat.JSON
+            assert json_processor.resolved_format == FileFormat.JSON
+            assert json_processor.resolved_output_format == FileFormat.JSON
             assert json_config.format is None
             assert json_config.output_format is None
 
@@ -227,7 +227,7 @@ class TestFileProcessingPatternReal:
             )
 
             csv_processor = FileProcessor(csv_config)
-            assert csv_processor._format == FileFormat.CSV
+            assert csv_processor.resolved_format == FileFormat.CSV
 
             # Test unknown extension
             unknown_config = FileProcessingConfig(
@@ -236,7 +236,7 @@ class TestFileProcessingPatternReal:
             )
 
             unknown_processor = FileProcessor(unknown_config)
-            assert unknown_processor._format == FileFormat.BINARY
+            assert unknown_processor.resolved_format == FileFormat.BINARY
     
     def test_file_processor_fsm_building(self):
         """Test that FileProcessor builds appropriate FSM."""

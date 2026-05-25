@@ -26,11 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty list (previously a required field). `FileProcessor` format
   auto-detection now resolves onto the processor rather than writing back to
   the (now immutable) config, which keeps its caller-supplied "auto-detect"
-  value. Existing constructor call sites are unaffected; the Pydantic FSM
+  value; the resolved values are exposed as the read-only
+  `FileProcessor.resolved_format` / `resolved_output_format` properties.
+  Existing constructor call sites are unaffected; the Pydantic FSM
   loader schema (`config/schema.py`) is the separate declarative layer and is
   unchanged.
 
 ### Security
+
+- `APIEndpoint.headers` (`patterns.api_orchestration`) is masked as `'***'`
+  in `repr()` via `_SENSITIVE_FIELDS`. The mapping routinely carries
+  credentials (`Authorization`, `X-Api-Key`, `Cookie`) whose key names are
+  not in the `StructuredConfig` interior default set, so the whole field is
+  masked by name. Display-only — `to_dict()` round-trips the real value.
 
 - Bumped minimum `pymdown-extensions` requirement (docs dev
   dependency) from `>=10.16.1` to `>=10.21.3` to exclude

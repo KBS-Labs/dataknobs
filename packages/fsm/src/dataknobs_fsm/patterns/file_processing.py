@@ -114,6 +114,25 @@ class FileProcessor:
         self._format: FileFormat = resolved_format
         self._output_format: FileFormat = self.config.output_format or resolved_format
 
+    @property
+    def resolved_format(self) -> FileFormat:
+        """The effective input format after auto-detection.
+
+        Equals ``config.format`` when the caller set it; otherwise the
+        format inferred from the input path's extension. Read-only — the
+        resolution lives on the processor, not the (frozen) config.
+        """
+        return self._format
+
+    @property
+    def resolved_output_format(self) -> FileFormat:
+        """The effective output format after resolution.
+
+        Equals ``config.output_format`` when set, else mirrors
+        :attr:`resolved_format`. Read-only.
+        """
+        return self._output_format
+
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for file processing."""
         # Determine data mode based on processing mode
