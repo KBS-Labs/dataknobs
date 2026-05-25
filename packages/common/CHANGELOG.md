@@ -61,7 +61,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`password`), `PostgresEventBusConfig` (`connection_string`),
   `SqsEventBusConfig` (`aws_access_key_id` / `aws_secret_access_key`,
   migrated off the prior `repr=False` field flag), and `PostgresLockConfig`
-  (`connection_string`) adopt it.
+  (`connection_string`) adopt it. Redaction also descends into raw
+  `Mapping`/`list` field values, masking any interior key in a module
+  default set (`api_key`, `password`, `connection_string`, the compound
+  `*_secret*` / `*_token` credential names, and the AWS keys) unioned with
+  the class's `_SENSITIVE_FIELDS`. This closes the gap where a credential
+  nested inside an intentionally-untyped polymorphic section (a
+  `vector_store` / `embedding` / `llm` dict held raw because its schema is
+  owned by another package and dispatched by a discriminator key) printed in
+  cleartext. The default set holds only unambiguous credential names — the
+  bare generics `token` and `secret` are excluded, since a false positive
+  there would mask a benign key inside a third-party opaque section the
+  consumer can neither rename nor remove. Interior matching is exact and
+  case-insensitive (a benign `access_token_expiry` is untouched), truthy-only,
+  and depth-bounded — and likewise display-only, so `to_dict()` and
+  round-trip are unchanged. `register_sensitive_interior_key(*names)` extends
+  the interior set process-globally (add-only — redaction is fail-closed, so
+  configuration can never switch masking off) for consumers whose custom
+  opaque sections use a non-default credential key. The interior-descent depth
+  bound defaults to 6 (ample for the ~2-3-level real shapes); a subclass with
+  an unusually deep raw section may raise it via the `_MAX_REDACT_DEPTH`
+  ClassVar but never lower it below the floor — a below-floor or non-int value
+  raises `ValueError` at class definition (lowering would shrink the masked
+  region).
 - `dataknobs_common.testing.assert_structured_config_consumer(cls)` —
   unified parity guard combining structural checks: `CONFIG_CLS`
   declared, is a `StructuredConfig` subclass, dataclass field set

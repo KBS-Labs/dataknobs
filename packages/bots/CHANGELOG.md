@@ -54,8 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorMemoryConfig.api_key` and `RAGKnowledgeBaseConfig.api_key` are
   masked as `'***'` in `repr(config)` (and therefore in logs, tracebacks,
   and pytest failure output). `to_dict()` is never redacted, so
-  round-trip construction is unaffected. (A secret nested inside the raw
-  `embedding` mapping is not reached by field-name redaction.)
+  round-trip construction is unaffected. A credential nested inside a raw
+  mapping section — the `embedding` dict's `api_key`, the `vector_store`
+  dict's `connection_string`, an `llm` dict's `api_key` (including in
+  `SummaryMemoryConfig`, which declares no `_SENSITIVE_FIELDS`) — is also
+  masked: common's repr now descends into raw `Mapping`/`list` fields and
+  masks interior keys in its default sensitive-key set ∪ the class's
+  `_SENSITIVE_FIELDS`.
 
 ### Changed
 
