@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-05-25T18:28:11Z",
+  "timestamp": "2026-05-25T20:02:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.16 (Homebrew 2026-05-21 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fsm-structured-config-rollout-part-A",
-  "git_commit": "3a74eb5b424dbb76dbb32d6a6be331049293e4ba",
+  "git_commit": "0cef340ec754404653181c5ba315164d1b3247d0",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
