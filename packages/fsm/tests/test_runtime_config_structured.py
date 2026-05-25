@@ -238,6 +238,22 @@ class TestStorageConfigStructured:
         assert loaded == cfg
         assert loaded.get_mode_config(DataHandlingMode.COPY) == {"deep": True}
 
+    def test_mode_specific_config_json_roundtrip_fails_closed(self) -> None:
+        # The Enum-keyed ``mode_specific_config`` is in-process-round-trip
+        # only: ``to_json_dict``/``jsonify`` normalises dict *values* but not
+        # *keys*, and ``from_dict`` coerces neither. Rather than silently
+        # corrupting the config, a JSON round-trip fails closed — ``json.dumps``
+        # raises ``TypeError`` on the un-stringified ``DataHandlingMode`` keys.
+        # This pins that loud failure so the documented limitation cannot
+        # regress into silent data loss (e.g. string keys that
+        # ``get_mode_config`` would never match).
+        cfg = StorageConfig(
+            backend=StorageBackend.MEMORY,
+            mode_specific_config={DataHandlingMode.COPY: {"deep": True}},
+        )
+        with pytest.raises(TypeError):
+            json.dumps(cfg.to_json_dict())
+
     def test_defaults_have_independent_dicts(self) -> None:
         a = StorageConfig()
         b = StorageConfig()
