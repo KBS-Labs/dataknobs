@@ -417,7 +417,6 @@ def test_wizard_from_config_carries_real_config() -> None:
     reasoning = WizardReasoning.from_config({"wizard_config": _WIZARD_DICT})
     assert isinstance(reasoning.config, WizardReasoningConfig)
     assert reasoning.config.wizard_config == _WIZARD_DICT
-    assert reasoning.config.wizard_config != _INJECTED_FSM_SENTINEL
     assert reasoning._fsm is not None
 
 
@@ -454,6 +453,21 @@ def test_wizard_from_config_missing_wizard_config_raises() -> None:
     """
     with pytest.raises(ValueError, match="wizard_config is required"):
         WizardReasoning.from_config({})
+
+
+def test_wizard_from_config_rejects_sentinel_on_typed_path() -> None:
+    """A typed config carrying the direct-ctor sentinel is rejected clearly.
+
+    The pre-coerce Mapping guard cannot see a typed config, so the sentinel
+    (which marks a pre-built-FSM envelope with no loadable ``wizard_config``)
+    would otherwise reach the loader and raise a confusing ``FileNotFoundError``
+    for a file literally named ``<injected-fsm>``. ``from_config`` catches it
+    post-coerce and surfaces the same pinned ``wizard_config is required``
+    error instead.
+    """
+    sentinel_config = WizardReasoningConfig(wizard_config=_INJECTED_FSM_SENTINEL)
+    with pytest.raises(ValueError, match="wizard_config is required"):
+        WizardReasoning.from_config(sentinel_config)
 
 
 def test_wizard_config_is_read_only() -> None:

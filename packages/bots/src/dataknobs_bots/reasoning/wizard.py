@@ -1261,6 +1261,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         typed = cls._coerce_config(config)
         wizard_config_value = typed.wizard_config
 
+        # The pre-coerce guard above only sees a Mapping. A typed config can
+        # still reach here carrying an unloadable ``wizard_config`` — an empty
+        # value, or the direct-ctor ``_INJECTED_FSM_SENTINEL`` (which marks a
+        # pre-built-FSM envelope with no real config to load). Catch it here so
+        # it surfaces as the pinned ValueError rather than a FileNotFoundError
+        # for a file literally named "<injected-fsm>".
+        if not wizard_config_value or wizard_config_value == _INJECTED_FSM_SENTINEL:
+            raise ValueError("wizard_config is required")
+
         # Resolve relative wizard_config paths against config_base_path
         config_base_path_str = typed.config_base_path
         config_base_path = Path(config_base_path_str) if config_base_path_str else None
