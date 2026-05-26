@@ -165,7 +165,7 @@ discards the dry-run objects — the sections stay raw mappings. It covers:
   `hybrid`, `wizard`) carry a typed config, so a `reasoning` section is always
   checked. (The wizard definition referenced by `wizard_config` is resolved by
   the wizard loader, not re-validated here — only the reasoning-section
-  envelope, whose `wizard_config` is required.)
+  envelope, whose `wizard_config` field is required (no default).)
 
 A backend or strategy registered as a bare callable (no typed config) is
 recognized and skipped rather than rejected. `conversation_storage` is not

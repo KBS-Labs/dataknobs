@@ -29,8 +29,8 @@ from typing import Any
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
+    ConfigClassResolution,
     StructuredConfig,
-    _SkipValidation,
     config_registries,
 )
 
@@ -86,7 +86,7 @@ _registry: PluginRegistry[ReasoningStrategy] = PluginRegistry(
 
 def _resolve_reasoning_config_cls(
     raw: Mapping[str, Any],
-) -> type[StructuredConfig] | _SkipValidation | None:
+) -> ConfigClassResolution:
     """Resolve a ``reasoning`` section's dict to its strategy config class.
 
     The resolver registered for the ``"reasoning"`` binding in

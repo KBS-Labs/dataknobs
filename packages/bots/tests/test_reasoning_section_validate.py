@@ -31,11 +31,12 @@ from collections.abc import Callable
 
 import pytest
 
-# Required side-effect imports: registering the resolvers in config_registries
-# that validate() resolves the sections against. Do NOT remove as "unused" —
-# without them the bindings are unregistered and validate() degrades to a
-# no-op skip.
-import dataknobs_bots.reasoning.registry  # noqa: F401
+# Required side-effect imports: registering the nested resolvers in
+# config_registries that validate() resolves the sections against. Do NOT
+# remove as "unused" — without them the bindings are unregistered and
+# validate() degrades to a no-op skip. (The ``reasoning`` resolver is
+# registered by importing ``dataknobs_bots.reasoning.registry``, already loaded
+# via the ``get_registry`` import below, so it needs no explicit line here.)
 import dataknobs_data.vector.stores  # noqa: F401
 import dataknobs_llm  # noqa: F401
 from dataknobs_bots.bot.config import DynaBotConfig
@@ -119,8 +120,15 @@ def test_wizard_missing_required_config_raises_via_recursion() -> None:
     # required, so a wizard section that omits it surfaces from the dry-run
     # build. (The reasoning configs carry no field-value validators, so a
     # missing-required-field is the deep failure available today.)
+    #
+    # The error type is coupled to ``wizard_config`` being a required field with
+    # no default: the dataclass constructor raises ``TypeError`` for the missing
+    # argument today. Accept ``ValueError`` too so a future refactor that gives
+    # the field a default and moves the check into ``__post_init__`` (raising
+    # ``ValueError``) still exercises the recursion-surfaces-deep-errors intent
+    # rather than silently passing.
     cfg = DynaBotConfig.from_dict({"reasoning": {"strategy": "wizard"}})
-    with pytest.raises(TypeError, match="wizard_config"):
+    with pytest.raises((TypeError, ValueError), match="wizard_config"):
         cfg.validate()
 
 

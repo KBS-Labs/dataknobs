@@ -39,8 +39,8 @@ from dataknobs_common.exceptions import (
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
+    ConfigClassResolution,
     StructuredConfig,
-    _SkipValidation,
     config_registries,
 )
 
@@ -94,7 +94,7 @@ memory_backends: PluginRegistry[Memory] = PluginRegistry(
 
 def _resolve_memory_config_cls(
     raw: Mapping[str, Any],
-) -> type[StructuredConfig] | _SkipValidation | None:
+) -> ConfigClassResolution:
     """Resolve a ``memory`` section's dict to its config class.
 
     The resolver registered for the ``"memory"`` binding in
