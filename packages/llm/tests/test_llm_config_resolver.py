@@ -23,6 +23,14 @@ from __future__ import annotations
 # resolver in config_registries. Do NOT remove as "unused".
 import dataknobs_llm  # noqa: F401
 from dataknobs_llm.llm.base import LLMConfig
+
+# Deliberate coupling to a private name: the drift guard must enumerate the
+# *same* registry the resolver delegates to (``_resolve_llm_config_cls`` consults
+# ``_provider_registry.get_factory``). Asserting against any other source — even a
+# public re-export — would no longer prove the resolver and the construction
+# factory cannot disagree, which is the whole point of the guard. There is no
+# public provider-enumeration API today; if one is ever added it must read from
+# this same registry for the guard to keep its meaning.
 from dataknobs_llm.llm.providers import _provider_registry
 
 from dataknobs_common.structured_config import config_registries

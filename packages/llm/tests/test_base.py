@@ -1,7 +1,9 @@
 """Tests for dataknobs_llm.llm.base module."""
 
+import dataclasses
 import pytest
 from datetime import datetime
+from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_llm.llm.base import (
     LLMConfig,
     LLMMessage,
@@ -401,10 +403,6 @@ def test_llm_config_dimensions_not_in_generation_params():
 
 def test_llm_config_is_structured_config():
     """LLMConfig is a frozen StructuredConfig."""
-    import dataclasses
-
-    from dataknobs_common.structured_config import StructuredConfig
-
     assert issubclass(LLMConfig, StructuredConfig)
     config = LLMConfig(provider="openai", model="gpt-4")
     # Frozen — post-construction field assignment is rejected.

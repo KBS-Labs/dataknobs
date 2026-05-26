@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `LLMConfig` is now a frozen `StructuredConfig` (was a plain mutable
+  dataclass). Fields can no longer be reassigned after construction — derive
+  a varied config with `clone(**overrides)` instead. `from_dict` / `to_dict`
+  are now inherited from the base.
+  - `to_dict()` now emits **every** field, with unset optionals serialized as
+    `None` (and `options` as `{}`), so that `from_dict(to_dict())` round-trips
+    exactly. The previous hand-rolled `to_dict()` omitted `None`-valued fields;
+    code that relied on those keys being absent must adjust. For a
+    JSON-serialisable projection (enums rendered as their `.value`), use
+    `to_json_dict()`.
+  - `repr(config)` now masks `api_key` as `'***'` so the credential cannot leak
+    to logs via `repr()` or an f-string. The stored value is unchanged and
+    `to_dict()` still carries it for round-tripping.
+
+### Added
+
+- An `llm` resolver is registered into `config_registries`, so a raw `llm`
+  config section (e.g. a bot's provider section) can be validated via
+  `StructuredConfig.validate()` without constructing a provider.
+
 ### Security
 
 - Bumped minimum `torch` requirement (extra: `embeddings`) from

@@ -544,6 +544,12 @@ class LLMConfig(StructuredConfig):
     # ``StructuredConfig`` redacting repr mask it as ``'***'`` so the key
     # never reaches logs via ``repr(config)`` or an f-string. ``api_base`` /
     # ``user_id`` are not secrets and are shown verbatim.
+    #
+    # Note: scalar redaction is by field *name*, not by parsing the value, so a
+    # credential embedded in an ``api_base`` URL (``https://user:token@host``)
+    # would NOT be masked — and ``register_sensitive_interior_key`` cannot help,
+    # as it masks interior *dict keys*, not substrings of a scalar string. Put
+    # the secret in ``api_key``; do not embed credentials in ``api_base``.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
 
     provider: str  # 'openai', 'anthropic', 'ollama', etc.

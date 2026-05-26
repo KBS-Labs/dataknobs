@@ -43,6 +43,11 @@ print(config)                  # LLMConfig(provider='openai', ..., api_key='***'
 config.to_dict()["api_key"]    # 'sk-secret' — round-trip preserves it
 ```
 
+Only `api_key` is masked. Redaction matches by field *name*, not by parsing
+the value, so a credential embedded in an `api_base` URL
+(`https://user:token@host`) is **not** redacted. Keep secrets in `api_key`;
+do not embed credentials in `api_base`.
+
 ### Serialization: `to_dict` vs `to_json_dict`
 
 `to_dict()` is the symmetric in-process projection — every field is present
