@@ -81,6 +81,14 @@ class _ParentAdopter(StructuredConfig):
     child: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _Node(StructuredConfig):
+    """Self-referential statically-typed node for the cycle-guard test."""
+
+    label: str = "n"
+    next: "_Node | None" = None
+
+
 def _resolve_leaf(raw: Mapping[str, Any]) -> type[StructuredConfig] | None:
     # Discriminator is ``kind``; only ``leaf`` is known.
     return _LeafConfig if raw.get("kind") == "leaf" else None
@@ -172,6 +180,21 @@ def test_recursion_validates_whole_tree() -> None:
     finally:
         config_registries.unregister("adopter")
         config_registries.unregister("leaf")
+
+
+# --- Cycle guard ----------------------------------------------------------
+
+
+def test_validate_cycle_guard_terminates() -> None:
+    # A statically-typed nested graph with a cycle must terminate via the
+    # visited-set guard rather than recursing without bound. ``from_dict``
+    # cannot build a cycle (frozen + acyclic construction), so force one with
+    # ``object.__setattr__`` to exercise the guard directly. Without it this
+    # would raise ``RecursionError``.
+    a = _Node(label="a")
+    b = _Node(label="b", next=a)
+    object.__setattr__(a, "next", b)  # a -> b -> a
+    a.validate()  # returns; no RecursionError
 
 
 # --- Parity guard ---------------------------------------------------------

@@ -507,8 +507,11 @@ class StructuredConfig:
     #: WITHOUT importing the child config type, so adopting validation adds
     #: no cross-package type-surface coupling — the binding is a string
     #: literal plus a runtime resolver registration in the owning package.
+    #: A frozen ``MappingProxyType`` default so an accidental
+    #: ``Base._polymorphic_fields[...] = ...`` raises instead of silently
+    #: mutating the shared base default for every non-overriding subclass.
     #: See :meth:`validate`.
-    _polymorphic_fields: ClassVar[Mapping[str, str]] = {}
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
@@ -760,6 +763,25 @@ class StructuredConfig:
                 config's own validation (e.g. a ``ValueError`` from its
                 ``__post_init__``) propagate unchanged.
         """
+        self._validate(set())
+
+    def _validate(self, visited: set[int]) -> None:
+        """Recursive worker for :meth:`validate` with a cycle guard.
+
+        ``visited`` tracks the ``id()`` of every persistent, statically-typed
+        nested instance reached from the original ``self``, so a config object
+        graph that shares a child instance via multiple paths (or, defensively,
+        a cycle built outside ``from_dict``) is validated once instead of
+        recursing without bound. The ephemeral dry-run children built inside
+        :meth:`_validate_polymorphic_section` deliberately do NOT share this
+        set: each starts a fresh ``validate()`` scope, because a discarded
+        child's ``id()`` can be reused by the next one and a shared set would
+        then skip a section that must be validated.
+        """
+        marker = id(self)
+        if marker in visited:
+            return
+        visited.add(marker)
         for field_name, binding in self._polymorphic_fields.items():
             value = getattr(self, field_name, None)
             if isinstance(value, Mapping):
@@ -776,21 +798,21 @@ class StructuredConfig:
         for f in dataclasses.fields(self):
             if f.name in self._polymorphic_fields:
                 continue
-            self._validate_nested(getattr(self, f.name, None))
+            self._validate_nested(getattr(self, f.name, None), visited)
 
     @staticmethod
-    def _validate_nested(value: Any) -> None:
+    def _validate_nested(value: Any, visited: set[int]) -> None:
         """Recurse :meth:`validate` into nested ``StructuredConfig`` values."""
         if isinstance(value, StructuredConfig):
-            value.validate()
+            value._validate(visited)
         elif isinstance(value, (list, tuple, set, frozenset)):
             for element in value:
                 if isinstance(element, StructuredConfig):
-                    element.validate()
+                    element._validate(visited)
         elif isinstance(value, Mapping):
             for element in value.values():
                 if isinstance(element, StructuredConfig):
-                    element.validate()
+                    element._validate(visited)
 
     def _validate_polymorphic_section(
         self, field_name: str, binding: str, raw: Mapping[str, Any]

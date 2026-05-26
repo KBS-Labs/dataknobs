@@ -148,12 +148,34 @@ def _resolve_vector_store_config_cls(
     factory's own default). Holding no independent backend→config-class
     table is the no-drift guarantee. Returns ``None`` for an unknown
     backend, which ``validate`` surfaces as a ``ConfigurationError``.
+
+    A backend that is *registered* but exposes no ``StructuredConfig``
+    ``CONFIG_CLS`` also returns ``None`` (there is no typed schema to
+    dry-run against), but is logged at WARNING first so that case is
+    distinguishable from a genuine typo'd discriminator — the two collapse
+    to the same ``None`` return otherwise. No registered backend is in this
+    state today; the parity guard
+    ``test_resolver_agrees_with_construction_registry_for_all_backends``
+    keeps it CI-impossible, so the branch is defense-in-depth for a backend
+    registered out of band.
     """
     backend = raw.get("backend", "memory")
     store_cls = vector_backends.get_factory(backend)
+    if store_cls is None:
+        # Unknown discriminator — the legitimate typo path; validate()
+        # raises ConfigurationError. Silent here so a real typo is reported
+        # by validate(), not pre-empted by a misleading WARNING.
+        return None
     config_cls = getattr(store_cls, "CONFIG_CLS", None)
     if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
         return config_cls
+    logger.warning(
+        "Vector-store backend %r is registered but exposes no StructuredConfig "
+        "CONFIG_CLS; validate() has no typed schema to check its config "
+        "section against and will treat it as an unknown variant. Give the "
+        "backend a CONFIG_CLS to make its section validatable.",
+        backend,
+    )
     return None
 
 

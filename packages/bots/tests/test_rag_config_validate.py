@@ -14,7 +14,11 @@ resolver is registered (eager on import); ``dataknobs-bots`` depends on
 
 from __future__ import annotations
 
-import dataknobs_data.vector.stores  # noqa: F401 — eager resolver registration
+# Required side-effect import: importing this package registers the
+# "vector_store" resolver in config_registries, which validate() resolves
+# the vector_store section against. Do NOT remove as "unused" — without it
+# the binding is unregistered and validate() degrades to a no-op skip.
+import dataknobs_data.vector.stores  # noqa: F401
 import pytest
 
 from dataknobs_bots.knowledge.config import RAGKnowledgeBaseConfig
