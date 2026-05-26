@@ -64,6 +64,8 @@ from typing import (
     get_type_hints,
 )
 
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.registry import Registry
 from dataknobs_common.serialization import jsonify
 
 if TYPE_CHECKING:
@@ -498,6 +500,19 @@ class StructuredConfig:
     #: protection, which :meth:`__init_subclass__` rejects.
     _MAX_REDACT_DEPTH: ClassVar[int] = _DEFAULT_MAX_REDACT_DEPTH
 
+    #: Maps a raw-dict field name -> the binding name registered in
+    #: :data:`config_registries`. Empty by default, so a config with no
+    #: polymorphic sections has a no-op :meth:`validate`. String-valued by
+    #: design: the parent declares *which registry* governs the field
+    #: WITHOUT importing the child config type, so adopting validation adds
+    #: no cross-package type-surface coupling — the binding is a string
+    #: literal plus a runtime resolver registration in the owning package.
+    #: A frozen ``MappingProxyType`` default so an accidental
+    #: ``Base._polymorphic_fields[...] = ...`` raises instead of silently
+    #: mutating the shared base default for every non-overriding subclass.
+    #: See :meth:`validate`.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
 
@@ -695,8 +710,239 @@ class StructuredConfig:
         """
         return jsonify(dataclasses.asdict(self))
 
+    def validate(self) -> None:
+        """Validate polymorphic raw-dict sections by dry-run construction.
+
+        ``from_dict`` is deliberately tolerant: it ignores keys that match
+        no field (registry-routing keys like ``backend`` pass through) and
+        does not look inside a raw-dict section whose schema is owned by
+        another package. ``validate`` is the opt-in companion that closes
+        that gap *without constructing the runtime objects* — the use case
+        is the gap between parse and construction (CI config-linting,
+        write-time validation in a multi-tenant config store, config
+        editors). A flow that builds the object immediately after parsing
+        already gets a fast failure from the construction factory; this is
+        for flows that parse but do not (yet) build.
+
+        For each field named in :attr:`_polymorphic_fields` whose value is
+        a non-empty mapping (or a list/tuple of mappings), the concrete
+        config class is resolved via :data:`config_registries` and its
+        ``from_dict`` is called purely to surface field-level errors — the
+        result is discarded (the field stays a raw dict). The dry-run child
+        is then itself validated, so a single ``parent.validate()``
+        validates the whole polymorphic tree (e.g. a bot config's
+        knowledge-base section down to its vector-store section).
+        Statically-typed nested ``StructuredConfig`` fields are likewise
+        recursed into, so the same single call covers typed nesting too.
+
+        Behavior:
+
+        * ``_polymorphic_fields`` empty (a non-adopter) — no-op.
+        * a section value that is empty (``{}`` / ``None``) — skipped
+          (it is the default-constructible / ``from_components`` path).
+        * the binding name has no registered resolver — skipped with a
+          ``logger.debug`` (best-effort: the cause is import order, and the
+          test-time guard
+          :func:`dataknobs_common.testing.assert_polymorphic_bindings_resolve`
+          catches genuine wiring drift in CI rather than at runtime).
+        * the resolver returns ``None`` (an unknown discriminator value) —
+          raises :class:`~dataknobs_common.exceptions.ConfigurationError`.
+          This is the headline win: a typo'd discriminator is caught at
+          config-lint time, not at first use.
+        * the resolver returns :data:`SKIP_VALIDATION` (the discriminator is
+          recognized but the variant exposes no typed config — e.g. a
+          bare-callable backend with no ``CONFIG_CLS``) — skipped with a
+          ``logger.debug``, never raised. Rejecting a valid, constructible
+          backend's config would be a false positive, so this stays
+          fail-soft like the unregistered-binding case.
+        * the resolver returns a config class — its ``from_dict`` runs
+          (surfacing any field-level error from the child's
+          ``__post_init__``) and the built child is validated recursively.
+
+        Does not mutate ``self`` and never auto-runs inside ``from_dict``
+        or construction — adopters/tools opt in by calling
+        ``Cfg.from_dict(raw).validate()``.
+
+        Raises:
+            ConfigurationError: If a polymorphic section's discriminator
+                names no known variant. Field-level errors from a child
+                config's own validation (e.g. a ``ValueError`` from its
+                ``__post_init__``) propagate unchanged.
+        """
+        self._validate(set())
+
+    def _validate(self, visited: set[int]) -> None:
+        """Recursive worker for :meth:`validate` with a cycle guard.
+
+        ``visited`` tracks the ``id()`` of every persistent, statically-typed
+        nested instance reached from the original ``self``, so a config object
+        graph that shares a child instance via multiple paths (or, defensively,
+        a cycle built outside ``from_dict``) is validated once instead of
+        recursing without bound. The ephemeral dry-run children built inside
+        :meth:`_validate_polymorphic_section` deliberately do NOT share this
+        set: each starts a fresh ``validate()`` scope, because a discarded
+        child's ``id()`` can be reused by the next one and a shared set would
+        then skip a section that must be validated.
+        """
+        marker = id(self)
+        if marker in visited:
+            return
+        visited.add(marker)
+        for field_name, binding in self._polymorphic_fields.items():
+            value = getattr(self, field_name, None)
+            if isinstance(value, Mapping):
+                self._validate_polymorphic_section(field_name, binding, value)
+            elif isinstance(value, (list, tuple)):
+                for element in value:
+                    if isinstance(element, Mapping):
+                        self._validate_polymorphic_section(
+                            field_name, binding, element
+                        )
+        # Recurse through statically-typed nested ``StructuredConfig``
+        # fields (and their containers) so one ``parent.validate()`` covers
+        # the whole config tree, not only the polymorphic raw-dict sections.
+        for f in dataclasses.fields(self):
+            if f.name in self._polymorphic_fields:
+                continue
+            self._validate_nested(getattr(self, f.name, None), visited)
+
+    @staticmethod
+    def _validate_nested(value: Any, visited: set[int]) -> None:
+        """Recurse :meth:`validate` into nested ``StructuredConfig`` values."""
+        if isinstance(value, StructuredConfig):
+            value._validate(visited)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for element in value:
+                if isinstance(element, StructuredConfig):
+                    element._validate(visited)
+        elif isinstance(value, Mapping):
+            for element in value.values():
+                if isinstance(element, StructuredConfig):
+                    element._validate(visited)
+
+    def _validate_polymorphic_section(
+        self, field_name: str, binding: str, raw: Mapping[str, Any]
+    ) -> None:
+        """Dry-run-build one polymorphic section to surface its errors.
+
+        See :meth:`validate` for the full contract. Resolves the section's
+        config class via :data:`config_registries`, builds it from ``raw``
+        purely to validate (discarding the result), and recurses into the
+        built child so the whole tree is checked.
+        """
+        if not raw:
+            return
+        resolver = config_registries.get_optional(binding)
+        if resolver is None:
+            logger.debug(
+                "No config resolver registered for binding %r (field "
+                "%s.%s); skipping validation of this section. Import the "
+                "package that owns the binding to register its resolver.",
+                binding,
+                type(self).__name__,
+                field_name,
+            )
+            return
+        config_cls = resolver(raw)
+        if config_cls is SKIP_VALIDATION:
+            logger.debug(
+                "Resolver for binding %r recognizes the discriminator in "
+                "field %s.%s but exposes no typed config; skipping validation "
+                "of this section.",
+                binding,
+                type(self).__name__,
+                field_name,
+            )
+            return
+        if config_cls is None:
+            raise ConfigurationError(
+                f"{type(self).__name__}.{field_name}: this configuration "
+                f"does not match any variant registered for '{binding}'; "
+                "check the section's discriminator key (e.g. 'backend' / "
+                "'provider').",
+                context={
+                    "config": type(self).__name__,
+                    "field": field_name,
+                    "binding": binding,
+                    "section_keys": sorted(str(k) for k in raw),
+                },
+            )
+        # Dry-run build to surface field-level errors, then recurse. The
+        # built child is discarded — the field stays a raw dict, so
+        # round-trip and construction paths are unaffected.
+        config_cls.from_dict(raw).validate()
+
 
 ConfigT = TypeVar("ConfigT", bound=StructuredConfig)
+
+
+class _SkipValidation:
+    """Sentinel type for :data:`SKIP_VALIDATION` (see it for semantics).
+
+    Enforced as a singleton: ``validate`` distinguishes the sentinel with an
+    ``is SKIP_VALIDATION`` identity check, so a second instance would silently
+    fall through to the ``None`` (unknown-discriminator → raise) branch. The
+    ``__new__`` guard makes ``_SkipValidation()`` impossible once the module
+    constant exists, so the only way to obtain one is the public
+    :data:`SKIP_VALIDATION`. Import this type only to *annotate* a resolver's
+    return (or use the public :data:`ConfigClassResolver` alias).
+    """
+
+    __slots__ = ()
+    _instance: ClassVar[_SkipValidation | None] = None
+
+    def __new__(cls) -> Self:
+        if cls._instance is not None:
+            raise TypeError(
+                "Use the SKIP_VALIDATION singleton; do not instantiate "
+                "_SkipValidation directly."
+            )
+        instance = super().__new__(cls)
+        cls._instance = instance
+        return instance
+
+    def __repr__(self) -> str:
+        return "SKIP_VALIDATION"
+
+
+#: Sentinel a :data:`ConfigClassResolver` returns to mean "I recognize this
+#: section's discriminator, but it has no typed :class:`StructuredConfig` to
+#: validate against — skip it (do not raise)." This is distinct from a ``None``
+#: return, which means "unknown discriminator" and *does* raise. The case
+#: arises for construction registries that accept bare-callable backends (no
+#: ``CONFIG_CLS`` to read): such a backend is valid and constructible, so
+#: rejecting its config at :meth:`StructuredConfig.validate` time would be a
+#: false positive. Skipping keeps ``validate`` fail-soft — the same posture it
+#: takes for an unregistered binding or an empty section — while preserving the
+#: typo-catching ``None`` → raise path.
+SKIP_VALIDATION: _SkipValidation = _SkipValidation()
+
+
+#: A resolver maps a polymorphic section's raw dict to the concrete
+#: :class:`StructuredConfig` subclass that validates it; to ``None`` when the
+#: section's discriminator names no known variant (an unknown backend /
+#: provider — surfaced by :meth:`StructuredConfig.validate` as a
+#: :class:`~dataknobs_common.exceptions.ConfigurationError`); or to
+#: :data:`SKIP_VALIDATION` when the discriminator *is* recognized but exposes no
+#: typed config to check (skipped, not raised). A resolver MUST delegate to the
+#: section's own construction registry (e.g. read ``CONFIG_CLS`` off the
+#: registered store class) rather than holding an independent discriminator→type
+#: table, so validation and construction cannot drift.
+ConfigClassResolver = Callable[
+    [Mapping[str, Any]], "type[StructuredConfig] | _SkipValidation | None"
+]
+
+#: Process-global registry of section resolvers, keyed by binding name (the
+#: value side of a :attr:`StructuredConfig._polymorphic_fields` entry). The
+#: registry-of-registries seam: ``dataknobs-common`` owns it but
+#: (``dependencies = []``) cannot populate it, so each package that owns a
+#: polymorphic section registers its resolver eagerly at import (e.g.
+#: ``dataknobs-data`` registers ``"vector_store"``). The string binding plus a
+#: runtime registration is what keeps adoption coupling-free — a parent config
+#: names the registry without importing the child config type.
+config_registries: Registry[ConfigClassResolver] = Registry(
+    "config_section_resolvers"
+)
 
 
 @functools.cache
@@ -1141,8 +1387,11 @@ class StructuredConfigConsumer(Generic[ConfigT]):
 
 
 __all__ = [
+    "SKIP_VALIDATION",
+    "ConfigClassResolver",
     "ConfigT",
     "StructuredConfig",
     "StructuredConfigConsumer",
+    "config_registries",
     "register_sensitive_interior_key",
 ]

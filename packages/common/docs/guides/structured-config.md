@@ -285,6 +285,125 @@ constructed child self-redacts) is the future typed-nesting work; until
 then the interior-key descent is the standing mechanism, and would remain
 as defense-in-depth.
 
+### Polymorphic-section validation (`validate()` + `config_registries`)
+
+`from_dict` is deliberately tolerant: it ignores keys matching no field
+(registry-routing keys like `backend` / `provider` pass through) and does
+**not** look inside a raw-dict section whose schema is owned by another
+package (`vector_store`, `embedding`, `llm`). `validate()` is the opt-in
+companion that checks those polymorphic sections **without constructing the
+runtime objects** — the use case is the gap between *parse* and
+*construction*: CI config-linting, write-time validation in a multi-tenant
+config store, config editors. A flow that builds the object right after
+parsing already gets a fast failure from its construction factory; this is
+for flows that parse but do not (yet) build.
+
+A config opts in by declaring `_polymorphic_fields` (field name → binding
+name) and relying on the field's owning package to register a resolver
+under that binding name. The binding is a **string** plus a runtime
+registration, so adopting validation adds **no** import of the child config
+type — it stays coupling-free:
+
+```python
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
+
+from dataknobs_common.structured_config import StructuredConfig
+
+@dataclass(frozen=True)
+class RAGConfig(StructuredConfig):
+    # "vector_store" field is governed by the "vector_store" binding,
+    # whose resolver dataknobs-data registers on import. No data import here.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {
+        "vector_store": "vector_store"
+    }
+    vector_store: dict[str, Any] = field(default_factory=dict)
+```
+
+`validate()` resolves each declared section's concrete config class via
+`config_registries`, calls its `from_dict` purely to surface field-level
+errors (discarding the result — the field stays a raw dict), then validates
+the built child so **one `parent.validate()` validates the whole tree**
+(a bot config's knowledge-base section down to its vector-store section).
+Statically-typed nested `StructuredConfig` fields are recursed into too.
+
+Behavior:
+
+| Situation | Behavior |
+|---|---|
+| no `_polymorphic_fields` (non-adopter) | no-op |
+| section value empty (`{}` / `None`) | skipped (the default / `from_components` path) |
+| binding has no registered resolver | skipped + `logger.debug` (fail-soft: cause is import order; the test guard below catches real drift) |
+| resolver returns `None` (unknown discriminator) | raises `ConfigurationError` — the headline win: a typo'd `backend` caught at config-lint time |
+| resolver returns `SKIP_VALIDATION` (recognized, but no typed config — e.g. a bare-callable backend) | skipped + `logger.debug` *in `validate()`* — rejecting a valid, constructible backend would be a false positive. (A resolver may itself `logger.warning` before returning the sentinel, so operators see an actionable "give this backend a `CONFIG_CLS`" signal; the two log sites and levels are intentional.) |
+| resolver returns a config class | dry-run `from_dict` (surfaces child field errors) + recurse |
+
+The parse-without-construct CI-lint usage:
+
+```python
+cfg = RAGConfig.from_dict(loaded_yaml)   # cheap parse — does not build the KB
+cfg.validate()                           # raises on a bad/unknown vector_store
+```
+
+`validate()` is **never** auto-called by `from_dict` or by construction —
+`from_dict`'s tolerant contract is preserved, and construction already fails
+fast.
+
+#### Registering a resolver (`config_registries`)
+
+`config_registries` is a process-global `Registry[ConfigClassResolver]`
+that `dataknobs-common` owns but (having `dependencies = []`) cannot
+populate — the **registry-of-registries** seam. Each package that owns a
+polymorphic section registers its resolver eagerly at import. A resolver
+maps the section's raw dict to its concrete config class (`None` for an
+unknown discriminator, or `SKIP_VALIDATION` when the discriminator is
+recognized but has no typed config to check) and **must delegate to the
+section's own construction registry** so validation and construction cannot
+drift:
+
+```python
+# dataknobs_data/vector/stores/__init__.py
+import logging
+
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION, StructuredConfig, config_registries,
+)
+
+logger = logging.getLogger(__name__)
+
+def _resolve_vector_store_config_cls(raw):
+    backend = raw.get("backend", "memory")
+    store_cls = vector_backends.get_factory(backend)   # the construction registry
+    if store_cls is None:
+        return None                                     # unknown backend -> raise
+    config_cls = getattr(store_cls, "CONFIG_CLS", None) # no independent table
+    if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+        return config_cls
+    # Registered (e.g. bare callable) but untyped -> skip. Warn first so an
+    # operator sees an actionable signal rather than a silent skip: this
+    # backend exists but isn't validatable until it grows a CONFIG_CLS.
+    logger.warning(
+        "Backend %r is registered but exposes no CONFIG_CLS; "
+        "validate() will skip its section. Give it a CONFIG_CLS "
+        "to make the section validatable.",
+        backend,
+    )
+    return SKIP_VALIDATION
+
+config_registries.register(
+    "vector_store", _resolve_vector_store_config_cls, allow_overwrite=True
+)
+```
+
+`SKIP_VALIDATION` matters for construction registries that accept
+bare-callable backends (no `CONFIG_CLS` to read): such a backend is valid
+and constructible, so returning `None` (→ raise) would be a false positive.
+A closed registry of config-bearing classes never needs it. A production
+resolver should `logger.warning` before returning the sentinel (as above), so
+operators know a registered backend is silently unvalidated and can act —
+`validate()` itself only emits a `logger.debug` for the skip.
+
 ## `StructuredConfigConsumer[ConfigT]` API
 
 ### `CONFIG_CLS` (ClassVar)
@@ -669,6 +788,24 @@ from dataknobs_common.testing import assert_structured_config_roundtrip
 
 def test_widget_config_roundtrips():
     assert_structured_config_roundtrip(WidgetConfig(name="x", size=4))
+```
+
+### `assert_polymorphic_bindings_resolve(cls)`
+
+Wiring guard for [`validate()`](#polymorphic-section-validation-validate--config_registries):
+asserts every binding a config declares in `_polymorphic_fields` is
+registered in `config_registries`. The declaration and the resolver
+registration live in different packages, so a rename or dropped
+registration would silently turn `validate()` into a skip-and-`debug`
+no-op. Run this from each adopting package's test suite (with the owning
+packages imported) so a real wiring regression fails in CI:
+
+```python
+from dataknobs_common.testing import assert_polymorphic_bindings_resolve
+
+def test_rag_config_bindings_resolve():
+    import dataknobs_data.vector.stores  # noqa: F401 — registers the resolver
+    assert_polymorphic_bindings_resolve(RAGConfig)
 ```
 
 ## Construction in the object-graph layer

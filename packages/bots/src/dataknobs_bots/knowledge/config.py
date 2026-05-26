@@ -16,6 +16,7 @@ being baked into this static field graph.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -50,6 +51,18 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
         documents_path: Optional directory to ingest on async warmup.
         document_pattern: Glob pattern used when ``documents_path`` is set.
     """
+
+    # Adopt polymorphic-section validation for ``vector_store``: a
+    # ``RAGKnowledgeBaseConfig.from_dict(raw).validate()`` dry-run-builds
+    # the vector-store config to surface field errors / an unknown backend
+    # at config-parse time (without constructing the store). The binding is
+    # a string — ``dataknobs-data`` registers the resolver under
+    # ``"vector_store"`` — so this adds no import of any data config type.
+    # ``embedding`` is intentionally NOT bound yet: no typed embedding-config
+    # family exists for its resolver to delegate to.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {
+        "vector_store": "vector_store"
+    }
 
     vector_store: dict[str, Any] = field(default_factory=dict)
     embedding: dict[str, Any] | None = None

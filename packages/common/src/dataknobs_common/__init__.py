@@ -116,8 +116,11 @@ from dataknobs_common.serialization import (
     serialize_list,
 )
 from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    ConfigClassResolver,
     StructuredConfig,
     StructuredConfigConsumer,
+    config_registries,
     register_sensitive_interior_key,
 )
 from dataknobs_common.testing import (
@@ -218,8 +221,11 @@ __all__ = [
     "is_deserializable",
     "jsonify",
     # Structured configuration
+    "SKIP_VALIDATION",
+    "ConfigClassResolver",
     "StructuredConfig",
     "StructuredConfigConsumer",
+    "config_registries",
     "register_sensitive_interior_key",
     # Testing - Availability Checks
     "is_ollama_available",

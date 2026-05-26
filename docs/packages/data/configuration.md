@@ -67,6 +67,35 @@ Mixing a typed `config=` with loose keyword arguments raises `TypeError`.
 The Postgres sync and async backends share one `PostgresDatabaseConfig`
 (so both honor `ssl`); the file backends share one `FileDatabaseConfig`.
 
+### Validating a `vector_store` section without constructing the store
+
+`dataknobs-data` is the reference adopter of the cross-package
+[polymorphic-section validation](../common/structured-config.md#polymorphic-section-validation-validate--config_registries)
+hook. On import it registers a resolver under the `"vector_store"` binding
+in `dataknobs_common.structured_config.config_registries`, delegating to the
+same `vector_backends` registry the construction path uses (reading
+`CONFIG_CLS` off the resolved store class — no independent table, so
+validation and construction cannot drift).
+
+A parent config that holds a raw `vector_store` section (e.g. a bot's RAG
+config) can then declare `_polymorphic_fields = {"vector_store": "vector_store"}`
+and call `cfg.validate()` to catch a malformed config or a typo'd `backend`
+at config-lint time, **without** building the vector store:
+
+```python
+import dataknobs_data.vector.stores  # registers the "vector_store" resolver
+
+cfg = SomeParentConfig.from_dict(loaded_yaml)  # cheap parse, no store built
+cfg.validate()                                 # raises on a bad vector_store
+```
+
+A custom backend registered as a bare callable (no `CONFIG_CLS`) is
+recognized but has no typed schema to check, so the resolver returns
+`SKIP_VALIDATION` and `validate()` skips that section rather than
+false-positive-raising. The resolver logs this skip at `WARNING` (the
+backend exists but isn't validatable) — give a custom backend a `CONFIG_CLS`
+to make its config section validatable and silence the warning.
+
 ## Backend-Specific Configuration
 
 ### Memory Backend

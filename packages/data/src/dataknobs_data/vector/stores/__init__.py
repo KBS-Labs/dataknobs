@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Type
+from collections.abc import Mapping
+from typing import Any, Type
 
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    StructuredConfig,
+    _SkipValidation,
+    config_registries,
+)
 
 from .base import VectorStore
 
@@ -127,6 +134,63 @@ VectorBackendRegistry = PluginRegistry
 
 # Now import factory (which will import vector_backends from this module)
 from .factory import VectorStoreFactory  # noqa: E402
+
+
+def _resolve_vector_store_config_cls(
+    raw: Mapping[str, Any],
+) -> type[StructuredConfig] | _SkipValidation | None:
+    """Resolve a ``vector_store`` section's dict to its config class.
+
+    The resolver registered for the ``"vector_store"`` binding in
+    :data:`~dataknobs_common.structured_config.config_registries`, used by
+    :meth:`StructuredConfig.validate
+    <dataknobs_common.structured_config.StructuredConfig.validate>` to
+    validate a raw ``vector_store`` config without constructing the store.
+
+    Delegates to ``vector_backends`` — the same registry the construction
+    path uses — by reading ``CONFIG_CLS`` off the registered store class
+    for the ``"backend"`` discriminator (defaulting to ``"memory"``, the
+    factory's own default). Holding no independent backend→config-class
+    table is the no-drift guarantee. Returns ``None`` for an unknown
+    backend, which ``validate`` surfaces as a ``ConfigurationError``.
+
+    A backend that is *registered* but exposes no ``StructuredConfig``
+    ``CONFIG_CLS`` returns :data:`SKIP_VALIDATION` (logged at WARNING):
+    there is no typed schema to dry-run against, but the backend is valid
+    and constructible, so ``validate`` skips the section rather than
+    raising — distinct from the ``None`` return for a genuine typo'd
+    discriminator. No built-in backend is in this state today (the parity
+    guard ``test_resolver_agrees_with_construction_registry_for_all_backends``
+    keeps it so); the branch covers a custom bare-callable backend
+    registered out of band.
+    """
+    backend = raw.get("backend", "memory")
+    store_cls = vector_backends.get_factory(backend)
+    if store_cls is None:
+        # Unknown discriminator — the legitimate typo path; validate()
+        # raises ConfigurationError. Silent here so a real typo is reported
+        # by validate(), not pre-empted by a misleading WARNING.
+        return None
+    config_cls = getattr(store_cls, "CONFIG_CLS", None)
+    if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+        return config_cls
+    logger.warning(
+        "Vector-store backend %r is registered but exposes no StructuredConfig "
+        "CONFIG_CLS; validate() has no typed schema to check its config "
+        "section against and will skip it. Give the backend a CONFIG_CLS to "
+        "make its section validatable.",
+        backend,
+    )
+    return SKIP_VALIDATION
+
+
+# Eager registration (not on_first_access): importing this package is what
+# makes the ``vector_store`` binding resolvable, and any parent config that
+# holds a vector-store section already depends on this package. ``override``
+# keeps re-import idempotent.
+config_registries.register(
+    "vector_store", _resolve_vector_store_config_cls, allow_overwrite=True
+)
 
 
 __all__ = [
