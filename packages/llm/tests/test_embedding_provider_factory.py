@@ -214,6 +214,9 @@ class TestCreateEmbeddingProvider:
         )
         provider = await create_embedding_provider(config)
         try:
+            # Already in EMBEDDING mode → no clone: the caller's exact object
+            # is used as-is (the optimization that skips a needless copy).
+            assert provider.config is config
             assert provider.config.mode == CompletionMode.EMBEDDING
             assert provider.config.model == "typed-embed"
         finally:

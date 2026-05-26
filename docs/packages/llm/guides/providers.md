@@ -128,8 +128,8 @@ correctly configured for `embed()` calls.
 Because an embedder config is an `LLMConfig`, `dataknobs-llm` registers an
 `"embedding"` resolver in `config_registries` (eager on import) that resolves
 an `embedding` section to `LLMConfig` — the same resolver as the `"llm"`
-binding. A consumer config holding a nested `embedding` section (e.g.
-`RAGKnowledgeBaseConfig`, `VectorMemoryConfig`) declares
+binding. A consumer config holding a nested `embedding` section
+(currently `RAGKnowledgeBaseConfig` and `VectorMemoryConfig`) declares
 `{"embedding": "embedding"}` in its `_polymorphic_fields`, so
 `config.validate()` dry-run-builds the embedder `LLMConfig` and surfaces an
 unknown provider or a bad field at config-parse time — without constructing a

@@ -107,6 +107,11 @@ config_registries.register("llm", _resolve_llm_config_cls, allow_overwrite=True)
 # distinct from ``"llm"`` so the section stays semantically separate; if an
 # embed-specific config surface is ever wanted, only this registration changes
 # (the ``"llm"`` binding is untouched).
+#
+# Both bindings delegate to ``_resolve_llm_config_cls`` → ``_provider_registry``,
+# the same registry the construction factory consults, so the no-drift guard in
+# ``tests/test_llm_config_resolver.py`` (which enumerates
+# ``_provider_registry.list_keys()``) covers both bindings at once.
 config_registries.register(
     "embedding", _resolve_llm_config_cls, allow_overwrite=True
 )
@@ -314,8 +319,6 @@ async def create_embedding_provider(
             if config.mode is CompletionMode.EMBEDDING
             else config.clone(mode=CompletionMode.EMBEDDING)
         )
-        provider_name = config.provider
-        model_name = config.model
     else:
         # Dict path. 1. Nested "embedding" sub-dict (preferred)
         extra: dict[str, Any]
@@ -343,6 +346,15 @@ async def create_embedding_provider(
             "mode": "embedding",  # Always forced — must come after **extra
         }
 
+    # Single log/error identity, read from the *resolved* ``provider_config``
+    # (the typed path may have cloned it for embedding mode) so the success and
+    # failure log sites share one source. ``provider_config`` is an
+    # ``LLMConfig`` on the typed path, a built dict on the dict path.
+    if isinstance(provider_config, LLMConfig):
+        log_provider, log_model = provider_config.provider, provider_config.model
+    else:
+        log_provider, log_model = provider_config["provider"], provider_config["model"]
+
     factory = LLMProviderFactory(is_async=True)
     try:
         provider = factory.create(provider_config)
@@ -350,15 +362,15 @@ async def create_embedding_provider(
     except Exception:
         _logger.exception(
             "Failed to create embedding provider: %s/%s",
-            provider_name,
-            model_name,
+            log_provider,
+            log_model,
         )
         raise
 
     _logger.info(
         "Embedding provider initialized: %s/%s",
-        provider_name,
-        model_name,
+        log_provider,
+        log_model,
     )
     return provider
 

@@ -146,7 +146,9 @@ discards the dry-run objects — the sections stay raw mappings. It covers:
   field error in the resolved memory config raises. A `composite` memory's
   `strategies` are validated element-wise. A `summary` memory's dedicated
   `llm` section and a `vector` memory's nested `embedding` section are
-  validated by the same descent.
+  validated by the same descent. (`vector` is the only memory type that
+  carries an `embedding` section — `buffer`, `summary`, and `composite`
+  have none, so no other memory type needs an `embedding` binding.)
 - **`knowledge_base`** — an unknown `type` raises; and because the resolved
   `RAGKnowledgeBaseConfig` carries its own `vector_store` and `embedding`
   bindings, the single call **descends into the nested `vector_store` and
