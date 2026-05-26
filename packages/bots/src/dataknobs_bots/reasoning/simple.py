@@ -3,11 +3,15 @@
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
+from dataknobs_common.structured_config import StructuredConfigConsumer
+
 from .base import ReasoningStrategy
 from .simple_config import SimpleReasoningConfig
 
 
-class SimpleReasoning(ReasoningStrategy):
+class SimpleReasoning(
+    StructuredConfigConsumer[SimpleReasoningConfig], ReasoningStrategy
+):
     """Simple reasoning strategy that makes direct LLM calls.
 
     This is the most straightforward strategy - it simply passes
@@ -30,12 +34,14 @@ class SimpleReasoning(ReasoningStrategy):
         ```
     """
 
-    #: Typed config pointer (read by the reasoning validation resolver and
-    #: a future consumer-mixin adoption); construction is unchanged.
+    #: Typed config consumed via the ``StructuredConfigConsumer`` mixin —
+    #: ``cls.from_config({...})`` / ``cls(SimpleReasoningConfig(...))`` /
+    #: ``cls(greeting_template=...)`` all reach the same typed ``self.config``.
     CONFIG_CLS: ClassVar[type[SimpleReasoningConfig]] = SimpleReasoningConfig
 
-    def __init__(self, *, greeting_template: str | None = None) -> None:
-        super().__init__(greeting_template=greeting_template)
+    def _setup(self) -> None:
+        """Bind the greeting template from the typed config."""
+        self._greeting_template = self.config.greeting_template
 
     async def generate(
         self,

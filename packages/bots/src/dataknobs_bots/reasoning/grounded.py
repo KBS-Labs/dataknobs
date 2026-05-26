@@ -32,6 +32,8 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.structured_config import StructuredConfigConsumer
+
 from dataknobs_bots.utils.template_env import create_template_env
 
 if TYPE_CHECKING:
@@ -192,7 +194,9 @@ class SynthesisPlan:
         return response
 
 
-class GroundedReasoning(ReasoningStrategy):
+class GroundedReasoning(
+    StructuredConfigConsumer[GroundedReasoningConfig], ReasoningStrategy
+):
     """Reasoning strategy with deterministic multi-source retrieval.
 
     Every turn executes the full retrieval pipeline regardless of whether
@@ -230,8 +234,13 @@ class GroundedReasoning(ReasoningStrategy):
           store_provenance: true
     """
 
-    #: Typed config pointer (read by the reasoning validation resolver and
-    #: a future consumer-mixin adoption); construction is unchanged.
+    #: Typed config consumed via the ``StructuredConfigConsumer`` mixin.
+    #: Construction flows through ``CONFIG_CLS`` (typed ``config=`` or a
+    #: config dict); the injected collaborators (``sources``,
+    #: ``query_provider``, ``prompt_resolver``, ``knowledge_base``) are NOT
+    #: config — they travel through the mixin's ``components`` channel
+    #: (``cls.from_config({...}, knowledge_base=kb, prompt_resolver=pr)``)
+    #: and are bound in :meth:`_setup`.
     CONFIG_CLS: ClassVar[type[GroundedReasoningConfig]] = GroundedReasoningConfig
 
     @classmethod
@@ -239,71 +248,41 @@ class GroundedReasoning(ReasoningStrategy):
         """Grounded strategy manages its own retrieval sources."""
         return StrategyCapabilities(manages_sources=True)
 
-    @classmethod
-    def from_config(  # type: ignore[override]
-        cls,
-        config: dict[str, Any],
-        **kwargs: Any,
-    ) -> GroundedReasoning:
-        """Create GroundedReasoning from a configuration dict.
+    def _setup(self) -> None:
+        """Build the retrieval pipeline from config and injected collaborators.
 
-        Args:
-            config: Configuration dict (passed to
-                ``GroundedReasoningConfig.from_dict``).
-            **kwargs: Optional ``knowledge_base`` — auto-wrapped as a
-                ``VectorKnowledgeSource`` when the config doesn't
-                already declare a ``vector_kb`` source.
-
-        Returns:
-            Configured GroundedReasoning instance.
+        Computes the derived components (mergers, formatters, query
+        generators, Jinja2 environments, result pipeline) from
+        ``self.config``, binds the optional injected collaborators
+        (``sources`` / ``query_provider`` / ``prompt_resolver`` /
+        ``knowledge_base``) from the mixin's ``components`` channel, and —
+        when a ``knowledge_base`` is injected and the config does not
+        already declare a ``vector_kb`` source — auto-wraps it as a
+        ``VectorKnowledgeSource`` (the same guard the former ``from_config``
+        applied, preventing the double-wrap with DynaBot's source loop).
         """
-        grounded_config = GroundedReasoningConfig.from_dict(config)
-        strategy = cls(
-            config=grounded_config,
-            prompt_resolver=kwargs.get("prompt_resolver"),
+        config = self.config
+        self._greeting_template = config.greeting_template
+        prompt_resolver: PromptResolver | None = self.components.get(
+            "prompt_resolver"
         )
-        # Auto-wrap knowledge_base as a VectorKnowledgeSource — but
-        # only when the config doesn't already declare a vector_kb
-        # source.  Otherwise the same KB gets wrapped twice: once
-        # here, and once by the source construction loop in
-        # DynaBot.from_config (bot/base.py).
-        knowledge_base = kwargs.get("knowledge_base")
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb" for s in grounded_config.sources
-        )
-        if knowledge_base is not None and not has_vector_kb_source:
-            strategy.set_knowledge_base(knowledge_base)
-        return strategy
-
-    def __init__(
-        self,
-        config: GroundedReasoningConfig,
-        sources: list[GroundedSource] | None = None,
-        query_provider: Any | None = None,
-        prompt_resolver: PromptResolver | None = None,
-    ) -> None:
-        """Initialize the grounded reasoning strategy.
-
-        Args:
-            config: Strategy configuration.
-            sources: List of grounded sources to query.  When empty,
-                use :meth:`set_knowledge_base` or :meth:`add_source`
-                to inject sources after construction.
-            query_provider: Optional separate LLM provider for query
-                generation.  When ``None`` the bot's main LLM (passed
-                as ``llm`` to :meth:`generate`) is used.
-            prompt_resolver: Optional PromptResolver for resolving
-                synthesis and provenance prompts from the prompt library.
-        """
-        super().__init__(greeting_template=config.greeting_template)
-        self._config = config
         self._prompt_resolver = prompt_resolver
-        self._sources: list[GroundedSource] = list(sources) if sources else []
+        injected_sources: list[GroundedSource] | None = self.components.get(
+            "sources"
+        )
+        self._sources: list[GroundedSource] = (
+            list(injected_sources) if injected_sources else []
+        )
         self._source_weights: dict[str, int] = {
             sc.name: sc.weight for sc in config.sources
         }
+        query_provider: Any | None = self.components.get("query_provider")
         self._query_provider = query_provider
-        self._merger = ChunkMerger(MergerConfig()) if config.retrieval.merge_adjacent else None
+        self._merger = (
+            ChunkMerger(MergerConfig())
+            if config.retrieval.merge_adjacent
+            else None
+        )
         self._formatter = ContextFormatter(FormatterConfig(
             include_scores=False,
             include_source=True,
@@ -361,6 +340,17 @@ class GroundedReasoning(ReasoningStrategy):
             rp_dict = asdict(config.result_processing)
             self._result_pipeline = build_pipeline(rp_dict)
 
+        # Auto-wrap an injected knowledge_base as a VectorKnowledgeSource —
+        # but only when the config doesn't already declare a vector_kb
+        # source.  Otherwise the same KB gets wrapped twice: once here, and
+        # once by the source construction loop in DynaBot (bot/base.py).
+        knowledge_base = self.components.get("knowledge_base")
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb" for s in config.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            self.set_knowledge_base(knowledge_base)
+
     # ------------------------------------------------------------------
     # Source management
     # ------------------------------------------------------------------
@@ -403,7 +393,7 @@ class GroundedReasoning(ReasoningStrategy):
 
         # Determine source name from config (if a vector_kb source is declared)
         source_name = "knowledge_base"
-        for source_cfg in self._config.sources:
+        for source_cfg in self.config.sources:
             if source_cfg.source_type == "vector_kb":
                 source_name = source_cfg.name
                 break
@@ -420,7 +410,7 @@ class GroundedReasoning(ReasoningStrategy):
 
     def _find_topic_index_config(self) -> dict[str, Any] | None:
         """Find topic_index config from source declarations."""
-        for source_cfg in self._config.sources:
+        for source_cfg in self.config.sources:
             if source_cfg.source_type == "vector_kb" and source_cfg.topic_index:
                 return source_cfg.topic_index
         return None
@@ -521,7 +511,7 @@ class GroundedReasoning(ReasoningStrategy):
 
         result = await self._synthesize(context, manager, provenance, **kwargs)
 
-        if self._config.store_provenance:
+        if self.config.store_provenance:
             self.store_provenance(manager, provenance)
 
         return result
@@ -579,7 +569,7 @@ class GroundedReasoning(ReasoningStrategy):
                     finish_reason="stop",
                 )
 
-        if self._config.store_provenance:
+        if self.config.store_provenance:
             self.store_provenance(manager, provenance)
 
     # ------------------------------------------------------------------
@@ -668,7 +658,7 @@ class GroundedReasoning(ReasoningStrategy):
         metadata: dict[str, Any],
     ) -> RetrievalIntent:
         """Resolve retrieval intent based on configured mode."""
-        cfg = self._config.intent
+        cfg = self.config.intent
         mode = cfg.mode
 
         if mode == "static":
@@ -705,7 +695,7 @@ class GroundedReasoning(ReasoningStrategy):
 
     def _build_static_intent(self, user_message: str) -> RetrievalIntent:
         """Build intent from static config values."""
-        cfg = self._config.intent
+        cfg = self.config.intent
         queries = list(cfg.text_queries)
         if cfg.include_message_as_query and user_message:
             queries.append(user_message)
@@ -732,7 +722,7 @@ class GroundedReasoning(ReasoningStrategy):
         """
         import yaml
 
-        cfg = self._config.intent
+        cfg = self.config.intent
         if not cfg.template:
             logger.warning("Intent mode is 'template' but no template configured; falling back to message")
             return RetrievalIntent(text_queries=[user_message])
@@ -779,7 +769,7 @@ class GroundedReasoning(ReasoningStrategy):
         ``[user_message]`` when extraction returns empty queries or
         raises an exception.
         """
-        cfg = self._config.intent
+        cfg = self.config.intent
 
         # Optional: enrich ambiguous queries with context keywords
         enriched = user_message
@@ -888,7 +878,7 @@ class GroundedReasoning(ReasoningStrategy):
         if self._transformer is None:
             return [user_message]
 
-        cfg = self._config.intent
+        cfg = self.config.intent
         provider = self._query_provider or llm
 
         # Ensure the transformer has the current provider
@@ -990,7 +980,7 @@ class GroundedReasoning(ReasoningStrategy):
             logger.warning("Grounded strategy has no sources configured — returning empty results")
             return {}
 
-        cfg = self._config.retrieval
+        cfg = self.config.retrieval
         results_by_source: dict[str, list[SourceResult]] = {}
 
         for source in self._sources:
@@ -1065,7 +1055,7 @@ class GroundedReasoning(ReasoningStrategy):
                         exhausted.add(name)
                         break
 
-        if not self._config.retrieval.deduplicate:
+        if not self.config.retrieval.deduplicate:
             return merged
 
         # Deduplicate by (source_name, source_id)
@@ -1295,12 +1285,12 @@ class GroundedReasoning(ReasoningStrategy):
             return session_style
 
         # 3. Config-level style
-        config_style = self._config.synthesis.style
+        config_style = self.config.synthesis.style
         if config_style in _VALID_STYLES:
             return config_style
 
         # 4. Legacy mode mapping
-        if self._config.synthesis.mode == "template":
+        if self.config.synthesis.mode == "template":
             return "structured"
 
         # 5. Default
@@ -1358,9 +1348,9 @@ class GroundedReasoning(ReasoningStrategy):
             kb_context: Formatted knowledge base context string.
             original_system_prompt: The base system prompt to augment.
             synthesis_config: Optional override for synthesis settings.
-                When ``None``, uses ``self._config.synthesis``.
+                When ``None``, uses ``self.config.synthesis``.
         """
-        cfg = synthesis_config or self._config.synthesis
+        cfg = synthesis_config or self.config.synthesis
 
         # Try library-based prompt resolution.  The meta-prompt uses Jinja2
         # conditionals to replicate the inline if/elif/else logic below.

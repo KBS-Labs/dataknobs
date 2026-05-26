@@ -105,8 +105,8 @@ class TestReActPromptRefresh:
             refresh_count += 1
             return f"Refreshed prompt (state={shared_state['value']})"
 
-        react = ReActReasoning(
-            max_iterations=5,
+        react = ReActReasoning.from_config(
+            {"max_iterations": 5},
             prompt_refresher=refresher,
         )
 
@@ -199,8 +199,8 @@ class TestReActPromptRefresh:
             refresh_count += 1
             return f"Refreshed-{refresh_count} (state={shared_state['value']})"
 
-        react = ReActReasoning(
-            max_iterations=2,
+        react = ReActReasoning.from_config(
+            {"max_iterations": 2},
             prompt_refresher=refresher,
         )
 
@@ -247,8 +247,8 @@ class TestReActPromptRefresh:
             refresh_count += 1
             return "Should not be called"
 
-        react = ReActReasoning(
-            max_iterations=5,
+        react = ReActReasoning.from_config(
+            {"max_iterations": 5},
             prompt_refresher=refresher,
         )
 
