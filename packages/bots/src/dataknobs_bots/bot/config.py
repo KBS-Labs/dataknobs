@@ -79,11 +79,13 @@ class DynaBotConfig(StructuredConfig):
     # bot), and — because ``RAGKnowledgeBaseConfig`` carries its own
     # ``vector_store`` binding — descends into the nested vector-store section
     # too. Bindings are strings: ``dataknobs-bots`` registers the ``memory`` /
-    # ``knowledge_base`` resolvers eagerly on import, so this adds no import of
-    # a subsystem config type. ``reasoning`` is intentionally NOT bound yet (it
-    # needs a reasoning-strategy config family first); ``conversation_storage``
-    # is owned by ``dataknobs-llm`` and likewise unbound for now.
+    # ``knowledge_base`` resolvers eagerly on import and ``dataknobs-llm``
+    # registers the ``llm`` resolver, so this adds no import of a subsystem
+    # config type. ``reasoning`` is intentionally NOT bound yet (it needs a
+    # reasoning-strategy config family first); ``conversation_storage`` is
+    # owned by ``dataknobs-llm`` and likewise unbound for now.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = {
+        "llm": "llm",
         "memory": "memory",
         "knowledge_base": "knowledge_base",
     }

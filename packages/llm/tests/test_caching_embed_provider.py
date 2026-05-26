@@ -327,8 +327,8 @@ class TestCachingEmbedProviderEmbed:
         await provider.embed("hello")
         assert inner.embed_call_count == 1
 
-        # Change the model on inner config
-        inner.config.model = "different-model"
+        # Change the model on inner config (LLMConfig is frozen — clone)
+        inner.config = inner.config.clone(model="different-model")
         await provider.embed("hello")
         assert inner.embed_call_count == 2  # Different model → cache miss
         assert await cache.count() == 2

@@ -11,6 +11,46 @@ Config overrides allow you to dynamically adjust LLM parameters for individual r
 - **Cost Optimization**: Use cheaper models for simple tasks
 - **Dynamic Tuning**: Adjust creativity/precision based on context
 
+## `LLMConfig` is immutable
+
+`LLMConfig` is a frozen [`StructuredConfig`](../../common/structured-config.md):
+its fields cannot be reassigned after construction. This is what makes
+per-request overrides safe — an override never mutates the provider's base
+config; it produces a derived copy for that one request. To create a varied
+config yourself, use `clone()`:
+
+```python
+base = LLMConfig(provider="openai", model="gpt-4", temperature=0.7)
+
+# Derive a variant — base is untouched.
+creative = base.clone(temperature=1.2, max_tokens=2000)
+
+# Mutating a field raises (the config is frozen).
+base.temperature = 1.0  # dataclasses.FrozenInstanceError
+```
+
+### `api_key` is redacted in `repr`
+
+Because `LLMConfig` is a `StructuredConfig`, its `repr()` masks the `api_key`
+field as `'***'`, so a credential never leaks into logs through
+`repr(config)` or an f-string. The real value is unchanged — only the
+display is redacted, so `to_dict()` (used for round-tripping) still carries
+the key:
+
+```python
+config = LLMConfig(provider="openai", model="gpt-4", api_key="sk-secret")
+print(config)                  # LLMConfig(provider='openai', ..., api_key='***', ...)
+config.to_dict()["api_key"]    # 'sk-secret' — round-trip preserves it
+```
+
+### Serialization: `to_dict` vs `to_json_dict`
+
+`to_dict()` is the symmetric in-process projection — every field is present
+(unset optionals as `None`) and `Enum` fields keep their members, so
+`LLMConfig.from_dict(config.to_dict()) == config`. When you need a
+JSON-serialisable dict, use `to_json_dict()`, which renders enums (e.g.
+`mode`) as their string `.value`.
+
 ## Basic Usage
 
 ### Provider-Level Overrides

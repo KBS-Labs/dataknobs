@@ -214,35 +214,40 @@ def test_llm_config_to_dict_basic():
     assert config_dict["temperature"] == 0.8
 
 
-def test_llm_config_to_dict_enum_conversion():
-    """Test to_dict converts enums to values."""
+def test_llm_config_to_dict_keeps_enum_member():
+    """to_dict (in-process) keeps the Enum member; to_json_dict renders .value.
+
+    Since the StructuredConfig migration, ``to_dict`` is the symmetric
+    in-process projection (Enum members preserved for an exact round-trip),
+    and ``to_json_dict`` is the JSON-safe projection that renders enums as
+    their ``.value``.
+    """
     config = LLMConfig(
         provider="openai",
         model="gpt-4",
         mode=CompletionMode.INSTRUCT
     )
-    config_dict = config.to_dict()
-    assert config_dict["mode"] == "instruct"
-    assert isinstance(config_dict["mode"], str)
+    assert config.to_dict()["mode"] is CompletionMode.INSTRUCT
+    json_dict = config.to_json_dict()
+    assert json_dict["mode"] == "instruct"
+    assert isinstance(json_dict["mode"], str)
 
 
-def test_llm_config_to_dict_with_config_attrs():
-    """Test to_dict with include_config_attrs=True."""
+def test_llm_config_to_dict_is_symmetric():
+    """to_dict is symmetric serialization: all fields present, round-trips.
+
+    The StructuredConfig base no longer omits ``None`` fields (the old
+    hand-rolled ``to_dict`` did); it emits every field so that
+    ``from_dict(to_dict())`` reconstructs the config exactly. The default
+    ``options`` factory is included as an empty dict.
+    """
     config = LLMConfig(provider="openai", model="gpt-4")
-    config_dict = config.to_dict(include_config_attrs=True)
-    assert config_dict["type"] == "llm"
-    assert config_dict["provider"] == "openai"
-
-
-def test_llm_config_to_dict_excludes_none():
-    """Test to_dict excludes None values for optional fields."""
-    config = LLMConfig(provider="openai", model="gpt-4")
     config_dict = config.to_dict()
-    # None values should not be in dict
-    assert "api_key" not in config_dict or config_dict.get("api_key") is not None
-    # But options should be included even if empty
-    assert "options" in config_dict
+    # Every field is present, including unset optionals (as None).
+    assert config_dict["api_key"] is None
     assert config_dict["options"] == {}
+    # Exact round-trip.
+    assert LLMConfig.from_dict(config_dict) == config
 
 
 def test_normalize_llm_config_with_llm_config():
@@ -392,3 +397,67 @@ def test_llm_config_dimensions_not_in_generation_params():
     params = config.generation_params()
     assert "dimensions" not in params
     assert params["temperature"] == 0.5
+
+
+def test_llm_config_is_structured_config():
+    """LLMConfig is a frozen StructuredConfig."""
+    import dataclasses
+
+    from dataknobs_common.structured_config import StructuredConfig
+
+    assert issubclass(LLMConfig, StructuredConfig)
+    config = LLMConfig(provider="openai", model="gpt-4")
+    # Frozen — post-construction field assignment is rejected.
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.model = "other"  # type: ignore[misc]
+
+
+def test_llm_config_repr_redacts_api_key():
+    """repr() masks api_key so the credential never leaks to logs."""
+    config = LLMConfig(
+        provider="openai",
+        model="gpt-4",
+        api_key="sk-super-secret-value",
+    )
+    text = repr(config)
+    assert "sk-super-secret-value" not in text
+    assert "api_key='***'" in text
+    # A non-secret field is shown verbatim.
+    assert "provider='openai'" in text
+    # The real value is untouched (display-only redaction).
+    assert config.api_key == "sk-super-secret-value"
+
+
+def test_llm_config_repr_unset_api_key_not_masked():
+    """An unset (None) api_key is shown verbatim — nothing to redact."""
+    config = LLMConfig(provider="openai", model="gpt-4")
+    assert "api_key=None" in repr(config)
+
+
+def test_llm_config_to_dict_does_not_redact_api_key():
+    """to_dict is for round-trip, not display — api_key is preserved."""
+    config = LLMConfig(provider="openai", model="gpt-4", api_key="sk-keep")
+    assert config.to_dict()["api_key"] == "sk-keep"
+
+
+def test_llm_config_structured_config_roundtrip():
+    """from_dict(to_dict()) == cfg for flat and option/function-populated configs."""
+    from dataknobs_common.testing import assert_structured_config_roundtrip
+
+    flat = LLMConfig(provider="openai", model="gpt-4", temperature=0.7)
+    assert_structured_config_roundtrip(flat)
+
+    rich = LLMConfig(
+        provider="anthropic",
+        model="claude-3-sonnet",
+        api_key="sk-secret",
+        mode=CompletionMode.FUNCTION,
+        temperature=1.2,
+        max_tokens=2000,
+        stop_sequences=["END", "STOP"],
+        functions=[{"name": "search", "parameters": {"type": "object"}}],
+        function_call="auto",
+        options={"echo_prefix": "x", "n": 3},
+        capabilities=["json_mode", "function_calling"],
+    )
+    assert_structured_config_roundtrip(rich)

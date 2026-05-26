@@ -570,7 +570,10 @@ class OllamaProvider(AsyncLLMProvider):
                             # Check if configured model is available
                             matching = _find_matching_models(self.config.model, models)
                             if matching and matching[0] != self.config.model:
-                                self.config.model = matching[0]
+                                # ``LLMConfig`` is a frozen ``StructuredConfig`` —
+                                # replace the config via ``clone`` rather than
+                                # mutating the (immutable) ``model`` field.
+                                self.config = self.config.clone(model=matching[0])
                                 logger.info("Ollama: Using model %s", self.config.model)
                             elif not matching:
                                 logger.warning(

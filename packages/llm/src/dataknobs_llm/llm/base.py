@@ -62,11 +62,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, Coroutine, Dict, List, Union, AsyncIterator, Iterator,
+    Any, ClassVar, Coroutine, Dict, List, Union, AsyncIterator, Iterator,
     Callable, Protocol
 )
 
 from dataknobs_common.exceptions import ResourceError
+from dataknobs_common.structured_config import StructuredConfig
 from datetime import datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
@@ -443,8 +444,8 @@ class LLMStreamResponse:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class LLMConfig:
+@dataclass(frozen=True)
+class LLMConfig(StructuredConfig):
     """Configuration for LLM operations.
 
     Comprehensive configuration for LLM providers with 20+ parameters
@@ -538,6 +539,13 @@ class LLMConfig:
         normalize_llm_config: Convert various formats to LLMConfig
         CompletionMode: Available completion modes
     """
+
+    # ``api_key`` is the only credential field. Naming it here makes the
+    # ``StructuredConfig`` redacting repr mask it as ``'***'`` so the key
+    # never reaches logs via ``repr(config)`` or an f-string. ``api_base`` /
+    # ``user_id`` are not secrets and are shown verbatim.
+    _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"api_key"})
+
     provider: str  # 'openai', 'anthropic', 'ollama', etc.
     model: str  # Model name/identifier
     api_key: str | None = None
@@ -586,65 +594,16 @@ class LLMConfig:
     # ModelCapability enum names (e.g. "json_mode", "function_calling").
     capabilities: List[str] | None = None
 
-    @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "LLMConfig":
-        """Create LLMConfig from a dictionary.
-
-        This method handles dictionaries from dataknobs Config objects,
-        which may include 'type', 'name', and 'factory' attributes.
-        These attributes are ignored during LLMConfig construction.
-
-        Args:
-            config_dict: Configuration dictionary
-
-        Returns:
-            LLMConfig instance
-        """
-        # Filter out Config-specific attributes
-        config_data = {
-            k: v for k, v in config_dict.items()
-            if k not in ('type', 'name', 'factory')
-        }
-
-        # Handle mode conversion if it's a string
-        if 'mode' in config_data and isinstance(config_data['mode'], str):
-            config_data['mode'] = CompletionMode(config_data['mode'])
-
-        # Get dataclass fields to filter unknown attributes
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered_data = {k: v for k, v in config_data.items() if k in valid_fields}
-
-        return cls(**filtered_data)
-
-    def to_dict(self, include_config_attrs: bool = False) -> Dict[str, Any]:
-        """Convert LLMConfig to a dictionary.
-
-        Args:
-            include_config_attrs: If True, includes 'type' attribute for Config compatibility
-
-        Returns:
-            Configuration dictionary
-        """
-        result = {}
-
-        for field_info in self.__dataclass_fields__.values():
-            value = getattr(self, field_info.name)
-
-            # Handle enum conversion
-            if isinstance(value, Enum):
-                result[field_info.name] = value.value
-            # Skip None values for optional fields
-            elif value is not None:
-                result[field_info.name] = value
-            # Include default factories even if empty for certain fields
-            elif field_info.name == 'options':
-                result[field_info.name] = {}
-
-        # Optionally add Config-compatible type attribute
-        if include_config_attrs:
-            result['type'] = 'llm'
-
-        return result
+    # ``from_dict`` / ``to_dict`` are inherited from ``StructuredConfig``:
+    #  - ``from_dict`` ignores unknown keys (so a dataknobs ``Config``'s
+    #    ``type`` / ``name`` / ``factory`` are dropped automatically) and
+    #    coerces the ``mode`` enum from its string value — exactly what the
+    #    old hand-rolled version did, with no per-class code.
+    #  - ``to_dict`` is the symmetric in-process projection (keeps ``Enum``
+    #    members and round-trips). ``to_json_dict`` renders enums as their
+    #    ``.value`` for a JSON-safe dict. Neither is redacted (display-only
+    #    redaction lives in the repr), so a round-trip preserves ``api_key``.
+    # ``clone`` and ``generation_params`` below are LLM-specific and retained.
 
     def clone(self, **overrides: Any) -> "LLMConfig":
         """Create a copy of this config with optional overrides.

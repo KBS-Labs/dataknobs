@@ -51,6 +51,13 @@ class SummaryMemoryConfig(StructuredConfig):
     summary_prompt: str | None = None
     llm: dict[str, Any] | None = None
 
+    # The ``llm`` section is dispatched by ``provider`` in the LLM provider
+    # registry; binding it here lets ``validate()`` dry-run-build the
+    # ``LLMConfig`` and catch an unknown provider / bad field at config-lint
+    # time. The binding name is a string — ``dataknobs-llm`` registers the
+    # ``llm`` resolver eagerly on import, so no LLM config type is imported.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {"llm": "llm"}
+
 
 @dataclass(frozen=True)
 class VectorMemoryConfig(StructuredConfig):
