@@ -19,6 +19,8 @@ These construct config internals directly (not bot flows), so no
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 # Required side-effect import: importing this module registers the
 # "knowledge_base" resolver in config_registries. Do NOT remove as "unused".
 import dataknobs_bots.knowledge.registry  # noqa: F401
@@ -62,21 +64,15 @@ def test_resolver_returns_none_for_unknown_type() -> None:
     assert _resolver()({"type": "raag"}) is None
 
 
-def test_registered_backend_without_config_cls_is_skipped() -> None:
+def test_registered_backend_without_config_cls_is_skipped(
+    register_untyped_backend: Callable[..., str],
+) -> None:
     # A backend registered as a bare callable (no CONFIG_CLS) is recognized
     # but has no typed schema to validate against. The resolver returns
     # SKIP_VALIDATION (not None), so validate() skips it rather than
     # false-positive-raising on a valid, constructible backend.
-    def _untyped_factory(config: object = None, **_: object) -> object:
-        raise NotImplementedError  # never built — resolver only reads the type
-
-    knowledge_base_backends.register(
-        "untyped_test_backend", _untyped_factory, override=True
-    )
-    try:
-        assert _resolver()({"type": "untyped_test_backend"}) is SKIP_VALIDATION
-    finally:
-        knowledge_base_backends.unregister("untyped_test_backend")
+    register_untyped_backend(knowledge_base_backends)
+    assert _resolver()({"type": "untyped_test_backend"}) is SKIP_VALIDATION
 
 
 def test_resolved_config_is_structured_config_subclass() -> None:

@@ -19,6 +19,8 @@ is imported so the nested ``vector_store`` resolver is registered too.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 # Required side-effect imports: registering the resolvers in config_registries
 # that validate() resolves the sections against. Do NOT remove as "unused" —
 # without them the bindings are unregistered and validate() degrades to a
@@ -164,17 +166,13 @@ def test_composite_all_good_strategies_validates() -> None:
 # --- skip sentinel: bare-callable backend skipped, not raised ---
 
 
-def test_bare_callable_backend_skipped_without_raising() -> None:
+def test_bare_callable_backend_skipped_without_raising(
+    register_untyped_backend: Callable[..., str],
+) -> None:
     # A custom backend registered as a bare callable has no CONFIG_CLS; the
     # resolver returns SKIP_VALIDATION, so validate() skips its section rather
     # than false-positive-raising on a valid, constructible backend.
-    def _untyped_factory(config: object = None, **_: object) -> object:
-        raise NotImplementedError  # never built — validate() only resolves
-
-    memory_backends.register("untyped_test_backend", _untyped_factory, override=True)
-    try:
-        DynaBotConfig.from_dict(
-            {"memory": {"type": "untyped_test_backend", "anything": 1}}
-        ).validate()
-    finally:
-        memory_backends.unregister("untyped_test_backend")
+    register_untyped_backend(memory_backends)
+    DynaBotConfig.from_dict(
+        {"memory": {"type": "untyped_test_backend", "anything": 1}}
+    ).validate()
