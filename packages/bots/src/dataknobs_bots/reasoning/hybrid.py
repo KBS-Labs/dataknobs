@@ -25,6 +25,8 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.structured_config import StructuredConfigConsumer
+
 from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
 
 if TYPE_CHECKING:
@@ -33,11 +35,14 @@ from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.grounded_config import GroundedSynthesisConfig
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.react import ReActReasoning
+from dataknobs_bots.reasoning.react_config import ReActReasoningConfig
 
 logger = logging.getLogger(__name__)
 
 
-class HybridReasoning(ReasoningStrategy):
+class HybridReasoning(
+    StructuredConfigConsumer[HybridReasoningConfig], ReasoningStrategy
+):
     """Reasoning strategy combining grounded retrieval with ReAct tool use.
 
     Holds a :class:`GroundedReasoning` instance for the mandatory
@@ -65,8 +70,13 @@ class HybridReasoning(ReasoningStrategy):
             strategy = HybridReasoning(config=config)
     """
 
-    #: Typed config pointer (read by the reasoning validation resolver and
-    #: a future consumer-mixin adoption); construction is unchanged.
+    #: Typed config consumed via the ``StructuredConfigConsumer`` mixin.
+    #: Construction flows through ``CONFIG_CLS`` (typed ``config=`` or a
+    #: config dict); the injected collaborators (``knowledge_base``,
+    #: ``prompt_resolver``) are NOT config — they travel through the
+    #: mixin's ``components`` channel
+    #: (``cls.from_config({...}, knowledge_base=kb, prompt_resolver=pr)``)
+    #: and are consumed in :meth:`_setup`.
     CONFIG_CLS: ClassVar[type[HybridReasoningConfig]] = HybridReasoningConfig
 
     @classmethod
@@ -88,60 +98,47 @@ class HybridReasoning(ReasoningStrategy):
             )
         return config.get("grounded", {}).get("sources", [])
 
-    @classmethod
-    def from_config(  # type: ignore[override]
-        cls,
-        config: dict[str, Any],
-        **kwargs: Any,
-    ) -> HybridReasoning:
-        """Create HybridReasoning from a configuration dict.
+    def _setup(self) -> None:
+        """Build the grounded + ReAct child strategies and auto-wrap the KB.
 
-        Args:
-            config: Configuration dict (passed to
-                ``HybridReasoningConfig.from_dict``).
-            **kwargs: Optional ``knowledge_base`` — auto-wrapped via
-                the grounded child's ``set_knowledge_base``.
-                Optional ``prompt_resolver`` — forwarded to the
-                grounded child for library-based prompt resolution.
-
-        Returns:
-            Configured HybridReasoning instance.
+        The ``prompt_resolver`` collaborator (from the mixin's
+        ``components`` channel) is forwarded to the grounded child via its
+        own mixin entry point; the already-typed ``config.grounded`` is
+        passed through ``GroundedReasoning.from_config`` without a dict
+        round-trip.  The ReAct child takes a typed ``ReActReasoningConfig``
+        directly (no collaborators).  When a ``knowledge_base`` is injected
+        and the config does not already declare a ``vector_kb`` source, it
+        is auto-wrapped through the grounded child — the same guard the
+        former ``from_config`` applied.
         """
-        hybrid_config = HybridReasoningConfig.from_dict(config)
-        strategy = cls(
-            config=hybrid_config,
-            prompt_resolver=kwargs.get("prompt_resolver"),
+        config = self.config
+        self._greeting_template = config.greeting_template
+        prompt_resolver: PromptResolver | None = self.components.get(
+            "prompt_resolver"
         )
-        # Auto-wrap knowledge_base — same guard as GroundedReasoning.
-        # Check the grounded child's sources to avoid double-wrapping
-        # when the config already declares a vector_kb source.
-        knowledge_base = kwargs.get("knowledge_base")
-        has_vector_kb_source = any(
-            s.source_type == "vector_kb"
-            for s in hybrid_config.grounded.sources
-        )
-        if knowledge_base is not None and not has_vector_kb_source:
-            strategy.set_knowledge_base(knowledge_base)
-        return strategy
 
-    def __init__(
-        self,
-        *,
-        config: HybridReasoningConfig,
-        prompt_resolver: PromptResolver | None = None,
-    ) -> None:
-        super().__init__(greeting_template=config.greeting_template)
-        self._config = config
-
-        self._grounded = GroundedReasoning(
-            config=config.grounded,
+        self._grounded = GroundedReasoning.from_config(
+            config.grounded,
             prompt_resolver=prompt_resolver,
         )
         self._react = ReActReasoning(
-            max_iterations=config.react_max_iterations,
-            verbose=config.react_verbose,
-            store_trace=config.react_store_trace,
+            ReActReasoningConfig(
+                max_iterations=config.react_max_iterations,
+                verbose=config.react_verbose,
+                store_trace=config.react_store_trace,
+            )
         )
+
+        # Auto-wrap knowledge_base — same guard as GroundedReasoning.
+        # Check the grounded child's config sources to avoid double-wrapping
+        # when the config already declares a vector_kb source.
+        knowledge_base = self.components.get("knowledge_base")
+        has_vector_kb_source = any(
+            s.source_type == "vector_kb"
+            for s in config.grounded.sources
+        )
+        if knowledge_base is not None and not has_vector_kb_source:
+            self.set_knowledge_base(knowledge_base)
 
     @property
     def grounded_strategy(self) -> GroundedReasoning:

@@ -199,7 +199,8 @@ class TestReActBeginTurn:
         manager = await _make_manager(provider)
         tool = EchoTool()
 
-        strategy = ReActReasoning(
+        strategy = ReActReasoning.from_config(
+            {},
             artifact_registry="mock_registry",
             review_executor="mock_executor",
             extra_context={"custom_key": "custom_value"},

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.exceptions import ToolsNotSupportedError
 from dataknobs_llm.llm.base import LLMResponse
@@ -55,7 +56,9 @@ class ReActTurnHandle(TurnHandle):
     verbose: bool = False
 
 
-class ReActReasoning(ReasoningStrategy):
+class ReActReasoning(
+    StructuredConfigConsumer[ReActReasoningConfig], ReasoningStrategy
+):
     """ReAct (Reasoning + Acting) strategy.
 
     This strategy implements the ReAct pattern where the LLM:
@@ -89,8 +92,14 @@ class ReActReasoning(ReasoningStrategy):
         ```
     """
 
-    #: Typed config pointer (read by the reasoning validation resolver and
-    #: a future consumer-mixin adoption); construction is unchanged.
+    #: Typed config consumed via the ``StructuredConfigConsumer`` mixin.
+    #: Config scalars (``max_iterations``/``verbose``/``store_trace``/
+    #: ``greeting_template``) flow through ``CONFIG_CLS``; the injected
+    #: runtime collaborators (artifact registry, review executor, context
+    #: builder, extra context, prompt refresher) are NOT config — they
+    #: travel through the mixin's ``components`` channel
+    #: (``cls.from_config({...}, prompt_refresher=fn)``) and are bound in
+    #: :meth:`_setup`.
     CONFIG_CLS: ClassVar[type[ReActReasoningConfig]] = ReActReasoningConfig
 
     @classmethod
@@ -98,65 +107,28 @@ class ReActReasoning(ReasoningStrategy):
         """ReAct manages its own tool execution loop."""
         return StrategyCapabilities(manages_tools=True)
 
-    @classmethod
-    def from_config(cls, config: dict[str, Any], **_kwargs: Any) -> ReActReasoning:  # type: ignore[override]
-        """Create ReActReasoning from a configuration dict.
+    def _setup(self) -> None:
+        """Bind scalar config and injected collaborators.
 
-        Args:
-            config: Configuration dict with optional keys:
-                max_iterations, verbose, store_trace, greeting_template.
-            **_kwargs: Ignored (no KB or provider injection needed).
-
-        Returns:
-            Configured ReActReasoning instance.
+        Scalars come from the typed config; the optional runtime
+        collaborators (artifact registry, review executor, context
+        builder, extra context, prompt refresher) come from the mixin's
+        ``components`` channel and default to ``None`` when not injected.
         """
-        return cls(
-            max_iterations=config.get("max_iterations", 5),
-            verbose=config.get("verbose", False),
-            store_trace=config.get("store_trace", False),
-            greeting_template=config.get("greeting_template"),
+        config = self.config
+        self._greeting_template = config.greeting_template
+        self.max_iterations = config.max_iterations
+        self.verbose = config.verbose
+        self.store_trace = config.store_trace
+        self._artifact_registry = self.components.get("artifact_registry")
+        self._review_executor = self.components.get("review_executor")
+        self._context_builder = self.components.get("context_builder")
+        self._extra_context: dict[str, Any] | None = self.components.get(
+            "extra_context"
         )
-
-    def __init__(
-        self,
-        max_iterations: int = 5,
-        verbose: bool = False,
-        store_trace: bool = False,
-        artifact_registry: Any | None = None,
-        review_executor: Any | None = None,
-        context_builder: Any | None = None,
-        extra_context: dict[str, Any] | None = None,
-        prompt_refresher: Callable[[], str] | None = None,
-        greeting_template: str | None = None,
-    ):
-        """Initialize ReAct reasoning strategy.
-
-        Args:
-            max_iterations: Maximum reasoning/action iterations
-            verbose: Enable debug-level logging for reasoning steps
-            store_trace: Store reasoning trace in conversation metadata
-            artifact_registry: Optional ArtifactRegistry for artifact management
-            review_executor: Optional ReviewExecutor for running reviews
-            context_builder: Optional ContextBuilder for building conversation context
-            extra_context: Optional extra key-value pairs to merge into the
-                ToolExecutionContext for every tool call (e.g. banks, custom state)
-            prompt_refresher: Optional callback that returns a fresh system
-                prompt string.  Called after tool execution in each iteration
-                to update ``system_prompt_override`` in the next
-                ``manager.complete()`` call.  This prevents stale context
-                when mutating tools change artifact/bank state mid-loop.
-            greeting_template: Optional Jinja2 template for bot-initiated
-                greetings (inherited from ReasoningStrategy).
-        """
-        super().__init__(greeting_template=greeting_template)
-        self.max_iterations = max_iterations
-        self.verbose = verbose
-        self.store_trace = store_trace
-        self._artifact_registry = artifact_registry
-        self._review_executor = review_executor
-        self._context_builder = context_builder
-        self._extra_context = extra_context
-        self._prompt_refresher = prompt_refresher
+        self._prompt_refresher: Callable[[], str] | None = self.components.get(
+            "prompt_refresher"
+        )
 
     @property
     def artifact_registry(self) -> Any | None:
