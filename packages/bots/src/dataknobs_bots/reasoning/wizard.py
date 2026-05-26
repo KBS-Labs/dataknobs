@@ -17,14 +17,14 @@ import copy
 import inspect
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.serialization import sanitize_for_json
-from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
-
+from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
+from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
 from .base import ProcessResult, ReasoningStrategy, StreamStageContext, ToolCallSpec, TurnHandle
 from .observability import (
@@ -33,12 +33,12 @@ from .observability import (
     WizardTaskList,
     create_transition_record,
 )
+from .wizard_config import WizardReasoningConfig
+from .wizard_confirmation import ConfirmationEvaluator
 from .wizard_derivations import (
     DerivationRule,
     parse_derivation_rules,
 )
-from .wizard_config import WizardReasoningConfig
-from .wizard_confirmation import ConfirmationEvaluator
 from .wizard_extraction import WizardExtractor
 from .wizard_grounding import (
     CompositeMergeFilter,
@@ -49,34 +49,42 @@ from .wizard_grounding import (
 from .wizard_hooks import WizardHooks
 from .wizard_navigation import WizardNavigator
 from .wizard_response import WizardResponder
+from .wizard_subflows import SubflowManager
+from .wizard_tasks import (
+    build_initial_tasks,
+    update_field_tasks,
+    update_stage_exit_tasks,
+    update_tool_tasks,
+)
 from .wizard_types import (  # noqa: F401 — re-exports for backward compat
+    _DEFAULT_AFFIRMATIVE_PHRASES,
+    _DEFAULT_AFFIRMATIVE_SIGNALS,
+    _DEFAULT_NEGATIVE_PHRASES,
+    _DEFAULT_NEGATIVE_SIGNALS,
     DEFAULT_BACK_KEYWORDS,
     DEFAULT_EPHEMERAL_KEYS,
     DEFAULT_RECOVERY_PIPELINE,
     DEFAULT_RESTART_KEYWORDS,
     DEFAULT_SKIP_KEYWORDS,
-    ExtractionPipelineResult,
-    NavigationCommandConfig,
-    NavigationConfig,
     RECOVERY_BOOLEAN,
     RECOVERY_CLARIFICATION,
     RECOVERY_DERIVATION,
     RECOVERY_FOCUSED_RETRY,
     RECOVERY_SCOPE_ESCALATION,
     SCOPE_BREADTH,
+    VALID_RECOVERY_STRATEGIES,
+    ExtractionPipelineResult,
+    FinalizePreambleResult,
+    NavigationCommandConfig,
+    NavigationConfig,
     StageSchema,
     SubflowContext,
     ToolResultMappingEntry,
     TurnContext,
-    VALID_RECOVERY_STRATEGIES,
     WizardAdvanceResult,
     WizardStageContext,
     WizardState,
     WizardTurnHandle,
-    _DEFAULT_AFFIRMATIVE_PHRASES,
-    _DEFAULT_AFFIRMATIVE_SIGNALS,
-    _DEFAULT_NEGATIVE_PHRASES,
-    _DEFAULT_NEGATIVE_SIGNALS,
     _is_json_safe,
     _load_merge_filter,
     _normalize_enum_value,
@@ -85,14 +93,6 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     load_merge_filter,
     normalize_enum_value,
     validate_strategy_names,
-)
-from .wizard_types import FinalizePreambleResult
-from .wizard_subflows import SubflowManager
-from .wizard_tasks import (
-    build_initial_tasks,
-    update_field_tasks,
-    update_stage_exit_tasks,
-    update_tool_tasks,
 )
 
 if TYPE_CHECKING:
@@ -105,12 +105,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: Placeholder ``wizard_config`` value for the pre-built-FSM construction
+#: path. ``WizardReasoning.__init__`` receives an already-built ``WizardFSM``
+#: (not a config source), and ``WizardFSM`` does not retain the raw
+#: ``wizard_config`` it was built from — so a synthesized envelope cannot
+#: reconstruct the original value. The sentinel satisfies the required-field
+#: ``__post_init__`` guard and is provably inert: ``self.config.wizard_config``
+#: is consumed only inside ``from_config`` (to build the FSM) and is read
+#: nowhere at runtime. The config-driven ``from_config`` path passes the real
+#: typed config, so only the direct-ctor path carries the sentinel.
+_INJECTED_FSM_SENTINEL = "<injected-fsm>"
+
+
 # Re-exports for backward compatibility are handled by the import block
 # above (from .wizard_types import ...).  All public names that were
 # previously defined here are still importable from this module.
 
 
-class WizardReasoning(ReasoningStrategy):
+class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], ReasoningStrategy):
     """FSM-backed reasoning strategy for guided conversational flows.
 
     Unlike SimpleReasoning (single LLM call) or ReActReasoning (iterative
@@ -144,7 +156,7 @@ class WizardReasoning(ReasoningStrategy):
     """
 
     #: Typed config pointer (read by the reasoning validation resolver and
-    #: a future consumer-mixin adoption); construction is unchanged.
+    #: the ``StructuredConfigConsumer`` mixin lifecycle).
     CONFIG_CLS: ClassVar[type[WizardReasoningConfig]] = WizardReasoningConfig
 
     def __init__(
@@ -189,6 +201,9 @@ class WizardReasoning(ReasoningStrategy):
         initial_data: dict[str, Any] | None = None,
         consistent_navigation_lifecycle: bool = True,
         prompt_resolver: PromptResolver | None = None,
+        *,
+        config: WizardReasoningConfig | None = None,
+        **config_overrides: Any,
     ):
         """Initialize WizardReasoning.
 
@@ -334,8 +349,40 @@ class WizardReasoning(ReasoningStrategy):
                 run auto-advance/subflow-pop as forward transitions do.  Set to
                 False to restore the original behavior where back/skip only
                 performed the FSM operation without lifecycle hooks.
+            config: Pre-built typed :class:`WizardReasoningConfig`. Supplied by
+                :meth:`from_config` so the config-driven path's ``self.config``
+                carries the real ``wizard_config``. Omitted on the direct,
+                pre-built-FSM path (the 174 existing call sites), where a thin
+                inert envelope is synthesized instead (see
+                :data:`_INJECTED_FSM_SENTINEL`).
+            config_overrides: Loose :class:`WizardReasoningConfig` field
+                overrides for the synthesized envelope (direct-ctor path only).
+                Unknown keys raise ``TypeError`` via the dataclass constructor;
+                combining them with a typed ``config`` is rejected.
         """
-        super().__init__()
+        # ``wizard_fsm`` is the required live collaborator (a pre-built FSM,
+        # not config data); it travels through the mixin's collaborator
+        # channel. The config (typed / dict / loose kwargs) is projected onto
+        # ``self.config`` — mirroring the ``ResourcePool(provider, config)``
+        # back-compat positional shortcut.
+        if config is None:
+            config = WizardReasoningConfig(
+                wizard_config=_INJECTED_FSM_SENTINEL,
+                strict_validation=strict_validation,
+                consistent_navigation_lifecycle=consistent_navigation_lifecycle,
+                initial_data=initial_data,
+                **config_overrides,
+            )
+        elif config_overrides:
+            raise TypeError(
+                "WizardReasoning: cannot combine a typed `config` with loose "
+                f"config overrides ({sorted(config_overrides)})."
+            )
+        # The mixin sets ``self._config``, runs the cooperative
+        # ``ReasoningStrategy.__init__`` (initialising greeting/tool/pipeline
+        # state), then the no-op ``_setup`` — before this body builds the
+        # sub-components from the explicit (FSM-settings-derived) params.
+        super().__init__(config, _components={"wizard_fsm": wizard_fsm})
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
@@ -1144,7 +1191,11 @@ class WizardReasoning(ReasoningStrategy):
         return self._context_builder
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> WizardReasoning:  # type: ignore[override]
+    def from_config(  # type: ignore[override]
+        cls,
+        config: Mapping[str, Any] | WizardReasoningConfig,
+        **kwargs: Any,
+    ) -> WizardReasoning:
         """Create WizardReasoning from configuration dict.
 
         Args:
@@ -1197,17 +1248,35 @@ class WizardReasoning(ReasoningStrategy):
         """
         from .wizard_loader import WizardConfigLoader
 
-        wizard_config_value = config.get("wizard_config")
-        if not wizard_config_value:
+        # Preserve the explicit, message-pinned error for the common
+        # "wizard_config omitted/None" mistake. ``_coerce_config`` below would
+        # otherwise surface the dataclass ``TypeError`` for the missing
+        # required argument; tests pin this ``ValueError`` message.
+        if isinstance(config, Mapping) and not config.get("wizard_config"):
+            raise ValueError("wizard_config is required")
+
+        # Coerce to the typed envelope through the shared guard (parity
+        # requirement — a wrong ``StructuredConfig`` subclass raises a clear
+        # ``TypeError``). ``self.config`` then carries the real config values.
+        typed = cls._coerce_config(config)
+        wizard_config_value = typed.wizard_config
+
+        # The pre-coerce guard above only sees a Mapping. A typed config can
+        # still reach here carrying an unloadable ``wizard_config`` — an empty
+        # value, or the direct-ctor ``_INJECTED_FSM_SENTINEL`` (which marks a
+        # pre-built-FSM envelope with no real config to load). Catch it here so
+        # it surfaces as the pinned ValueError rather than a FileNotFoundError
+        # for a file literally named "<injected-fsm>".
+        if not wizard_config_value or wizard_config_value == _INJECTED_FSM_SENTINEL:
             raise ValueError("wizard_config is required")
 
         # Resolve relative wizard_config paths against config_base_path
-        config_base_path_str = config.get("config_base_path")
+        config_base_path_str = typed.config_base_path
         config_base_path = Path(config_base_path_str) if config_base_path_str else None
 
         # Load wizard FSM — supports both file paths and inline dicts
         loader = WizardConfigLoader()
-        custom_fns = config.get("custom_functions", {})
+        custom_fns = typed.custom_functions or {}
 
         if isinstance(wizard_config_value, dict):
             wizard_fsm = loader.load_from_dict(
@@ -1223,7 +1292,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Create extractor if extraction_config specified
         extractor = None
-        extraction_config = config.get("extraction_config")
+        extraction_config = typed.extraction_config
         if extraction_config:
             try:
                 from dataknobs_llm.extraction import SchemaExtractor
@@ -1237,7 +1306,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Create hooks if hooks config specified
         hooks = None
-        hooks_config = config.get("hooks")
+        hooks_config = typed.hooks
         if hooks_config:
             hooks = WizardHooks.from_config(hooks_config)
 
@@ -1339,7 +1408,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Create artifact registry if artifact definitions configured
         artifact_registry = None
-        artifacts_config = config.get("artifacts", {})
+        artifacts_config = typed.artifacts or {}
         if artifacts_config:
             try:
                 from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -1379,7 +1448,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Create review executor if review protocols configured
         review_executor = None
-        review_config = config.get("review_protocols", {})
+        review_config = typed.review_protocols or {}
         if review_config:
             try:
                 from ..review import ReviewExecutor, ReviewProtocolDefinition
@@ -1412,7 +1481,7 @@ class WizardReasoning(ReasoningStrategy):
         return cls(
             wizard_fsm=wizard_fsm,
             extractor=extractor,
-            strict_validation=config.get("strict_validation", True),
+            strict_validation=typed.strict_validation,
             hooks=hooks,
             auto_advance_filled_stages=auto_advance,
             context_template=context_template,
@@ -1447,11 +1516,10 @@ class WizardReasoning(ReasoningStrategy):
             clarification_template=clarification_template,
             default_store_trace=store_trace,
             default_verbose=verbose,
-            initial_data=config.get("initial_data"),
-            consistent_navigation_lifecycle=config.get(
-                "consistent_navigation_lifecycle", True
-            ),
+            initial_data=typed.initial_data,
+            consistent_navigation_lifecycle=typed.consistent_navigation_lifecycle,
             prompt_resolver=kwargs.get("prompt_resolver"),
+            config=typed,
         )
 
     async def greet(
@@ -1700,7 +1768,9 @@ class WizardReasoning(ReasoningStrategy):
         result = ProcessResult()
         wizard_state = handle.wizard_state
         if wizard_state is None:
-            raise ValueError("WizardTurnHandle.wizard_state is None — begin_turn must be called first")
+            raise ValueError(
+                "WizardTurnHandle.wizard_state is None — begin_turn must be called first"
+            )
         manager = handle.manager
         llm = handle.llm
         tools = handle.tools
