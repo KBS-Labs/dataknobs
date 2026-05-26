@@ -127,14 +127,39 @@ class TestWizardReasoningConfig:
         with pytest.raises(TypeError):
             WizardReasoningConfig()  # type: ignore[call-arg]
 
+    def test_from_dict_without_wizard_config_raises(self) -> None:
+        """from_dict({}) is not silently tolerated — wizard_config is required.
+
+        ``from_dict`` skips absent fields (they take their declared default),
+        but ``wizard_config`` has no default, so the dataclass constructor
+        raises rather than producing a half-built config.
+        """
+        with pytest.raises(TypeError):
+            WizardReasoningConfig.from_dict({})
+
+    def test_from_dict_rejects_non_str_non_dict_wizard_config(self) -> None:
+        """A scalar/list wizard_config fails at construction, not later."""
+        with pytest.raises(ValueError, match="wizard_config"):
+            WizardReasoningConfig.from_dict({"wizard_config": 123})
+
     def test_extraction_api_key_redacted_in_repr(self) -> None:
-        """Credentials nested in extraction_config are masked by the base repr."""
+        """Credentials nested in extraction_config are masked by the base repr.
+
+        The base repr's interior-key descent covers the whole module default
+        sensitive-key set, not just ``api_key`` — assert a second key
+        (``connection_string``) is masked too to document that scope.
+        """
         cfg = WizardReasoningConfig(
             wizard_config="w.yaml",
-            extraction_config={"provider": "openai", "api_key": "sk-secret"},
+            extraction_config={
+                "provider": "openai",
+                "api_key": "sk-secret",
+                "connection_string": "postgres://user:pw@host/db",
+            },
         )
         rendered = repr(cfg)
         assert "sk-secret" not in rendered
+        assert "postgres://user:pw@host/db" not in rendered
         assert "openai" in rendered
 
 

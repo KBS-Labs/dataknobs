@@ -63,3 +63,17 @@ class WizardReasoningConfig(StructuredConfig):
     review_protocols: dict[str, Any] | None = None
     initial_data: dict[str, Any] | None = None
     consistent_navigation_lifecycle: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate ``wizard_config`` is a path string or inline dict.
+
+        The base ``from_dict`` projects non-coercible values verbatim, so a
+        YAML scalar or list would otherwise pass through construction silently
+        and only surface as a distant error when the wizard is loaded.  Guard
+        it here, at the construction site, so the failure is local and clear.
+        """
+        if not isinstance(self.wizard_config, (str, dict)):
+            raise ValueError(
+                "wizard_config must be a path string or an inline "
+                f"wizard-definition dict, got {type(self.wizard_config).__name__}"
+            )

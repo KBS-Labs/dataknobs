@@ -797,7 +797,13 @@ class NavigationCommandConfig(StructuredConfig):
     enabled: bool = True
 
     def __post_init__(self) -> None:
-        """Coerce ``keywords`` to a tuple (raw config arrives as a list)."""
+        """Coerce ``keywords`` to a tuple (raw config arrives as a list).
+
+        The ``from_dict`` path already coerces ``tuple[str, ...]`` fields via
+        the base ``_coerce_field``; this guard covers the direct-construction
+        path (``NavigationCommandConfig(keywords=[...])``).  Running on the
+        dict path too is a harmless no-op (the value is already a tuple).
+        """
         if not isinstance(self.keywords, tuple):
             object.__setattr__(self, "keywords", tuple(self.keywords))
 
@@ -844,6 +850,11 @@ class NavigationConfig(StructuredConfig):
         the former hand-rolled ``from_dict``.  The resulting per-command
         dicts are rebuilt into :class:`NavigationCommandConfig` instances
         by the inherited :meth:`StructuredConfig.from_dict` recursion.
+
+        An empty input is safe — all three commands fall back to the module
+        defaults, so ``from_dict({})`` yields the same config as
+        :meth:`defaults` (the former ``from_dict``'s explicit empty-dict
+        fast-path is no longer needed).
         """
 
         def _command(
