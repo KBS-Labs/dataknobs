@@ -14,6 +14,7 @@ rather than being baked into the static field graph.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -117,6 +118,12 @@ class CompositeMemoryConfig(StructuredConfig):
         primary_index: Index of the primary strategy in ``strategies``. The
             documented ``primary`` config key is accepted as an alias.
     """
+
+    # Each ``strategies`` element is a raw memory spec dispatched by its own
+    # ``type`` discriminator, so the ``"memory"`` resolver validates them
+    # element-wise (the base's list-valued-section handling) under
+    # ``CompositeMemoryConfig.from_dict(raw).validate()``.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {"strategies": "memory"}
 
     strategies: list[dict[str, Any]] = field(default_factory=list)
     primary_index: int = 0
