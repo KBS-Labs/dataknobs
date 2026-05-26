@@ -62,8 +62,15 @@ from .task_injection import (
     TaskInjector,
 )
 from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
+from .wizard_config import WizardReasoningConfig
 from .wizard_response import StageResponseResult
-from .wizard_types import RecoveryResult, ToolResultMappingEntry, WizardTurnHandle
+from .wizard_types import (
+    NavigationCommandConfig,
+    NavigationConfig,
+    RecoveryResult,
+    ToolResultMappingEntry,
+    WizardTurnHandle,
+)
 from .wizard_derivations import DerivationRule, FieldTransform
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
@@ -112,6 +119,9 @@ __all__ = [
     "HybridReasoningConfig",
     "WizardAdvanceResult",
     "WizardReasoning",
+    "WizardReasoningConfig",
+    "NavigationConfig",
+    "NavigationCommandConfig",
     "WizardStageContext",
     "WizardState",
     "StageResponseResult",
