@@ -1,8 +1,9 @@
 """Construction-path tests for the reasoning-strategy consumer-mixin adoption.
 
-The non-wizard reasoning strategies — ``SimpleReasoning``,
-``ReActReasoning``, ``GroundedReasoning``, ``HybridReasoning`` — are built
-from a frozen ``StructuredConfig`` via
+All five reasoning strategies — ``SimpleReasoning``, ``ReActReasoning``,
+``GroundedReasoning``, ``HybridReasoning`` (the config-first matrix below) and
+``WizardReasoning`` (the FSM-as-collaborator adopter, tested separately) — are
+built from a frozen ``StructuredConfig`` via
 :class:`~dataknobs_common.structured_config.StructuredConfigConsumer`.
 Each gains the uniform construction surface: a typed-config ctor, a
 dict-dispatch ``cls.from_config({...})`` (the entry point the reasoning
@@ -28,16 +29,17 @@ behavior (retrieval pipeline, ReAct loop, KB auto-wrap) is covered by the
 existing reasoning + DynaBot suites; these tests cover only the construction
 surface the mixin standardizes.
 
+``WizardReasoning`` keeps its 40-param ``__init__`` as the blessed back-compat
+shim (its required ``wizard_fsm`` is a pre-built FSM collaborator, not config
+data), so it is covered by a dedicated section rather than the config-first
+matrix — mirroring how ``ResourcePool`` is handled in the FSM adoption suite.
+
 No external service is required — construction only.
 """
 
 from __future__ import annotations
 
 import pytest
-from dataknobs_common.testing import (
-    assert_structured_config_consumer,
-    assert_structured_config_roundtrip,
-)
 
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
@@ -47,6 +49,14 @@ from dataknobs_bots.reasoning.react import ReActReasoning
 from dataknobs_bots.reasoning.react_config import ReActReasoningConfig
 from dataknobs_bots.reasoning.simple import SimpleReasoning
 from dataknobs_bots.reasoning.simple_config import SimpleReasoningConfig
+from dataknobs_bots.reasoning.wizard import _INJECTED_FSM_SENTINEL, WizardReasoning
+from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_common.testing import (
+    assert_structured_config_consumer,
+    assert_structured_config_roundtrip,
+)
 
 # (consumer_cls, config_cls, typed_config, equivalent_dict)
 #
@@ -303,3 +313,162 @@ def test_hybrid_forwards_prompt_resolver_to_grounded_child() -> None:
     prompt_resolver = object()
     strat = HybridReasoning.from_config({}, prompt_resolver=prompt_resolver)
     assert strat._grounded._prompt_resolver is prompt_resolver
+
+
+# --- Wizard: FSM-as-collaborator adopter ---------------------------------
+#
+# WizardReasoning carries a required ``wizard_fsm`` collaborator (a pre-built
+# FSM, not config data) and keeps its 40-param ``__init__`` as the blessed
+# back-compat shim for the existing direct-ctor call sites — mirroring
+# ``ResourcePool(provider, config)``. Because it defines its own ``__init__``,
+# the parity guard's MRO-precedence check is exempt, so an explicit
+# ``issubclass`` assertion is kept (as for ``ResourcePool``). It is tested
+# apart from the generic config-first matrix above.
+#
+# The shim's FSM-settings-derived ctor params are not config fields, so they
+# are passed to ``ignore_params``. The four that ARE config-envelope fields
+# (``strict_validation``, ``hooks``, ``initial_data``,
+# ``consistent_navigation_lifecycle``) stay on the ctor surface and match the
+# dataclass; the six raw-input config fields the ctor does not expose
+# (``wizard_config``, ``config_base_path``, ``custom_functions``,
+# ``extraction_config``, ``artifacts``, ``review_protocols`` — consumed only
+# by ``from_config`` to build the FSM/collaborators) are covered by the
+# ctor's ``**config_overrides`` variadic.
+_WIZARD_IGNORE_PARAMS = {
+    "wizard_fsm",
+    "extractor",
+    "auto_advance_filled_stages",
+    "context_template",
+    "allow_post_completion_edits",
+    "section_to_stage_mapping",
+    "default_tool_reasoning",
+    "default_max_iterations",
+    "default_store_trace",
+    "default_verbose",
+    "artifact_registry",
+    "review_executor",
+    "context_builder",
+    "extraction_scope",
+    "conflict_strategy",
+    "log_conflicts",
+    "extraction_grounding",
+    "merge_filter",
+    "skip_builtin_grounding",
+    "grounding_overlap_threshold",
+    "expansion_config",
+    "scope_escalation_enabled",
+    "scope_escalation_scope",
+    "recent_messages_count",
+    "field_derivations",
+    "enum_normalize",
+    "normalize_threshold",
+    "reject_unmatched",
+    "boolean_recovery",
+    "recovery_pipeline",
+    "focused_retry_enabled",
+    "focused_retry_max_retries",
+    "clarification_groups",
+    "clarification_exclude_derivable",
+    "clarification_template",
+    "prompt_resolver",
+}
+
+# Minimal inline wizard definition (one start + one end stage).
+_WIZARD_DICT = {
+    "name": "adoption-test-wizard",
+    "version": "1.0",
+    "stages": [
+        {
+            "name": "start",
+            "is_start": True,
+            "prompt": "Hello?",
+            "transitions": [{"target": "done"}],
+        },
+        {"name": "done", "is_end": True, "prompt": "Bye."},
+    ],
+}
+
+
+def _build_wizard_fsm() -> object:
+    """Build a raw ``WizardFSM`` for the pre-built-FSM (direct-ctor) path."""
+    return WizardConfigLoader().load_from_dict(_WIZARD_DICT)
+
+
+def test_wizard_is_consumer_and_parity_holds() -> None:
+    """WizardReasoning is a mixin adopter; the parity guard holds.
+
+    ``wizard_fsm`` + the FSM-settings-derived ctor params are passed to
+    ``ignore_params``. The explicit ``issubclass`` check is retained because
+    the guard's MRO check is exempt for an ``__init__``-defining class.
+    """
+    assert issubclass(WizardReasoning, StructuredConfigConsumer)
+    assert_structured_config_consumer(
+        WizardReasoning, ignore_params=_WIZARD_IGNORE_PARAMS
+    )
+
+
+def test_wizard_from_config_carries_real_config() -> None:
+    """The config-driven path's ``self.config`` carries the real wizard_config.
+
+    ``from_config`` routes through ``_coerce_config`` and passes the typed
+    config to ``__init__`` (not the sentinel), so ``self.config`` reflects the
+    true value — and the FSM is built.
+    """
+    reasoning = WizardReasoning.from_config({"wizard_config": _WIZARD_DICT})
+    assert isinstance(reasoning.config, WizardReasoningConfig)
+    assert reasoning.config.wizard_config == _WIZARD_DICT
+    assert reasoning.config.wizard_config != _INJECTED_FSM_SENTINEL
+    assert reasoning._fsm is not None
+
+
+def test_wizard_direct_ctor_synthesizes_inert_sentinel_config() -> None:
+    """The pre-built-FSM path synthesizes an inert envelope; FSM via components.
+
+    The 174 existing direct-ctor sites pass a pre-built FSM and no config, so
+    ``self.config`` carries the sentinel ``wizard_config`` (provably inert —
+    read nowhere at runtime) while the envelope fields reflect the ctor args.
+    The FSM travels through the mixin's collaborator channel.
+    """
+    fsm = _build_wizard_fsm()
+    reasoning = WizardReasoning(
+        wizard_fsm=fsm,
+        strict_validation=False,
+        consistent_navigation_lifecycle=False,
+    )
+    assert isinstance(reasoning.config, WizardReasoningConfig)
+    assert reasoning.config.wizard_config == _INJECTED_FSM_SENTINEL
+    # Envelope fields reflect the explicit ctor args.
+    assert reasoning.config.strict_validation is False
+    assert reasoning.config.consistent_navigation_lifecycle is False
+    # The required FSM is the injected collaborator, not config data.
+    assert reasoning.components["wizard_fsm"] is fsm
+    assert reasoning._fsm is fsm
+
+
+def test_wizard_from_config_missing_wizard_config_raises() -> None:
+    """The message-pinned ValueError survives the mixin adoption.
+
+    ``from_config`` guards the common "wizard_config omitted" mistake before
+    ``_coerce_config`` would surface the dataclass ``TypeError`` for the
+    missing required field.
+    """
+    with pytest.raises(ValueError, match="wizard_config is required"):
+        WizardReasoning.from_config({})
+
+
+def test_wizard_config_is_read_only() -> None:
+    """``config`` is the mixin's read-only property."""
+    reasoning = WizardReasoning(wizard_fsm=_build_wizard_fsm())
+    with pytest.raises(AttributeError):
+        reasoning.config = WizardReasoningConfig(wizard_config=_WIZARD_DICT)
+
+
+def test_wizard_typed_config_plus_overrides_raises() -> None:
+    """A typed config combined with loose config overrides is a ctor error."""
+    cfg = WizardReasoningConfig(wizard_config=_WIZARD_DICT)
+    with pytest.raises(TypeError):
+        WizardReasoning(
+            wizard_fsm=_build_wizard_fsm(),
+            config=cfg,
+            some_unexpected_field=1,
+        )
