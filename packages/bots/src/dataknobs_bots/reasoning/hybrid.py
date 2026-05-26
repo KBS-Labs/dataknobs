@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_bots.reasoning.base import ReasoningStrategy, StrategyCapabilities
 
@@ -64,6 +64,10 @@ class HybridReasoning(ReasoningStrategy):
             })
             strategy = HybridReasoning(config=config)
     """
+
+    #: Typed config pointer (read by the reasoning validation resolver and
+    #: a future consumer-mixin adoption); construction is unchanged.
+    CONFIG_CLS: ClassVar[type[HybridReasoningConfig]] = HybridReasoningConfig
 
     @classmethod
     def capabilities(cls) -> StrategyCapabilities:

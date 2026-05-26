@@ -9,8 +9,8 @@ from typing import Any
 from dataknobs_common.structured_config import StructuredConfig
 
 
-@dataclass
-class GroundedIntentConfig:
+@dataclass(frozen=True)
+class GroundedIntentConfig(StructuredConfig):
     """Configuration for intent resolution — how retrieval intent is built.
 
     Three modes control how the user message becomes a
@@ -107,8 +107,8 @@ class GroundedIntentConfig:
 GroundedQueryConfig = GroundedIntentConfig
 
 
-@dataclass
-class GroundedRetrievalConfig:
+@dataclass(frozen=True)
+class GroundedRetrievalConfig(StructuredConfig):
     """Configuration for the deterministic retrieval phase.
 
     Attributes:
@@ -126,8 +126,8 @@ class GroundedRetrievalConfig:
     deduplicate: bool = True
 
 
-@dataclass
-class GroundedSynthesisConfig:
+@dataclass(frozen=True)
+class GroundedSynthesisConfig(StructuredConfig):
     """Configuration for the synthesis phase.
 
     **Legacy modes** (``mode`` field):
@@ -209,8 +209,8 @@ class GroundedSynthesisConfig:
     instruction: str | None = None
 
 
-@dataclass
-class GroundedResultProcessingConfig:
+@dataclass(frozen=True)
+class GroundedResultProcessingConfig(StructuredConfig):
     """Configuration for the result processing pipeline.
 
     Stages run in order: normalize -> filter -> rerank -> cluster
@@ -250,14 +250,8 @@ class GroundedResultProcessingConfig:
     cluster_min_size: int = 2
     cluster_threshold: float = 0.7
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> GroundedResultProcessingConfig:
-        """Build from a config dict, ignoring unknown keys."""
-        import dataclasses
-
-        known_names = {f.name for f in dataclasses.fields(cls)}
-        filtered = {k: v for k, v in data.items() if k in known_names}
-        return cls(**filtered)
+    # No hand-rolled ``from_dict`` — the ``StructuredConfig`` base already
+    # ignores unknown keys during field projection.
 
 
 @dataclass(frozen=True)
@@ -326,8 +320,8 @@ class GroundedSourceConfig(StructuredConfig):
         }
 
 
-@dataclass
-class GroundedReasoningConfig:
+@dataclass(frozen=True)
+class GroundedReasoningConfig(StructuredConfig):
     """Top-level configuration for :class:`GroundedReasoning`.
 
     Attributes:
@@ -366,19 +360,27 @@ class GroundedReasoningConfig:
         return self.intent
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> GroundedReasoningConfig:
-        """Build config from a flat reasoning config dict.
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Massage the flat reasoning-config shape before field projection.
 
-        Accepts both the new ``intent`` key and the legacy
-        ``query_generation`` key (which maps to extract mode).
+        The ``StructuredConfig`` base rebuilds the nested ``intent`` /
+        ``retrieval`` / ``synthesis`` / ``result_processing`` / ``sources``
+        fields recursively (each is now a ``StructuredConfig``), so only
+        two shape quirks remain to handle here:
+
+        1. **Legacy ``query_generation`` alias** — the former name of
+           ``intent``.  Mapped to ``intent`` only when ``intent`` is absent
+           or falsy, preserving the old ``data.get("intent") or
+           data.get("query_generation", {})`` precedence.
+        2. **Empty ``result_processing``** — a falsy value (``None`` / ``{}``)
+           must leave the field unset so it defaults to ``None`` (pipeline
+           disabled), rather than building a default-constructed config.
 
         New shape::
 
             reasoning:
               strategy: grounded
-              intent:
-                mode: extract
-                num_queries: 3
+              intent: {mode: extract, num_queries: 3}
               retrieval: {top_k: 5}
               synthesis: {mode: llm, require_citations: true}
               sources:
@@ -393,33 +395,11 @@ class GroundedReasoningConfig:
               retrieval: {top_k: 5}
               synthesis: {require_citations: true}
         """
-        # Intent config: prefer "intent", fall back to "query_generation"
-        intent_data = data.get("intent") or data.get("query_generation", {})
-
-        # Source configs
-        source_configs = [
-            GroundedSourceConfig.from_dict(s)
-            for s in data.get("sources", [])
-        ]
-
-        # Result processing config
-        rp_data = data.get("result_processing")
-        rp_config = (
-            GroundedResultProcessingConfig.from_dict(rp_data)
-            if rp_data
-            else None
-        )
-
-        return cls(
-            intent=GroundedIntentConfig(**intent_data),
-            retrieval=GroundedRetrievalConfig(
-                **data.get("retrieval", {}),
-            ),
-            synthesis=GroundedSynthesisConfig(
-                **data.get("synthesis", {}),
-            ),
-            result_processing=rp_config,
-            sources=source_configs,
-            store_provenance=data.get("store_provenance", True),
-            greeting_template=data.get("greeting_template"),
-        )
+        if not raw.get("intent") and raw.get("query_generation"):
+            raw["intent"] = raw["query_generation"]
+        # ``query_generation`` is not a field; drop it so it doesn't linger.
+        raw.pop("query_generation", None)
+        # Falsy result_processing → unset → field defaults to None.
+        if not raw.get("result_processing"):
+            raw.pop("result_processing", None)
+        return raw

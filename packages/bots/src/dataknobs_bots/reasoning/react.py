@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.exceptions import ToolsNotSupportedError
@@ -17,6 +17,7 @@ from dataknobs_llm.tools import ToolExecutionContext
 from dataknobs_bots.bot.turn import ToolExecution
 
 from .base import ProcessResult, ReasoningStrategy, StrategyCapabilities, TurnHandle
+from .react_config import ReActReasoningConfig
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,10 @@ class ReActReasoning(ReasoningStrategy):
         )
         ```
     """
+
+    #: Typed config pointer (read by the reasoning validation resolver and
+    #: a future consumer-mixin adoption); construction is unchanged.
+    CONFIG_CLS: ClassVar[type[ReActReasoningConfig]] = ReActReasoningConfig
 
     @classmethod
     def capabilities(cls) -> StrategyCapabilities:
