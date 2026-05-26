@@ -74,20 +74,22 @@ class DynaBotConfig(StructuredConfig):
     # Adopt polymorphic-section validation for the subsystem sections whose
     # config families are registry-resolvable today. A
     # ``DynaBotConfig.from_dict(raw).validate()`` dry-run-builds the resolved
-    # ``memory`` / ``knowledge_base`` configs to surface field errors / an
-    # unknown backend ``type`` at config-parse time (without constructing the
+    # ``llm`` / ``memory`` / ``knowledge_base`` / ``reasoning`` configs to
+    # surface field errors / an unknown discriminator (backend ``type`` /
+    # provider / ``strategy``) at config-parse time (without constructing the
     # bot), and — because ``RAGKnowledgeBaseConfig`` carries its own
-    # ``vector_store`` binding — descends into the nested vector-store section
-    # too. Bindings are strings: ``dataknobs-bots`` registers the ``memory`` /
-    # ``knowledge_base`` resolvers eagerly on import and ``dataknobs-llm``
-    # registers the ``llm`` resolver, so this adds no import of a subsystem
-    # config type. ``reasoning`` is intentionally NOT bound yet (it needs a
-    # reasoning-strategy config family first); ``conversation_storage`` is
-    # owned by ``dataknobs-llm`` and likewise unbound for now.
+    # ``vector_store`` binding and the grounded/hybrid strategy configs carry
+    # nested sub-config trees — descends into those nested sections too.
+    # Bindings are strings: ``dataknobs-bots`` registers the ``memory`` /
+    # ``knowledge_base`` / ``reasoning`` resolvers eagerly on import and
+    # ``dataknobs-llm`` registers the ``llm`` resolver, so this adds no import
+    # of a subsystem config type. ``conversation_storage`` is owned by
+    # ``dataknobs-llm`` and remains unbound for now.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = {
         "llm": "llm",
         "memory": "memory",
         "knowledge_base": "knowledge_base",
+        "reasoning": "reasoning",
     }
 
     # --- provider / storage (raw mappings) ---

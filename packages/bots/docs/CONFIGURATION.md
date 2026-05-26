@@ -157,9 +157,18 @@ discards the dry-run objects — the sections stay raw mappings. It covers:
   `cfg.validate()`). Only the nested `embedding` dict is validated; the legacy
   flat keys (`embedding_provider` / `embedding_model` / `dimensions` /
   `api_base` / `api_key`) are left unvalidated.
+- **`reasoning`** — an unknown `strategy` raises `ConfigurationError`; a field
+  error in the resolved strategy config raises. Because the `grounded` and
+  `hybrid` strategy configs carry nested sub-config trees (`intent`,
+  `retrieval`, `synthesis`, …), the single call **descends into those nested
+  sections** too. All five built-in strategies (`simple`, `react`, `grounded`,
+  `hybrid`, `wizard`) carry a typed config, so a `reasoning` section is always
+  checked. (The wizard definition referenced by `wizard_config` is resolved by
+  the wizard loader, not re-validated here — only the reasoning-section
+  envelope, whose `wizard_config` is required.)
 
-A backend registered as a bare callable (no typed config) is recognized and
-skipped rather than rejected. `reasoning` and `conversation_storage` are not
+A backend or strategy registered as a bare callable (no typed config) is
+recognized and skipped rather than rejected. `conversation_storage` is not
 validated yet (no registry-resolvable typed config family). See the common
 [Polymorphic-section validation](../../common/structured-config.md#polymorphic-section-validation-validate-config_registries)
 guide for the underlying mechanism.
