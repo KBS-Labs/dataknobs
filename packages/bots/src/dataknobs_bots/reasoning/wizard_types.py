@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_common.structured_config import StructuredConfig
 
 from .base import TurnHandle
 from .observability import TransitionRecord, WizardTaskList
@@ -565,7 +566,7 @@ _VALID_ON_ERROR: frozenset[str] = frozenset({"skip", "fail"})
 
 
 @dataclass(frozen=True)
-class ToolResultMappingEntry:
+class ToolResultMappingEntry(StructuredConfig):
     """Single tool-to-state mapping from stage config.
 
     Declares that after extraction, a tool should be called with
@@ -782,7 +783,7 @@ class StageSchema:
 
 
 @dataclass(frozen=True)
-class NavigationCommandConfig:
+class NavigationCommandConfig(StructuredConfig):
     """Configuration for a single navigation command.
 
     Attributes:
@@ -795,15 +796,25 @@ class NavigationCommandConfig:
     keywords: tuple[str, ...]
     enabled: bool = True
 
+    def __post_init__(self) -> None:
+        """Coerce ``keywords`` to a tuple (raw config arrives as a list)."""
+        if not isinstance(self.keywords, tuple):
+            object.__setattr__(self, "keywords", tuple(self.keywords))
+
 
 @dataclass(frozen=True)
-class NavigationConfig:
+class NavigationConfig(StructuredConfig):
     """Configuration for wizard navigation commands (back, skip, restart).
 
     Wizard authors can customize navigation keywords at the wizard level
     (via ``settings.navigation``) and override them per-stage. When no
     configuration is provided, the hardcoded defaults are used, preserving
     backward compatibility.
+
+    ``from_dict`` is inherited from :class:`StructuredConfig`; the nested
+    :class:`NavigationCommandConfig` values are rebuilt by its recursion.
+    :meth:`_normalize_dict` supplies the per-command default keywords and
+    lowercase normalisation that the raw settings dict needs.
 
     Attributes:
         back: Configuration for the back/previous navigation command.
@@ -825,42 +836,34 @@ class NavigationConfig:
         )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> NavigationConfig:
-        """Build a ``NavigationConfig`` from a settings dict.
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Project a settings dict onto the back/skip/restart fields.
 
-        Missing commands fall back to defaults. Keywords are normalised
-        to lowercase.
-
-        Args:
-            data: Dict with optional ``back``, ``skip``, ``restart`` keys.
-                Each value is a dict with optional ``keywords`` (list of
-                strings) and ``enabled`` (bool) keys.
-
-        Returns:
-            A new ``NavigationConfig`` instance.
+        Missing commands fall back to the module default keywords and all
+        keywords are normalised to lowercase — preserving the behaviour of
+        the former hand-rolled ``from_dict``.  The resulting per-command
+        dicts are rebuilt into :class:`NavigationCommandConfig` instances
+        by the inherited :meth:`StructuredConfig.from_dict` recursion.
         """
-        if not data:
-            return cls.defaults()
 
-        def _build_command(
-            raw: dict[str, Any] | None,
+        def _command(
+            raw_cmd: dict[str, Any] | None,
             default_keywords: tuple[str, ...],
-        ) -> NavigationCommandConfig:
-            if raw is None:
-                return NavigationCommandConfig(keywords=default_keywords)
-            keywords = raw.get("keywords")
+        ) -> dict[str, Any]:
+            if raw_cmd is None:
+                return {"keywords": list(default_keywords)}
+            keywords = raw_cmd.get("keywords")
             if keywords is not None:
-                keywords = tuple(k.lower() for k in keywords)
+                keywords = [k.lower() for k in keywords]
             else:
-                keywords = default_keywords
-            enabled = raw.get("enabled", True)
-            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
+                keywords = list(default_keywords)
+            return {"keywords": keywords, "enabled": raw_cmd.get("enabled", True)}
 
-        return cls(
-            back=_build_command(data.get("back"), DEFAULT_BACK_KEYWORDS),
-            skip=_build_command(data.get("skip"), DEFAULT_SKIP_KEYWORDS),
-            restart=_build_command(data.get("restart"), DEFAULT_RESTART_KEYWORDS),
-        )
+        return {
+            "back": _command(raw.get("back"), DEFAULT_BACK_KEYWORDS),
+            "skip": _command(raw.get("skip"), DEFAULT_SKIP_KEYWORDS),
+            "restart": _command(raw.get("restart"), DEFAULT_RESTART_KEYWORDS),
+        }
 
 
 # =========================================================================

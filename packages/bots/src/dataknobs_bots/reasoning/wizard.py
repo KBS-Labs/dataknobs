@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
@@ -37,6 +37,7 @@ from .wizard_derivations import (
     DerivationRule,
     parse_derivation_rules,
 )
+from .wizard_config import WizardReasoningConfig
 from .wizard_confirmation import ConfirmationEvaluator
 from .wizard_extraction import WizardExtractor
 from .wizard_grounding import (
@@ -141,6 +142,10 @@ class WizardReasoning(ReasoningStrategy):
         _strict_validation: Whether to enforce schema validation
         _hooks: Optional WizardHooks for lifecycle events
     """
+
+    #: Typed config pointer (read by the reasoning validation resolver and
+    #: a future consumer-mixin adoption); construction is unchanged.
+    CONFIG_CLS: ClassVar[type[WizardReasoningConfig]] = WizardReasoningConfig
 
     def __init__(
         self,
