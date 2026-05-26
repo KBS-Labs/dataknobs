@@ -1,9 +1,10 @@
 """Simple reasoning strategy - direct LLM call."""
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, ClassVar
 
 from .base import ReasoningStrategy
+from .simple_config import SimpleReasoningConfig
 
 
 class SimpleReasoning(ReasoningStrategy):
@@ -28,6 +29,10 @@ class SimpleReasoning(ReasoningStrategy):
         )
         ```
     """
+
+    #: Typed config pointer (read by the reasoning validation resolver and
+    #: a future consumer-mixin adoption); construction is unchanged.
+    CONFIG_CLS: ClassVar[type[SimpleReasoningConfig]] = SimpleReasoningConfig
 
     def __init__(self, *, greeting_template: str | None = None) -> None:
         super().__init__(greeting_template=greeting_template)

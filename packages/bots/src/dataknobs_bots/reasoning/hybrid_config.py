@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from dataknobs_common.structured_config import StructuredConfig
 
 from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class HybridReasoningConfig:
+@dataclass(frozen=True)
+class HybridReasoningConfig(StructuredConfig):
     """Top-level configuration for :class:`HybridReasoning`.
 
     The hybrid strategy composes grounded retrieval (mandatory KB lookup)
@@ -40,11 +43,33 @@ class HybridReasoningConfig:
     store_provenance: bool = True
     greeting_template: str | None = None
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> HybridReasoningConfig:
-        """Build config from a flat reasoning config dict.
+    def __post_init__(self) -> None:
+        """Warn when grounded's ``store_provenance`` differs from hybrid's.
 
-        Expected shape::
+        In hybrid mode only the hybrid-level flag controls provenance
+        storage — grounded's ``generate()`` is never called, only
+        ``retrieve_context()`` — so a mismatched ``grounded.store_provenance``
+        is silently ineffective.  Surfacing it on every construction path
+        (dict-loaded *and* direct) is strictly more helpful than the
+        former ``from_dict``-only warning.
+        """
+        if self.grounded.store_provenance != self.store_provenance:
+            logger.warning(
+                "Hybrid strategy: 'grounded.store_provenance' (%s) differs "
+                "from hybrid-level 'store_provenance' (%s). Only the "
+                "hybrid-level flag is effective.",
+                self.grounded.store_provenance,
+                self.store_provenance,
+            )
+
+    @classmethod
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Flatten the nested ``react`` sub-dict onto the flat react fields.
+
+        The ``StructuredConfig`` base rebuilds the ``grounded`` field
+        recursively (it is itself a ``StructuredConfig``).  The only shape
+        quirk is the ``react`` sub-dict, whose keys map to the flat
+        ``react_*`` fields::
 
             reasoning:
               strategy: hybrid
@@ -61,31 +86,16 @@ class HybridReasoningConfig:
                 store_trace: false
               store_provenance: true
               greeting_template: "Hello!"
+
+        A flat key already present (the round-trip shape produced by
+        ``to_dict``) takes precedence over the nested form.
         """
-        grounded_data = data.get("grounded", {})
-        react_data = data.get("react", {})
-
-        hybrid_provenance = data.get("store_provenance", True)
-        grounded_config = GroundedReasoningConfig.from_dict(grounded_data)
-
-        # Warn if grounded sub-config has a different store_provenance —
-        # in hybrid mode, only the hybrid-level flag controls provenance
-        # storage (grounded's generate() is never called, only
-        # retrieve_context()).
-        if grounded_config.store_provenance != hybrid_provenance:
-            logger.warning(
-                "Hybrid strategy: 'grounded.store_provenance' (%s) differs "
-                "from hybrid-level 'store_provenance' (%s). Only the "
-                "hybrid-level flag is effective.",
-                grounded_config.store_provenance,
-                hybrid_provenance,
-            )
-
-        return cls(
-            grounded=grounded_config,
-            react_max_iterations=react_data.get("max_iterations", 5),
-            react_verbose=react_data.get("verbose", False),
-            react_store_trace=react_data.get("store_trace", False),
-            store_provenance=hybrid_provenance,
-            greeting_template=data.get("greeting_template"),
-        )
+        react = raw.pop("react", None)
+        if isinstance(react, Mapping):
+            if "max_iterations" in react:
+                raw.setdefault("react_max_iterations", react["max_iterations"])
+            if "verbose" in react:
+                raw.setdefault("react_verbose", react["verbose"])
+            if "store_trace" in react:
+                raw.setdefault("react_store_trace", react["store_trace"])
+        return raw

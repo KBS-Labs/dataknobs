@@ -30,7 +30,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_bots.utils.template_env import create_template_env
 
@@ -229,6 +229,10 @@ class GroundedReasoning(ReasoningStrategy):
             require_citations: true
           store_provenance: true
     """
+
+    #: Typed config pointer (read by the reasoning validation resolver and
+    #: a future consumer-mixin adoption); construction is unchanged.
+    CONFIG_CLS: ClassVar[type[GroundedReasoningConfig]] = GroundedReasoningConfig
 
     @classmethod
     def capabilities(cls) -> StrategyCapabilities:

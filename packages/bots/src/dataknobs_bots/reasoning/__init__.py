@@ -53,7 +53,9 @@ from .observability import (
     ExecutionTracker,
 )
 from .react import ReActReasoning, ReActTurnHandle
+from .react_config import ReActReasoningConfig
 from .simple import SimpleReasoning
+from .simple_config import SimpleReasoningConfig
 from .task_injection import (
     TaskInjectionContext,
     TaskInjectionResult,
@@ -95,7 +97,9 @@ __all__ = [
     "get_strategy_factory",
     "get_registry",
     "SimpleReasoning",
+    "SimpleReasoningConfig",
     "ReActReasoning",
+    "ReActReasoningConfig",
     "ReActTurnHandle",
     "GroundedReasoning",
     "GroundedReasoningConfig",
