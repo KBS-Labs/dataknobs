@@ -5,6 +5,106 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-05-26
+
+### dataknobs-common [1.4.0]
+
+#### Added
+- Add StructuredConfig.validate() for polymorphic config sections
+- Add automatic secret redaction to StructuredConfig repr
+- Add collaborator injection and async dispatch to StructuredConfigConsumer
+- add StructuredConfig meta-abstraction + retrofit event-bus backends
+- add structured event-bus configs + cross-registry parity guards
+
+#### Changed
+- Adopt polymorphic-section validation for bots memory/knowledge_base
+- Coerce Enum fields in StructuredConfig.from_dict; add to_json_dict + jsonify
+- Migrate PostgresAdvisoryLock to StructuredConfigConsumer
+- Support async-canonical from_config for structured-config consumers
+- Make collaborator delivery signature-aware; clarify from_components errors
+- generalize StructuredConfig construction-lifecycle & composition
+
+### dataknobs-config [0.4.0]
+
+#### Added
+- add StructuredConfig meta-abstraction + retrofit event-bus backends
+
+#### Changed
+- generalize StructuredConfig construction-lifecycle & composition
+
+### dataknobs-structures [1.0.11]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-utils [1.2.13]
+
+#### Changed
+- Migrate all dataknobs-data backends to typed StructuredConfig
+- bumped versions, updated release notes
+
+### dataknobs-data [0.5.0]
+
+#### Added
+- Add StructuredConfig.validate() for polymorphic config sections
+- Add automatic secret redaction to StructuredConfig repr
+- add structured event-bus configs + cross-registry parity guards
+
+#### Changed
+- Bump dependency floors for floor-resolve CVE findings
+- Migrate cross-cutting leaf configs to StructuredConfig
+- Migrate vector stores to StructuredConfig + formalize empty-list filter contract
+- Migrate all dataknobs-data backends to typed StructuredConfig
+
+### dataknobs-fsm [0.2.0]
+
+#### Added
+- Add fail-closed regression guard for StorageConfig enum-keyed JSON round-trip
+
+#### Changed
+- Adopt StructuredConfigConsumer in FSM pattern/runtime consumers
+- Migrate FSM resources/IO/storage/streaming/functions configs to StructuredConfig
+- Migrate FSM patterns-family configs to StructuredConfig
+- Bump dependency floors for floor-resolve CVE findings
+
+### dataknobs-llm [0.6.0]
+
+#### Added
+- Add embedding-section typed config + validation (reuse LLMConfig)
+- Add LLMConfig field-coverage drift guard for LLM providers
+- add structured event-bus configs + cross-registry parity guards
+
+#### Changed
+- Migrate LLMConfig to frozen StructuredConfig + llm-section validation
+- Bump dependency floors for floor-resolve CVE findings
+
+### dataknobs-bots [0.7.0]
+
+#### Added
+- Add embedding-section typed config + validation (reuse LLMConfig)
+- Add StructuredConfig.validate() for polymorphic config sections
+- Add automatic secret redaction to StructuredConfig repr
+- Add builder↔ctor drift guards for memory backend builders
+- Add pluggable backend registries for memory, knowledge, and grounded sources
+
+#### Changed
+- Adopt StructuredConfigConsumer mixin in the wizard reasoning strategy
+- Adopt StructuredConfigConsumer mixin in non-wizard reasoning strategies
+- Validate the reasoning config section in DynaBotConfig
+- Migrate wizard reasoning config family to StructuredConfig
+- Migrate core reasoning-strategy configs to StructuredConfig
+- Migrate LLMConfig to frozen StructuredConfig + llm-section validation
+- Convert config-validation skip-sentinel test teardown to a fixture
+- Adopt polymorphic-section validation for bots memory/knowledge_base
+- Bump dependency floors for floor-resolve CVE findings
+- Descend StructuredConfig repr redaction into raw mapping/list fields
+- Migrate vector stores to StructuredConfig + formalize empty-list filter contract
+- Adopt StructuredConfigConsumer in memory and knowledge subsystem classes
+- Adopt typed DynaBotConfig and structured-config lifecycle in DynaBot
+- Migrate bots config/ dataclasses to StructuredConfig
+- bumped versions, updated release notes
+
+
 ## Release - 2026-05-20
 
 ### dataknobs-common [1.3.14]
