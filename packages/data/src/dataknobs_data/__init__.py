@@ -121,7 +121,7 @@ from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import StreamConfig, StreamProcessor, StreamResult
 
-__version__ = "0.4.20"
+__version__ = "0.5.0"
 
 __all__ = [
     # Core classes

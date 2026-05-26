@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.4.0 - 2026-05-26
+
 ### Added
 - Async object-construction bridge for the `StructuredConfigConsumer`
   contract. `Config.build_object_async(ref, ...)` (and the underlying

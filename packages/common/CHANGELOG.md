@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.4.0 - 2026-05-26
+
 ### Added
 - `dataknobs_common.structured_config` module — typed configuration
   meta-abstraction. `StructuredConfig` is a frozen-dataclass base with
