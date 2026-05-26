@@ -884,8 +884,9 @@ class _SkipValidation:
     fall through to the ``None`` (unknown-discriminator → raise) branch. The
     ``__new__`` guard makes ``_SkipValidation()`` impossible once the module
     constant exists, so the only way to obtain one is the public
-    :data:`SKIP_VALIDATION`. Import this type only to *annotate* a resolver's
-    return (or use the public :data:`ConfigClassResolver` alias).
+    :data:`SKIP_VALIDATION`. This type is private; to annotate a resolver's
+    return, use the public :data:`ConfigClassResolution` alias rather than
+    importing this name.
     """
 
     __slots__ = ()
@@ -918,19 +919,23 @@ class _SkipValidation:
 SKIP_VALIDATION: _SkipValidation = _SkipValidation()
 
 
-#: A resolver maps a polymorphic section's raw dict to the concrete
-#: :class:`StructuredConfig` subclass that validates it; to ``None`` when the
-#: section's discriminator names no known variant (an unknown backend /
-#: provider — surfaced by :meth:`StructuredConfig.validate` as a
-#: :class:`~dataknobs_common.exceptions.ConfigurationError`); or to
+#: The result a :data:`ConfigClassResolver` produces (its return type): the
+#: concrete :class:`StructuredConfig` subclass that validates the section;
+#: ``None`` when the discriminator names no known variant (surfaced by
+#: :meth:`StructuredConfig.validate` as a
+#: :class:`~dataknobs_common.exceptions.ConfigurationError`); or
 #: :data:`SKIP_VALIDATION` when the discriminator *is* recognized but exposes no
-#: typed config to check (skipped, not raised). A resolver MUST delegate to the
-#: section's own construction registry (e.g. read ``CONFIG_CLS`` off the
-#: registered store class) rather than holding an independent discriminator→type
-#: table, so validation and construction cannot drift.
-ConfigClassResolver = Callable[
-    [Mapping[str, Any]], "type[StructuredConfig] | _SkipValidation | None"
-]
+#: typed config to check (skipped, not raised). Exported so a resolver function
+#: can annotate its return without importing the private :class:`_SkipValidation`
+#: sentinel type.
+ConfigClassResolution = type[StructuredConfig] | _SkipValidation | None
+
+#: A resolver maps a polymorphic section's raw dict to a
+#: :data:`ConfigClassResolution`. A resolver MUST delegate to the section's own
+#: construction registry (e.g. read ``CONFIG_CLS`` off the registered store
+#: class) rather than holding an independent discriminator→type table, so
+#: validation and construction cannot drift.
+ConfigClassResolver = Callable[[Mapping[str, Any]], ConfigClassResolution]
 
 #: Process-global registry of section resolvers, keyed by binding name (the
 #: value side of a :attr:`StructuredConfig._polymorphic_fields` entry). The
@@ -1388,6 +1393,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
 
 __all__ = [
     "SKIP_VALIDATION",
+    "ConfigClassResolution",
     "ConfigClassResolver",
     "ConfigT",
     "StructuredConfig",
