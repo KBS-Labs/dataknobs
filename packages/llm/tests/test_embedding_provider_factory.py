@@ -7,8 +7,7 @@ for backward compatibility.
 
 import pytest
 
-from dataknobs_llm import create_embedding_provider
-from dataknobs_llm import CompletionMode
+from dataknobs_llm import CompletionMode, LLMConfig, create_embedding_provider
 
 
 class TestCreateEmbeddingProvider:
@@ -177,6 +176,63 @@ class TestCreateEmbeddingProvider:
             },
         })
         try:
+            assert provider.config.mode == CompletionMode.EMBEDDING
+        finally:
+            await provider.close()
+
+    # --- typed LLMConfig affordance ---
+
+    @pytest.mark.asyncio
+    async def test_accepts_typed_llmconfig(self) -> None:
+        """A typed LLMConfig is accepted directly (not just a dict)."""
+        provider = await create_embedding_provider(
+            LLMConfig(provider="echo", model="typed-embed")
+        )
+        try:
+            assert provider.config.provider == "echo"
+            assert provider.config.model == "typed-embed"
+            assert provider.is_initialized is True
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    async def test_typed_llmconfig_forces_embedding_mode(self) -> None:
+        """A typed LLMConfig with a non-embedding mode is forced to EMBEDDING."""
+        provider = await create_embedding_provider(
+            LLMConfig(provider="echo", model="typed-embed", mode=CompletionMode.CHAT)
+        )
+        try:
+            assert provider.config.mode == CompletionMode.EMBEDDING
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    async def test_typed_llmconfig_already_embedding_passthrough(self) -> None:
+        """A typed LLMConfig already in EMBEDDING mode is used as-is."""
+        config = LLMConfig(
+            provider="echo", model="typed-embed", mode=CompletionMode.EMBEDDING
+        )
+        provider = await create_embedding_provider(config)
+        try:
+            # Already in EMBEDDING mode → no clone: the caller's exact object
+            # is used as-is (the optimization that skips a needless copy).
+            assert provider.config is config
+            assert provider.config.mode == CompletionMode.EMBEDDING
+            assert provider.config.model == "typed-embed"
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    async def test_typed_llmconfig_does_not_mutate_caller_config(self) -> None:
+        """Forcing embedding mode clones — the caller's frozen config is intact."""
+        config = LLMConfig(
+            provider="echo", model="typed-embed", mode=CompletionMode.CHAT
+        )
+        provider = await create_embedding_provider(config)
+        try:
+            # The original is frozen and untouched; only the provider's copy
+            # carries the forced embedding mode.
+            assert config.mode == CompletionMode.CHAT
             assert provider.config.mode == CompletionMode.EMBEDDING
         finally:
             await provider.close()

@@ -52,16 +52,25 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
         document_pattern: Glob pattern used when ``documents_path`` is set.
     """
 
-    # Adopt polymorphic-section validation for ``vector_store``: a
-    # ``RAGKnowledgeBaseConfig.from_dict(raw).validate()`` dry-run-builds
-    # the vector-store config to surface field errors / an unknown backend
-    # at config-parse time (without constructing the store). The binding is
-    # a string — ``dataknobs-data`` registers the resolver under
-    # ``"vector_store"`` — so this adds no import of any data config type.
-    # ``embedding`` is intentionally NOT bound yet: no typed embedding-config
-    # family exists for its resolver to delegate to.
+    # Adopt polymorphic-section validation for the nested ``vector_store``
+    # and ``embedding`` sections: a
+    # ``RAGKnowledgeBaseConfig.from_dict(raw).validate()`` dry-run-builds each
+    # bound section's config to surface field errors / an unknown discriminator
+    # at config-parse time (without constructing the store or embedder). Both
+    # bindings are strings — ``dataknobs-data`` registers the ``"vector_store"``
+    # resolver and ``dataknobs-llm`` registers the ``"embedding"`` resolver
+    # (an embedder config is an ``LLMConfig``, keyed by ``provider``) — so this
+    # adds no import of any data/llm config type.
+    #
+    # Only the *nested* ``embedding`` dict is validated. The legacy flat
+    # passthroughs (``embedding_provider`` / ``embedding_model`` / ``dimensions``
+    # / ``api_base`` / ``api_key``) are intentionally left unvalidated: they are
+    # legacy and slated for removal, and lack a ``provider`` discriminator to
+    # resolve on. A config using only flat keys has an empty nested ``embedding``
+    # → ``validate()`` skips it (empty-section rule), so no false positive.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = {
-        "vector_store": "vector_store"
+        "vector_store": "vector_store",
+        "embedding": "embedding",
     }
 
     vector_store: dict[str, Any] = field(default_factory=dict)

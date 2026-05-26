@@ -89,6 +89,19 @@ class VectorMemoryConfig(StructuredConfig):
             cannot be overridden by caller-supplied metadata.
     """
 
+    # The nested ``embedding`` section is dispatched by ``provider`` in the LLM
+    # provider registry; binding it lets ``validate()`` dry-run-build the
+    # ``LLMConfig`` (an embedder config is an ``LLMConfig``) and catch an
+    # unknown provider / bad field at config-lint time. The binding name is a
+    # string — ``dataknobs-llm`` registers the ``"embedding"`` resolver eagerly
+    # on import, so no LLM config type is imported here.
+    #
+    # Only the nested ``embedding`` dict is validated. The legacy flat
+    # passthroughs (``embedding_provider`` / ``embedding_model`` / ``dimensions``
+    # / ``api_base`` / ``api_key``) are intentionally left unvalidated: legacy,
+    # slated for removal, and without a ``provider`` discriminator to resolve on.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {"embedding": "embedding"}
+
     backend: str = "memory"
     dimension: int = 1536
     collection: str | None = None

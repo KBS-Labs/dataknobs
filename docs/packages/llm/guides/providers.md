@@ -42,7 +42,7 @@ returned ready for `embed()` calls with `CompletionMode.EMBEDDING` forced.
 
 ```python
 async def create_embedding_provider(
-    config: dict[str, Any],
+    config: LLMConfig | dict[str, Any],
     *,
     default_provider: str = "ollama",
     default_model: str = "nomic-embed-text",
@@ -53,9 +53,9 @@ async def create_embedding_provider(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `config` | `dict` | — | Configuration dict (see formats below) |
-| `default_provider` | `str` | `"ollama"` | Provider when not specified in config |
-| `default_model` | `str` | `"nomic-embed-text"` | Model when not specified in config |
+| `config` | `LLMConfig \| dict` | — | A typed `LLMConfig` or a configuration dict (see formats below) |
+| `default_provider` | `str` | `"ollama"` | Provider when not specified (dict path only) |
+| `default_model` | `str` | `"nomic-embed-text"` | Model when not specified (dict path only) |
 
 ### Returns
 
@@ -63,7 +63,26 @@ Initialized `AsyncLLMProvider` with `CompletionMode.EMBEDDING` set.
 
 ### Configuration Formats
 
-Two configuration formats are supported. The nested format is preferred.
+A typed `LLMConfig` or one of two dict formats is supported. An embedder config
+**is** an `LLMConfig` — embedding providers ride the same provider registry —
+so no separate config type is needed.
+
+**Typed `LLMConfig`:**
+
+```python
+from dataknobs_llm import LLMConfig
+
+provider = await create_embedding_provider(
+    LLMConfig(provider="ollama", model="nomic-embed-text", dimensions=768)
+)
+```
+
+`provider` / `model` are validated as required fields, and `mode` is forced to
+`CompletionMode.EMBEDDING` via `clone()` — `LLMConfig` is frozen, so the
+caller's config is never mutated. `default_provider` / `default_model` are
+unused on this path.
+
+The two dict formats follow. The nested format is preferred.
 
 **Nested format** (preferred):
 
@@ -103,6 +122,22 @@ When the nested format is present, it takes precedence over legacy keys.
 `CompletionMode.EMBEDDING` is always forced on the created provider, even if
 the caller's config includes `"mode": "chat"`. This ensures the provider is
 correctly configured for `embed()` calls.
+
+### Config-lint validation
+
+Because an embedder config is an `LLMConfig`, `dataknobs-llm` registers an
+`"embedding"` resolver in `config_registries` (eager on import) that resolves
+an `embedding` section to `LLMConfig` — the same resolver as the `"llm"`
+binding. A consumer config holding a nested `embedding` section
+(currently `RAGKnowledgeBaseConfig` and `VectorMemoryConfig`) declares
+`{"embedding": "embedding"}` in its `_polymorphic_fields`, so
+`config.validate()` dry-run-builds the embedder `LLMConfig` and surfaces an
+unknown provider or a bad field at config-parse time — without constructing a
+provider. Only the nested `embedding` dict is validated; the legacy flat keys
+(`embedding_provider` / `embedding_model` / `dimensions` / `api_base` /
+`api_key`) are left unvalidated. See the
+[Structured Config guide](../../common/structured-config.md) for the
+`validate()` / `_polymorphic_fields` mechanism.
 
 ### Examples
 

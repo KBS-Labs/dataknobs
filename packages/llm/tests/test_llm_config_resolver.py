@@ -69,3 +69,35 @@ def test_resolver_returns_none_for_missing_provider() -> None:
     assert _resolver()({}) is None
     assert _resolver()({"provider": ""}) is None
     assert _resolver()({"provider": None}) is None
+
+
+# --- the "embedding" binding reuses the same resolver ---
+#
+# An embedding section *is* an LLM-provider section (``create_embedding_provider``
+# rides the same provider registry and forces ``mode=embedding`` onto an
+# ``LLMConfig``), so the ``"embedding"`` binding resolves with the *same*
+# function as ``"llm"``. These pin that reuse so a future split is a deliberate
+# change, not an accident.
+
+
+def test_embedding_resolver_registered_on_import() -> None:
+    assert config_registries.has("embedding")
+
+
+def test_embedding_resolver_is_the_llm_resolver() -> None:
+    # Same function object under both bindings — embedding reuses LLMConfig,
+    # so a parallel resolver with identical logic would only duplicate it.
+    assert config_registries.get("embedding") is config_registries.get("llm")
+
+
+def test_embedding_resolver_returns_llm_config_for_known_provider() -> None:
+    resolver = config_registries.get("embedding")
+    keys = _provider_registry.list_keys()
+    assert keys, "expected the built-in providers to be registered"
+    for key in keys:
+        assert resolver({"provider": key}) is LLMConfig, f"drift for {key!r}"
+
+
+def test_embedding_resolver_returns_none_for_unknown_provider() -> None:
+    assert config_registries.get("embedding")({"provider": "nope"}) is None
+    assert config_registries.get("embedding")({}) is None

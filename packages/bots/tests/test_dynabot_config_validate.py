@@ -34,7 +34,11 @@ import dataknobs_llm  # noqa: F401
 import pytest
 
 from dataknobs_bots.bot.config import DynaBotConfig
-from dataknobs_bots.memory.config import CompositeMemoryConfig, SummaryMemoryConfig
+from dataknobs_bots.memory.config import (
+    CompositeMemoryConfig,
+    SummaryMemoryConfig,
+    VectorMemoryConfig,
+)
 from dataknobs_bots.memory.registry import memory_backends
 
 from dataknobs_common.exceptions import ConfigurationError
@@ -56,6 +60,12 @@ def test_summary_memory_bindings_resolve_guard() -> None:
     # SummaryMemoryConfig declares the ``llm`` binding; this fails in CI if the
     # dataknobs-llm resolver registration ever drops or is renamed.
     assert_polymorphic_bindings_resolve(SummaryMemoryConfig)
+
+
+def test_vector_memory_bindings_resolve_guard() -> None:
+    # VectorMemoryConfig declares the ``embedding`` binding; this fails in CI
+    # if the dataknobs-llm embedding resolver registration ever drops.
+    assert_polymorphic_bindings_resolve(VectorMemoryConfig)
 
 
 # --- happy paths ---
@@ -135,6 +145,44 @@ def test_summary_memory_absent_llm_is_noop() -> None:
 def test_summary_memory_unknown_llm_provider_raises() -> None:
     cfg = SummaryMemoryConfig.from_dict({"llm": {"provider": "nope"}})
     with pytest.raises(ConfigurationError, match="llm"):
+        cfg.validate()
+
+
+# --- VectorMemoryConfig.embedding validated by the same mechanism ---
+
+
+def test_vector_memory_good_embedding_validates() -> None:
+    VectorMemoryConfig.from_dict(
+        {"embedding": {"provider": "echo", "model": "test-embed"}}
+    ).validate()
+
+
+def test_vector_memory_absent_embedding_is_noop() -> None:
+    # embedding defaults to None on VectorMemoryConfig — a clean no-op.
+    VectorMemoryConfig.from_dict({"backend": "memory"}).validate()
+
+
+def test_vector_memory_unknown_embedding_provider_raises() -> None:
+    cfg = VectorMemoryConfig.from_dict({"embedding": {"provider": "nope"}})
+    with pytest.raises(ConfigurationError, match="embedding"):
+        cfg.validate()
+
+
+def test_vector_memory_flat_embedding_keys_not_validated() -> None:
+    # Legacy flat keys (no nested ``embedding`` dict) are not validated.
+    VectorMemoryConfig.from_dict(
+        {"embedding_provider": "nope", "embedding_model": "x"}
+    ).validate()
+
+
+def test_unknown_embedding_via_vector_memory_recursion_raises() -> None:
+    # A single DynaBotConfig.validate() descends: memory resolves to
+    # VectorMemoryConfig (type=vector), which carries the embedding binding,
+    # so an unknown embedding provider surfaces from the dry-run build.
+    cfg = DynaBotConfig.from_dict(
+        {"memory": {"type": "vector", "embedding": {"provider": "nope"}}}
+    )
+    with pytest.raises(ConfigurationError, match="embedding"):
         cfg.validate()
 
 
