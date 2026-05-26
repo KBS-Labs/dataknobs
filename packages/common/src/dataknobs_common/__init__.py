@@ -116,6 +116,7 @@ from dataknobs_common.serialization import (
     serialize_list,
 )
 from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
     ConfigClassResolver,
     StructuredConfig,
     StructuredConfigConsumer,
@@ -220,6 +221,7 @@ __all__ = [
     "is_deserializable",
     "jsonify",
     # Structured configuration
+    "SKIP_VALIDATION",
     "ConfigClassResolver",
     "StructuredConfig",
     "StructuredConfigConsumer",

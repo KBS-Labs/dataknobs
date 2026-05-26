@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from typing import Any, Type
 
 from dataknobs_common.registry import PluginRegistry
-from dataknobs_common.structured_config import StructuredConfig, config_registries
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    StructuredConfig,
+    _SkipValidation,
+    config_registries,
+)
 
 from .base import VectorStore
 
@@ -133,7 +138,7 @@ from .factory import VectorStoreFactory  # noqa: E402
 
 def _resolve_vector_store_config_cls(
     raw: Mapping[str, Any],
-) -> type[StructuredConfig] | None:
+) -> type[StructuredConfig] | _SkipValidation | None:
     """Resolve a ``vector_store`` section's dict to its config class.
 
     The resolver registered for the ``"vector_store"`` binding in
@@ -150,13 +155,13 @@ def _resolve_vector_store_config_cls(
     backend, which ``validate`` surfaces as a ``ConfigurationError``.
 
     A backend that is *registered* but exposes no ``StructuredConfig``
-    ``CONFIG_CLS`` also returns ``None`` (there is no typed schema to
-    dry-run against), but is logged at WARNING first so that case is
-    distinguishable from a genuine typo'd discriminator — the two collapse
-    to the same ``None`` return otherwise. No registered backend is in this
-    state today; the parity guard
-    ``test_resolver_agrees_with_construction_registry_for_all_backends``
-    keeps it CI-impossible, so the branch is defense-in-depth for a backend
+    ``CONFIG_CLS`` returns :data:`SKIP_VALIDATION` (logged at WARNING):
+    there is no typed schema to dry-run against, but the backend is valid
+    and constructible, so ``validate`` skips the section rather than
+    raising — distinct from the ``None`` return for a genuine typo'd
+    discriminator. No built-in backend is in this state today (the parity
+    guard ``test_resolver_agrees_with_construction_registry_for_all_backends``
+    keeps it so); the branch covers a custom bare-callable backend
     registered out of band.
     """
     backend = raw.get("backend", "memory")
@@ -172,11 +177,11 @@ def _resolve_vector_store_config_cls(
     logger.warning(
         "Vector-store backend %r is registered but exposes no StructuredConfig "
         "CONFIG_CLS; validate() has no typed schema to check its config "
-        "section against and will treat it as an unknown variant. Give the "
-        "backend a CONFIG_CLS to make its section validatable.",
+        "section against and will skip it. Give the backend a CONFIG_CLS to "
+        "make its section validatable.",
         backend,
     )
-    return None
+    return SKIP_VALIDATION
 
 
 # Eager registration (not on_first_access): importing this package is what

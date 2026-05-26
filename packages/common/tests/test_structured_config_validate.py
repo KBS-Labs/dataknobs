@@ -32,6 +32,7 @@ import pytest
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
     StructuredConfig,
     config_registries,
 )
@@ -98,6 +99,16 @@ def _resolve_adopter(raw: Mapping[str, Any]) -> type[StructuredConfig] | None:
     return _Adopter
 
 
+# Return annotation omitted deliberately: the resolver's return type union
+# includes the private ``_SkipValidation`` sentinel type, which tests should
+# not import. The contract is enforced where this is passed to
+# ``config_registries.register`` (typed ``ConfigClassResolver``).
+def _resolve_skip(raw: Mapping[str, Any]):
+    # Recognizes the discriminator but has no typed config to validate
+    # against (the bare-callable-backend case) — skip, don't raise.
+    return SKIP_VALIDATION if raw.get("kind") == "leaf" else None
+
+
 @pytest.fixture
 def leaf_registered() -> Any:
     """Register the ``leaf`` resolver, restoring the registry afterward."""
@@ -145,6 +156,36 @@ def test_unknown_discriminator_raises(leaf_registered: Any) -> None:
     assert "_Adopter" in msg
     assert "section" in msg
     assert "leaf" in msg
+
+
+def test_skip_sentinel_skips_without_raising(caplog: Any) -> None:
+    # A resolver that returns SKIP_VALIDATION means "recognized but no typed
+    # config" — validate() skips with a debug log, distinct from the None
+    # (unknown discriminator) path which raises.
+    config_registries.register("leaf", _resolve_skip, allow_overwrite=True)
+    try:
+        with caplog.at_level(
+            logging.DEBUG, logger="dataknobs_common.structured_config"
+        ):
+            _Adopter.from_dict({"section": {"kind": "leaf", "size": -1}}).validate()
+        # -1 would fail _LeafConfig.__post_init__ if it were built; the skip
+        # means the section is never dry-run-built, so no error surfaces.
+        assert any(
+            "exposes no typed config" in r.message for r in caplog.records
+        )
+    finally:
+        config_registries.unregister("leaf")
+
+
+def test_skip_sentinel_does_not_suppress_unknown_discriminator() -> None:
+    # The same resolver returns None (not SKIP) for an unrecognized
+    # discriminator, which must still raise — SKIP is not a blanket mute.
+    config_registries.register("leaf", _resolve_skip, allow_overwrite=True)
+    try:
+        with pytest.raises(ConfigurationError):
+            _Adopter.from_dict({"section": {"kind": "bogus"}}).validate()
+    finally:
+        config_registries.unregister("leaf")
 
 
 def test_child_field_error_propagates(leaf_registered: Any) -> None:

@@ -336,6 +336,7 @@ Behavior:
 | section value empty (`{}` / `None`) | skipped (the default / `from_components` path) |
 | binding has no registered resolver | skipped + `logger.debug` (fail-soft: cause is import order; the test guard below catches real drift) |
 | resolver returns `None` (unknown discriminator) | raises `ConfigurationError` — the headline win: a typo'd `backend` caught at config-lint time |
+| resolver returns `SKIP_VALIDATION` (recognized, but no typed config — e.g. a bare-callable backend) | skipped + `logger.debug` *in `validate()`* — rejecting a valid, constructible backend would be a false positive. (A resolver may itself `logger.warning` before returning the sentinel, so operators see an actionable "give this backend a `CONFIG_CLS`" signal; the two log sites and levels are intentional.) |
 | resolver returns a config class | dry-run `from_dict` (surfaces child field errors) + recurse |
 
 The parse-without-construct CI-lint usage:
@@ -355,26 +356,53 @@ fast.
 that `dataknobs-common` owns but (having `dependencies = []`) cannot
 populate — the **registry-of-registries** seam. Each package that owns a
 polymorphic section registers its resolver eagerly at import. A resolver
-maps the section's raw dict to its concrete config class (or `None` for an
-unknown discriminator) and **must delegate to the section's own
-construction registry** so validation and construction cannot drift:
+maps the section's raw dict to its concrete config class (`None` for an
+unknown discriminator, or `SKIP_VALIDATION` when the discriminator is
+recognized but has no typed config to check) and **must delegate to the
+section's own construction registry** so validation and construction cannot
+drift:
 
 ```python
 # dataknobs_data/vector/stores/__init__.py
-from dataknobs_common.structured_config import StructuredConfig, config_registries
+import logging
+
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION, StructuredConfig, config_registries,
+)
+
+logger = logging.getLogger(__name__)
 
 def _resolve_vector_store_config_cls(raw):
     backend = raw.get("backend", "memory")
     store_cls = vector_backends.get_factory(backend)   # the construction registry
+    if store_cls is None:
+        return None                                     # unknown backend -> raise
     config_cls = getattr(store_cls, "CONFIG_CLS", None) # no independent table
     if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
         return config_cls
-    return None
+    # Registered (e.g. bare callable) but untyped -> skip. Warn first so an
+    # operator sees an actionable signal rather than a silent skip: this
+    # backend exists but isn't validatable until it grows a CONFIG_CLS.
+    logger.warning(
+        "Backend %r is registered but exposes no CONFIG_CLS; "
+        "validate() will skip its section. Give it a CONFIG_CLS "
+        "to make the section validatable.",
+        backend,
+    )
+    return SKIP_VALIDATION
 
 config_registries.register(
     "vector_store", _resolve_vector_store_config_cls, allow_overwrite=True
 )
 ```
+
+`SKIP_VALIDATION` matters for construction registries that accept
+bare-callable backends (no `CONFIG_CLS` to read): such a backend is valid
+and constructible, so returning `None` (→ raise) would be a false positive.
+A closed registry of config-bearing classes never needs it. A production
+resolver should `logger.warning` before returning the sentinel (as above), so
+operators know a registered backend is silently unvalidated and can act —
+`validate()` itself only emits a `logger.debug` for the skip.
 
 ## `StructuredConfigConsumer[ConfigT]` API
 

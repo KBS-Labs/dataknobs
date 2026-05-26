@@ -17,7 +17,11 @@ import dataknobs_data.vector.stores  # noqa: F401 — eager resolver registratio
 from dataknobs_data.vector.stores import vector_backends
 from dataknobs_data.vector.stores.config import MemoryVectorStoreConfig
 
-from dataknobs_common.structured_config import StructuredConfig, config_registries
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    StructuredConfig,
+    config_registries,
+)
 
 
 def _resolver():
@@ -48,6 +52,23 @@ def test_resolver_defaults_to_memory() -> None:
 def test_resolver_returns_none_for_unknown_backend() -> None:
     result = _resolver()({"backend": "pgvektor"})
     assert result is None
+
+
+def test_registered_backend_without_config_cls_is_skipped() -> None:
+    # A backend registered as a bare callable (no CONFIG_CLS) is recognized
+    # but has no typed schema to validate against. The resolver returns
+    # SKIP_VALIDATION (not None), so validate() skips it rather than
+    # false-positive-raising on a valid, constructible backend.
+    def _untyped_factory(config: object = None, **_: object) -> object:
+        raise NotImplementedError  # never built — resolver only reads the type
+
+    vector_backends.register(
+        "untyped_test_backend", _untyped_factory, override=True
+    )
+    try:
+        assert _resolver()({"backend": "untyped_test_backend"}) is SKIP_VALIDATION
+    finally:
+        vector_backends.unregister("untyped_test_backend")
 
 
 def test_resolved_config_is_structured_config_subclass() -> None:

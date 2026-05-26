@@ -89,6 +89,13 @@ cfg = SomeParentConfig.from_dict(loaded_yaml)  # cheap parse, no store built
 cfg.validate()                                 # raises on a bad vector_store
 ```
 
+A custom backend registered as a bare callable (no `CONFIG_CLS`) is
+recognized but has no typed schema to check, so the resolver returns
+`SKIP_VALIDATION` and `validate()` skips that section rather than
+false-positive-raising. The resolver logs this skip at `WARNING` (the
+backend exists but isn't validatable) — give a custom backend a `CONFIG_CLS`
+to make its config section validatable and silence the warning.
+
 ## Backend-Specific Configuration
 
 ### Memory Backend
