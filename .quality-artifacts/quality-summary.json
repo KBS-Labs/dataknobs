@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-05-26T03:59:13Z",
+  "timestamp": "2026-05-26T04:06:27Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots",
   "tested_packages": ["bots"],
   "package_hashes": {
-  "bots": "0732cf50c3daa444344beee1ee98c1a2c3ad2d5679c417d96173663670733c34",
+  "bots": "22556dd4833ec00c81b6d4677429f3b105565e95f3ef2a5084d5eb6828bb1b87",
   "common": "03df08031aa58e2a56db92eed117e16875d1265e31c0925aec9f5258abbbe907",
   "config": "1cba16240d9dfae40bf8dfaf5d13844edb8f503b4761cac2b682fd5d3f4c5aa8",
   "data": "3283d9a7d8673907d17d315977b097e5df4254ec99ac4a2ffd3e113b0390812e",

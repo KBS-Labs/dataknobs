@@ -397,7 +397,9 @@ class GroundedReasoningConfig(StructuredConfig):
         """
         if not raw.get("intent") and raw.get("query_generation"):
             raw["intent"] = raw["query_generation"]
-        # ``query_generation`` is not a field; drop it so it doesn't linger.
+        # Hygiene only — the base ignores unknown keys during field
+        # projection, but popping ``query_generation`` keeps it out of any
+        # debug dump of ``raw`` and signals it has been folded into ``intent``.
         raw.pop("query_generation", None)
         # Falsy result_processing → unset → field defaults to None.
         if not raw.get("result_processing"):

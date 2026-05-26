@@ -250,11 +250,22 @@ class TestHybridReasoningConfig:
         assert cfg.grounded.intent.mode == "static"
         assert cfg.grounded.retrieval.top_k == 10
 
-    def test_from_dict_react_defaults_when_absent(self) -> None:
-        cfg = HybridReasoningConfig.from_dict({"grounded": {}})
+    def test_from_dict_react_defaults_when_absent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(
+            logging.WARNING, logger="dataknobs_bots.reasoning.hybrid_config"
+        ):
+            cfg = HybridReasoningConfig.from_dict({"grounded": {}})
         assert cfg.react_max_iterations == 5
         assert cfg.react_verbose is False
         assert cfg.react_store_trace is False
+        # Both grounded and hybrid default ``store_provenance`` to True, so the
+        # provenance-mismatch warning must stay silent on the defaults path. A
+        # future default shift that introduced a spurious warning would trip here.
+        assert not [
+            rec for rec in caplog.records if "store_provenance" in rec.message
+        ]
 
     def test_provenance_mismatch_warns(
         self, caplog: pytest.LogCaptureFixture
