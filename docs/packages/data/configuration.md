@@ -70,7 +70,7 @@ The Postgres sync and async backends share one `PostgresDatabaseConfig`
 ### Validating a `vector_store` section without constructing the store
 
 `dataknobs-data` is the reference adopter of the cross-package
-[polymorphic-section validation](../common/structured-config.md#polymorphic-section-validation-validate--config_registries)
+[polymorphic-section validation](../common/structured-config.md#polymorphic-section-validation-validate-config_registries)
 hook. On import it registers a resolver under the `"vector_store"` binding
 in `dataknobs_common.structured_config.config_registries`, delegating to the
 same `vector_backends` registry the construction path uses (reading

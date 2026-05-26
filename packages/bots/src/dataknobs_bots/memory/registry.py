@@ -28,7 +28,7 @@ that does not consume a given collaborator absorbs it with ``**_``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.exceptions import (
@@ -37,6 +37,12 @@ from dataknobs_common.exceptions import (
     OperationError,
 )
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    StructuredConfig,
+    _SkipValidation,
+    config_registries,
+)
 
 from .base import Memory
 from .buffer import BufferMemory
@@ -83,6 +89,56 @@ memory_backends: PluginRegistry[Memory] = PluginRegistry(
     config_key="type",
     config_key_default="buffer",
     on_first_access=_register_builtins,
+)
+
+
+def _resolve_memory_config_cls(
+    raw: Mapping[str, Any],
+) -> type[StructuredConfig] | _SkipValidation | None:
+    """Resolve a ``memory`` section's dict to its config class.
+
+    The resolver registered for the ``"memory"`` binding in
+    :data:`~dataknobs_common.structured_config.config_registries`, used by
+    :meth:`StructuredConfig.validate
+    <dataknobs_common.structured_config.StructuredConfig.validate>` to
+    validate a raw ``memory`` section (and each element of a composite's
+    ``strategies`` list) without constructing the memory backend.
+
+    Delegates to ``memory_backends`` — the same registry the construction
+    path uses — by reading ``CONFIG_CLS`` off the registered backend class
+    for the ``"type"`` discriminator (defaulting to ``"buffer"``, the
+    factory's own default). Holding no independent type→config-class table
+    is the no-drift guarantee. Returns ``None`` for an unknown type, which
+    ``validate`` surfaces as a ``ConfigurationError``.
+
+    Unlike ``vector_backends`` (a closed set of config-bearing classes),
+    ``register_memory_backend`` accepts a bare callable factory
+    (``MemoryFactory = type[Memory] | Callable[..., Memory]``). Such a
+    backend has no ``StructuredConfig`` ``CONFIG_CLS``, so the resolver
+    returns :data:`SKIP_VALIDATION`: the backend is valid and constructible
+    but has no typed schema to dry-run against, so ``validate`` skips it
+    rather than false-positive-raising — distinct from the ``None`` return
+    for a genuine typo'd discriminator.
+    """
+    backend_type = raw.get("type", "buffer")  # registry's own default
+    factory = memory_backends.get_factory(backend_type)
+    if factory is None:
+        return None  # unknown type -> validate() raises ConfigurationError
+    config_cls = getattr(factory, "CONFIG_CLS", None)
+    if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+        return config_cls
+    return SKIP_VALIDATION  # registered bare callable, no CONFIG_CLS -> skip
+
+
+# Eager registration (mirroring ``dataknobs-data``'s ``vector_store``):
+# importing this module is what makes the ``memory`` binding resolvable, and
+# any parent config holding a memory section depends on this package. The
+# package ``__init__`` imports this module, so ``import dataknobs_bots.memory``
+# fires it. ``config_registries`` is a plain ``Registry`` -> ``allow_overwrite``
+# (NOT ``override=``, which is ``memory_backends``'/``PluginRegistry``'s param;
+# the two registries differ) keeps re-import idempotent.
+config_registries.register(
+    "memory", _resolve_memory_config_cls, allow_overwrite=True
 )
 
 

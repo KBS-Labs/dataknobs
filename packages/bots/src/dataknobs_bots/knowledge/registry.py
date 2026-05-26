@@ -22,7 +22,7 @@ The discriminator key is ``type`` (default ``rag``).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from dataknobs_common.exceptions import (
@@ -31,6 +31,12 @@ from dataknobs_common.exceptions import (
     OperationError,
 )
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import (
+    SKIP_VALIDATION,
+    StructuredConfig,
+    _SkipValidation,
+    config_registries,
+)
 
 from .base import KnowledgeBase
 
@@ -61,6 +67,50 @@ knowledge_base_backends: PluginRegistry[KnowledgeBase] = PluginRegistry(
     config_key="type",
     config_key_default="rag",
     on_first_access=_register_builtins,
+)
+
+
+def _resolve_knowledge_base_config_cls(
+    raw: Mapping[str, Any],
+) -> type[StructuredConfig] | _SkipValidation | None:
+    """Resolve a ``knowledge_base`` section's dict to its config class.
+
+    The resolver registered for the ``"knowledge_base"`` binding in
+    :data:`~dataknobs_common.structured_config.config_registries`, used by
+    :meth:`StructuredConfig.validate
+    <dataknobs_common.structured_config.StructuredConfig.validate>` to
+    validate a raw ``knowledge_base`` section without constructing the
+    knowledge base. Because the resolved ``RAGKnowledgeBaseConfig`` itself
+    carries the ``vector_store`` binding, one
+    ``DynaBotConfig.from_dict(raw).validate()`` descends into the nested
+    vector-store section too (the base's recursion through dry-run-built
+    children).
+
+    Delegates to ``knowledge_base_backends`` — the same registry the
+    construction path uses — by reading ``CONFIG_CLS`` off the registered
+    backend class for the ``"type"`` discriminator (defaulting to ``"rag"``,
+    the factory's own default). Returns ``None`` for an unknown type (→
+    ``ConfigurationError``); returns :data:`SKIP_VALIDATION` for a
+    registered bare-callable backend with no ``CONFIG_CLS`` (see the memory
+    resolver for the rationale).
+    """
+    backend_type = raw.get("type", "rag")  # registry's own default
+    factory = knowledge_base_backends.get_factory(backend_type)
+    if factory is None:
+        return None  # unknown type -> validate() raises ConfigurationError
+    config_cls = getattr(factory, "CONFIG_CLS", None)
+    if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+        return config_cls
+    return SKIP_VALIDATION  # registered bare callable, no CONFIG_CLS -> skip
+
+
+# Eager registration (mirroring the memory resolver / ``dataknobs-data``'s
+# ``vector_store``). The package ``__init__`` imports this module, so
+# ``import dataknobs_bots.knowledge`` fires it. ``config_registries`` is a
+# plain ``Registry`` -> ``allow_overwrite`` (NOT ``override=``, which is the
+# ``PluginRegistry`` param) keeps re-import idempotent.
+config_registries.register(
+    "knowledge_base", _resolve_knowledge_base_config_cls, allow_overwrite=True
 )
 
 

@@ -121,6 +121,40 @@ bot = DynaBot.from_components(
 `DynaBotConfigSchema` config toolkit (which *produces* config mappings —
 see [Config Toolkit](config-toolkit.md)).
 
+### Validating config sections without constructing the bot
+
+`from_dict` is deliberately tolerant — it forwards each polymorphic section
+(`memory`, `knowledge_base`, …) to its subsystem factory verbatim and does
+not look inside. For flows that parse a config but do not immediately build
+the bot (CI config-linting, a write-time check in a multi-tenant config
+store, a config editor), call `validate()` to dry-run-build the resolved
+section configs and surface malformed or unknown sections at parse time:
+
+```python
+from dataknobs_bots.bot.config import DynaBotConfig
+
+cfg = DynaBotConfig.from_dict(loaded_yaml)
+cfg.validate()   # raises if a section is malformed; does not construct the bot
+```
+
+`validate()` is opt-in (never auto-run by `from_dict` or construction) and
+discards the dry-run objects — the sections stay raw mappings. It covers:
+
+- **`memory`** — an unknown backend `type` raises `ConfigurationError`; a
+  field error in the resolved memory config raises. A `composite` memory's
+  `strategies` are validated element-wise.
+- **`knowledge_base`** — an unknown `type` raises; and because the resolved
+  `RAGKnowledgeBaseConfig` carries its own `vector_store` binding, the single
+  call **descends into the nested `vector_store` section** too (an unknown
+  vector-store `backend` or a bad nested field is caught from the same
+  `cfg.validate()`).
+
+A backend registered as a bare callable (no typed config) is recognized and
+skipped rather than rejected. `reasoning` and `conversation_storage` are not
+validated yet (no registry-resolvable typed config family). See the common
+[Polymorphic-section validation](../../common/structured-config.md#polymorphic-section-validation-validate-config_registries)
+guide for the underlying mechanism.
+
 ---
 
 ## Configuration Structure

@@ -19,8 +19,9 @@ build logic, not rebuilt into typed trees here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -69,6 +70,23 @@ class DynaBotConfig(StructuredConfig):
         tool_timeout: Per-tool execution timeout in seconds.
         tool_loop_timeout: Wall-clock budget for the tool-execution loop.
     """
+
+    # Adopt polymorphic-section validation for the subsystem sections whose
+    # config families are registry-resolvable today. A
+    # ``DynaBotConfig.from_dict(raw).validate()`` dry-run-builds the resolved
+    # ``memory`` / ``knowledge_base`` configs to surface field errors / an
+    # unknown backend ``type`` at config-parse time (without constructing the
+    # bot), and — because ``RAGKnowledgeBaseConfig`` carries its own
+    # ``vector_store`` binding — descends into the nested vector-store section
+    # too. Bindings are strings: ``dataknobs-bots`` registers the ``memory`` /
+    # ``knowledge_base`` resolvers eagerly on import, so this adds no import of
+    # a subsystem config type. ``reasoning`` is intentionally NOT bound yet (it
+    # needs a reasoning-strategy config family first); ``conversation_storage``
+    # is owned by ``dataknobs-llm`` and likewise unbound for now.
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {
+        "memory": "memory",
+        "knowledge_base": "knowledge_base",
+    }
 
     # --- provider / storage (raw mappings) ---
     llm: dict[str, Any] = field(default_factory=dict)

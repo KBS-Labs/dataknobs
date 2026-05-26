@@ -792,7 +792,7 @@ def test_widget_config_roundtrips():
 
 ### `assert_polymorphic_bindings_resolve(cls)`
 
-Wiring guard for [`validate()`](#polymorphic-section-validation-validate--config_registries):
+Wiring guard for [`validate()`](#polymorphic-section-validation-validate-config_registries):
 asserts every binding a config declares in `_polymorphic_fields` is
 registered in `config_registries`. The declaration and the resolver
 registration live in different packages, so a rename or dropped
