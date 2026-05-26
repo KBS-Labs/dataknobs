@@ -140,14 +140,21 @@ cfg.validate()   # raises if a section is malformed; does not construct the bot
 `validate()` is opt-in (never auto-run by `from_dict` or construction) and
 discards the dry-run objects — the sections stay raw mappings. It covers:
 
+- **`llm`** — an unknown `provider` raises `ConfigurationError`; a field error
+  in the resolved `LLMConfig` raises.
 - **`memory`** — an unknown backend `type` raises `ConfigurationError`; a
   field error in the resolved memory config raises. A `composite` memory's
-  `strategies` are validated element-wise.
+  `strategies` are validated element-wise. A `summary` memory's dedicated
+  `llm` section and a `vector` memory's nested `embedding` section are
+  validated by the same descent.
 - **`knowledge_base`** — an unknown `type` raises; and because the resolved
-  `RAGKnowledgeBaseConfig` carries its own `vector_store` binding, the single
-  call **descends into the nested `vector_store` section** too (an unknown
-  vector-store `backend` or a bad nested field is caught from the same
-  `cfg.validate()`).
+  `RAGKnowledgeBaseConfig` carries its own `vector_store` and `embedding`
+  bindings, the single call **descends into the nested `vector_store` and
+  `embedding` sections** too (an unknown vector-store `backend`, an unknown
+  embedding `provider`, or a bad nested field is caught from the same
+  `cfg.validate()`). Only the nested `embedding` dict is validated; the legacy
+  flat keys (`embedding_provider` / `embedding_model` / `dimensions` /
+  `api_base` / `api_key`) are left unvalidated.
 
 A backend registered as a bare callable (no typed config) is recognized and
 skipped rather than rejected. `reasoning` and `conversation_storage` are not

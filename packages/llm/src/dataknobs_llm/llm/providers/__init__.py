@@ -15,6 +15,7 @@ from dataknobs_common.structured_config import StructuredConfig, config_registri
 
 from ..base import (
     AsyncLLMProvider,
+    CompletionMode,
     LLMConfig,
     LLMMessage,
     LLMResponse,
@@ -95,6 +96,20 @@ def _resolve_llm_config_cls(
 # types directly (the binding name is a string). ``allow_overwrite=True``
 # keeps re-import idempotent.
 config_registries.register("llm", _resolve_llm_config_cls, allow_overwrite=True)
+
+# An ``embedding`` section *is* an LLM-provider section: ``create_embedding_provider``
+# rides the same ``_provider_registry`` and forces ``mode=embedding`` onto an
+# ``LLMConfig`` (there is no separate embedding-provider registry or config
+# family — every embedder config key, including ``dimensions``, is already an
+# ``LLMConfig`` field). So the ``embedding`` section validates against
+# ``LLMConfig`` via the *same* resolver — registering a parallel resolver with
+# identical logic would only duplicate it. The binding name is deliberately
+# distinct from ``"llm"`` so the section stays semantically separate; if an
+# embed-specific config surface is ever wanted, only this registration changes
+# (the ``"llm"`` binding is untouched).
+config_registries.register(
+    "embedding", _resolve_llm_config_cls, allow_overwrite=True
+)
 
 
 class LLMProviderFactory:
@@ -241,73 +256,94 @@ def create_llm_provider(
 
 
 async def create_embedding_provider(
-    config: dict[str, Any],
+    config: LLMConfig | dict[str, Any],
     *,
     default_provider: str = "ollama",
     default_model: str = "nomic-embed-text",
 ) -> AsyncLLMProvider:
     """Create and initialize an embedding provider from configuration.
 
-    Normalizes configuration from two supported formats:
+    Accepts a typed ``LLMConfig`` or a dict (mirroring the data factories,
+    which accept a typed config or a raw dict). An embedder config *is* an
+    ``LLMConfig`` — embedding providers ride the same provider registry — so
+    no separate config type is needed; ``mode=embedding`` is forced in every
+    case (a caller-supplied ``mode`` is overridden).
 
-    - **Nested format:** ``{"embedding": {"provider": "ollama", "model": "..."}}``
+    - **Typed ``LLMConfig``:** used directly. ``provider`` / ``model`` are
+      already validated as required fields; ``mode`` is forced to
+      :attr:`CompletionMode.EMBEDDING` (via ``clone`` — ``LLMConfig`` is
+      frozen). *default_provider* / *default_model* are unused on this path.
+    - **Nested dict:** ``{"embedding": {"provider": "ollama", "model": "..."}}``
       -- the ``"embedding"`` sub-dict is extracted and used.  All extra keys
       in the sub-dict (``api_base``, ``api_key``, ``dimensions``, etc.) are
       forwarded to the provider.
-    - **Legacy prefix format:** ``{"embedding_provider": "ollama",
+    - **Legacy prefix dict:** ``{"embedding_provider": "ollama",
       "embedding_model": "..."}`` -- ``embedding_`` prefixed keys at the
       top level.  ``api_base``, ``api_key``, and ``dimensions`` are also
       forwarded when present at the top level.
 
-    When neither format is present, *default_provider* / *default_model*
+    When neither dict format is present, *default_provider* / *default_model*
     are used (``ollama`` / ``nomic-embed-text``).
 
     Args:
-        config: Configuration dict.
-        default_provider: Default provider if not specified.
-        default_model: Default model if not specified.
+        config: A typed ``LLMConfig`` or a configuration dict.
+        default_provider: Default provider if not specified (dict path only).
+        default_model: Default model if not specified (dict path only).
 
     Returns:
         Initialized ``AsyncLLMProvider`` instance ready for ``embed()`` calls.
 
     Example:
         ```python
+        # Typed config
+        provider = await create_embedding_provider(
+            LLMConfig(provider="ollama", model="nomic-embed-text")
+        )
+        # Or a dict
         provider = await create_embedding_provider({
-            "embedding": {
-                "provider": "ollama",
-                "model": "nomic-embed-text",
-            },
+            "embedding": {"provider": "ollama", "model": "nomic-embed-text"},
         })
         embedding = await provider.embed("hello world")
         ```
     """
-    # 1. Nested "embedding" sub-dict (preferred)
-    extra: dict[str, Any]
-    embedding_config = config.get("embedding", {})
-    if embedding_config and isinstance(embedding_config, dict):
-        provider_name = embedding_config.get("provider", default_provider)
-        model_name = embedding_config.get("model", default_model)
-        # Forward all extra keys (api_base, api_key, dimensions, etc.)
-        extra = {
-            k: v for k, v in embedding_config.items()
-            if k not in ("provider", "model")
-        }
+    provider_config: LLMConfig | dict[str, Any]
+    if isinstance(config, LLMConfig):
+        # Typed path: force embedding mode (clone — LLMConfig is frozen).
+        provider_config = (
+            config
+            if config.mode is CompletionMode.EMBEDDING
+            else config.clone(mode=CompletionMode.EMBEDDING)
+        )
+        provider_name = config.provider
+        model_name = config.model
     else:
-        # 2. Legacy prefix format (embedding_provider / embedding_model)
-        provider_name = config.get("embedding_provider", default_provider)
-        model_name = config.get("embedding_model", default_model)
-        extra = {}
-        for passthrough in ("api_base", "api_key", "dimensions"):
-            if passthrough in config:
-                extra[passthrough] = config[passthrough]
+        # Dict path. 1. Nested "embedding" sub-dict (preferred)
+        extra: dict[str, Any]
+        embedding_config = config.get("embedding", {})
+        if embedding_config and isinstance(embedding_config, dict):
+            provider_name = embedding_config.get("provider", default_provider)
+            model_name = embedding_config.get("model", default_model)
+            # Forward all extra keys (api_base, api_key, dimensions, etc.)
+            extra = {
+                k: v for k, v in embedding_config.items()
+                if k not in ("provider", "model")
+            }
+        else:
+            # 2. Legacy prefix format (embedding_provider / embedding_model)
+            provider_name = config.get("embedding_provider", default_provider)
+            model_name = config.get("embedding_model", default_model)
+            extra = {}
+            for passthrough in ("api_base", "api_key", "dimensions"):
+                if passthrough in config:
+                    extra[passthrough] = config[passthrough]
+        provider_config = {
+            "provider": provider_name,
+            "model": model_name,
+            **extra,
+            "mode": "embedding",  # Always forced — must come after **extra
+        }
 
     factory = LLMProviderFactory(is_async=True)
-    provider_config = {
-        "provider": provider_name,
-        "model": model_name,
-        **extra,
-        "mode": "embedding",  # Always forced — must come after **extra
-    }
     try:
         provider = factory.create(provider_config)
         await provider.initialize()
