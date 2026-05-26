@@ -570,7 +570,18 @@ class OllamaProvider(AsyncLLMProvider):
                             # Check if configured model is available
                             matching = _find_matching_models(self.config.model, models)
                             if matching and matching[0] != self.config.model:
-                                self.config.model = matching[0]
+                                # ``LLMConfig`` is a frozen ``StructuredConfig`` —
+                                # replace the config via ``clone`` rather than
+                                # mutating the (immutable) ``model`` field.
+                                #
+                                # ``self.config`` is a plain (mutable) instance
+                                # attribute here, so reassigning it is fine. If
+                                # this provider is ever migrated to
+                                # ``StructuredConfigConsumer`` (where ``config`` is
+                                # a read-only property), this site must rebind the
+                                # backing ``_config`` instead — a plain
+                                # ``self.config = ...`` would then raise at runtime.
+                                self.config = self.config.clone(model=matching[0])
                                 logger.info("Ollama: Using model %s", self.config.model)
                             elif not matching:
                                 logger.warning(

@@ -1,12 +1,13 @@
-"""Tests for ``DynaBotConfig`` / ``CompositeMemoryConfig`` polymorphic-section
-validation.
+"""Tests for ``DynaBotConfig`` / ``CompositeMemoryConfig`` /
+``SummaryMemoryConfig`` polymorphic-section validation.
 
 The bots-side adopters of polymorphic-section validation: a parsed
 ``DynaBotConfig`` can be validated (without constructing the bot) so a
-malformed or unknown ``memory`` / ``knowledge_base`` section — and the
-nested ``vector_store`` reached through the knowledge base — is caught at
+malformed or unknown ``llm`` / ``memory`` / ``knowledge_base`` section — and
+the nested ``vector_store`` reached through the knowledge base — is caught at
 config-lint time. ``CompositeMemoryConfig`` validates each ``strategies``
-element by the same mechanism.
+element, and ``SummaryMemoryConfig`` its ``llm`` section, by the same
+mechanism.
 
 These config-level tests construct the config dataclass directly — a
 legitimate use (they test config internals, not bot flows), so no
@@ -14,7 +15,8 @@ legitimate use (they test config internals, not bot flows), so no
 
 The registry modules are imported for their side effect (registering the
 ``memory`` / ``knowledge_base`` resolvers, eager on import); ``dataknobs-data``
-is imported so the nested ``vector_store`` resolver is registered too.
+is imported so the nested ``vector_store`` resolver is registered too, and
+``dataknobs_llm`` so the ``llm`` resolver is registered.
 """
 
 from __future__ import annotations
@@ -28,10 +30,11 @@ from collections.abc import Callable
 import dataknobs_bots.knowledge.registry  # noqa: F401
 import dataknobs_bots.memory.registry  # noqa: F401
 import dataknobs_data.vector.stores  # noqa: F401
+import dataknobs_llm  # noqa: F401
 import pytest
 
 from dataknobs_bots.bot.config import DynaBotConfig
-from dataknobs_bots.memory.config import CompositeMemoryConfig
+from dataknobs_bots.memory.config import CompositeMemoryConfig, SummaryMemoryConfig
 from dataknobs_bots.memory.registry import memory_backends
 
 from dataknobs_common.exceptions import ConfigurationError
@@ -49,11 +52,23 @@ def test_composite_bindings_resolve_guard() -> None:
     assert_polymorphic_bindings_resolve(CompositeMemoryConfig)
 
 
+def test_summary_memory_bindings_resolve_guard() -> None:
+    # SummaryMemoryConfig declares the ``llm`` binding; this fails in CI if the
+    # dataknobs-llm resolver registration ever drops or is renamed.
+    assert_polymorphic_bindings_resolve(SummaryMemoryConfig)
+
+
 # --- happy paths ---
 
 
 def test_good_memory_section_validates() -> None:
     DynaBotConfig.from_dict({"memory": {"type": "buffer", "max_messages": 25}}).validate()
+
+
+def test_good_llm_section_validates() -> None:
+    DynaBotConfig.from_dict(
+        {"llm": {"provider": "ollama", "model": "llama3.2", "temperature": 0.7}}
+    ).validate()
 
 
 def test_good_knowledge_base_section_validates() -> None:
@@ -92,6 +107,35 @@ def test_unknown_knowledge_base_type_raises() -> None:
     msg = str(exc.value)
     assert "knowledge_base" in msg
     assert "DynaBotConfig" in msg
+
+
+def test_unknown_llm_provider_raises() -> None:
+    cfg = DynaBotConfig.from_dict({"llm": {"provider": "bogus-provider", "model": "x"}})
+    with pytest.raises(ConfigurationError) as exc:
+        cfg.validate()
+    msg = str(exc.value)
+    assert "llm" in msg
+    assert "DynaBotConfig" in msg
+
+
+# --- SummaryMemoryConfig.llm validated by the same mechanism ---
+
+
+def test_summary_memory_good_llm_validates() -> None:
+    SummaryMemoryConfig.from_dict(
+        {"recent_window": 5, "llm": {"provider": "echo", "model": "test"}}
+    ).validate()
+
+
+def test_summary_memory_absent_llm_is_noop() -> None:
+    # llm defaults to None on SummaryMemoryConfig — a clean no-op.
+    SummaryMemoryConfig.from_dict({"recent_window": 5}).validate()
+
+
+def test_summary_memory_unknown_llm_provider_raises() -> None:
+    cfg = SummaryMemoryConfig.from_dict({"llm": {"provider": "nope"}})
+    with pytest.raises(ConfigurationError, match="llm"):
+        cfg.validate()
 
 
 # --- recursion through knowledge_base -> vector_store ---

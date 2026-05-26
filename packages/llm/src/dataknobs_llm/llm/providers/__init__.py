@@ -7,9 +7,11 @@ Supports both direct instantiation and dataknobs Config-based factory pattern.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import StructuredConfig, config_registries
 
 from ..base import (
     AsyncLLMProvider,
@@ -61,6 +63,38 @@ _provider_registry: PluginRegistry[type[AsyncLLMProvider]] = PluginRegistry(
     canonicalize_keys=True,
     on_first_access=_register_builtin_providers,
 )
+
+
+def _resolve_llm_config_cls(
+    raw: Mapping[str, Any],
+) -> type[StructuredConfig] | None:
+    """Resolve an ``llm`` config section to its ``StructuredConfig`` class.
+
+    ``LLMConfig`` is a single config class keyed by ``provider`` — there are
+    no per-provider config subclasses (provider-specific knobs live in
+    ``options``). So the resolver returns ``LLMConfig`` for *any known*
+    provider and ``None`` for an unknown/missing one (which makes
+    ``StructuredConfig.validate()`` raise ``ConfigurationError``). The
+    known-provider set is delegated to the provider registry — the same
+    source the factory checks at construction — so validation and
+    construction can never drift. ``get_factory`` triggers the registry's
+    lazy ``on_first_access`` registration, so built-in providers are visible
+    here even on a cold registry.
+
+    No ``SKIP_VALIDATION`` path is needed: every registered provider has a
+    typed config (``LLMConfig``) to validate against.
+    """
+    provider = raw.get("provider")
+    if provider and _provider_registry.get_factory(provider) is not None:
+        return LLMConfig
+    return None
+
+
+# Registered eagerly at import so ``StructuredConfig.validate()`` can resolve
+# an ``llm`` section without the consumer importing ``dataknobs-llm`` config
+# types directly (the binding name is a string). ``allow_overwrite=True``
+# keeps re-import idempotent.
+config_registries.register("llm", _resolve_llm_config_cls, allow_overwrite=True)
 
 
 class LLMProviderFactory:

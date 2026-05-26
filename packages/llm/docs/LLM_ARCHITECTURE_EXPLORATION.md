@@ -487,6 +487,11 @@ class MetricsCollector:
 - Can be created as dataclass directly: `LLMConfig(provider="openai", model="gpt-4")`
 - Can be created from dict: `LLMConfig.from_dict(config_dict)`
 - Can be created from dataknobs Config object: `normalize_llm_config(config_obj)`
+- Is a **frozen `StructuredConfig`** — immutable after construction (use
+  `clone(**overrides)` to derive a variant), and its `repr()` redacts
+  `api_key`. `to_dict()` round-trips in-process (enum members kept);
+  `to_json_dict()` renders enums as their `.value` for JSON. See the
+  "Config Overrides" guide for details.
 
 **Key Pattern:** Flexible config handling
 ```python
