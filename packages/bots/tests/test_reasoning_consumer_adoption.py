@@ -34,7 +34,6 @@ No external service is required — construction only.
 from __future__ import annotations
 
 import pytest
-from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_common.testing import (
     assert_structured_config_consumer,
     assert_structured_config_roundtrip,
@@ -84,14 +83,13 @@ _IDS = [a[0].__name__ for a in ADOPTERS]
 
 
 @pytest.mark.parametrize("consumer_cls", [a[0] for a in ADOPTERS], ids=_IDS)
-def test_is_structured_config_consumer(consumer_cls: type) -> None:
-    """Each non-wizard strategy mixes in StructuredConfigConsumer."""
-    assert issubclass(consumer_cls, StructuredConfigConsumer)
-
-
-@pytest.mark.parametrize("consumer_cls", [a[0] for a in ADOPTERS], ids=_IDS)
 def test_parity_guard(consumer_cls: type) -> None:
     """The unified parity contract holds (CONFIG_CLS, field/ctor match, MRO).
+
+    Its MRO-ordering check (the mixin must precede ``ReasoningStrategy``)
+    subsumes a bare ``issubclass(consumer_cls, StructuredConfigConsumer)``
+    assertion — that the class mixes in the consumer is a precondition of
+    the ordering check — so no separate subclass test is kept.
 
     No ``ignore_params``: the strategies drop their custom ``__init__``, so
     the inspected ctor is the mixin's ``(config, *, _components, **kwargs)``
@@ -124,6 +122,38 @@ def test_typed_dict_and_from_config_reach_same_state(
     assert via_typed.config == typed_config
     assert via_dict.config == typed_config
     assert via_from_config.config == typed_config
+
+
+def test_hybrid_nested_grounded_reaches_same_state() -> None:
+    """A non-default nested ``grounded`` sub-config reconstructs identically.
+
+    The ADOPTERS matrix entry for Hybrid varies only ``react_max_iterations``,
+    leaving ``grounded`` at its default — so a ``from_dict`` regression in the
+    nested ``grounded`` tree would pass silently there (both sides would fall
+    back to the same grounded default). This pins the nested-grounded
+    reconstruction explicitly: the typed-config ctor, the dict ctor, and
+    ``from_config`` must all reach the same state with a non-default
+    ``grounded.greeting_template``.
+    """
+    typed = HybridReasoningConfig(
+        grounded=GroundedReasoningConfig(greeting_template="Hey"),
+        react_max_iterations=4,
+    )
+    equivalent_dict = {
+        "grounded": {"greeting_template": "Hey"},
+        "react": {"max_iterations": 4},
+    }
+    via_typed = HybridReasoning(typed)
+    via_dict = HybridReasoning(equivalent_dict)
+    via_from_config = HybridReasoning.from_config(equivalent_dict)
+
+    assert via_typed.config == typed
+    assert via_dict.config == typed
+    assert via_from_config.config == typed
+    # The nested grounded sub-config specifically survived reconstruction
+    # (not merely defaulted equal on both sides).
+    assert via_dict.config.grounded.greeting_template == "Hey"
+    assert via_from_config.config.grounded.greeting_template == "Hey"
 
 
 @pytest.mark.parametrize(

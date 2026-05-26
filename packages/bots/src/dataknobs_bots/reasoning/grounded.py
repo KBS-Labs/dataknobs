@@ -393,7 +393,7 @@ class GroundedReasoning(
 
         # Determine source name from config (if a vector_kb source is declared)
         source_name = "knowledge_base"
-        for source_cfg in self._config.sources:
+        for source_cfg in self.config.sources:
             if source_cfg.source_type == "vector_kb":
                 source_name = source_cfg.name
                 break
@@ -410,7 +410,7 @@ class GroundedReasoning(
 
     def _find_topic_index_config(self) -> dict[str, Any] | None:
         """Find topic_index config from source declarations."""
-        for source_cfg in self._config.sources:
+        for source_cfg in self.config.sources:
             if source_cfg.source_type == "vector_kb" and source_cfg.topic_index:
                 return source_cfg.topic_index
         return None
@@ -511,7 +511,7 @@ class GroundedReasoning(
 
         result = await self._synthesize(context, manager, provenance, **kwargs)
 
-        if self._config.store_provenance:
+        if self.config.store_provenance:
             self.store_provenance(manager, provenance)
 
         return result
@@ -569,7 +569,7 @@ class GroundedReasoning(
                     finish_reason="stop",
                 )
 
-        if self._config.store_provenance:
+        if self.config.store_provenance:
             self.store_provenance(manager, provenance)
 
     # ------------------------------------------------------------------
@@ -658,7 +658,7 @@ class GroundedReasoning(
         metadata: dict[str, Any],
     ) -> RetrievalIntent:
         """Resolve retrieval intent based on configured mode."""
-        cfg = self._config.intent
+        cfg = self.config.intent
         mode = cfg.mode
 
         if mode == "static":
@@ -695,7 +695,7 @@ class GroundedReasoning(
 
     def _build_static_intent(self, user_message: str) -> RetrievalIntent:
         """Build intent from static config values."""
-        cfg = self._config.intent
+        cfg = self.config.intent
         queries = list(cfg.text_queries)
         if cfg.include_message_as_query and user_message:
             queries.append(user_message)
@@ -722,7 +722,7 @@ class GroundedReasoning(
         """
         import yaml
 
-        cfg = self._config.intent
+        cfg = self.config.intent
         if not cfg.template:
             logger.warning("Intent mode is 'template' but no template configured; falling back to message")
             return RetrievalIntent(text_queries=[user_message])
@@ -769,7 +769,7 @@ class GroundedReasoning(
         ``[user_message]`` when extraction returns empty queries or
         raises an exception.
         """
-        cfg = self._config.intent
+        cfg = self.config.intent
 
         # Optional: enrich ambiguous queries with context keywords
         enriched = user_message
@@ -878,7 +878,7 @@ class GroundedReasoning(
         if self._transformer is None:
             return [user_message]
 
-        cfg = self._config.intent
+        cfg = self.config.intent
         provider = self._query_provider or llm
 
         # Ensure the transformer has the current provider
@@ -980,7 +980,7 @@ class GroundedReasoning(
             logger.warning("Grounded strategy has no sources configured — returning empty results")
             return {}
 
-        cfg = self._config.retrieval
+        cfg = self.config.retrieval
         results_by_source: dict[str, list[SourceResult]] = {}
 
         for source in self._sources:
@@ -1055,7 +1055,7 @@ class GroundedReasoning(
                         exhausted.add(name)
                         break
 
-        if not self._config.retrieval.deduplicate:
+        if not self.config.retrieval.deduplicate:
             return merged
 
         # Deduplicate by (source_name, source_id)
@@ -1285,12 +1285,12 @@ class GroundedReasoning(
             return session_style
 
         # 3. Config-level style
-        config_style = self._config.synthesis.style
+        config_style = self.config.synthesis.style
         if config_style in _VALID_STYLES:
             return config_style
 
         # 4. Legacy mode mapping
-        if self._config.synthesis.mode == "template":
+        if self.config.synthesis.mode == "template":
             return "structured"
 
         # 5. Default
@@ -1348,9 +1348,9 @@ class GroundedReasoning(
             kb_context: Formatted knowledge base context string.
             original_system_prompt: The base system prompt to augment.
             synthesis_config: Optional override for synthesis settings.
-                When ``None``, uses ``self._config.synthesis``.
+                When ``None``, uses ``self.config.synthesis``.
         """
-        cfg = synthesis_config or self._config.synthesis
+        cfg = synthesis_config or self.config.synthesis
 
         # Try library-based prompt resolution.  The meta-prompt uses Jinja2
         # conditionals to replicate the inline if/elif/else logic below.

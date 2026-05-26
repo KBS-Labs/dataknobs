@@ -371,7 +371,7 @@ class HybridReasoning(
         delegates storage to :meth:`GroundedReasoning.store_provenance`
         to keep the metadata key convention in a single place.
         """
-        if not self._config.store_provenance:
+        if not self.config.store_provenance:
             return
 
         provenance["tool_executions"] = [
