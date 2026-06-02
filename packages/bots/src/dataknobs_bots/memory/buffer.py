@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from .base import Memory, _compile_history_redactions, apply_history_redactions
+from .base import Memory, apply_history_redactions, compile_history_redactions
 from .config import BufferMemoryConfig
 
 
@@ -34,7 +34,7 @@ class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
         self.messages: deque[dict[str, Any]] = deque(
             maxlen=self.config.max_messages
         )
-        self._compiled_redactions = _compile_history_redactions(
+        self._compiled_redactions = compile_history_redactions(
             self.config.history_redactions
         )
 

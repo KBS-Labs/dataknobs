@@ -206,13 +206,37 @@ if [ "$RUN_MODE" = "pr" ] && [ -z "$PACKAGES" ]; then
     }
 
     if [ -n "$CHANGED_INFO" ]; then
-        CHANGED_PACKAGES=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(' '.join(d['packages']))" 2>/dev/null || echo "")
-        DOCS_CHANGED=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(str(d['docs_changed']).lower())" 2>/dev/null || echo "true")
-        CHANGE_MODE=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('mode', 'all'))" 2>/dev/null || echo "all")
+        # Parse every field with the SAME interpreter that produced the JSON
+        # (uv-managed Python), NOT a bare `python3` that may resolve to a
+        # broken pyenv shim. A parse failure here is a real error — the JSON
+        # was just emitted by changed-packages.py and is well formed by
+        # construction — so abort loudly. The previous behavior swallowed the
+        # error (`2>/dev/null || echo ""`) and left CHANGED_PACKAGES empty,
+        # which silently set SKIP_TESTS=yes and skipped the ENTIRE test suite
+        # while still reporting success.
+        if ! CHANGED_PARSED=$(printf '%s' "$CHANGED_INFO" | uv run python -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+print(" ".join(data["packages"]))
+print(str(data["docs_changed"]).lower())
+print(data.get("mode", "all"))
+print(json.dumps(data["packages"]))
+'); then
+            print_error "Failed to parse change-detection output; aborting so"
+            print_error "the test suite is not silently skipped. Raw output:"
+            printf '%s\n' "$CHANGED_INFO" >&2
+            exit 1
+        fi
+        mapfile -t _changed_fields <<< "$CHANGED_PARSED"
+        CHANGED_PACKAGES="${_changed_fields[0]}"
+        DOCS_CHANGED="${_changed_fields[1]}"
+        CHANGE_MODE="${_changed_fields[2]}"
+        TESTED_PACKAGES_JSON="${_changed_fields[3]}"
 
         if [ -n "$CHANGED_PACKAGES" ]; then
             PACKAGES="$CHANGED_PACKAGES"
-            TESTED_PACKAGES_JSON=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(json.dumps(d['packages']))" 2>/dev/null || echo "[]")
             print_success "Changed packages: $PACKAGES"
             if [ "$CHANGE_MODE" = "all" ]; then
                 print_status "Global files changed — testing all packages"
@@ -397,8 +421,11 @@ elif [ "$IN_DOCKER" = true ] && [ "$SKIP_TESTS" != "yes" ]; then
     # Set environment for connectivity tests
     set_environment_vars
     
-    # Test PostgreSQL
-    if python3 -c "import psycopg2; psycopg2.connect('$DATABASE_URL')" 2>/dev/null; then
+    # Test PostgreSQL. Use the uv-managed interpreter (where psycopg2 is
+    # installed) rather than a bare `python3` that may resolve to a pyenv
+    # shim lacking the dependency — otherwise this always warns even when
+    # PostgreSQL is up.
+    if uv run python -c "import psycopg2; psycopg2.connect('$DATABASE_URL')" 2>/dev/null; then
         print_success "PostgreSQL is accessible"
     else
         print_warning "PostgreSQL not accessible - integration tests may fail"
