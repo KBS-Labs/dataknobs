@@ -7,53 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.1 - 2026-06-02
+
 ### Added
 
-- **History-redaction primitive** in the new module
-  `dataknobs_llm.conversations.history_redaction`: the `HistoryRedaction`
-  frozen `StructuredConfig` (`pattern` + `replacement`, eager-compiled in
-  `__post_init__`) plus the `compile_history_redactions` /
-  `apply_history_redactions` helpers. `apply_history_redactions` is
-  generalized over a `(role_of, content_of, replace_content)` accessor
-  trio so callers operating on different element shapes — an `LLMMessage`
-  (the middleware) and a plain `dict[str, Any]` (memory backends in
-  `dataknobs-bots`) — drive one implementation; a dict-shape convenience
-  wrapper `apply_history_redactions_to_dicts` covers the dict call site.
-  `HistoryRedaction` is exported from `dataknobs_llm.conversations`. The
-  helper was initially introduced as `_compile_history_redactions` (an
-  underscore that misled given its cross-package use); a back-compat
-  alias preserves that name for the brief window it shipped under it.
-- **`HistoryRedactionMiddleware`** in
-  `dataknobs_llm.conversations.middleware`. New `ConversationMiddleware`
-  that rewrites assistant-role message content in `process_request`
-  before it reaches the provider; `process_response` is a passthrough so
-  the fresh LLM response keeps its full citation set for rendering.
-  Constructor accepts either a sequence of typed `HistoryRedaction`
-  instances (preferred — reuses the list built for a memory backend's
-  `history_redactions`) or the legacy ordered list of `{"pattern":
-  <regex>, "replacement": <str>}` dicts, plus an optional `redact_roles`
-  override (defaults to `("assistant",)`). Mixing the two shapes in one
-  call raises `TypeError`. Each dict spec is validated up front: a
-  missing `pattern` key or an empty pattern raises `ValueError` at
-  construction time so config typos surface at the config-load boundary
-  rather than mid-loop on the first request. Non-content fields on the
-  rewritten assistant message — `tool_calls`, `tool_call_id`, `name`,
-  `function_call`, `metadata` — are preserved (the clone uses
-  `dataclasses.replace`), so agent / tool-use loops keep their
-  invocation and pairing fields intact across the rewrite. Persisted
-  conversation-tree nodes are NOT mutated — redaction is scoped to the
-  in-memory message list that this turn forwards to the LLM, so the
-  persisted assistant node keeps the original text and only the
-  prompt-feed boundary sees the redacted form. Motivated by the
-  *citation carry-over* leak: bots that emit structured citation tokens
-  (`[bib:N · …]` headers, bare `bib:N` references) would otherwise have
-  the model treat its own prior citations as a reusable source pool on
-  the next turn, even when this turn's retrieval no longer surfaces
-  those sources. Patterns are applied in declared order — list the more
-  specific pattern (a bracketed header) before the more general bare
-  token, or the bare-token rule will consume `bib:N` inside the bracket
-  and leave a malformed `[ · vendor · …]` header. Exported from
-  `dataknobs_llm.conversations`.
+- **History-redaction primitive** (`dataknobs_llm.conversations`):
+  `HistoryRedaction` is a frozen `StructuredConfig` of
+  `pattern` + `replacement`, eagerly compiled at construction so an
+  empty `pattern` raises `ValueError` and an invalid regex raises
+  `re.error` — both at config-load.
+  `compile_history_redactions(redactions)` harvests the cached compiled
+  patterns into `(compiled_pattern, replacement)` tuples for hot-path
+  reuse, and `apply_history_redactions(messages, patterns, *, role_of,
+  content_of, replace_content, redact_roles=frozenset({"assistant"}))`
+  is shape-generic over an accessor trio so callers drive one
+  implementation for any element shape — an `LLMMessage` here, a plain
+  dict in `dataknobs-bots` memory backends.
+  `apply_history_redactions_to_dicts` is the dict-shape convenience
+  wrapper. Non-eligible-role elements pass through by identity (no
+  shallow copy).
+- **`HistoryRedactionMiddleware`** (`dataknobs_llm.conversations`).
+  New `ConversationMiddleware` that rewrites assistant-role message
+  content in `process_request` before it reaches the provider;
+  `process_response` is a passthrough, so the fresh LLM response keeps
+  its full citation set for rendering. Persisted conversation-tree
+  nodes are never mutated — redaction is scoped to the in-memory
+  message list this turn forwards to the LLM. Constructor accepts
+  either a sequence of typed `HistoryRedaction` instances (the
+  preferred shape — reuses the list a memory backend already carries)
+  or the legacy ordered list of `{"pattern": <regex>, "replacement":
+  <str>}` dicts; mixing the two in one call raises `TypeError`. Each
+  dict spec is validated up front (missing `pattern` key or empty
+  pattern raises `ValueError`). An optional `redact_roles=`
+  defaults to `("assistant",)`. Non-content fields on the rewritten
+  assistant message — `tool_calls`, `tool_call_id`, `name`,
+  `function_call`, `metadata` — are preserved across the rewrite, so
+  agent / tool-use loops keep their invocation and pairing fields
+  intact. Patterns are applied in declared order: list the more
+  specific pattern (a bracketed citation header) before the more
+  general bare token, or the bare-token rule will consume the token
+  inside the bracket and leave a malformed header.
 
 ### Security
 
