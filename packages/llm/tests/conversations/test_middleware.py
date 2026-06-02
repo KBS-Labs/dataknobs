@@ -7,6 +7,7 @@ from dataknobs_llm.conversations import (
     ConversationMiddleware,
     LoggingMiddleware,
     ContentFilterMiddleware,
+    HistoryRedaction,
     HistoryRedactionMiddleware,
     ValidationMiddleware,
     MetadataMiddleware,
@@ -421,6 +422,64 @@ class TestHistoryRedactionMiddleware:
                     {"patten": r"\bbib:\d+\b", "replacement": "[x]"},  # typo
                 ],
             )
+
+    @pytest.mark.asyncio
+    async def test_typed_input_redactions_produces_same_output_as_dict_input(
+        self,
+    ) -> None:
+        """A typed ``HistoryRedaction`` list produces the same redaction output
+        as the equivalent dict-shape list — the widened ctor is shape-agnostic.
+        """
+        typed_mw = HistoryRedactionMiddleware(
+            redactions=[
+                HistoryRedaction(
+                    pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
+                ),
+                HistoryRedaction(
+                    pattern=r"\bbib:\d+\b", replacement="[prior citation]"
+                ),
+            ],
+        )
+        dict_mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        messages = [
+            LLMMessage(role="assistant", content="Cited [bib:5 · vendor] and bib:3."),
+        ]
+
+        typed_out = await typed_mw.process_request(messages, state=None)
+        dict_out = await dict_mw.process_request(messages, state=None)
+
+        assert typed_out[0].content == dict_out[0].content
+        assert typed_out[0].content == (
+            "Cited [prior citation] and [prior citation]."
+        )
+
+    @pytest.mark.asyncio
+    async def test_mixed_typed_and_dict_input_raises_typeerror(self) -> None:
+        """Mixing typed and dict shapes in one call is a bug, not back-compat."""
+        with pytest.raises(TypeError, match="mixed"):
+            HistoryRedactionMiddleware(
+                redactions=[
+                    HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[x]"),
+                    {"pattern": r"\[bib:\d+\]", "replacement": "[x]"},
+                ],
+            )
+
+    @pytest.mark.asyncio
+    async def test_empty_typed_sequence_is_passthrough(self) -> None:
+        """An empty (typed) redaction sequence ⇒ passthrough."""
+        mw = HistoryRedactionMiddleware(redactions=[])
+        messages = [
+            LLMMessage(role="assistant", content="Cited [bib:5 · vendor · x]."),
+        ]
+
+        out = await mw.process_request(messages, state=None)
+
+        assert out[0].content == "Cited [bib:5 · vendor · x]."
 
 
 class TestMetadataMiddleware:

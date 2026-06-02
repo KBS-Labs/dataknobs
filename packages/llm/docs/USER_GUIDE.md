@@ -790,15 +790,30 @@ response = await manager.complete()
 #### HistoryRedactionMiddleware
 
 ```python
-from dataknobs_llm.conversations import HistoryRedactionMiddleware
+from dataknobs_llm.conversations import (
+    HistoryRedaction,
+    HistoryRedactionMiddleware,
+)
 
 # Block citation carry-over for a bot that emits [bib:N · …] headers
-# and bare bib:N references in its responses.
+# and bare bib:N references in its responses. Either the typed
+# HistoryRedaction shape (preferred) or the legacy dict shape works;
+# mixing the two in one call raises TypeError.
 redaction_mw = HistoryRedactionMiddleware(
     redactions=[
         # Bracketed header MUST come first (more specific) — if the
         # bare-token rule ran first it would consume the bib:N inside
         # the bracket and leave a malformed `[ · vendor · …]` header.
+        HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]",
+                         replacement="[prior citation]"),
+        HistoryRedaction(pattern=r"\bbib:\d+\b",
+                         replacement="[prior citation]"),
+    ],
+)
+
+# Equivalent legacy dict shape (the config-spec path):
+redaction_mw = HistoryRedactionMiddleware(
+    redactions=[
         {"pattern": r"\[bib:\d+[^\]]*\]",
          "replacement": "[prior citation]"},
         {"pattern": r"\bbib:\d+\b",

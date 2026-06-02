@@ -9,14 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **History-redaction primitive** in the new module
+  `dataknobs_llm.conversations.history_redaction`: the `HistoryRedaction`
+  frozen `StructuredConfig` (`pattern` + `replacement`, eager-compiled in
+  `__post_init__`) plus the `_compile_history_redactions` /
+  `apply_history_redactions` helpers. `apply_history_redactions` is
+  generalized over a `(role_of, content_of, replace_content)` accessor
+  trio so callers operating on different element shapes — an `LLMMessage`
+  (the middleware) and a plain `dict[str, Any]` (memory backends in
+  `dataknobs-bots`) — drive one implementation; a dict-shape convenience
+  wrapper `apply_history_redactions_to_dicts` covers the dict call site.
+  `HistoryRedaction` is exported from `dataknobs_llm.conversations`.
 - **`HistoryRedactionMiddleware`** in
   `dataknobs_llm.conversations.middleware`. New `ConversationMiddleware`
   that rewrites assistant-role message content in `process_request`
   before it reaches the provider; `process_response` is a passthrough so
   the fresh LLM response keeps its full citation set for rendering.
-  Constructor accepts an ordered list of `{"pattern": <regex>,
-  "replacement": <str>}` dicts plus an optional `redact_roles` override
-  (defaults to `("assistant",)`). Each spec is validated up front: a
+  Constructor accepts either a sequence of typed `HistoryRedaction`
+  instances (preferred — reuses the list built for a memory backend's
+  `history_redactions`) or the legacy ordered list of `{"pattern":
+  <regex>, "replacement": <str>}` dicts, plus an optional `redact_roles`
+  override (defaults to `("assistant",)`). Mixing the two shapes in one
+  call raises `TypeError`. Each dict spec is validated up front: a
   missing `pattern` key or an empty pattern raises `ValueError` at
   construction time so config typos surface at the config-load boundary
   rather than mid-loop on the first request. Non-content fields on the

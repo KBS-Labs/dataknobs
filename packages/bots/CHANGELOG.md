@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Read-time history redaction in `BufferMemory`.** New
-  `HistoryRedaction` frozen `StructuredConfig` (exported from
-  `dataknobs_bots.memory`) describes a `(pattern, replacement)` regex
-  rewrite. `BufferMemoryConfig` carries a new
+- **Read-time history redaction in `BufferMemory`.** The
+  `HistoryRedaction` frozen `StructuredConfig` describes a
+  `(pattern, replacement)` regex rewrite. Its canonical home is
+  `dataknobs_llm.conversations.history_redaction`; it is re-exported from
+  `dataknobs_bots.memory` for back-compat, so the public import path
+  `from dataknobs_bots.memory import HistoryRedaction` is unchanged.
+  `BufferMemoryConfig` carries a new
   `history_redactions: list[HistoryRedaction]` field (default empty —
   passthrough), and `BufferMemory.get_context` applies the rewrites to
   assistant-role messages as they are served to the prompt-feed. The

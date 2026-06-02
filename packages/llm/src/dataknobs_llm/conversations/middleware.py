@@ -94,6 +94,7 @@ import dataclasses
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Callable, Dict, List
 
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
@@ -101,6 +102,11 @@ from dataknobs_common.exceptions import RateLimitError
 
 from dataknobs_llm.llm import LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers import AsyncLLMProvider
+from dataknobs_llm.conversations.history_redaction import (
+    HistoryRedaction,
+    _compile_history_redactions,
+    apply_history_redactions,
+)
 from dataknobs_llm.conversations.storage import ConversationState
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -431,11 +437,34 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
     when you need a broader rewrite (e.g. redacting tool-result
     messages that quote prior assistant output).
 
+    The middleware accepts either the typed
+    :class:`~dataknobs_llm.conversations.history_redaction.HistoryRedaction`
+    sequence or the legacy ``dict`` shape — see :meth:`__init__`.
+
     Example:
         >>> # Block bib-N carry-over for an ASRM-style framework bot.
+        >>> from dataknobs_llm.conversations import (
+        ...     HistoryRedaction,
+        ...     HistoryRedactionMiddleware,
+        ... )
+        >>> # Typed shape (preferred — reuses the list built for
+        >>> # ``BufferMemoryConfig.history_redactions``):
         >>> mw = HistoryRedactionMiddleware(
         ...     redactions=[
         ...         # Bracketed header MUST come first (longer match).
+        ...         HistoryRedaction(
+        ...             pattern=r"\\[bib:\\d+[^\\]]*\\]",
+        ...             replacement="[prior citation]",
+        ...         ),
+        ...         HistoryRedaction(
+        ...             pattern=r"\\bbib:\\d+\\b",
+        ...             replacement="[prior citation]",
+        ...         ),
+        ...     ],
+        ... )
+        >>> # Legacy dict shape (the config-spec path) is equivalent:
+        >>> mw = HistoryRedactionMiddleware(
+        ...     redactions=[
         ...         {"pattern": r"\\[bib:\\d+[^\\]]*\\]", "replacement": "[prior citation]"},
         ...         {"pattern": r"\\bbib:\\d+\\b", "replacement": "[prior citation]"},
         ...     ],
@@ -453,46 +482,90 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
 
     def __init__(
         self,
-        redactions: List[Dict[str, str]],
-        redact_roles: tuple[str, ...] = ("assistant",),
+        redactions: Sequence[HistoryRedaction] | Sequence[Mapping[str, str]],
+        redact_roles: Iterable[str] = ("assistant",),
     ):
         """Initialize history-redaction middleware.
 
         Args:
-            redactions: Ordered list of ``{"pattern": <regex>,
-                "replacement": <str>}`` dicts. Patterns are compiled
-                once at construction; empty list ⇒ passthrough. A spec
-                missing ``"pattern"`` or carrying an empty pattern is
-                rejected with ``ValueError`` at construction so config
-                typos surface at the config-load boundary rather than
-                mid-loop on first request.
+            redactions: Ordered redaction patterns. Accepts either a
+                sequence of
+                :class:`~dataknobs_llm.conversations.history_redaction.HistoryRedaction`
+                instances (preferred, typed-config-friendly) or a sequence
+                of ``{"pattern": <regex>, "replacement": <str>}`` mappings
+                (the original shape used by the config-spec path). Mixing
+                the two shapes in a single call raises ``TypeError``.
+                Patterns are compiled once at construction; an empty
+                sequence ⇒ passthrough. A dict spec missing ``"pattern"``
+                or carrying an empty pattern is rejected with ``ValueError``
+                at construction so config typos surface at the config-load
+                boundary rather than mid-loop on first request.
             redact_roles: Message roles whose content is rewritten.
                 Defaults to ``("assistant",)`` — the dominant
                 citation-leak source.
 
         Raises:
-            ValueError: If a redaction spec is missing the ``"pattern"``
-                key or has an empty pattern.
+            TypeError: If typed and dict redactions are mixed in one call.
+            ValueError: If a dict redaction spec is missing the
+                ``"pattern"`` key or has an empty pattern.
             re.error: If a redaction spec's ``"pattern"`` is not a valid
                 regular expression.
         """
-        compiled: list[tuple[re.Pattern[str], str]] = []
+        typed = self._normalize_redactions(redactions)
+        self._compiled = _compile_history_redactions(typed)
+        self._redact_roles = frozenset(redact_roles)
+
+    @staticmethod
+    def _normalize_redactions(
+        redactions: Sequence[HistoryRedaction] | Sequence[Mapping[str, str]],
+    ) -> list[HistoryRedaction]:
+        """Project the dual-shape input onto the typed sequence.
+
+        First-element type drives the dispatch; the sequence must be
+        homogeneous (mixing typed and dict shapes raises ``TypeError`` —
+        a mixed list is a bug, not back-compat). The dict branch preserves
+        the up-front "missing 'pattern' key" ``ValueError`` (with index +
+        the keys actually present) so a config typo surfaces at the
+        config-load boundary rather than as a generic empty-pattern error
+        from ``HistoryRedaction.__post_init__``.
+        """
+        if not redactions:
+            return []
+        first = redactions[0]
+        if isinstance(first, HistoryRedaction):
+            for r in redactions:
+                if not isinstance(r, HistoryRedaction):
+                    raise TypeError(
+                        "HistoryRedactionMiddleware: mixed typed/dict "
+                        "redactions are not supported; pass either a "
+                        "Sequence[HistoryRedaction] or a "
+                        "Sequence[Mapping[str, str]]."
+                    )
+            return list(redactions)
+        out: list[HistoryRedaction] = []
         for i, r in enumerate(redactions):
+            if isinstance(r, HistoryRedaction):
+                raise TypeError(
+                    "HistoryRedactionMiddleware: mixed typed/dict "
+                    "redactions are not supported; pass either a "
+                    "Sequence[HistoryRedaction] or a "
+                    "Sequence[Mapping[str, str]]."
+                )
             if "pattern" not in r:
                 raise ValueError(
                     f"HistoryRedactionMiddleware: redactions[{i}] is missing "
                     f"the required 'pattern' key (got keys: {sorted(r.keys())})"
                 )
-            pattern_str = r["pattern"]
-            if not pattern_str:
-                raise ValueError(
-                    f"HistoryRedactionMiddleware: redactions[{i}].pattern is "
-                    f"empty; an empty regex matches every position and would "
-                    f"corrupt content"
+            # ``HistoryRedaction.__post_init__`` enforces the non-empty
+            # pattern and eagerly compiles the regex — no separate
+            # empty-pattern guard is needed here.
+            out.append(
+                HistoryRedaction(
+                    pattern=r["pattern"],
+                    replacement=r.get("replacement", ""),
                 )
-            compiled.append((re.compile(pattern_str), r.get("replacement", "")))
-        self._compiled = compiled
-        self._redact_roles = frozenset(redact_roles)
+            )
+        return out
 
     async def process_request(
         self,
@@ -518,18 +591,29 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
             New message list with assistant content redacted per the
             configured patterns. Other roles pass through unchanged.
         """
-        if not self._compiled:
-            return list(messages)
-        out: list[LLMMessage] = []
-        for msg in messages:
-            if msg.role in self._redact_roles:
-                content = msg.content
-                for pattern, replacement in self._compiled:
-                    content = pattern.sub(replacement, content)
-                out.append(dataclasses.replace(msg, content=content))
-            else:
-                out.append(msg)
-        return out
+
+        def _role_of(msg: LLMMessage) -> str:
+            return msg.role
+
+        def _content_of(msg: LLMMessage) -> str | None:
+            return msg.content
+
+        def _replace(msg: LLMMessage, new_content: str) -> LLMMessage:
+            # ``dataclasses.replace`` clones the whole LLMMessage and
+            # overrides only ``content`` — ``tool_calls``, ``tool_call_id``,
+            # ``name``, ``function_call``, ``metadata`` (and any future
+            # field) survive automatically. Manual reconstruction would
+            # silently drop them and break agent / tool-use loops.
+            return dataclasses.replace(msg, content=new_content)
+
+        return apply_history_redactions(
+            messages,
+            self._compiled,
+            role_of=_role_of,
+            content_of=_content_of,
+            replace_content=_replace,
+            redact_roles=self._redact_roles,
+        )
 
     async def process_response(
         self,

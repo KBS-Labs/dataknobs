@@ -122,7 +122,10 @@ fresh turn are NOT mutated — only the in-memory message list this turn
 forwards to the provider:
 
 ```python
-from dataknobs_llm.conversations import HistoryRedactionMiddleware
+from dataknobs_llm.conversations import (
+    HistoryRedaction,
+    HistoryRedactionMiddleware,
+)
 
 manager = await ConversationManager.create(
     llm=llm,
@@ -130,15 +133,18 @@ manager = await ConversationManager.create(
     storage=storage,
     middleware=[
         HistoryRedactionMiddleware(
+            # Typed HistoryRedaction shape (preferred). The legacy
+            # dict shape ({"pattern": ..., "replacement": ...}) is also
+            # accepted; mixing the two in one call raises TypeError.
             redactions=[
                 # Bracketed header MUST come first — it's the more
                 # specific pattern. If the bare-token rule ran first
                 # it would consume the `bib:N` inside the bracket and
                 # leave a malformed `[ · vendor · …]` header.
-                {"pattern": r"\[bib:\d+[^\]]*\]",
-                 "replacement": "[prior citation]"},
-                {"pattern": r"\bbib:\d+\b",
-                 "replacement": "[prior citation]"},
+                HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]",
+                                 replacement="[prior citation]"),
+                HistoryRedaction(pattern=r"\bbib:\d+\b",
+                                 replacement="[prior citation]"),
             ],
         ),
     ],
