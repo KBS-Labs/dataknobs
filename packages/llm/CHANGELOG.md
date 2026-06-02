@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `torch` requirement (extra: `embeddings`) from
+  `>=2.9.0` to `>=2.12.0` to exclude PYSEC-2026-139 (CVSS 7.8,
+  deserialization in the pt2 Loading Handler), flagged at the floor
+  resolve by the `dependency-update` workflow. The OSV record's
+  `last_affected: 2.10.0` makes 2.11.0+ unaffected per OSV semantics;
+  2.12.0 was chosen as the latest stable. The bump preserves the
+  prior sweep of PYSEC-2025-203/204/206 (fixed in 2.9.0),
+  GHSA-887c-mr87-cxwp (CVSS 4.8, 2.8.0), GHSA-3749-ghw9-m3mg (CVSS
+  3.3, 2.7.1), and CVE-2025-32434 (RCE in `torch.load`, 2.6.0).
+
 ## v0.6.0 - 2026-05-26
 
 ### Changed
