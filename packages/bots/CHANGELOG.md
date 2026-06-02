@@ -48,6 +48,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HistoryRedactionMiddleware` from `dataknobs-llm` to apply the same
   citation-carry-over guard at the manager layer for bots whose memory
   is not the leak surface.
+- **Read-time history redaction extended to `SummaryMemory` and
+  `VectorMemory`.** Both `SummaryMemoryConfig` and `VectorMemoryConfig`
+  now carry the same `history_redactions: list[HistoryRedaction]` field as
+  `BufferMemoryConfig` (default empty — passthrough). `SummaryMemory`
+  redacts assistant-role entries in its recent buffer (the system-role
+  summary header is untouched by the default assistant-only
+  `redact_roles`), and `VectorMemory` redacts assistant-role
+  search-result rows *after* the similarity search, so stored vectors and
+  scoring are unaffected and the non-content keys (`role`, `similarity`,
+  `metadata`) carry over unchanged. `CompositeMemory` inherits the
+  guarantee via delegation — a child carrying `history_redactions` redacts
+  on its own path, so `CompositeMemoryConfig` deliberately does not carry
+  the field.
+
+### Changed
+
+- **The private middleware-spec construction helper is split by
+  interface.** `DynaBot._create_middleware(config, *, expected_type=…)` is
+  replaced by `_create_bot_middleware` (returns `Middleware | None`) and
+  `_create_conversation_middleware` (returns `ConversationMiddleware |
+  None`), both delegating to a shared `_resolve_middleware_from_spec`
+  body. The class-shape check now runs via `issubclass` *before*
+  instantiation, so a spec listed under the wrong field is rejected
+  without ever running its constructor (no ctor side effects). Type
+  mismatches raise unconditionally; `optional: true` continues to cover
+  only transient resolution failures (missing module / class / bad
+  params).
 
 ## v0.7.0 - 2026-05-26
 

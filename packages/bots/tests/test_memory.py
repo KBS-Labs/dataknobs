@@ -5,6 +5,7 @@ import pytest
 from dataknobs_bots.bot.base import PROVIDER_ROLE_MAIN, PROVIDER_ROLE_SUMMARY_LLM
 from dataknobs_bots.memory import (
     BufferMemory,
+    CompositeMemory,
     SummaryMemory,
     VectorMemory,
     create_memory_from_config,
@@ -231,6 +232,268 @@ class TestBufferMemoryHistoryRedaction:
         assert context[0]["content"] == (
             "See [prior citation] and also [prior citation]."
         )
+
+
+def _echo_embedding_provider() -> EchoProvider:
+    """Build an initialized EchoProvider for deterministic embeddings."""
+    llm_factory = LLMProviderFactory(is_async=True)
+    return llm_factory.create({"provider": "echo", "model": "test"})
+
+
+async def _memory_vector_store(dimensions: int = 384):
+    """Build an initialized in-memory vector store."""
+    store = VectorStoreFactory().create(backend="memory", dimensions=dimensions)
+    await store.initialize()
+    return store
+
+
+class TestSummaryMemoryHistoryRedaction:
+    """Tests for SummaryMemory history_redactions (read-time transform)."""
+
+    @staticmethod
+    def _provider() -> EchoProvider:
+        factory = LLMProviderFactory(is_async=True)
+        return factory.create({"provider": "echo", "model": "test"})
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_applied_to_assistant_role_only(self):
+        """Redaction rewrites assistant content in the recent buffer only."""
+        memory = SummaryMemory.from_components(
+            {
+                "recent_window": 10,
+                "history_redactions": [
+                    {
+                        "pattern": r"\[bib:\d+[^\]]*\]",
+                        "replacement": "[prior citation]",
+                    },
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            llm_provider=self._provider(),
+        )
+
+        await memory.add_message("What does bib:5 cover?", "user")
+        await memory.add_message(
+            "The toolkit [bib:5 · vendor · microsoft-agt] covers identity"
+            " and converges with NIST guidance (bib:3).",
+            "assistant",
+        )
+
+        context = await memory.get_context("test")
+        assert len(context) == 2
+
+        # User message passes through untouched.
+        assert context[0]["role"] == "user"
+        assert context[0]["content"] == "What does bib:5 cover?"
+
+        # Assistant content has bracketed header AND bare bib:N redacted.
+        assert context[1]["role"] == "assistant"
+        assert context[1]["content"] == (
+            "The toolkit [prior citation] covers identity"
+            " and converges with NIST guidance ([prior citation])."
+        )
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_preserve_recent_buffer(self):
+        """Redaction is read-time only — the recent deque keeps the original."""
+        memory = SummaryMemory.from_components(
+            {
+                "recent_window": 10,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            llm_provider=self._provider(),
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites [prior citation] here."
+
+        # Underlying recent buffer is untouched.
+        assert memory._messages[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_default_empty_is_passthrough(self):
+        """No redactions configured ⇒ assistant content returned verbatim."""
+        memory = SummaryMemory.from_components(
+            {"recent_window": 10},
+            llm_provider=self._provider(),
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_do_not_rewrite_summary_header(self):
+        """The system-role summary header is NOT redacted (default redact_roles)."""
+        memory = SummaryMemory.from_components(
+            {
+                "recent_window": 10,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            llm_provider=self._provider(),
+        )
+        # Force a running summary directly to bypass the LLM path.
+        memory._summary = "Summary text mentioning bib:5"
+        await memory.add_message("Assistant cites bib:5", "assistant")
+
+        context = await memory.get_context("test")
+
+        # First element is the system-role summary header — unredacted.
+        assert context[0]["role"] == "system"
+        assert context[0]["content"] == (
+            "[Conversation summary]: Summary text mentioning bib:5"
+        )
+        # The assistant entry in the recent buffer IS redacted.
+        assert context[1]["role"] == "assistant"
+        assert context[1]["content"] == "Assistant cites [prior citation]"
+
+
+class TestVectorMemoryHistoryRedaction:
+    """Tests for VectorMemory history_redactions (read-time transform)."""
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_applied_to_search_results_assistant_only(
+        self,
+    ):
+        """Redaction rewrites assistant content in search results; keys survive."""
+        vector_store = await _memory_vector_store()
+        memory = VectorMemory.from_components(
+            {
+                "max_results": 5,
+                # -1.0 surfaces every stored row regardless of the sign of
+                # EchoProvider's deterministic cosine score.
+                "similarity_threshold": -1.0,
+                "history_redactions": [
+                    {
+                        "pattern": r"\[bib:\d+[^\]]*\]",
+                        "replacement": "[prior citation]",
+                    },
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            vector_store=vector_store,
+            embedding_provider=_echo_embedding_provider(),
+        )
+
+        await memory.add_message(
+            "The toolkit [bib:5 · vendor] covers identity, see bib:3.",
+            "assistant",
+        )
+
+        context = await memory.get_context("identity")
+        assert len(context) == 1
+        item = context[0]
+        assert item["role"] == "assistant"
+        assert item["content"] == (
+            "The toolkit [prior citation] covers identity, see [prior citation]."
+        )
+        # Non-content keys carry over unchanged.
+        assert "similarity" in item
+        assert item["metadata"]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_preserve_stored_vectors(self):
+        """Stored rows are untouched — redaction is read-time only.
+
+        The dict-shape helper rewrites only the returned element's
+        ``content`` key; the ``metadata`` value still references the stored
+        metadata row, whose ``content`` reflects what is persisted. So the
+        returned ``metadata["content"]`` showing the original (un-redacted)
+        text proves the stored row was not mutated.
+        """
+        vector_store = await _memory_vector_store()
+        memory = VectorMemory.from_components(
+            {
+                "max_results": 5,
+                "similarity_threshold": -1.0,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            vector_store=vector_store,
+            embedding_provider=_echo_embedding_provider(),
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("cites")
+        assert context[0]["content"] == "Cites [prior citation] here."
+        # The stored metadata row keeps the original content.
+        assert context[0]["metadata"]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_default_empty_is_passthrough(self):
+        """No redactions configured ⇒ assistant content returned verbatim."""
+        vector_store = await _memory_vector_store()
+        memory = VectorMemory.from_components(
+            {"max_results": 5, "similarity_threshold": -1.0},
+            vector_store=vector_store,
+            embedding_provider=_echo_embedding_provider(),
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("cites")
+        assert context[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_skip_non_assistant_roles_in_results(self):
+        """User-role results are NOT rewritten (default redact_roles)."""
+        vector_store = await _memory_vector_store()
+        memory = VectorMemory.from_components(
+            {
+                "max_results": 10,
+                "similarity_threshold": -1.0,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            vector_store=vector_store,
+            embedding_provider=_echo_embedding_provider(),
+        )
+
+        await memory.add_message("User asks about bib:5", "user")
+        await memory.add_message("Assistant cites bib:5", "assistant")
+
+        context = await memory.get_context("bib")
+        by_role = {item["role"]: item["content"] for item in context}
+        assert by_role["user"] == "User asks about bib:5"
+        assert by_role["assistant"] == "Assistant cites [prior citation]"
+
+
+class TestCompositeMemoryHistoryRedaction:
+    """CompositeMemory inherits redaction via delegation to its children."""
+
+    @pytest.mark.asyncio
+    async def test_redaction_inherits_via_delegation_from_buffer_child(self):
+        """A redacted BufferMemory child redacts on the composite's path.
+
+        Pins the design contract: redaction is a per-child concern.
+        ``CompositeMemoryConfig`` does NOT carry ``history_redactions`` —
+        ``CompositeMemory.get_context`` delegates to children unchanged, so
+        the guarantee is inherited rather than re-implemented.
+        """
+        child = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        composite = CompositeMemory.from_components(strategies=[child])
+
+        await composite.add_message("Assistant cites bib:5", "assistant")
+
+        context = await composite.get_context("any")
+        assistant_entries = [m for m in context if m["role"] == "assistant"]
+        assert len(assistant_entries) == 1
+        assert assistant_entries[0]["content"] == "Assistant cites [prior citation]"
 
 
 class TestBufferMemoryPopMessages:

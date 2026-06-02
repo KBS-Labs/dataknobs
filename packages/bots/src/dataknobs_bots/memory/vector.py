@@ -10,7 +10,7 @@ import numpy as np
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from .base import Memory
+from .base import Memory, apply_history_redactions, compile_history_redactions
 from .config import VectorMemoryConfig
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,9 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         self.embedding_provider: Any = None
         self._owns_vector_store = False
         self._owns_embedding_provider = False
+        self._compiled_redactions = compile_history_redactions(
+            self.config.history_redactions
+        )
 
     @classmethod
     async def from_config(  # type: ignore[override]
@@ -201,11 +204,19 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
     async def get_context(self, current_message: str) -> list[dict[str, Any]]:
         """Get semantically relevant messages.
 
+        Configured ``history_redactions`` are applied to assistant-role
+        result rows AFTER the similarity search, so stored vectors and
+        vector-store rows are untouched and scoring is unaffected. The
+        non-content keys (``role``, ``similarity``, ``metadata``) carry
+        over unchanged.
+
         Args:
             current_message: Current message to find context for
 
         Returns:
-            List of relevant message dictionaries sorted by similarity
+            List of relevant message dictionaries sorted by similarity,
+            with assistant content redacted per the configured
+            ``history_redactions`` (passthrough when none are configured).
         """
         # Generate query embedding
         query_embedding = await self.embedding_provider.embed(current_message)
@@ -226,7 +237,7 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         results = await self.vector_store.search(**search_kwargs)
 
         # Format results
-        context = []
+        context: list[dict[str, Any]] = []
         for _vector_id, similarity, msg_metadata in results:
             if msg_metadata and similarity >= self.similarity_threshold:
                 context.append(
@@ -238,7 +249,12 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
                     }
                 )
 
-        return context
+        # Read-time redaction on assistant-role results. Stored vectors
+        # and vector-store rows are untouched; redaction happens AFTER
+        # the similarity search so it does not perturb scoring. The
+        # dict-shape helper copies only assistant rows and rewrites only
+        # their ``content`` key, so ``similarity`` / ``metadata`` survive.
+        return apply_history_redactions(context, self._compiled_redactions)
 
     def providers(self) -> dict[str, Any]:
         """Return the embedding provider, keyed by role."""

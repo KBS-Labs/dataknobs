@@ -7,6 +7,7 @@ Tests the ``llm`` and ``middleware`` override kwargs on
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -426,4 +427,84 @@ class TestFromConfigConversationMiddleware:
                         },
                     ],
                 },
+            )
+
+
+# ---------------------------------------------------------------------------
+# Middleware-spec class-shape resolution (the split _create_*_middleware
+# helpers). These call the static helpers directly — no bot construction
+# needed — to pin the pre-construction issubclass validation and the
+# optional-flag semantics.
+# ---------------------------------------------------------------------------
+
+
+_BOT_MIDDLEWARE_CLASS = "dataknobs_bots.middleware.logging.LoggingMiddleware"
+_CONVERSATION_MIDDLEWARE_CLASS = (
+    "dataknobs_llm.conversations.HistoryRedactionMiddleware"
+)
+
+
+class TestMiddlewareSpecResolution:
+    """Class-shape validation in _create_bot/_create_conversation_middleware.
+
+    The split helpers reject a spec whose resolved class does not subclass
+    the expected base — BEFORE instantiation (``issubclass``), so a
+    wrong-shape spec never runs its ctor. Type-mismatch always raises;
+    ``optional: true`` only covers transient resolution failures.
+    """
+
+    def test_create_conversation_middleware_rejects_bot_middleware_class(
+        self,
+    ) -> None:
+        """A bot-turn Middleware listed as a ConversationMiddleware is rejected."""
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError) as exc:
+            DynaBot._create_conversation_middleware(
+                {"class": _BOT_MIDDLEWARE_CLASS}
+            )
+
+        message = str(exc.value)
+        # Names both the resolved class and the expected base.
+        assert _BOT_MIDDLEWARE_CLASS in message
+        assert "ConversationMiddleware" in message
+
+    def test_create_bot_middleware_rejects_conversation_middleware_class(
+        self,
+    ) -> None:
+        """A ConversationMiddleware listed as a bot-turn Middleware is rejected."""
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError) as exc:
+            DynaBot._create_bot_middleware(
+                {"class": _CONVERSATION_MIDDLEWARE_CLASS}
+            )
+
+        message = str(exc.value)
+        assert _CONVERSATION_MIDDLEWARE_CLASS in message
+        assert "must subclass" in message
+
+    def test_optional_true_logs_and_returns_none_on_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """optional: true skips a resolution failure (missing class) for both."""
+        spec = {
+            "class": "nonexistent.module.NoSuchClass",
+            "optional": True,
+        }
+
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.bot.base"):
+            assert DynaBot._create_bot_middleware(spec) is None
+            assert DynaBot._create_conversation_middleware(spec) is None
+
+        assert "nonexistent.module.NoSuchClass" in caplog.text
+        assert "Skipping optional" in caplog.text
+
+    def test_optional_true_does_not_silence_type_mismatch(self) -> None:
+        """A class-shape mismatch always raises, even with optional: true."""
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="conversation_middleware"):
+            DynaBot._create_conversation_middleware(
+                {"class": _BOT_MIDDLEWARE_CLASS, "optional": True}
             )

@@ -52,11 +52,21 @@ class SummaryMemoryConfig(StructuredConfig):
             memory; when absent, the injected fallback provider (the bot's
             main LLM) is used. Kept as a raw mapping — LLM-provider config
             is owned by ``dataknobs-llm``.
+        history_redactions: Read-time redaction patterns applied to
+            assistant-role messages in the recent buffer when
+            ``get_context`` is called. Default empty (passthrough). The
+            running summary header (system-role) is NOT redacted by the
+            default ``redact_roles``; if your summarizer LLM echoes
+            citation tokens into the summary text itself, address it by
+            updating the summarization prompt rather than by widening
+            ``redact_roles``. See :class:`HistoryRedaction` for the
+            shape and the read-time / assistant-only semantics.
     """
 
     recent_window: int = 10
     summary_prompt: str | None = None
     llm: dict[str, Any] | None = None
+    history_redactions: list[HistoryRedaction] = field(default_factory=list)
 
     # The ``llm`` section is dispatched by ``provider`` in the LLM provider
     # registry; binding it here lets ``validate()`` dry-run-build the
@@ -94,6 +104,13 @@ class VectorMemoryConfig(StructuredConfig):
         default_filter: Filter merged into every ``get_context`` search.
         immutable_metadata_keys: Keys whose ``default_metadata`` values
             cannot be overridden by caller-supplied metadata.
+        history_redactions: Read-time redaction patterns applied to
+            assistant-role messages in the search-result rows when
+            ``get_context`` is called. Default empty (passthrough).
+            Redaction runs AFTER the similarity search, so stored vectors
+            and vector-store rows are untouched and scoring is unaffected.
+            See :class:`HistoryRedaction` for the shape and the
+            read-time / assistant-only semantics.
     """
 
     # The nested ``embedding`` section is dispatched by ``provider`` in the LLM
@@ -125,6 +142,7 @@ class VectorMemoryConfig(StructuredConfig):
     default_metadata: dict[str, Any] | None = None
     default_filter: dict[str, Any] | None = None
     immutable_metadata_keys: list[str] | None = None
+    history_redactions: list[HistoryRedaction] = field(default_factory=list)
 
     # Redacted from ``repr`` by the StructuredConfig base. A secret nested
     # inside the raw ``embedding`` mapping (its ``api_key``) is also masked:
@@ -144,6 +162,13 @@ class CompositeMemoryConfig(StructuredConfig):
             configs.
         primary_index: Index of the primary strategy in ``strategies``. The
             documented ``primary`` config key is accepted as an alias.
+
+    Note:
+        Read-time redaction is inherited from each strategy's own
+        ``history_redactions``; ``CompositeMemoryConfig`` itself does not
+        carry the field. ``CompositeMemory.get_context`` delegates to its
+        children, so a child configured with ``history_redactions`` redacts
+        on its own path.
     """
 
     # Each ``strategies`` element is a raw memory spec dispatched by its own

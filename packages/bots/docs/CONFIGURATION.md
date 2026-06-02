@@ -818,6 +818,32 @@ memory:
 - When you need conversation continuity without high token costs
 - When exact verbatim recall of old messages is not required
 
+#### Read-time history redaction
+
+Summary memory accepts the same `history_redactions` list as buffer
+memory. Patterns rewrite assistant-role entries in the **recent buffer**
+on the way out of `get_context()`:
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10
+  history_redactions:
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+The running summary header is a **system-role** message, so the default
+`redact_roles` (assistant only) leaves it unchanged. If your summarizer
+LLM echoes citation tokens into the summary text itself, fix the
+summarization prompt rather than widening `redact_roles`. As with buffer
+memory, the rewrite is read-time only (the recent deque keeps the
+original) and the default is an empty list (passthrough). See the
+[Buffer Memory redaction notes](#read-time-history-redaction) for the
+pattern shape, ordering, and validation semantics.
+
 ### Vector Memory
 
 Semantic search over conversation history:
@@ -892,6 +918,34 @@ different subset (e.g. one category/conversation within a tenant). To
 genuinely wipe an entire shared store regardless of tenant scoping, call
 `mem.vector_store.clear()` directly to bypass the wrapper.
 
+#### Read-time history redaction
+
+Vector memory accepts the same `history_redactions` list as buffer
+memory. Patterns rewrite assistant-role **search-result rows** on the way
+out of `get_context()`:
+
+```yaml
+memory:
+  type: vector
+  backend: faiss
+  dimension: 384
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  history_redactions:
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+Redaction runs **after** the similarity search, so stored vectors and
+vector-store rows are untouched and scoring is unaffected. Only the
+`content` of assistant-role result rows is rewritten — `role`,
+`similarity`, and `metadata` carry over unchanged. Default is an empty
+list (passthrough). See the
+[Buffer Memory redaction notes](#read-time-history-redaction) for the
+pattern shape, ordering, and validation semantics.
+
 ### Composite Memory
 
 Combine multiple memory strategies for best-of-both-worlds context:
@@ -914,6 +968,11 @@ memory:
 Each entry in `strategies` is a complete memory configuration (same format as
 a standalone memory config). The `primary` field selects which strategy's
 results appear first in `get_context()`.
+
+> **Read-time history redaction** is configured per strategy, not on the
+> composite. `CompositeMemory.get_context()` delegates to its children, so
+> a child carrying `history_redactions` redacts on its own path —
+> `composite` itself has no `history_redactions` field.
 
 **How it works:**
 

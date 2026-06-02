@@ -348,6 +348,20 @@ class TestConfigRoundTrips:
             SummaryMemoryConfig(llm={"provider": "echo", "model": "m"})
         )
 
+    def test_summary_config_roundtrip_with_history_redactions(self) -> None:
+        # Nested list[StructuredConfig] rebuild via base recursion — mirrors
+        # the BufferMemoryConfig adoption.
+        from dataknobs_bots.memory import HistoryRedaction
+
+        assert_structured_config_roundtrip(
+            SummaryMemoryConfig(
+                recent_window=6,
+                history_redactions=[
+                    HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[x]"),
+                ],
+            )
+        )
+
     def test_composite_config_roundtrip(self) -> None:
         assert_structured_config_roundtrip(
             CompositeMemoryConfig(
@@ -365,6 +379,22 @@ class TestConfigRoundTrips:
                 max_results=3,
                 default_filter={"user_id": "u1"},
                 immutable_metadata_keys=["user_id"],
+            )
+        )
+
+    def test_vector_config_roundtrip_with_history_redactions(self) -> None:
+        # Nested list[StructuredConfig] rebuild via base recursion — mirrors
+        # the BufferMemoryConfig adoption.
+        from dataknobs_bots.memory import HistoryRedaction
+
+        assert_structured_config_roundtrip(
+            VectorMemoryConfig(
+                backend="memory",
+                dimension=8,
+                embedding={"provider": "echo", "model": "m"},
+                history_redactions=[
+                    HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[x]"),
+                ],
             )
         )
 
