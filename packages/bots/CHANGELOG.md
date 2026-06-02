@@ -9,78 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Read-time history redaction in `BufferMemory`.** The
-  `HistoryRedaction` frozen `StructuredConfig` describes a
-  `(pattern, replacement)` regex rewrite. Its canonical home is
-  `dataknobs_llm.conversations.history_redaction`; it is re-exported from
-  `dataknobs_bots.memory` for back-compat, so the public import path
-  `from dataknobs_bots.memory import HistoryRedaction` is unchanged.
-  `BufferMemoryConfig` carries a new
+- **`history_redactions` on every memory backend config — read-time
+  citation redaction.** `BufferMemoryConfig`, `SummaryMemoryConfig`, and
+  `VectorMemoryConfig` each carry a new
   `history_redactions: list[HistoryRedaction]` field (default empty —
-  passthrough), and `BufferMemory.get_context` applies the rewrites to
-  assistant-role messages as they are served to the prompt-feed. The
-  underlying deque keeps the original text; the UI, exports, and any
-  consumer reading `memory.messages` directly see the unredacted form.
-  Motivated by the *citation carry-over* leak — bots that emit structured
-  citation tokens (`[bib:N · …]` headers, bare `bib:N` references) would
-  otherwise carry those tokens forward as if they were a reusable source
-  pool on the next turn, even after the underlying retrieval set changed.
-  Patterns are applied in declared order, so list the more specific
-  pattern (a bracketed header) before the more general bare token.
-  `HistoryRedaction.pattern` is required and non-empty; each pattern is
-  eagerly compiled in `__post_init__` so an invalid regex surfaces at
-  config-load time rather than at backend construction time.
+  passthrough); each backend's `get_context()` rewrites assistant-role
+  messages on the way out to the prompt-feed. `HistoryRedaction`
+  (re-exported from `dataknobs_bots.memory`; canonical home in
+  `dataknobs-llm`) is a `(pattern, replacement)` regex spec, applied in
+  declared order — list the more specific pattern (a bracketed citation
+  header) before the more general bare token. Stored state is never
+  mutated: `BufferMemory.messages`, the `SummaryMemory` recent deque,
+  and the vector-store rows keep the original text, so direct reads of
+  the buffer, exports, and any UI that bypasses `get_context()` see
+  un-redacted content. Backend-specific behavior:
+  - `SummaryMemory` also applies the same redactions to overflow
+    messages before they are summarized, so a citation token in an
+    aged-out turn cannot survive in the system-role summary header.
+  - `VectorMemory` applies redactions to search-result rows after the
+    similarity search, so stored vectors and scoring are unaffected.
+    `item["content"]` is the redacted view; `item["metadata"]` aliases
+    the live stored row, so `item["metadata"]["content"]` still reads
+    the un-redacted text — treat `metadata` as a read-only reference to
+    the stored row.
+  - `CompositeMemory` inherits the guarantee via delegation: each child
+    configured with `history_redactions` redacts on its own path.
+    `CompositeMemoryConfig` deliberately does not carry the field.
+    Children configured with mismatched policies can land the same
+    source message in two different `(role, content)` dedup buckets, so
+    configure consistently across children that may surface the same
+    content.
 - **`DynaBotConfig.conversation_middleware`.** New optional list of
-  middleware specs (same `{class, params, optional}` shape as
-  `middleware`) forwarded to every `ConversationManager` the bot
-  constructs. Distinct from `middleware` (bot-turn lifecycle hooks) —
-  `conversation_middleware` lives at the LLM-call boundary
-  (`ConversationMiddleware.process_request` / `process_response`) so it
-  can wrap the request/response that hits the provider. The two stay
-  separate fields because the interfaces are structurally different.
-  `DynaBot.from_config(...)` accepts a symmetric
-  `conversation_middleware=` kwarg that replaces the config-driven list
-  with pre-built instances (matching the existing `middleware=` kwarg);
-  the construction helper validates each spec's resolved class against
-  the expected interface so a misplaced spec (a bot-turn `Middleware`
-  listed under `conversation_middleware:`, or vice versa) is rejected at
-  config-load time with a clear error. First use: pairing with
-  `HistoryRedactionMiddleware` from `dataknobs-llm` to apply the same
-  citation-carry-over guard at the manager layer for bots whose memory
-  is not the leak surface.
-- **Read-time history redaction extended to `SummaryMemory` and
-  `VectorMemory`.** Both `SummaryMemoryConfig` and `VectorMemoryConfig`
-  now carry the same `history_redactions: list[HistoryRedaction]` field as
-  `BufferMemoryConfig` (default empty — passthrough). `SummaryMemory`
-  redacts assistant-role entries in its recent buffer AND redacts the
-  overflow messages BEFORE they are formatted into the summarizer prompt
-  in `_summarize_oldest()`, so citation tokens cannot leak from the
-  oldest messages into the running summary (the summary header is a
-  system-role message the default assistant-only `redact_roles`
-  deliberately leaves untouched on the read path; redacting the
-  summarizer's INPUT is what prevents the carry-over). `VectorMemory`
-  redacts assistant-role search-result rows *after* the similarity
-  search, so stored vectors and scoring are unaffected and the
-  non-content keys (`role`, `similarity`, `metadata`) carry over
-  unchanged — note that `item["metadata"]` aliases the live stored row,
-  so `item["metadata"]["content"]` still reads the un-redacted text.
-  `CompositeMemory` inherits the guarantee via delegation — a child
-  carrying `history_redactions` redacts on its own path, so
-  `CompositeMemoryConfig` deliberately does not carry the field.
+  `ConversationMiddleware` specs (same `{class, params, optional}` shape
+  as `middleware`) forwarded to every `ConversationManager` the bot
+  constructs. Distinct from `middleware` (bot-turn lifecycle hooks):
+  `conversation_middleware` wraps the LLM-call boundary
+  (`process_request` / `process_response`), so it can transform the
+  request and response that hit the provider. `DynaBot.from_config(...)`
+  accepts a symmetric `conversation_middleware=` kwarg that replaces the
+  config-driven list with pre-built instances (matching the existing
+  `middleware=` kwarg). Pairs with `HistoryRedactionMiddleware` from
+  `dataknobs-llm` for deployments where the bot's memory is not the
+  redaction surface.
 
 ### Changed
 
-- **The private middleware-spec construction helper is split by
-  interface.** `DynaBot._create_middleware(config, *, expected_type=…)` is
-  replaced by `_create_bot_middleware` (returns `Middleware | None`) and
-  `_create_conversation_middleware` (returns `ConversationMiddleware |
-  None`), both delegating to a shared `_resolve_middleware_from_spec`
-  body. The class-shape check now runs via `issubclass` *before*
-  instantiation, so a spec listed under the wrong field is rejected
-  without ever running its constructor (no ctor side effects). Type
-  mismatches raise unconditionally; `optional: true` continues to cover
-  only transient resolution failures (missing module / class / bad
-  params).
+- **Middleware and tool specs are validated against their target
+  interface at config-load.** A `middleware` spec whose resolved class
+  does not subclass `Middleware`, a `conversation_middleware` spec whose
+  resolved class does not subclass `ConversationMiddleware`, or a
+  `tools` spec whose resolved class does not subclass `Tool` raises
+  `ConfigurationError` before the spec's constructor is invoked, so a
+  misplaced spec cannot trigger constructor side effects. `optional:
+  true` continues to silence transient resolution failures (missing
+  module / class, malformed params) but no longer silences a
+  class-shape mismatch — a wrong-shape spec is a config-layout error,
+  not a transient environment failure, and always raises. The tool
+  resolver's wrong-shape error message changes accordingly (from
+  `"Resolved class … is not a Tool instance"` to `"Resolved class …
+  must subclass …Tool"`).
 
 ## v0.7.0 - 2026-05-26
 
