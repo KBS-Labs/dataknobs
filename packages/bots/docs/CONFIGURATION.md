@@ -771,6 +771,13 @@ only**: the underlying buffer keeps the original text, so the UI,
 exports, and any consumer reading `memory.messages` directly see the
 unredacted form. Default is an empty list (passthrough).
 
+Each rule's `pattern` is **required and non-empty** — and the regex is
+compiled eagerly at config-load time, so an empty pattern or a
+malformed regex (e.g. unbalanced parens) raises a clear error when
+the bot config is parsed rather than corrupting messages silently or
+failing during the first turn. `replacement` defaults to `""` (strip
+the match).
+
 If the same redaction needs to apply at the conversation-manager layer
 (e.g. for bots whose memory backend is not the leak surface), use the
 `HistoryRedactionMiddleware` from `dataknobs-llm` via the bot-level

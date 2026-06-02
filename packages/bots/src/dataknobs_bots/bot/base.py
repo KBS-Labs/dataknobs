@@ -17,6 +17,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import (
     ConversationManager,
+    ConversationMiddleware,
     ConversationStorage,
     DataknobsConversationStorage,
 )
@@ -165,7 +166,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
-        conversation_middleware: list[Any] | None = None,
+        conversation_middleware: list[ConversationMiddleware] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -371,7 +372,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
-        conversation_middleware: list[Any] | None = None,
+        conversation_middleware: list[ConversationMiddleware] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -450,7 +451,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
-        conversation_middleware: list[Any] | None = None,
+        conversation_middleware: list[ConversationMiddleware] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -578,6 +579,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         *,
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
+        conversation_middleware: list[ConversationMiddleware] | None = None,
     ) -> DynaBot:
         """Create DynaBot from configuration.
 
@@ -600,6 +602,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 - reasoning: Optional reasoning strategy configuration
                 - middleware: Optional middleware configurations (ignored
                   when the ``middleware`` kwarg is provided)
+                - conversation_middleware: Optional ConversationMiddleware
+                  configurations (ignored when the
+                  ``conversation_middleware`` kwarg is provided)
                 - prompts: Optional prompts library (dict of name -> content)
                 - system_prompt: Optional system prompt configuration (see below)
                 - config_base_path: Optional base directory for resolving
@@ -610,8 +615,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 is optional and the provider is used as-is (no initialization
                 or cleanup — the caller owns the lifecycle).  Use this to
                 share a single provider across multiple bot instances.
-            middleware: Pre-built middleware list.  When provided, replaces
-                any middleware defined in config.
+            middleware: Pre-built bot-turn middleware list
+                (``dataknobs_bots.middleware.Middleware``).  When provided,
+                replaces any ``middleware`` defined in config.
+            conversation_middleware: Pre-built LLM-call middleware list
+                (``dataknobs_llm.conversations.ConversationMiddleware``).
+                When provided, replaces any ``conversation_middleware``
+                defined in config.  Use this to inject a shared / per-test
+                middleware instance against an otherwise config-driven bot.
 
         Returns:
             Configured DynaBot instance
@@ -643,6 +654,12 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
             # With pre-built middleware
             bot = await DynaBot.from_config(config, middleware=[my_middleware])
+
+            # With pre-built conversation_middleware (LLM-call wraps)
+            bot = await DynaBot.from_config(
+                config,
+                conversation_middleware=[HistoryRedactionMiddleware(...)],
+            )
             ```
         """
         components: dict[str, Any] = {}
@@ -650,10 +667,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             components["llm"] = llm
         if middleware is not None:
             components["middleware"] = middleware
+        if conversation_middleware is not None:
+            components["conversation_middleware"] = conversation_middleware
         # Async-canonical construction: route through the structured-config
         # lifecycle (from_config_async → __init__ → _setup → _ainit) rather
-        # than returning a half-built instance. The `llm` / `middleware`
-        # kwargs travel the injected-collaborator channel to _ainit.
+        # than returning a half-built instance. The `llm` / `middleware` /
+        # `conversation_middleware` kwargs travel the injected-collaborator
+        # channel to _ainit.
         return await cls.from_config_async(config, **components)
 
     async def _ainit(
@@ -661,6 +681,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         *,
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
+        conversation_middleware: list[ConversationMiddleware] | None = None,
         **_: Any,
     ) -> None:
         """Async build: create/adopt the provider, then build collaborators.
@@ -678,7 +699,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # Caller-owned provider — skip creation/initialization.
             self.llm = llm
             self._owns_llm = False
-            await self._build_collaborators(middleware_override=middleware)
+            await self._build_collaborators(
+                middleware_override=middleware,
+                conversation_middleware_override=conversation_middleware,
+            )
             return
 
         if not self.config.llm:
@@ -701,7 +725,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Everything below can fail; ensure the provider is closed on error
         # so we don't leak aiohttp sessions or other resources.
         try:
-            await self._build_collaborators(middleware_override=middleware)
+            await self._build_collaborators(
+                middleware_override=middleware,
+                conversation_middleware_override=conversation_middleware,
+            )
         except Exception:
             await created_llm.close()
             raise
@@ -710,6 +737,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self,
         *,
         middleware_override: list[Middleware] | None = None,
+        conversation_middleware_override: list[Any] | None = None,
     ) -> None:
         """Build and bind the configured collaborators onto ``self``.
 
@@ -987,7 +1015,9 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             middleware = []
             if self.config.middleware:
                 for mw_config in self.config.middleware:
-                    mw = self._create_middleware(mw_config)
+                    mw = self._create_middleware(
+                        mw_config, expected_type=Middleware
+                    )
                     if mw:
                         middleware.append(mw)
 
@@ -997,12 +1027,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # ``self.middleware`` runs at bot-turn boundaries; this list is
         # forwarded to every ``ConversationManager`` this bot creates, so
         # it wraps the ``llm.complete`` call itself.
-        conversation_middleware: list[Any] = []
-        if self.config.conversation_middleware:
-            for mw_config in self.config.conversation_middleware:
-                mw = self._create_middleware(mw_config)
-                if mw is not None:
-                    conversation_middleware.append(mw)
+        if conversation_middleware_override is not None:
+            conversation_middleware: list[ConversationMiddleware] = list(
+                conversation_middleware_override
+            )
+        else:
+            conversation_middleware = []
+            if self.config.conversation_middleware:
+                for mw_config in self.config.conversation_middleware:
+                    mw = self._create_middleware(
+                        mw_config, expected_type=ConversationMiddleware
+                    )
+                    if mw is not None:
+                        conversation_middleware.append(mw)
 
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
@@ -3139,23 +3176,54 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             raise ConfigurationError(msg) from e
 
     @staticmethod
-    def _create_middleware(config: dict[str, Any]) -> Middleware | None:
+    def _create_middleware(
+        config: dict[str, Any],
+        *,
+        expected_type: type | None = None,
+    ) -> Any | None:
         """Create middleware from configuration.
+
+        Used for both bot-turn :class:`~dataknobs_bots.middleware.Middleware`
+        and LLM-call
+        :class:`~dataknobs_llm.conversations.ConversationMiddleware` — the
+        two are wired to different layers but share this construction
+        shape (``class`` + ``params`` + ``optional``). The optional
+        ``expected_type`` argument lets each caller validate that the
+        resolved class actually implements the right interface; a
+        misplaced spec (a turn-lifecycle ``Middleware`` listed under
+        ``conversation_middleware:``, or vice versa) is caught at
+        config-load time instead of crashing on first message with
+        ``AttributeError``.
 
         Args:
             config: Middleware configuration dict with:
                 - class: Dotted import path to middleware class
                 - params: Optional constructor parameters
-                - optional: If True, log warning and skip on failure
-                  instead of raising (default: False)
+                - optional: If True, log warning and skip on resolution
+                  failure (missing module / class / bad params) instead of
+                  raising (default: False). Does NOT apply to
+                  ``expected_type`` mismatches — those are programmer
+                  errors in the config layout, not transient environment
+                  failures, and always raise.
+            expected_type: Optional base class the resolved middleware
+                must be an instance of. When provided and the resolved
+                instance is not of that type, raises ``ConfigurationError``
+                unconditionally — ``optional: true`` is intentionally
+                ignored here because a misplaced spec indicates the
+                caller listed the entry under the wrong field
+                (``middleware`` vs ``conversation_middleware``) and the
+                only safe response is to surface that at config-load.
 
         Returns:
-            Middleware instance, or None if resolution fails and
-            middleware is optional
+            Middleware instance (concrete type left to the caller's
+            ``expected_type``), or ``None`` if resolution fails and
+            middleware is marked ``optional: true``.
 
         Raises:
-            ConfigurationError: If middleware cannot be resolved and
-                is not marked ``optional: true``.
+            ConfigurationError: If middleware cannot be resolved and is
+                not marked ``optional: true``, or if the resolved
+                instance fails the ``expected_type`` check (regardless
+                of ``optional``).
         """
         import importlib
 
@@ -3168,7 +3236,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             module_path, class_name = config["class"].rsplit(".", 1)
             module = importlib.import_module(module_path)
             middleware_class = getattr(module, class_name)
-            return middleware_class(**dict(config.get("params", {})))
+            instance = middleware_class(**dict(config.get("params", {})))
+            if expected_type is not None and not isinstance(instance, expected_type):
+                raise ConfigurationError(
+                    f"Middleware '{class_path}' resolved to a "
+                    f"{type(instance).__name__} but expected "
+                    f"{expected_type.__name__} — check whether this spec "
+                    f"belongs under 'middleware' (bot-turn hooks) or "
+                    f"'conversation_middleware' (LLM-call wraps)."
+                )
+            return instance
         except ConfigurationError:
             raise
         except Exception as e:

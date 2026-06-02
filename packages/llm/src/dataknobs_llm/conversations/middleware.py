@@ -90,9 +90,11 @@ See Also:
     ConversationMiddleware: Base class for custom middleware
 """
 
-from abc import ABC, abstractmethod
-from typing import List, Any, Dict, Callable
+import dataclasses
 import logging
+import re
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Dict, List
 
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_common.exceptions import RateLimitError
@@ -392,8 +394,6 @@ class ContentFilterMiddleware(ConversationMiddleware):
             if self.case_sensitive:
                 content = content.replace(word, self.replacement)
             else:
-                # Case-insensitive replacement
-                import re
                 pattern = re.compile(re.escape(word), re.IGNORECASE)
                 content = pattern.sub(self.replacement, content)
 
@@ -461,17 +461,37 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
         Args:
             redactions: Ordered list of ``{"pattern": <regex>,
                 "replacement": <str>}`` dicts. Patterns are compiled
-                once at construction; empty list ⇒ passthrough.
+                once at construction; empty list ⇒ passthrough. A spec
+                missing ``"pattern"`` or carrying an empty pattern is
+                rejected with ``ValueError`` at construction so config
+                typos surface at the config-load boundary rather than
+                mid-loop on first request.
             redact_roles: Message roles whose content is rewritten.
                 Defaults to ``("assistant",)`` — the dominant
                 citation-leak source.
-        """
-        import re
 
-        self._compiled = [
-            (re.compile(r["pattern"]), r.get("replacement", ""))
-            for r in redactions
-        ]
+        Raises:
+            ValueError: If a redaction spec is missing the ``"pattern"``
+                key or has an empty pattern.
+            re.error: If a redaction spec's ``"pattern"`` is not a valid
+                regular expression.
+        """
+        compiled: list[tuple[re.Pattern[str], str]] = []
+        for i, r in enumerate(redactions):
+            if "pattern" not in r:
+                raise ValueError(
+                    f"HistoryRedactionMiddleware: redactions[{i}] is missing "
+                    f"the required 'pattern' key (got keys: {sorted(r.keys())})"
+                )
+            pattern_str = r["pattern"]
+            if not pattern_str:
+                raise ValueError(
+                    f"HistoryRedactionMiddleware: redactions[{i}].pattern is "
+                    f"empty; an empty regex matches every position and would "
+                    f"corrupt content"
+                )
+            compiled.append((re.compile(pattern_str), r.get("replacement", "")))
+        self._compiled = compiled
         self._redact_roles = frozenset(redact_roles)
 
     async def process_request(
@@ -482,7 +502,12 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
         """Rewrite assistant content in the message list bound for the LLM.
 
         Returns new ``LLMMessage`` instances; the input list and its
-        elements are not mutated.
+        elements are not mutated. Non-content fields (``tool_calls``,
+        ``tool_call_id``, ``name``, ``function_call``, ``metadata``) are
+        preserved — agent/tool-use loops depend on the invocation and
+        pairing fields surviving the rewrite, so the clone uses
+        :func:`dataclasses.replace` rather than reconstructing field by
+        field.
 
         Args:
             messages: Messages to send to LLM.
@@ -501,15 +526,7 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
                 content = msg.content
                 for pattern, replacement in self._compiled:
                     content = pattern.sub(replacement, content)
-                out.append(
-                    LLMMessage(
-                        role=msg.role,
-                        content=content,
-                        name=msg.name,
-                        function_call=msg.function_call,
-                        metadata=msg.metadata,
-                    )
-                )
+                out.append(dataclasses.replace(msg, content=content))
             else:
                 out.append(msg)
         return out
@@ -521,10 +538,11 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
     ) -> LLMResponse:
         """Passthrough — the LLM's response is not redacted.
 
-        Redaction is intentionally scoped to the prompt-feed direction.
-        The fresh response keeps its full citation set for rendering;
-        only when that response RE-ENTERS the prompt as history on the
-        next turn does the redactor strip it.
+        Redaction is intentionally scoped to the prompt-feed direction
+        (see :meth:`process_request`); the response direction is a
+        passthrough so the fresh LLM response keeps its full citation
+        set for rendering. Only when that response RE-ENTERS the
+        prompt as history on the next turn does the redactor strip it.
         """
         return response
 

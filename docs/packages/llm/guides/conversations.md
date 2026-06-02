@@ -151,10 +151,22 @@ output). The default is `("assistant",)` — users rarely type citation
 tokens, and system prompts may intentionally reference bibs for the
 bibliography menu.
 
+Each redaction spec is validated at construction time: a missing
+`pattern` key, an empty pattern, or an invalid regex raises a clear
+`ValueError` / `re.error` at the config-load boundary rather than
+mid-loop on the first request. Non-content fields on the rewritten
+assistant message — `tool_calls`, `tool_call_id`, `name`,
+`function_call`, `metadata` — are preserved, so agent / tool-use loops
+keep their invocation and pairing fields intact across the redaction.
+
 DynaBot users do not configure this middleware on the
 `ConversationManager` directly; they list it under
 `DynaBotConfig.conversation_middleware` and the bot forwards it to every
-manager it constructs.
+manager it constructs. To inject a pre-built instance against an
+otherwise config-driven bot, pass it via the
+`conversation_middleware=` kwarg on `DynaBot.from_config(...)` — it
+replaces the config-driven list symmetrically with the existing
+`middleware=` kwarg.
 
 #### Per-Turn (Scoped) Middleware
 

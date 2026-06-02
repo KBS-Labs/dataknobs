@@ -16,19 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the fresh LLM response keeps its full citation set for rendering.
   Constructor accepts an ordered list of `{"pattern": <regex>,
   "replacement": <str>}` dicts plus an optional `redact_roles` override
-  (defaults to `("assistant",)`). Persisted conversation-tree nodes are
-  NOT mutated — redaction is scoped to the in-memory message list that
-  this turn forwards to the LLM, so the persisted assistant node keeps
-  the original text and only the prompt-feed boundary sees the redacted
-  form. Motivated by the *citation carry-over* leak: bots that emit
-  structured citation tokens (`[bib:N · …]` headers, bare `bib:N`
-  references) would otherwise have the model treat its own prior
-  citations as a reusable source pool on the next turn, even when this
-  turn's retrieval no longer surfaces those sources. Patterns are
-  applied in declared order — list the more specific pattern (a
-  bracketed header) before the more general bare token, or the
-  bare-token rule will consume `bib:N` inside the bracket and leave a
-  malformed `[ · vendor · …]` header. Exported from
+  (defaults to `("assistant",)`). Each spec is validated up front: a
+  missing `pattern` key or an empty pattern raises `ValueError` at
+  construction time so config typos surface at the config-load boundary
+  rather than mid-loop on the first request. Non-content fields on the
+  rewritten assistant message — `tool_calls`, `tool_call_id`, `name`,
+  `function_call`, `metadata` — are preserved (the clone uses
+  `dataclasses.replace`), so agent / tool-use loops keep their
+  invocation and pairing fields intact across the rewrite. Persisted
+  conversation-tree nodes are NOT mutated — redaction is scoped to the
+  in-memory message list that this turn forwards to the LLM, so the
+  persisted assistant node keeps the original text and only the
+  prompt-feed boundary sees the redacted form. Motivated by the
+  *citation carry-over* leak: bots that emit structured citation tokens
+  (`[bib:N · …]` headers, bare `bib:N` references) would otherwise have
+  the model treat its own prior citations as a reusable source pool on
+  the next turn, even when this turn's retrieval no longer surfaces
+  those sources. Patterns are applied in declared order — list the more
+  specific pattern (a bracketed header) before the more general bare
+  token, or the bare-token rule will consume `bib:N` inside the bracket
+  and leave a malformed `[ · vendor · …]` header. Exported from
   `dataknobs_llm.conversations`.
 
 ### Security

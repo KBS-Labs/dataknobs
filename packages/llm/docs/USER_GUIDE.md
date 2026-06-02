@@ -822,6 +822,17 @@ sees the redacted form. Pass `redact_roles=(...)` to widen the rewrite
 beyond the assistant role (the default `("assistant",)` matches the
 dominant leak source).
 
+Non-content fields on assistant messages — `tool_calls`, `tool_call_id`,
+`name`, `function_call`, `metadata` — are preserved when content is
+rewritten, so agent / tool-use loops that interleave bib tokens with
+tool invocations keep their invocation and pairing fields intact across
+the redaction.
+
+Each redaction spec is validated up front: a missing `pattern` key, an
+empty pattern, or an invalid regex raises a clear `ValueError` /
+`re.error` at construction time (the config-load boundary) instead of
+crashing mid-loop on the first request.
+
 #### ValidationMiddleware
 
 ```python

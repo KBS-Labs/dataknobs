@@ -13,7 +13,7 @@ from dataknobs_llm.conversations import (
     RateLimitMiddleware,
     DataknobsConversationStorage,
 )
-from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse
+from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse, ToolCall
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 from dataknobs_llm.conversations.storage import ConversationState, ConversationNode
 from dataknobs_common.exceptions import RateLimitError
@@ -370,6 +370,57 @@ class TestHistoryRedactionMiddleware:
         assert "bib:5" not in assistant_content
         assert "bib:3" not in assistant_content
         assert "[prior citation]" in assistant_content
+
+    @pytest.mark.asyncio
+    async def test_preserves_tool_calls_and_tool_call_id(self) -> None:
+        """Redacting assistant content must NOT drop tool_calls or tool_call_id.
+
+        In agent/tool-use loops, prior assistant turns carry ``tool_calls`` (the
+        invocation record) and downstream ``role="tool"`` messages carry
+        ``tool_call_id`` to pair results with calls. The middleware rebuilds the
+        message when rewriting content — if it forgets these fields the provider
+        sees a tool result with no matching invocation (OpenAI/Anthropic error)
+        or hallucinates around the missing tool calls.
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        tool_calls = [ToolCall(name="search", parameters={"q": "x"}, id="call_1")]
+        original = LLMMessage(
+            role="assistant",
+            content="Calling search after citing bib:5",
+            tool_calls=tool_calls,
+            tool_call_id="call_root",
+            name="agent",
+        )
+
+        out = await mw.process_request([original], state=None)
+
+        assert out[0].content == "Calling search after citing [prior citation]"
+        assert out[0].tool_calls == tool_calls, (
+            "tool_calls must be preserved when content is redacted"
+        )
+        assert out[0].tool_call_id == "call_root", (
+            "tool_call_id must be preserved when content is redacted"
+        )
+        assert out[0].name == "agent"
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_pattern_key(self) -> None:
+        """A misspelled / missing 'pattern' key fails up-front with a clear error.
+
+        Today a redaction dict without ``"pattern"`` raises ``KeyError`` mid-loop
+        on first request — far from the config-load boundary where the typo
+        actually lives. Validate up-front.
+        """
+        with pytest.raises(ValueError, match="pattern"):
+            HistoryRedactionMiddleware(
+                redactions=[
+                    {"patten": r"\bbib:\d+\b", "replacement": "[x]"},  # typo
+                ],
+            )
 
 
 class TestMetadataMiddleware:

@@ -25,8 +25,17 @@ class HistoryRedaction(StructuredConfig):
     underlying buffer keeps the original text while the prompt-feed sees
     a redacted form.
 
+    The pattern is compiled eagerly in ``__post_init__`` so an invalid
+    regex surfaces at config-load time (with the offending pattern in the
+    exception) rather than later at backend construction time. The
+    compiled form is stashed on the frozen dataclass for reuse by
+    :func:`_compile_history_redactions`.
+
     Attributes:
         pattern: Regex pattern matched against assistant message content.
+            Required and non-empty: an empty regex matches every position
+            and combined with any non-empty replacement would shred
+            message content.
         replacement: String substituted for each match. Defaults to ``""``
             (strip the match). Use a placeholder like ``"[prior citation]"``
             to preserve sentence flow.
@@ -34,6 +43,29 @@ class HistoryRedaction(StructuredConfig):
 
     pattern: str = ""
     replacement: str = ""
+
+    def __post_init__(self) -> None:
+        """Validate the pattern and eagerly compile it.
+
+        Rejecting an empty pattern at config-load time avoids a class of
+        silent footgun: ``re.compile("")`` matches at every position, so
+        combined with any non-empty replacement it would corrupt every
+        message. Compiling here also surfaces invalid regex syntax at the
+        config-load boundary rather than at backend construction time.
+        """
+        if not self.pattern:
+            raise ValueError(
+                "HistoryRedaction.pattern is required and must be non-empty; "
+                "an empty regex matches every position and would corrupt "
+                "message content."
+            )
+        # Eagerly validate the regex syntax. Stash the compiled form on
+        # the frozen dataclass for reuse — bypassing the frozen guard
+        # with object.__setattr__ is the standard pattern for caching
+        # derived state on a frozen StructuredConfig (see e.g.
+        # PostgresAdvisoryLock._key_hash).
+        compiled = re.compile(self.pattern)
+        object.__setattr__(self, "_compiled_pattern", compiled)
 
 
 def _compile_history_redactions(
@@ -45,8 +77,13 @@ def _compile_history_redactions(
     list is then handed to :func:`apply_history_redactions` per turn.
     Patterns are applied in declared order — callers list the more specific
     pattern (e.g. a bracketed header) before the more general bare token.
+
+    Each :class:`HistoryRedaction` already eagerly compiled its pattern in
+    ``__post_init__``; this function simply harvests the cached compiled
+    forms into the ``(pattern, replacement)`` tuple shape that
+    :func:`apply_history_redactions` expects.
     """
-    return [(re.compile(r.pattern), r.replacement) for r in redactions]
+    return [(r._compiled_pattern, r.replacement) for r in redactions]
 
 
 def apply_history_redactions(
@@ -79,7 +116,12 @@ def apply_history_redactions(
     out: list[dict[str, Any]] = []
     for msg in messages:
         if msg.get("role") in redact_roles:
-            content = msg.get("content", "")
+            # ``msg.get("content")`` returns ``None`` when the key is present
+            # but the value is None (e.g. assistant tool-call messages with no
+            # textual content) — ``or ""`` coerces both the missing and the
+            # explicit-None case to an empty string so ``pattern.sub`` does
+            # not raise ``TypeError``.
+            content = msg.get("content") or ""
             for pattern, replacement in redactions:
                 content = pattern.sub(replacement, content)
             new_msg = dict(msg)
