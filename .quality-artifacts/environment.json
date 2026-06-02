@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-02T22:09:07Z",
+  "timestamp": "2026-06-02T22:30:43Z",
   "python_version": "Python 3.12.3",
   "uv_version": "uv 0.9.14",
   "os": "Linux",
   "os_version": "6.8.0-110-generic",
-  "git_branch": "sbk/history-redaction-pr1",
-  "git_commit": "984e9cf091cb3e75f6c6ff9896abb153dc214318",
+  "git_branch": "sbk/history-redaction-pr2",
+  "git_commit": "65c8a816c644aa125cbca632c2acdab5565656ef",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
