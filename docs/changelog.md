@@ -5,6 +5,38 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-06-02
+
+### dataknobs-xization [1.3.8]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-legacy [0.1.7]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-llm [0.6.1]
+
+#### Added
+- add citation-carryover redaction for buffer memory + conversation middleware
+
+#### Changed
+- Relocate HistoryRedaction to dataknobs-llm and generalize the helper
+- chore: bump torch floor for PYSEC-2026-139 and cap aiohttp for aioresponses
+
+### dataknobs-bots [0.7.1]
+
+#### Added
+- add citation-carryover redaction for buffer memory + conversation middleware
+
+#### Changed
+- Extend read-time history redaction to Summary/Vector memory + split middleware helper
+- Rewrite Unreleased CHANGELOG entries for end-state-only style
+- chore: bump torch floor for PYSEC-2026-139 and cap aiohttp for aioresponses
+
+
 ## Release - 2026-05-26
 
 ### dataknobs-common [1.4.0]

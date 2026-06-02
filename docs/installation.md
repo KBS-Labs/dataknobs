@@ -307,11 +307,11 @@ CMD ["python", "app.py"]
 dataknobs-config>=0.4.0
 dataknobs-data>=0.5.0
 dataknobs-fsm>=0.2.0
-dataknobs-llm>=0.6.0
-dataknobs-bots>=0.7.0
+dataknobs-llm>=0.6.1
+dataknobs-bots>=0.7.1
 dataknobs-structures>=1.0.11
 dataknobs-utils>=1.2.13
-dataknobs-xization>=1.3.7
+dataknobs-xization>=1.3.8
 
 # Optional dependencies
 psycopg2-binary>=2.9.0
