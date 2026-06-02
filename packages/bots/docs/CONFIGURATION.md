@@ -821,8 +821,11 @@ memory:
 #### Read-time history redaction
 
 Summary memory accepts the same `history_redactions` list as buffer
-memory. Patterns rewrite assistant-role entries in the **recent buffer**
-on the way out of `get_context()`:
+memory. Patterns rewrite assistant-role entries in **two** places:
+
+1. The **recent buffer** on the way out of `get_context()`, and
+2. The **oldest messages** as they overflow `recent_window` and are
+   formatted into the summarizer prompt in `_summarize_oldest()`.
 
 ```yaml
 memory:
@@ -835,12 +838,22 @@ memory:
       replacement: '[prior citation]'
 ```
 
-The running summary header is a **system-role** message, so the default
-`redact_roles` (assistant only) leaves it unchanged. If your summarizer
-LLM echoes citation tokens into the summary text itself, fix the
-summarization prompt rather than widening `redact_roles`. As with buffer
-memory, the rewrite is read-time only (the recent deque keeps the
-original) and the default is an empty list (passthrough). See the
+The second redaction site is the load-bearing one: the running summary
+header is a **system-role** message that the default `redact_roles`
+(assistant only) deliberately leaves unchanged on the read path, so any
+citation tokens that reach the summarizer survive forever as an
+unredacted system header. Redacting the summarizer's INPUT (rather than
+trying to redact a fully-formed summary on the OUTPUT) closes that
+carry-over leak.
+
+> **Note:** A summarizer LLM may still generate citation-format text
+> on its own (independent of the input it was given). That is a
+> separate concern — address it by tightening the summarization
+> prompt, not by widening `redact_roles`.
+
+As with buffer memory, the rewrite is read-time only (the recent deque
+and the popped overflow messages are not mutated in place) and the
+default is an empty list (passthrough). See the
 [Buffer Memory redaction notes](#read-time-history-redaction) for the
 pattern shape, ordering, and validation semantics.
 

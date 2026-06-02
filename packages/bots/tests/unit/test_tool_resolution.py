@@ -11,6 +11,27 @@ from tests.fixtures.test_tools import (
 )
 
 
+class _SideEffectyNonTool:
+    """Module-level fixture for the no-ctor-side-effects guarantee.
+
+    Deliberately NOT a ``Tool`` subclass. Bumps a class-level counter on
+    every instantiation so a test can assert the counter is 0 after the
+    resolver rejects the spec — proving the rejection happens BEFORE the
+    ctor runs. The counter mechanism is structural: it would still record
+    side effects even if the rejection were moved to post-instantiation,
+    so it cannot be silently bypassed by a regression.
+    """
+
+    instances_created: int = 0
+
+    def __init__(self, **_kwargs: object) -> None:
+        type(self).instances_created += 1
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.instances_created = 0
+
+
 class TestToolResolution:
     """Test tool resolution from configuration."""
 
@@ -148,14 +169,71 @@ class TestToolResolution:
             DynaBot._resolve_tool("xref:invalid_format", {})
 
     def test_resolve_non_tool_class(self):
-        """Class that isn't a Tool raises ConfigurationError."""
+        """Class that isn't a Tool raises ConfigurationError.
+
+        The class-shape check uses ``issubclass`` BEFORE instantiation,
+        so a wrong-shape spec is rejected without the ctor or
+        ``from_config`` ever running — see
+        ``test_resolve_non_tool_class_does_not_run_ctor`` for the
+        no-side-effect guarantee.
+        """
         tool_config = {
             "class": "builtins.str",  # Not a Tool subclass
             "params": {},
         }
 
-        with pytest.raises(ConfigurationError, match="not a Tool instance"):
+        with pytest.raises(ConfigurationError, match="must subclass"):
             DynaBot._resolve_tool(tool_config, {})
+
+    def test_resolve_non_tool_class_with_optional_true_still_raises(self):
+        """``optional: true`` does NOT silence a class-shape mismatch.
+
+        Mirrors the middleware-helper policy: a class listed under the
+        ``tools`` field that does not subclass ``Tool`` is a programmer
+        error in the config layout (wrong dotted path, spec belongs
+        elsewhere), not a transient environment failure. The only safe
+        response is to surface it at config-load. ``optional: true``
+        continues to cover missing modules / classes / bad params.
+        """
+        tool_config = {
+            "class": "builtins.str",
+            "params": {},
+            "optional": True,
+        }
+
+        with pytest.raises(ConfigurationError, match="must subclass"):
+            DynaBot._resolve_tool(tool_config, {})
+
+    def test_resolve_non_tool_class_does_not_run_ctor(self):
+        """A wrong-shape class is rejected BEFORE its ctor runs.
+
+        Pins the no-side-effect guarantee: a misplaced tool spec must
+        not trigger network reads / file opens / log writes a non-Tool
+        class's initializer might perform. Uses a deliberately
+        side-effecty fixture class that bumps a class-level counter in
+        ``__init__``; asserts the counter is 0 after the rejection.
+
+        Without the issubclass-first ordering, this test would fail —
+        the post-instantiation ``isinstance`` check that the policy
+        replaces would still raise, but only AFTER the ctor had already
+        run and recorded its side effect.
+        """
+        _SideEffectyNonTool.reset()
+
+        tool_config = {
+            "class": (
+                "tests.unit.test_tool_resolution._SideEffectyNonTool"
+            ),
+            "params": {},
+        }
+
+        with pytest.raises(ConfigurationError, match="must subclass"):
+            DynaBot._resolve_tool(tool_config, {})
+
+        assert _SideEffectyNonTool.instances_created == 0, (
+            "Wrong-shape class was instantiated before the shape check — "
+            "the issubclass-first ordering has regressed."
+        )
 
     def test_resolve_missing_class_key(self):
         """Config without class or xref key raises ConfigurationError."""

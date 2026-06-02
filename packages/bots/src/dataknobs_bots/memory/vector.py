@@ -210,6 +210,13 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         non-content keys (``role``, ``similarity``, ``metadata``) carry
         over unchanged.
 
+        Note:
+            ``metadata`` is the LIVE stored vector-store row by
+            reference. Only ``item["content"]`` is redacted —
+            ``item["metadata"]["content"]`` still reads the original
+            un-redacted text. Treat ``metadata`` as a read-only
+            reference to the stored row, not as a redacted view.
+
         Args:
             current_message: Current message to find context for
 
@@ -254,6 +261,18 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         # the similarity search so it does not perturb scoring. The
         # dict-shape helper copies only assistant rows and rewrites only
         # their ``content`` key, so ``similarity`` / ``metadata`` survive.
+        #
+        # IMPORTANT — ``metadata`` is the LIVE stored row by reference
+        # (the same ``msg_metadata`` dict bound during ``add_message``).
+        # Only ``item["content"]`` is redacted; consumers reading
+        # ``item["metadata"]["content"]`` (or any other key copied into
+        # ``metadata`` at write time) will see the original
+        # un-redacted text. This is intentional — the read-time
+        # guarantee covers what the prompt-feed sees, not the stored
+        # row — but any downstream feature that copies ``metadata``
+        # into the prompt-feed, into logs that ship off-host, or into a
+        # debug panel would bypass redaction. Treat ``metadata`` as a
+        # read-only reference to the stored row.
         return apply_history_redactions(context, self._compiled_redactions)
 
     def providers(self) -> dict[str, Any]:

@@ -2974,19 +2974,30 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         Args:
             tool_config: Tool configuration (dict or string xref).
                 Dict configs support an ``optional`` key (default False).
-                When ``optional: true``, resolution failures log a warning
-                and return None.  When False (default), failures raise
+                When ``optional: true``, transient resolution failures
+                (missing module / class, ``from_config`` raising, ctor
+                raising on bad params) log a warning and return ``None``
+                instead of raising. ``optional: true`` does NOT cover
+                class-shape mismatches — a resolved class that does not
+                subclass ``Tool`` always raises, because that is a
+                programmer error in the config layout (wrong dotted
+                path, spec listed under the wrong field), not a
+                transient environment failure. When ``optional`` is
+                ``False`` (default), every failure raises
                 ``ConfigurationError``.
             config: Full bot configuration for xref resolution
             dependencies: Optional resource dependencies to inject into tools
                 that declare them via catalog_metadata().requires
 
         Returns:
-            Tool instance, or None if resolution fails and tool is optional
+            Tool instance, or ``None`` if a transient resolution failure
+            occurred and ``optional: true`` was set.
 
         Raises:
-            ConfigurationError: If the tool cannot be resolved and is not
-                marked ``optional: true``.
+            ConfigurationError: If the tool cannot be resolved and is
+                not marked ``optional: true``, OR if the resolved class
+                is not a subclass of ``Tool`` (always raises, regardless
+                of ``optional``).
 
         Example:
             # Direct instantiation (required — fails loudly)
@@ -3105,6 +3116,29 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 module = importlib.import_module(module_path)
                 tool_class = getattr(module, class_name)
 
+                # Class-shape check BEFORE instantiation / from_config.
+                # A wrong-shape class is a programmer error (the spec is
+                # listed under the wrong field, or the dotted path points
+                # at the wrong symbol entirely), not a transient
+                # environment failure. ``optional: true`` is therefore
+                # NOT honored here — it covers missing modules / classes
+                # / bad params, not a class that resolved successfully
+                # but is the wrong type. Running ``from_config`` or the
+                # constructor before the shape check would let a
+                # misplaced spec trigger ctor side effects (network
+                # reads, file opens, log writes); mirroring the
+                # middleware-helper policy keeps that closed.
+                from dataknobs_llm.tools import Tool
+
+                if not (
+                    isinstance(tool_class, type) and issubclass(tool_class, Tool)
+                ):
+                    raise ConfigurationError(
+                        f"Resolved class {class_path} must subclass "
+                        f"{Tool.__module__}.{Tool.__qualname__} — got "
+                        f"{tool_class!r}."
+                    )
+
                 # Inject dependencies declared in catalog_metadata().requires
                 if dependencies:
                     meta_fn = getattr(tool_class, "catalog_metadata", None)
@@ -3123,19 +3157,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     tool = tool_class.from_config(params)
                 else:
                     tool = tool_class(**params)
-
-                # Validate it's a Tool instance
-                from dataknobs_llm.tools import Tool
-
-                if not isinstance(tool, Tool):
-                    msg = (
-                        f"Resolved class {class_path} is not a Tool "
-                        f"instance: {type(tool)}"
-                    )
-                    if optional:
-                        logger.warning("Skipping optional tool: %s", msg)
-                        return None
-                    raise ConfigurationError(msg)
 
                 logger.info("Successfully loaded tool: %s (%s)", tool.name, class_path)
                 return tool

@@ -315,6 +315,49 @@ class TestSummaryMemoryHistoryRedaction:
         assert memory._messages[0]["content"] == "Cites bib:5 here."
 
     @pytest.mark.asyncio
+    async def test_non_redacted_role_dicts_pass_through_by_identity(self):
+        """Non-redacted-role dicts in the returned context are the SAME objects
+        as the corresponding entries in the underlying recent buffer.
+
+        ``SummaryMemory.get_context`` calls the same dict-shape helper as
+        ``BufferMemory.get_context``; the identity-passthrough contract is
+        a property of the helper, so the same guard applies here. Without
+        this test, a future helper regression that re-introduced
+        unconditional shallow-copying would still break the BufferMemory
+        test but silently pass for SummaryMemory — and a SummaryMemory
+        consumer mutating a returned non-redacted dict would alias-mutate
+        the deque's stored entry without the boundary being pinned.
+
+        The summary header is skipped in this test (its element index
+        would not have an underlying ``self._messages`` counterpart) so
+        the user/assistant entries land at positions 0 and 1 of both the
+        returned context and the underlying deque.
+        """
+        memory = SummaryMemory.from_components(
+            {
+                "recent_window": 10,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            llm_provider=self._provider(),
+        )
+        await memory.add_message("User cites bib:5", "user")
+        await memory.add_message("Assistant cites bib:5", "assistant")
+
+        context = await memory.get_context("test")
+
+        # No summary header configured — context starts at the first
+        # buffered user message.
+        assert len(context) == 2
+        # User dict (non-redacted role) is the SAME object as the deque entry.
+        assert context[0] is memory._messages[0]
+        # Assistant dict (redacted role) is a NEW object — content rewritten.
+        assert context[1] is not memory._messages[1]
+        assert memory._messages[1]["content"] == "Assistant cites bib:5"
+        assert context[1]["content"] == "Assistant cites [prior citation]"
+
+    @pytest.mark.asyncio
     async def test_history_redactions_default_empty_is_passthrough(self):
         """No redactions configured ⇒ assistant content returned verbatim."""
         memory = SummaryMemory.from_components(
@@ -353,6 +396,84 @@ class TestSummaryMemoryHistoryRedaction:
         # The assistant entry in the recent buffer IS redacted.
         assert context[1]["role"] == "assistant"
         assert context[1]["content"] == "Assistant cites [prior citation]"
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_applied_before_summarizer_prompt(self):
+        """Oldest assistant content is redacted BEFORE the summarizer LLM sees it.
+
+        The system-role summary header is left untouched by ``get_context``'s
+        assistant-only redact_roles, so any citation tokens that leak into the
+        summary survive forever as an unredacted system header — the exact
+        carry-over the read-time guarantee is supposed to prevent. Redaction
+        therefore runs in ``_summarize_oldest`` before the summarizer prompt
+        is formatted.
+
+        Drives ``recent_window=1`` so a single overflow message forces the
+        summarizer path; uses ``EchoProvider``'s scripted-response queue to
+        capture the prompt that would have been sent to the LLM, so the
+        assertion is on the prompt text directly (not on the LLM's echo).
+        """
+        from dataknobs_llm.testing import text_response
+
+        provider = self._provider()
+        # Scripted response so the summary content is deterministic and
+        # the LLM call doesn't echo the redacted prompt back into _summary.
+        provider.set_responses([text_response("Summary of the prior turn.")])
+
+        memory = SummaryMemory.from_components(
+            {
+                "recent_window": 1,
+                "history_redactions": [
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+                ],
+            },
+            llm_provider=provider,
+        )
+
+        # First assistant message: stays in the buffer (recent_window=1).
+        await memory.add_message("Assistant cites bib:5 in the first turn.", "assistant")
+        # Second message: forces the first to overflow into _summarize_oldest,
+        # which invokes the summarizer LLM with the formatted prompt.
+        await memory.add_message("Second turn.", "user")
+
+        # The summarizer call must have seen the REDACTED form, not the
+        # raw citation token. Read it back off EchoProvider's call
+        # history. Anchor the read tightly so a future change that adds a
+        # system preamble to the summarizer call (so messages[0] would no
+        # longer be the formatted-prompt user message) doesn't silently
+        # let the assertion read the wrong message and pass.
+        assert provider.call_count == 1, (
+            f"Expected exactly one LLM call (the summarizer); got "
+            f"{provider.call_count}. Test scope changed — adjust the "
+            f"call-history selector."
+        )
+        last_call = provider.get_last_call()
+        assert last_call is not None, "Summarizer LLM was not invoked"
+        # Find the formatted-prompt message by role rather than by
+        # positional index. The summarizer is called with a single
+        # user-role message whose content IS the formatted prompt.
+        # ``messages`` may carry LLMMessage instances or dicts depending
+        # on the call path; normalize both before asserting.
+        def _role_and_content(msg: object) -> tuple[str, str]:
+            if hasattr(msg, "role") and hasattr(msg, "content"):
+                return msg.role, msg.content  # type: ignore[attr-defined]
+            return msg["role"], msg["content"]  # type: ignore[index]
+
+        user_contents = [
+            content
+            for role, content in (_role_and_content(m) for m in last_call["messages"])
+            if role == "user"
+        ]
+        assert len(user_contents) == 1, (
+            f"Expected exactly one user-role message in the summarizer call; "
+            f"got {len(user_contents)}. Summarizer prompt shape changed."
+        )
+        prompt_text = user_contents[0]
+        assert "bib:5" not in prompt_text, (
+            "Summarizer received the un-redacted token; redaction must run "
+            "BEFORE the summarizer prompt is formatted, not only at read time."
+        )
+        assert "[prior citation]" in prompt_text
 
 
 class TestVectorMemoryHistoryRedaction:
@@ -470,6 +591,33 @@ class TestVectorMemoryHistoryRedaction:
 
 class TestCompositeMemoryHistoryRedaction:
     """CompositeMemory inherits redaction via delegation to its children."""
+
+    def test_composite_memory_config_does_not_carry_history_redactions(self):
+        """Pin the per-child design contract at the type level.
+
+        ``CompositeMemoryConfig`` deliberately does NOT carry a
+        ``history_redactions`` field — redaction is each child's own
+        responsibility, and ``CompositeMemory.get_context`` inherits the
+        guarantee via delegation. A future "add it to the composite too"
+        patch would create ambiguity (does composite-level redaction apply
+        to every child's output, or only to the assembled view?) and a
+        risk of double-redaction; this assertion fails loudly so the
+        patch author has to confront and justify the change.
+
+        Verifies via ``dataclasses.fields`` rather than ``hasattr`` so a
+        runtime-added attribute on the frozen dataclass can't paper over a
+        missing field declaration.
+        """
+        import dataclasses
+
+        from dataknobs_bots.memory.config import CompositeMemoryConfig
+
+        field_names = {f.name for f in dataclasses.fields(CompositeMemoryConfig)}
+        assert "history_redactions" not in field_names, (
+            "CompositeMemoryConfig must not declare a history_redactions "
+            "field — redaction is a per-child concern. If you are adding "
+            "this field, see the class docstring and the delegation test."
+        )
 
     @pytest.mark.asyncio
     async def test_redaction_inherits_via_delegation_from_buffer_child(self):

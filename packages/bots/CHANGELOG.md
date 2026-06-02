@@ -52,15 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorMemory`.** Both `SummaryMemoryConfig` and `VectorMemoryConfig`
   now carry the same `history_redactions: list[HistoryRedaction]` field as
   `BufferMemoryConfig` (default empty — passthrough). `SummaryMemory`
-  redacts assistant-role entries in its recent buffer (the system-role
-  summary header is untouched by the default assistant-only
-  `redact_roles`), and `VectorMemory` redacts assistant-role
-  search-result rows *after* the similarity search, so stored vectors and
-  scoring are unaffected and the non-content keys (`role`, `similarity`,
-  `metadata`) carry over unchanged. `CompositeMemory` inherits the
-  guarantee via delegation — a child carrying `history_redactions` redacts
-  on its own path, so `CompositeMemoryConfig` deliberately does not carry
-  the field.
+  redacts assistant-role entries in its recent buffer AND redacts the
+  overflow messages BEFORE they are formatted into the summarizer prompt
+  in `_summarize_oldest()`, so citation tokens cannot leak from the
+  oldest messages into the running summary (the summary header is a
+  system-role message the default assistant-only `redact_roles`
+  deliberately leaves untouched on the read path; redacting the
+  summarizer's INPUT is what prevents the carry-over). `VectorMemory`
+  redacts assistant-role search-result rows *after* the similarity
+  search, so stored vectors and scoring are unaffected and the
+  non-content keys (`role`, `similarity`, `metadata`) carry over
+  unchanged — note that `item["metadata"]` aliases the live stored row,
+  so `item["metadata"]["content"]` still reads the un-redacted text.
+  `CompositeMemory` inherits the guarantee via delegation — a child
+  carrying `history_redactions` redacts on its own path, so
+  `CompositeMemoryConfig` deliberately does not carry the field.
 
 ### Changed
 

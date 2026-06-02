@@ -444,6 +444,41 @@ _CONVERSATION_MIDDLEWARE_CLASS = (
 )
 
 
+# Module-level fixture for the no-ctor-side-effects guarantee. Imported by
+# dotted path through the resolver, so it must live at module scope. NOT a
+# subclass of either ``Middleware`` or ``ConversationMiddleware`` — the spec
+# is intentionally misplaced under both fields to exercise the issubclass
+# rejection from both helpers. The class-level counter records every ctor
+# call so a test can prove the ctor never ran.
+class _SideEffectyNonMiddleware:
+    """Records every ``__init__`` call; never a middleware.
+
+    A test that asserts the counter is 0 after a misplaced-spec
+    rejection proves the rejection happened BEFORE the ctor ran — the
+    structural guarantee that lets us safely resolve specs without
+    accidentally triggering network reads / file opens / log writes a
+    misplaced class's initializer might perform. This counter does not
+    rely on incidental properties (no required args, no raising ctor);
+    it would still record a ``__init__`` call even if the rejection
+    were moved post-instantiation, so a regression cannot be silently
+    masked.
+    """
+
+    instances_created: int = 0
+
+    def __init__(self, **_kwargs: object) -> None:
+        type(self).instances_created += 1
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.instances_created = 0
+
+
+_SIDE_EFFECTY_NON_MIDDLEWARE_CLASS = (
+    "tests.test_from_config_di._SideEffectyNonMiddleware"
+)
+
+
 class TestMiddlewareSpecResolution:
     """Class-shape validation in _create_bot/_create_conversation_middleware.
 
@@ -484,6 +519,37 @@ class TestMiddlewareSpecResolution:
         assert _CONVERSATION_MIDDLEWARE_CLASS in message
         assert "must subclass" in message
 
+    def test_misplaced_spec_rejection_does_not_instantiate_ctor(self) -> None:
+        """Misplaced spec is rejected BEFORE the ctor runs (both helpers).
+
+        Pins the no-side-effects guarantee structurally. The other
+        rejection tests use real middleware classes whose ctors happen
+        to take no required args (``LoggingMiddleware``) — they would
+        still pass if the helper regressed to instantiate-first +
+        post-check, because the post-check would still raise. This test
+        uses a fixture class that records every ``__init__`` call, so a
+        nonzero counter after a rejection proves the ordering broke.
+        Tests both helpers in one shot — the issubclass-before-ctor
+        ordering is a property of the shared ``_resolve_middleware_from_spec``
+        body, not of either wrapper individually.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        _SideEffectyNonMiddleware.reset()
+
+        spec = {"class": _SIDE_EFFECTY_NON_MIDDLEWARE_CLASS}
+
+        with pytest.raises(ConfigurationError, match="must subclass"):
+            DynaBot._create_bot_middleware(spec)
+        with pytest.raises(ConfigurationError, match="must subclass"):
+            DynaBot._create_conversation_middleware(spec)
+
+        assert _SideEffectyNonMiddleware.instances_created == 0, (
+            "Wrong-shape class was instantiated before the shape check — "
+            "the issubclass-before-ctor ordering in "
+            "_resolve_middleware_from_spec has regressed."
+        )
+
     def test_optional_true_logs_and_returns_none_on_failure(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -508,3 +574,54 @@ class TestMiddlewareSpecResolution:
             DynaBot._create_conversation_middleware(
                 {"class": _BOT_MIDDLEWARE_CLASS, "optional": True}
             )
+
+    def test_instantiation_failure_raises_with_instantiate_label(self) -> None:
+        """A good-shape class whose ctor raises surfaces the instantiation branch.
+
+        ``HistoryRedactionMiddleware`` is a real ``ConversationMiddleware``
+        with a REQUIRED ``redactions`` parameter — omitting ``params``
+        passes the issubclass check but raises ``TypeError`` from
+        ``__init__``. The resolver's third branch (instantiation
+        failure) is then exercised end-to-end, including the exact
+        ``"Failed to instantiate {label}"`` error-message format the
+        helper emits.
+
+        Without this test the format string is unverified by direct
+        coverage — only the first two branches (resolution failure +
+        class-shape mismatch) have direct tests.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError) as exc:
+            DynaBot._create_conversation_middleware(
+                {"class": _CONVERSATION_MIDDLEWARE_CLASS}
+            )
+
+        message = str(exc.value)
+        assert "Failed to instantiate" in message
+        assert "conversation_middleware" in message
+        assert _CONVERSATION_MIDDLEWARE_CLASS in message
+        # The chained-from underlying error should be the ctor's TypeError.
+        assert isinstance(exc.value.__cause__, TypeError)
+
+    def test_optional_true_silences_instantiation_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """optional: true skips an instantiation failure (ctor raised).
+
+        Same trigger as the previous test (omitted required param), but
+        with ``optional: true`` the helper logs a warning and returns
+        ``None`` instead of raising. Pins the documented contract that
+        ``optional`` covers BOTH resolution and instantiation failures,
+        not only the class-import path.
+        """
+        spec = {
+            "class": _CONVERSATION_MIDDLEWARE_CLASS,
+            "optional": True,
+        }
+
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.bot.base"):
+            assert DynaBot._create_conversation_middleware(spec) is None
+
+        assert _CONVERSATION_MIDDLEWARE_CLASS in caplog.text
+        assert "Skipping optional" in caplog.text

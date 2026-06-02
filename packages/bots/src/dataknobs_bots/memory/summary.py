@@ -303,6 +303,13 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         formats them into a prompt, and asks the LLM to produce an
         updated summary. On LLM failure the messages are simply
         discarded (graceful degradation to buffer-only behaviour).
+
+        Configured ``history_redactions`` are applied to the oldest
+        messages BEFORE they are formatted into the summarization
+        prompt. Otherwise the running summary (a system-role header
+        the default ``redact_roles`` deliberately leaves untouched on
+        the read path) would carry the citation tokens forward — a
+        leak that bypasses the read-time guarantee.
         """
         # Collect messages that overflow the recent window
         messages_to_summarize: list[dict[str, Any]] = []
@@ -312,9 +319,18 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         if not messages_to_summarize:
             return
 
+        # Redact assistant content before the summarizer sees it. The
+        # apply helper returns a fresh list and rewrites only the
+        # ``content`` of redaction-eligible roles; non-eligible rows
+        # pass through by identity (cheap when no redactions are
+        # configured — pass-through fast path).
+        redacted_for_summary = apply_history_redactions(
+            messages_to_summarize, self._compiled_redactions
+        )
+
         # Format messages for the summarization prompt
         formatted = "\n".join(
-            f"{msg['role']}: {msg['content']}" for msg in messages_to_summarize
+            f"{msg['role']}: {msg['content']}" for msg in redacted_for_summary
         )
 
         prompt = self.summary_prompt.format(

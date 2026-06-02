@@ -54,13 +54,15 @@ class SummaryMemoryConfig(StructuredConfig):
             is owned by ``dataknobs-llm``.
         history_redactions: Read-time redaction patterns applied to
             assistant-role messages in the recent buffer when
-            ``get_context`` is called. Default empty (passthrough). The
-            running summary header (system-role) is NOT redacted by the
-            default ``redact_roles``; if your summarizer LLM echoes
-            citation tokens into the summary text itself, address it by
-            updating the summarization prompt rather than by widening
-            ``redact_roles``. See :class:`HistoryRedaction` for the
-            shape and the read-time / assistant-only semantics.
+            ``get_context`` is called, AND to the oldest messages BEFORE
+            they are formatted into the summarizer prompt in
+            ``_summarize_oldest`` — so the running summary cannot carry
+            forward redacted tokens. Default empty (passthrough). The
+            running summary header (system-role) is itself NOT redacted
+            by the default ``redact_roles`` because the redaction
+            already ran on its source content. See
+            :class:`HistoryRedaction` for the shape and the read-time /
+            assistant-only semantics.
     """
 
     recent_window: int = 10
@@ -169,6 +171,18 @@ class CompositeMemoryConfig(StructuredConfig):
         carry the field. ``CompositeMemory.get_context`` delegates to its
         children, so a child configured with ``history_redactions`` redacts
         on its own path.
+
+        Per-child means: if children differ in their redaction policy,
+        the same source message can appear twice in the composite output
+        — once as a redacted row from a child that carries the patterns
+        (dedup key ``(role, redacted_content)``), once as an
+        un-redacted row from a child that does not (dedup key
+        ``(role, original_content)``). The composite dedups on the
+        post-redaction ``(role, content)`` tuple, so the two views land
+        in different dedup buckets and both survive. If you want a
+        single redacted view across children, configure
+        ``history_redactions`` consistently on every child that might
+        surface the affected content.
     """
 
     # Each ``strategies`` element is a raw memory spec dispatched by its own
