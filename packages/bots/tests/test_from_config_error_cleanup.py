@@ -227,7 +227,7 @@ class TestMiddlewareResolutionFailure:
         }
 
         with EchoProvider.track_instances() as instances:
-            with pytest.raises(ConfigurationError, match="Failed to create middleware"):
+            with pytest.raises(ConfigurationError, match="Failed to resolve middleware"):
                 await DynaBot.from_config(config)
 
         assert len(instances) == 1

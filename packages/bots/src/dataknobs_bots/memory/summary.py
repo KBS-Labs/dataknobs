@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from dataknobs_bots.prompts.memory import DEFAULT_SUMMARY_PROMPT
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from .base import Memory
+from .base import Memory, apply_history_redactions, compile_history_redactions
 from .config import SummaryMemoryConfig
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,9 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         self.summary_prompt: str = DEFAULT_SUMMARY_PROMPT
         self._messages: deque[dict[str, Any]] = deque()
         self._summary: str = ""
+        self._compiled_redactions = compile_history_redactions(
+            self.config.history_redactions
+        )
 
     def _resolve_prompt(self, prompt_resolver: PromptResolver | None) -> None:
         """Resolve ``summary_prompt`` (explicit > library > default).
@@ -190,6 +193,11 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
     async def get_context(self, current_message: str) -> list[dict[str, Any]]:
         """Return the running summary followed by recent messages.
 
+        Configured ``history_redactions`` are applied to assistant-role
+        entries in the recent buffer; the summary header (system-role)
+        and user messages pass through unchanged. The underlying
+        ``self._messages`` deque is not mutated.
+
         Args:
             current_message: The current message (not used by summary memory,
                             kept for interface compatibility)
@@ -197,7 +205,7 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         Returns:
             List of message dicts. If a summary exists it is the first
             element with ``role="system"``; the remaining elements are
-            the recent verbatim messages.
+            the redacted view of the recent verbatim messages.
         """
         context: list[dict[str, Any]] = []
 
@@ -210,7 +218,11 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
                 }
             )
 
-        context.extend(self._messages)
+        # Redact assistant content in the recent buffer; system + user
+        # roles pass through (default redact_roles={"assistant"}).
+        context.extend(
+            apply_history_redactions(self._messages, self._compiled_redactions)
+        )
         return context
 
     def providers(self) -> dict[str, Any]:
@@ -291,6 +303,13 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         formats them into a prompt, and asks the LLM to produce an
         updated summary. On LLM failure the messages are simply
         discarded (graceful degradation to buffer-only behaviour).
+
+        Configured ``history_redactions`` are applied to the oldest
+        messages BEFORE they are formatted into the summarization
+        prompt. Otherwise the running summary (a system-role header
+        the default ``redact_roles`` deliberately leaves untouched on
+        the read path) would carry the citation tokens forward — a
+        leak that bypasses the read-time guarantee.
         """
         # Collect messages that overflow the recent window
         messages_to_summarize: list[dict[str, Any]] = []
@@ -300,9 +319,18 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         if not messages_to_summarize:
             return
 
+        # Redact assistant content before the summarizer sees it. The
+        # apply helper returns a fresh list and rewrites only the
+        # ``content`` of redaction-eligible roles; non-eligible rows
+        # pass through by identity (cheap when no redactions are
+        # configured — pass-through fast path).
+        redacted_for_summary = apply_history_redactions(
+            messages_to_summarize, self._compiled_redactions
+        )
+
         # Format messages for the summarization prompt
         formatted = "\n".join(
-            f"{msg['role']}: {msg['content']}" for msg in messages_to_summarize
+            f"{msg['role']}: {msg['content']}" for msg in redacted_for_summary
         )
 
         prompt = self.summary_prompt.format(
