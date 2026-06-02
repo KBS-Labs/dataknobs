@@ -12,14 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **History-redaction primitive** in the new module
   `dataknobs_llm.conversations.history_redaction`: the `HistoryRedaction`
   frozen `StructuredConfig` (`pattern` + `replacement`, eager-compiled in
-  `__post_init__`) plus the `_compile_history_redactions` /
+  `__post_init__`) plus the `compile_history_redactions` /
   `apply_history_redactions` helpers. `apply_history_redactions` is
   generalized over a `(role_of, content_of, replace_content)` accessor
   trio so callers operating on different element shapes — an `LLMMessage`
   (the middleware) and a plain `dict[str, Any]` (memory backends in
   `dataknobs-bots`) — drive one implementation; a dict-shape convenience
   wrapper `apply_history_redactions_to_dicts` covers the dict call site.
-  `HistoryRedaction` is exported from `dataknobs_llm.conversations`.
+  `HistoryRedaction` is exported from `dataknobs_llm.conversations`. The
+  helper was initially introduced as `_compile_history_redactions` (an
+  underscore that misled given its cross-package use); a back-compat
+  alias preserves that name for the brief window it shipped under it.
 - **`HistoryRedactionMiddleware`** in
   `dataknobs_llm.conversations.middleware`. New `ConversationMiddleware`
   that rewrites assistant-role message content in `process_request`

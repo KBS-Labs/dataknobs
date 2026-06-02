@@ -1,7 +1,7 @@
 """Tests for the read-time history-redaction primitive.
 
 Covers the canonical ``HistoryRedaction`` dataclass, the
-``_compile_history_redactions`` harvester, the generic
+``compile_history_redactions`` harvester, the generic
 ``apply_history_redactions`` helper (driven by the accessor trio), and the
 dict-shape convenience wrapper ``apply_history_redactions_to_dicts`` that the
 ``dataknobs-bots`` memory backends call.
@@ -17,9 +17,9 @@ import pytest
 
 from dataknobs_llm.conversations.history_redaction import (
     HistoryRedaction,
-    _compile_history_redactions,
     apply_history_redactions,
     apply_history_redactions_to_dicts,
+    compile_history_redactions,
 )
 from dataknobs_llm.llm import LLMMessage
 
@@ -56,12 +56,12 @@ class TestHistoryRedactionConfig:
         assert HistoryRedaction.from_dict(r.to_dict()) == r
 
     def test_compile_history_redactions_reuses_cached_pattern(self) -> None:
-        """``_compile_history_redactions`` harvests the cached compiled pattern
+        """``compile_history_redactions`` harvests the cached compiled pattern
         rather than recompiling — the eager ``__post_init__`` compile is reused.
         """
         r = HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[x]")
-        out1 = _compile_history_redactions([r])
-        out2 = _compile_history_redactions([r])
+        out1 = compile_history_redactions([r])
+        out2 = compile_history_redactions([r])
         assert out1[0][0] is out2[0][0]
         # And it is the same object stashed on the dataclass.
         assert out1[0][0] is r._compiled_pattern
@@ -95,7 +95,7 @@ class TestApplyHistoryRedactionsToDicts:
         Redacted elements are new dict objects; original input dicts are not
         mutated.
         """
-        patterns = _compile_history_redactions(
+        patterns = compile_history_redactions(
             [
                 HistoryRedaction(
                     pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
@@ -154,7 +154,7 @@ class TestApplyHistoryRedactionsToDicts:
         If the bare-token rule ran first it would consume ``bib:N`` inside the
         bracket and leave a malformed ``[ · vendor · …]`` header.
         """
-        patterns = _compile_history_redactions(
+        patterns = compile_history_redactions(
             [
                 HistoryRedaction(
                     pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
@@ -200,7 +200,7 @@ class TestGenericHelperSymmetry:
         run through the generic helper with each shape's accessor trio, produces
         identical redacted content (the structural-symmetry guard).
         """
-        patterns = _compile_history_redactions(
+        patterns = compile_history_redactions(
             [
                 HistoryRedaction(
                     pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"

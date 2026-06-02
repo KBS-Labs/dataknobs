@@ -79,6 +79,40 @@ class TestBufferMemory:
         assert context[0]["metadata"] == metadata
 
 
+class TestHistoryRedactionReExport:
+    """Guard the load-bearing cross-package class- and callable-identity
+    invariants.
+
+    ``HistoryRedaction`` (and its companion ``compile_history_redactions``)
+    was relocated to ``dataknobs_llm.conversations`` and re-exported from
+    ``dataknobs_bots.memory`` (resp. ``dataknobs_bots.memory.base``) for
+    back-compat. The two import paths MUST resolve to the SAME object so
+    ``isinstance`` checks (for the class) and identity comparisons (for the
+    function) across the package boundary continue to work — a future
+    refactor that wrapped/subclassed the class, or aliased the function
+    through a thin wrapper, would silently break consumers without breaking
+    the imports themselves.
+    """
+
+    def test_history_redaction_is_same_class_across_packages(self) -> None:
+        from dataknobs_bots.memory import HistoryRedaction as BotsRedaction
+        from dataknobs_llm.conversations import HistoryRedaction as LLMRedaction
+
+        assert BotsRedaction is LLMRedaction
+
+    def test_compile_history_redactions_is_same_callable_across_packages(
+        self,
+    ) -> None:
+        from dataknobs_bots.memory.base import (
+            compile_history_redactions as bots_compile,
+        )
+        from dataknobs_llm.conversations.history_redaction import (
+            compile_history_redactions as llm_compile,
+        )
+
+        assert bots_compile is llm_compile
+
+
 class TestBufferMemoryHistoryRedaction:
     """Tests for BufferMemory history_redactions (read-time message transform)."""
 
@@ -132,6 +166,37 @@ class TestBufferMemoryHistoryRedaction:
 
         # Underlying buffer is untouched.
         assert memory.messages[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_non_redacted_role_dicts_pass_through_by_identity(self):
+        """Non-redacted-role dicts in the returned context are the SAME objects
+        as the corresponding entries in the underlying buffer — the dict-shape
+        helper's identity-passthrough contract pinned at the consumer call site.
+
+        Regression guard for the new behavior: the originating dict-only helper
+        shallow-copied every message regardless of role; the relocated generic
+        helper passes non-redacted-role elements through by identity. Anyone
+        mutating a returned non-redacted dict would now alias-mutate the
+        buffer's stored dict — this test guards the boundary so a future change
+        that re-introduces shallow copying does not slip through silently.
+        """
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        await memory.add_message("User cites bib:5", "user")
+        await memory.add_message("Assistant cites bib:5", "assistant")
+
+        context = await memory.get_context("test")
+
+        # User dict (non-redacted role) is the SAME object as the buffered dict.
+        assert context[0] is memory.messages[0]
+        # Assistant dict (redacted role) is a NEW object — its content was rewritten.
+        assert context[1] is not memory.messages[1]
+        assert memory.messages[1]["content"] == "Assistant cites bib:5"
+        assert context[1]["content"] == "Assistant cites [prior citation]"
 
     @pytest.mark.asyncio
     async def test_history_redactions_default_empty_is_passthrough(self):

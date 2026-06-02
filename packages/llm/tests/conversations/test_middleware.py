@@ -470,6 +470,64 @@ class TestHistoryRedactionMiddleware:
             )
 
     @pytest.mark.asyncio
+    async def test_clone_does_not_alias_mutable_container_fields(self) -> None:
+        """Mutating ``metadata`` / ``tool_calls`` / ``function_call`` on the
+        redacted output must NOT mutate the input ``LLMMessage`` — those
+        containers are shallow-copied onto the clone so downstream middleware
+        (e.g. ``MetadataMiddleware`` does ``msg.metadata.update(...)``) does
+        not alias-mutate the source through a shared reference.
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        original = LLMMessage(
+            role="assistant",
+            content="cited bib:5",
+            tool_calls=[ToolCall(name="search", parameters={"q": "x"}, id="c1")],
+            function_call={"name": "f", "arguments": "{}"},
+            metadata={"trace_id": "src"},
+        )
+
+        out = await mw.process_request([original], state=None)
+
+        # Mutate the clone's containers — simulating downstream middleware.
+        assert out[0].metadata is not None
+        out[0].metadata["trace_id"] = "downstream"
+        out[0].metadata["new_key"] = "added"
+        assert out[0].tool_calls is not None
+        out[0].tool_calls.append(
+            ToolCall(name="extra", parameters={}, id="c2")
+        )
+        assert out[0].function_call is not None
+        out[0].function_call["arguments"] = "mutated"
+
+        # Source ``LLMMessage`` containers are NOT mutated through aliasing.
+        assert original.metadata == {"trace_id": "src"}
+        assert original.tool_calls is not None
+        assert len(original.tool_calls) == 1
+        assert original.tool_calls[0].name == "search"
+        assert original.function_call == {"name": "f", "arguments": "{}"}
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_dict_branch_element_raises_clear_typeerror(
+        self,
+    ) -> None:
+        """A non-mapping element in the dict branch (e.g. a tuple — the
+        plausible "I meant a 2-tuple" typo) raises ``TypeError`` with the
+        element's index and type, not a cryptic ``AttributeError`` from
+        inside the loop body.
+        """
+        with pytest.raises(TypeError, match=r"redactions\[1\].*not a Mapping"):
+            HistoryRedactionMiddleware(
+                redactions=[
+                    {"pattern": r"\bbib:\d+\b", "replacement": "[x]"},
+                    ("pattern", "x"),  # type: ignore[list-item]
+                ],
+            )
+
+    @pytest.mark.asyncio
     async def test_empty_typed_sequence_is_passthrough(self) -> None:
         """An empty (typed) redaction sequence ⇒ passthrough."""
         mw = HistoryRedactionMiddleware(redactions=[])
@@ -480,6 +538,35 @@ class TestHistoryRedactionMiddleware:
         out = await mw.process_request(messages, state=None)
 
         assert out[0].content == "Cited [bib:5 · vendor · x]."
+
+    @pytest.mark.asyncio
+    async def test_assistant_message_with_none_content_does_not_crash(
+        self,
+    ) -> None:
+        """An assistant ``LLMMessage`` with ``content=None`` (tool-call-only
+        assistant turn) must not crash the regex sub. The generic helper
+        coerces ``None`` to ``""`` before applying patterns; the result has
+        empty content (and any tool-call invocation fields preserved).
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        tool_calls = [ToolCall(name="search", parameters={"q": "x"}, id="c1")]
+        # LLMMessage.content is annotated ``str`` but the dataclass has no
+        # runtime validation; tool-call-only assistant turns from some
+        # providers legitimately surface here as ``content=None``.
+        msg = LLMMessage(
+            role="assistant",
+            content=None,  # type: ignore[arg-type]
+            tool_calls=tool_calls,
+        )
+
+        out = await mw.process_request([msg], state=None)
+
+        assert out[0].content == ""
+        assert out[0].tool_calls == tool_calls
 
 
 class TestMetadataMiddleware:

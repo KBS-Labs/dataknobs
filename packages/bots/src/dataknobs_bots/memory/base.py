@@ -1,7 +1,7 @@
 """Base memory interface for bot memory implementations.
 
 The history-redaction primitive (``HistoryRedaction`` + the
-``_compile_history_redactions`` / ``apply_history_redactions`` helpers) has
+``compile_history_redactions`` / ``apply_history_redactions`` helpers) has
 its canonical home in ``dataknobs_llm.conversations.history_redaction`` so
 both memory backends (here) and ``HistoryRedactionMiddleware`` (in
 ``dataknobs-llm``) drive the same primitive. The names are re-exported from
@@ -10,6 +10,10 @@ this module for back-compat: existing
 The re-exported ``apply_history_redactions`` is the dict-shape wrapper
 (``apply_history_redactions_to_dicts``), preserving the dict-shape signature
 the in-tree memory backends call with.
+
+The previous underscored alias ``_compile_history_redactions`` is also
+re-exported (off ``__all__``) for the brief window it shipped under that
+name; new code should import :func:`compile_history_redactions`.
 """
 
 from __future__ import annotations
@@ -19,15 +23,16 @@ from typing import Any
 
 from dataknobs_llm.conversations.history_redaction import (
     HistoryRedaction,
-    _compile_history_redactions,
+    _compile_history_redactions,  # noqa: F401 — back-compat alias re-export
     apply_history_redactions_to_dicts as apply_history_redactions,
+    compile_history_redactions,
 )
 
 __all__ = [
     "HistoryRedaction",
     "Memory",
-    "_compile_history_redactions",
     "apply_history_redactions",
+    "compile_history_redactions",
 ]
 
 

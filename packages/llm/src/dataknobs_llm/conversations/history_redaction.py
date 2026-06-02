@@ -52,7 +52,7 @@ class HistoryRedaction(StructuredConfig):
     (or an empty pattern, which would corrupt every message) surfaces at
     config-load time rather than later at backend construction time. The
     compiled form is stashed on the frozen dataclass for reuse by
-    :func:`_compile_history_redactions`.
+    :func:`compile_history_redactions`.
 
     Attributes:
         pattern: Regex pattern matched against assistant message content.
@@ -91,7 +91,7 @@ class HistoryRedaction(StructuredConfig):
         object.__setattr__(self, "_compiled_pattern", compiled)
 
 
-def _compile_history_redactions(
+def compile_history_redactions(
     redactions: Sequence[HistoryRedaction],
 ) -> list[tuple[re.Pattern[str], str]]:
     """Harvest the cached compiled patterns into ``(pattern, replacement)``.
@@ -122,7 +122,7 @@ def apply_history_redactions(
         messages: Iterable of message-like elements (shape opaque to the
             helper — projected via the accessor callables).
         redactions: Compiled patterns from
-            :func:`_compile_history_redactions`. Empty ⇒ the elements are
+            :func:`compile_history_redactions`. Empty ⇒ the elements are
             returned in a fresh list, unchanged.
         role_of: Returns the role string for one element.
         content_of: Returns the textual content of one element, or ``None``
@@ -164,11 +164,16 @@ def apply_history_redactions(
 
 
 def _dict_role(msg: dict[str, Any]) -> str:
+    # Missing-role defaults to ``""`` which is never in ``redact_roles``,
+    # so a malformed dict falls through to the identity-passthrough branch.
     return msg.get("role", "")
 
 
 def _dict_content(msg: dict[str, Any]) -> str | None:
-    # ``.get`` (no default) returns None when the key is present-but-None.
+    # Returns None when the ``"content"`` key is missing OR present-but-None
+    # (tool-call assistant dicts legitimately carry no textual content);
+    # both cases are coerced to ``""`` by :func:`apply_history_redactions`
+    # before the regex sub.
     return msg.get("content")
 
 
@@ -206,9 +211,19 @@ def apply_history_redactions_to_dicts(
     )
 
 
+# Back-compat alias for the underscored name that shipped briefly with the
+# original ``dataknobs_bots.memory.base`` location. The underscore was
+# misleading (the symbol was re-exported via ``__all__`` and called across
+# package boundaries), so the canonical name is now
+# :func:`compile_history_redactions`. The alias is intentionally NOT in
+# ``__all__`` — it survives ``from ... import _compile_history_redactions``
+# for any out-of-tree caller but is not advertised as public API.
+_compile_history_redactions = compile_history_redactions
+
+
 __all__ = [
     "HistoryRedaction",
-    "_compile_history_redactions",
     "apply_history_redactions",
     "apply_history_redactions_to_dicts",
+    "compile_history_redactions",
 ]

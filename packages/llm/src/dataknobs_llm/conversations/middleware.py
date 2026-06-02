@@ -104,8 +104,8 @@ from dataknobs_llm.llm import LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers import AsyncLLMProvider
 from dataknobs_llm.conversations.history_redaction import (
     HistoryRedaction,
-    _compile_history_redactions,
     apply_history_redactions,
+    compile_history_redactions,
 )
 from dataknobs_llm.conversations.storage import ConversationState
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -512,7 +512,7 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
                 regular expression.
         """
         typed = self._normalize_redactions(redactions)
-        self._compiled = _compile_history_redactions(typed)
+        self._compiled = compile_history_redactions(typed)
         self._redact_roles = frozenset(redact_roles)
 
     @staticmethod
@@ -523,11 +523,17 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
 
         First-element type drives the dispatch; the sequence must be
         homogeneous (mixing typed and dict shapes raises ``TypeError`` —
-        a mixed list is a bug, not back-compat). The dict branch preserves
-        the up-front "missing 'pattern' key" ``ValueError`` (with index +
-        the keys actually present) so a config typo surfaces at the
-        config-load boundary rather than as a generic empty-pattern error
-        from ``HistoryRedaction.__post_init__``.
+        a mixed list is a bug, not back-compat). In the dict branch every
+        element is also re-checked against ``Mapping`` so a misuse like
+        ``redactions=[("pattern", "x")]`` (a plausible "I meant a 2-tuple"
+        typo) raises the same shape-mismatch ``TypeError`` rather than
+        crashing inside the loop body with
+        ``AttributeError: 'tuple' object has no attribute 'keys'`` far
+        from the call site. The dict branch preserves the up-front
+        "missing 'pattern' key" ``ValueError`` (with index + the keys
+        actually present) so a config typo surfaces at the config-load
+        boundary rather than as a generic empty-pattern error from
+        ``HistoryRedaction.__post_init__``.
         """
         if not redactions:
             return []
@@ -549,6 +555,13 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
                     "HistoryRedactionMiddleware: mixed typed/dict "
                     "redactions are not supported; pass either a "
                     "Sequence[HistoryRedaction] or a "
+                    "Sequence[Mapping[str, str]]."
+                )
+            if not isinstance(r, Mapping):
+                raise TypeError(
+                    "HistoryRedactionMiddleware: redactions["
+                    f"{i}] is not a Mapping (got {type(r).__name__!r}); "
+                    "pass either a Sequence[HistoryRedaction] or a "
                     "Sequence[Mapping[str, str]]."
                 )
             if "pattern" not in r:
@@ -582,6 +595,19 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
         :func:`dataclasses.replace` rather than reconstructing field by
         field.
 
+        The mutable container fields (``metadata`` dict, ``tool_calls``
+        list, ``function_call`` dict) are shallow-copied onto the clone so
+        a downstream middleware that does e.g.
+        ``out_msg.metadata.update({"trace_id": ...})`` (see
+        :class:`MetadataMiddleware`) does NOT alias-mutate the source
+        ``LLMMessage`` through a shared reference. The defense is
+        deliberately shallow: it neutralizes top-level mutations (the
+        cited contract violation) without paying for a deep copy of
+        nested values, which remains the caller's contract to avoid.
+        ``ToolCall`` items inside ``tool_calls`` are shared by reference;
+        callers that mutate a ``ToolCall.parameters`` dict in place still
+        see the source mutate, but no in-tree middleware does that.
+
         Args:
             messages: Messages to send to LLM.
             state: Current conversation state (unused — the redactor
@@ -604,7 +630,23 @@ class HistoryRedactionMiddleware(ConversationMiddleware):
             # ``name``, ``function_call``, ``metadata`` (and any future
             # field) survive automatically. Manual reconstruction would
             # silently drop them and break agent / tool-use loops.
-            return dataclasses.replace(msg, content=new_content)
+            #
+            # The mutable containers are shallow-copied so downstream
+            # mutations (e.g. ``out_msg.metadata.update(...)``) do not
+            # alias-mutate the source ``LLMMessage``. See method docstring.
+            return dataclasses.replace(
+                msg,
+                content=new_content,
+                metadata=dict(msg.metadata),
+                tool_calls=(
+                    list(msg.tool_calls) if msg.tool_calls is not None else None
+                ),
+                function_call=(
+                    dict(msg.function_call)
+                    if msg.function_call is not None
+                    else None
+                ),
+            )
 
         return apply_history_redactions(
             messages,

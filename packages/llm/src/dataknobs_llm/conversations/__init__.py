@@ -53,7 +53,12 @@ from dataknobs_llm.conversations.storage import (
     get_messages_for_llm,
     get_nodes_for_path,
 )
-from dataknobs_llm.conversations.history_redaction import HistoryRedaction
+from dataknobs_llm.conversations.history_redaction import (
+    HistoryRedaction,
+    apply_history_redactions,
+    apply_history_redactions_to_dicts,
+    compile_history_redactions,
+)
 from dataknobs_llm.conversations.manager import ConversationManager
 from dataknobs_llm.conversations.middleware import (
     ConversationMiddleware,
@@ -93,6 +98,11 @@ __all__ = [
     "RateLimitMiddleware",
     "PromoteToPersistMiddleware",
     "RateLimitError",
+
+    # History-redaction helpers (the companion API to HistoryRedaction)
+    "apply_history_redactions",
+    "apply_history_redactions_to_dicts",
+    "compile_history_redactions",
 
     # Helper functions
     "calculate_node_id",
