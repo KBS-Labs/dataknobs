@@ -744,6 +744,39 @@ memory:
 - Medium conversations: `max_messages: 15-20`
 - Long conversations: `max_messages: 30-50`
 
+#### Read-time history redaction
+
+Buffer memory can rewrite assistant-role messages on the way out of
+`get_context()` so transient artifacts like citation tokens do not
+re-enter the model's prompt as if they were a reusable pool of sources.
+Add an ordered list of `(pattern, replacement)` rules under
+`history_redactions`:
+
+```yaml
+memory:
+  type: buffer
+  max_messages: 10
+  history_redactions:
+    # Bracketed citation header — MUST come first (more specific).
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    # Bare bib token — comes second (more general).
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+Patterns apply in declared order to assistant-role content only — user
+and system messages pass through unchanged. The rewrite is **read-time
+only**: the underlying buffer keeps the original text, so the UI,
+exports, and any consumer reading `memory.messages` directly see the
+unredacted form. Default is an empty list (passthrough).
+
+If the same redaction needs to apply at the conversation-manager layer
+(e.g. for bots whose memory backend is not the leak surface), use the
+`HistoryRedactionMiddleware` from `dataknobs-llm` via the bot-level
+`conversation_middleware:` field documented under
+[Middleware Configuration](#middleware-configuration).
+
 ### Summary Memory
 
 LLM-based compression of older messages into a running summary:
@@ -3264,6 +3297,43 @@ Legacy hooks (`before_message`, `after_message`, `post_stream`) are still
 dispatched for backward compatibility but are deprecated. See the
 [Middleware Guide](middleware.md) for the full hook reference, `TurnState`
 fields, `plugin_data` bridge, and migration guidance.
+
+### LLM-call middleware via `conversation_middleware:`
+
+The bot-level `middleware:` list above wraps **bot-turn lifecycle hooks**
+(`on_turn_start`, `after_turn`, `on_error`, …). To wrap the LLM call
+itself — `process_request` / `process_response` around every
+`ConversationManager.complete()` / `stream_complete()` — configure
+`conversation_middleware:` at the same top level as `middleware:`:
+
+```yaml
+# Bot-turn-lifecycle hooks (above) — implement Middleware from
+# dataknobs_bots.middleware.base.
+middleware:
+  - class: dataknobs_bots.middleware.LoggingMiddleware
+    params:
+      log_level: INFO
+
+# LLM-call wrap (below) — implement ConversationMiddleware from
+# dataknobs_llm.conversations.middleware.
+conversation_middleware:
+  - class: dataknobs_llm.conversations.HistoryRedactionMiddleware
+    params:
+      redactions:
+        - pattern: '\[bib:\d+[^\]]*\]'
+          replacement: '[prior citation]'
+        - pattern: '\bbib:\d+\b'
+          replacement: '[prior citation]'
+```
+
+Each entry uses the same `{class, params, optional}` spec shape as
+`middleware`. The bot constructs each entry once at startup and forwards
+the resulting list to every `ConversationManager` it builds, so the
+wraps apply across all conversations the bot manages.
+
+The two lists are intentionally kept separate because the interfaces are
+structurally different (bot-turn hooks vs. LLM-call wraps). Pick the
+list that matches the layer you want to instrument.
 
 ### Programmatic Middleware via `from_config()`
 

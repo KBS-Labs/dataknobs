@@ -407,6 +407,128 @@ class ContentFilterMiddleware(ConversationMiddleware):
         return response
 
 
+class HistoryRedactionMiddleware(ConversationMiddleware):
+    r"""Rewrite assistant-role messages on their way into the LLM.
+
+    Bots that emit structured citation tokens (``[bib:N · …]`` headers,
+    bare ``bib:N`` references, footnote markers, …) carry those tokens
+    forward in the conversation tree. On the next turn, the model sees
+    its own prior citations as part of conversation history and will
+    happily reuse them — even when this turn's retrieval no longer
+    surfaces those sources. The result is a *citation carry-over leak*:
+    bibs cited inline that aren't in the current kept set.
+
+    This middleware applies regex rewrites to assistant-role message
+    content in :meth:`process_request` — the prompt-feed direction.
+    The persisted conversation tree is NOT mutated; only the
+    in-memory ``LLMMessage`` list passed to the LLM provider is. The
+    UI, exports, and `manager.messages` continue to see the original
+    text. :meth:`process_response` is a passthrough.
+
+    The matching set defaults to assistant-role messages only. Users
+    rarely type bib codes; system prompts may intentionally reference
+    bibs for the bibliography menu. Override ``redact_roles`` only
+    when you need a broader rewrite (e.g. redacting tool-result
+    messages that quote prior assistant output).
+
+    Example:
+        >>> # Block bib-N carry-over for an ASRM-style framework bot.
+        >>> mw = HistoryRedactionMiddleware(
+        ...     redactions=[
+        ...         # Bracketed header MUST come first (longer match).
+        ...         {"pattern": r"\\[bib:\\d+[^\\]]*\\]", "replacement": "[prior citation]"},
+        ...         {"pattern": r"\\bbib:\\d+\\b", "replacement": "[prior citation]"},
+        ...     ],
+        ... )
+        >>> manager = await ConversationManager.create(
+        ...     llm=llm, prompt_builder=builder, storage=storage,
+        ...     middleware=[mw],
+        ... )
+
+    Pattern order matters: callers list the more specific pattern
+    (e.g. a bracketed header) before the more general bare token. If
+    the bare-token rule ran first it would consume ``bib:N`` inside
+    the bracket and leave a malformed ``[ · vendor · …]`` header.
+    """
+
+    def __init__(
+        self,
+        redactions: List[Dict[str, str]],
+        redact_roles: tuple[str, ...] = ("assistant",),
+    ):
+        """Initialize history-redaction middleware.
+
+        Args:
+            redactions: Ordered list of ``{"pattern": <regex>,
+                "replacement": <str>}`` dicts. Patterns are compiled
+                once at construction; empty list ⇒ passthrough.
+            redact_roles: Message roles whose content is rewritten.
+                Defaults to ``("assistant",)`` — the dominant
+                citation-leak source.
+        """
+        import re
+
+        self._compiled = [
+            (re.compile(r["pattern"]), r.get("replacement", ""))
+            for r in redactions
+        ]
+        self._redact_roles = frozenset(redact_roles)
+
+    async def process_request(
+        self,
+        messages: List[LLMMessage],
+        state: ConversationState | None,
+    ) -> List[LLMMessage]:
+        """Rewrite assistant content in the message list bound for the LLM.
+
+        Returns new ``LLMMessage`` instances; the input list and its
+        elements are not mutated.
+
+        Args:
+            messages: Messages to send to LLM.
+            state: Current conversation state (unused — the redactor
+                is stateless and per-message).
+
+        Returns:
+            New message list with assistant content redacted per the
+            configured patterns. Other roles pass through unchanged.
+        """
+        if not self._compiled:
+            return list(messages)
+        out: list[LLMMessage] = []
+        for msg in messages:
+            if msg.role in self._redact_roles:
+                content = msg.content
+                for pattern, replacement in self._compiled:
+                    content = pattern.sub(replacement, content)
+                out.append(
+                    LLMMessage(
+                        role=msg.role,
+                        content=content,
+                        name=msg.name,
+                        function_call=msg.function_call,
+                        metadata=msg.metadata,
+                    )
+                )
+            else:
+                out.append(msg)
+        return out
+
+    async def process_response(
+        self,
+        response: LLMResponse,
+        state: ConversationState | None,
+    ) -> LLMResponse:
+        """Passthrough — the LLM's response is not redacted.
+
+        Redaction is intentionally scoped to the prompt-feed direction.
+        The fresh response keeps its full citation set for rendering;
+        only when that response RE-ENTERS the prompt as history on the
+        next turn does the redactor strip it.
+        """
+        return response
+
+
 class ValidationMiddleware(ConversationMiddleware):
     """Middleware that validates LLM responses using another LLM call.
 

@@ -79,6 +79,95 @@ class TestBufferMemory:
         assert context[0]["metadata"] == metadata
 
 
+class TestBufferMemoryHistoryRedaction:
+    """Tests for BufferMemory history_redactions (read-time message transform)."""
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_applied_to_assistant_role_only(self):
+        """Redaction patterns rewrite assistant content; user content untouched."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message("What does bib:5 cover?", "user")
+        await memory.add_message(
+            "The toolkit [bib:5 · vendor · microsoft-agt] covers identity"
+            " and converges with NIST guidance (bib:3).",
+            "assistant",
+        )
+
+        context = await memory.get_context("test")
+        assert len(context) == 2
+
+        # User message passes through untouched — humans don't emit bib codes.
+        assert context[0]["role"] == "user"
+        assert context[0]["content"] == "What does bib:5 cover?"
+
+        # Assistant content has bracketed header AND bare bib:N redacted.
+        assert context[1]["role"] == "assistant"
+        assert context[1]["content"] == (
+            "The toolkit [prior citation] covers identity"
+            " and converges with NIST guidance ([prior citation])."
+        )
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_preserve_original_buffer(self):
+        """Redaction is read-time only — the stored buffer keeps the original."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        # get_context returns redacted view.
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites [prior citation] here."
+
+        # Underlying buffer is untouched.
+        assert memory.messages[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_default_empty_is_passthrough(self):
+        """No redactions configured ⇒ get_context returns content verbatim."""
+        memory = BufferMemory(max_messages=10)
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_patterns_applied_in_order(self):
+        """Patterns are applied in declared order — bracketed header before bare."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                # Bracketed header MUST come first (longer match) — if the
+                # bare-token rule ran first, it would consume the bib:N inside
+                # the brackets and leave a malformed "[ · vendor · …]".
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message(
+            "See [bib:5 · vendor · microsoft-agt] and also bib:3.",
+            "assistant",
+        )
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == (
+            "See [prior citation] and also [prior citation]."
+        )
+
+
 class TestBufferMemoryPopMessages:
     """Tests for BufferMemory.pop_messages()."""
 

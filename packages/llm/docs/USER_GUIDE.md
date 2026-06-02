@@ -787,6 +787,41 @@ response = await manager.complete()
 # If LLM returns "This is inappropriate", it becomes "This is [FILTERED]"
 ```
 
+#### HistoryRedactionMiddleware
+
+```python
+from dataknobs_llm.conversations import HistoryRedactionMiddleware
+
+# Block citation carry-over for a bot that emits [bib:N · …] headers
+# and bare bib:N references in its responses.
+redaction_mw = HistoryRedactionMiddleware(
+    redactions=[
+        # Bracketed header MUST come first (more specific) — if the
+        # bare-token rule ran first it would consume the bib:N inside
+        # the bracket and leave a malformed `[ · vendor · …]` header.
+        {"pattern": r"\[bib:\d+[^\]]*\]",
+         "replacement": "[prior citation]"},
+        {"pattern": r"\bbib:\d+\b",
+         "replacement": "[prior citation]"},
+    ],
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[redaction_mw],
+)
+```
+
+`process_request` rewrites assistant-role content as messages are
+forwarded to the LLM; `process_response` is a passthrough so the fresh
+response keeps its full citation set for rendering. The persisted
+assistant node keeps the original text — only the in-memory prompt-feed
+sees the redacted form. Pass `redact_roles=(...)` to widen the rewrite
+beyond the assistant role (the default `("assistant",)` matches the
+dominant leak source).
+
 #### ValidationMiddleware
 
 ```python

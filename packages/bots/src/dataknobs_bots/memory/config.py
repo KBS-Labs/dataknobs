@@ -20,6 +20,8 @@ from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
+from .base import HistoryRedaction
+
 
 @dataclass(frozen=True)
 class BufferMemoryConfig(StructuredConfig):
@@ -27,9 +29,14 @@ class BufferMemoryConfig(StructuredConfig):
 
     Attributes:
         max_messages: Maximum number of messages retained in the FIFO buffer.
+        history_redactions: Read-time redaction patterns applied to
+            assistant-role messages when ``get_context`` is called. Default
+            empty (passthrough). See :class:`HistoryRedaction` for the
+            shape and the read-time / assistant-only semantics.
     """
 
     max_messages: int = 10
+    history_redactions: list[HistoryRedaction] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

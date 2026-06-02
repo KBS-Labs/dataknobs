@@ -328,6 +328,17 @@ class TestConfigRoundTrips:
 
     def test_buffer_config_roundtrip(self) -> None:
         assert_structured_config_roundtrip(BufferMemoryConfig(max_messages=7))
+        # Round-trip with history_redactions populated — nested list[StructuredConfig].
+        from dataknobs_bots.memory import HistoryRedaction
+
+        assert_structured_config_roundtrip(
+            BufferMemoryConfig(
+                max_messages=7,
+                history_redactions=[
+                    HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[x]"),
+                ],
+            )
+        )
 
     def test_summary_config_roundtrip(self) -> None:
         assert_structured_config_roundtrip(

@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from .base import Memory
+from .base import Memory, _compile_history_redactions, apply_history_redactions
 from .config import BufferMemoryConfig
 
 
@@ -34,6 +34,9 @@ class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
         self.messages: deque[dict[str, Any]] = deque(
             maxlen=self.config.max_messages
         )
+        self._compiled_redactions = _compile_history_redactions(
+            self.config.history_redactions
+        )
 
     async def add_message(
         self, content: str, role: str, metadata: dict[str, Any] | None = None
@@ -51,15 +54,19 @@ class BufferMemory(StructuredConfigConsumer[BufferMemoryConfig], Memory):
         """Get all messages in buffer.
 
         The current_message parameter is not used in buffer memory since
-        we simply return all buffered messages in order.
+        we simply return all buffered messages in order. Configured
+        ``history_redactions`` are applied to assistant-role messages
+        in the returned copy; the underlying deque is not mutated.
 
         Args:
             current_message: Not used in buffer memory
 
         Returns:
-            List of all buffered messages
+            List of all buffered messages, with assistant content redacted
+            per the configured ``history_redactions`` (passthrough when
+            none are configured).
         """
-        return list(self.messages)
+        return apply_history_redactions(self.messages, self._compiled_redactions)
 
     async def clear(self) -> None:
         """Clear all messages from buffer."""

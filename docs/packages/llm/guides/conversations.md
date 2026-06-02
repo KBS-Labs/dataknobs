@@ -106,6 +106,56 @@ manager = await ConversationManager.create(
 )
 ```
 
+#### Citation Carry-Over Redaction (`HistoryRedactionMiddleware`)
+
+Bots that emit structured citation tokens — bracketed headers like
+`[bib:N · vendor · slug]`, bare `bib:N` references, footnote markers —
+carry those tokens forward in the persisted conversation tree. On the
+next turn, the model sees its own prior citations as part of conversation
+history and reuses them, even when *this* turn's retrieval no longer
+surfaces those sources. The result is a **citation carry-over leak**:
+bibs cited inline that are not in the current kept set.
+
+`HistoryRedactionMiddleware` rewrites assistant-role messages on their
+way INTO the LLM. The persisted tree, exports, and the response of the
+fresh turn are NOT mutated — only the in-memory message list this turn
+forwards to the provider:
+
+```python
+from dataknobs_llm.conversations import HistoryRedactionMiddleware
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[
+        HistoryRedactionMiddleware(
+            redactions=[
+                # Bracketed header MUST come first — it's the more
+                # specific pattern. If the bare-token rule ran first
+                # it would consume the `bib:N` inside the bracket and
+                # leave a malformed `[ · vendor · …]` header.
+                {"pattern": r"\[bib:\d+[^\]]*\]",
+                 "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b",
+                 "replacement": "[prior citation]"},
+            ],
+        ),
+    ],
+)
+```
+
+Pass an `redact_roles=(...,)` override to widen the rewrite beyond the
+assistant role (e.g. for tool-result messages that quote prior assistant
+output). The default is `("assistant",)` — users rarely type citation
+tokens, and system prompts may intentionally reference bibs for the
+bibliography menu.
+
+DynaBot users do not configure this middleware on the
+`ConversationManager` directly; they list it under
+`DynaBotConfig.conversation_middleware` and the bot forwards it to every
+manager it constructs.
+
 #### Per-Turn (Scoped) Middleware
 
 For middleware whose internal state must be fresh for each turn (e.g. a

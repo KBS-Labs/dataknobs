@@ -165,6 +165,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
+        conversation_middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -209,7 +210,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 When False, the KB is still available for tool-based access
                 but not automatically queried on every message.
             reasoning_strategy: Optional reasoning strategy
-            middleware: Optional list of Middleware instances
+            middleware: Optional list of bot-turn ``Middleware`` instances
+                (``dataknobs_bots.middleware.Middleware`` — turn-lifecycle
+                hooks).
+            conversation_middleware: Optional list of LLM-call
+                ``ConversationMiddleware`` instances
+                (``dataknobs_llm.conversations.ConversationMiddleware`` —
+                request/response wraps around ``llm.complete``). Forwarded
+                to every :class:`~dataknobs_llm.conversations.ConversationManager`
+                this bot constructs. Distinct from ``middleware`` because
+                the two interfaces are structurally different.
             system_prompt_name: Name of system prompt template (mutually exclusive with content)
             system_prompt_content: Inline system prompt content (mutually exclusive with name)
             system_prompt_rag_configs: RAG configurations for inline system prompts
@@ -258,6 +268,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     ("knowledge_base", knowledge_base),
                     ("reasoning_strategy", reasoning_strategy),
                     ("middleware", middleware),
+                    ("conversation_middleware", conversation_middleware),
                     ("system_prompt_name", system_prompt_name),
                     ("system_prompt_content", system_prompt_content),
                     ("system_prompt_rag_configs", system_prompt_rag_configs),
@@ -314,6 +325,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             kb_auto_context=kb_auto_context,
             reasoning_strategy=reasoning_strategy,
             middleware=middleware,
+            conversation_middleware=conversation_middleware,
             system_prompt_name=system_prompt_name,
             system_prompt_content=system_prompt_content,
             system_prompt_rag_configs=system_prompt_rag_configs,
@@ -359,6 +371,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
+        conversation_middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -406,6 +419,11 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._kb_auto_context = kb_auto_context
         self.reasoning_strategy = reasoning_strategy
         self.middleware = middleware or []
+        # LLM-call middleware list (ConversationMiddleware), distinct from
+        # bot-turn `self.middleware`. Forwarded to every ConversationManager
+        # this bot constructs. Set on BOTH the pre-built and config-driven
+        # paths so `_create_conversation_manager` can read it unconditionally.
+        self._conversation_middleware = conversation_middleware or []
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
         self.system_prompt_rag_configs = system_prompt_rag_configs
@@ -432,6 +450,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Middleware] | None = None,
+        conversation_middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -459,6 +478,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             kb_auto_context=kb_auto_context,
             reasoning_strategy=reasoning_strategy,
             middleware=middleware,
+            conversation_middleware=conversation_middleware,
             system_prompt_name=system_prompt_name,
             system_prompt_content=system_prompt_content,
             system_prompt_rag_configs=system_prompt_rag_configs,
@@ -971,6 +991,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     if mw:
                         middleware.append(mw)
 
+        # Create conversation_middleware (ConversationMiddleware — LLM-call
+        # wraps). Built the same way as ``middleware`` but lives in a
+        # separate list because the two are forwarded to different layers:
+        # ``self.middleware`` runs at bot-turn boundaries; this list is
+        # forwarded to every ``ConversationManager`` this bot creates, so
+        # it wraps the ``llm.complete`` call itself.
+        conversation_middleware: list[Any] = []
+        if self.config.conversation_middleware:
+            for mw_config in self.config.conversation_middleware:
+                mw = self._create_middleware(mw_config)
+                if mw is not None:
+                    conversation_middleware.append(mw)
+
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
         system_prompt_content = None
@@ -1012,6 +1045,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._kb_auto_context = kb_auto_context
         self.reasoning_strategy = reasoning_strategy
         self.middleware = middleware
+        self._conversation_middleware = conversation_middleware
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
         self.system_prompt_rag_configs = system_prompt_rag_configs
@@ -2798,6 +2832,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 llm=self.llm,
                 prompt_builder=self.prompt_builder,
                 storage=self.conversation_storage,
+                middleware=list(self._conversation_middleware),
             )
         except Exception:
             metadata = {
@@ -2815,6 +2850,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 storage=self.conversation_storage,
                 conversation_id=conv_id,
                 metadata=metadata,
+                middleware=list(self._conversation_middleware),
             )
 
             if self.system_prompt_name:

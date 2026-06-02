@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dataknobs_data import SyncDatabase
 

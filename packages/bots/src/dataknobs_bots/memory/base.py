@@ -1,7 +1,93 @@
 """Base memory interface for bot memory implementations."""
 
+from __future__ import annotations
+
+import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
+
+from dataknobs_common.structured_config import StructuredConfig
+
+
+@dataclass(frozen=True)
+class HistoryRedaction(StructuredConfig):
+    """One redaction pattern applied to assistant-role history at read time.
+
+    Memory backends that surface conversation history back into an LLM prompt
+    (``BufferMemory``, ``SummaryMemory``, …) can carry citation tokens or
+    other domain-specific identifiers forward verbatim. From the model's
+    view those tokens look like a pool of citable sources — even when this
+    turn's retrieval no longer includes them — and the model will reach for
+    them. ``HistoryRedaction`` is a configurable rewrite applied as
+    messages are served from memory (NOT as they are stored), so the
+    underlying buffer keeps the original text while the prompt-feed sees
+    a redacted form.
+
+    Attributes:
+        pattern: Regex pattern matched against assistant message content.
+        replacement: String substituted for each match. Defaults to ``""``
+            (strip the match). Use a placeholder like ``"[prior citation]"``
+            to preserve sentence flow.
+    """
+
+    pattern: str = ""
+    replacement: str = ""
+
+
+def _compile_history_redactions(
+    redactions: Sequence[HistoryRedaction],
+) -> list[tuple[re.Pattern[str], str]]:
+    """Compile a sequence of :class:`HistoryRedaction` once for reuse.
+
+    Backends call this in their ``_setup`` and cache the result; the cached
+    list is then handed to :func:`apply_history_redactions` per turn.
+    Patterns are applied in declared order — callers list the more specific
+    pattern (e.g. a bracketed header) before the more general bare token.
+    """
+    return [(re.compile(r.pattern), r.replacement) for r in redactions]
+
+
+def apply_history_redactions(
+    messages: Iterable[dict[str, Any]],
+    redactions: Sequence[tuple[re.Pattern[str], str]],
+    *,
+    redact_roles: frozenset[str] = frozenset({"assistant"}),
+) -> list[dict[str, Any]]:
+    """Return a redacted copy of ``messages`` for prompt-feed.
+
+    Each message whose ``role`` is in ``redact_roles`` (default:
+    ``"assistant"`` only) has its ``content`` rewritten by applying the
+    compiled ``(pattern, replacement)`` pairs in order. Other messages
+    pass through unchanged. The input iterable is not mutated.
+
+    Args:
+        messages: The raw messages to transform (typically from the
+            backend's internal buffer / retrieval).
+        redactions: Compiled patterns from :func:`_compile_history_redactions`.
+            Empty ⇒ messages are returned as a shallow-copied list with no
+            rewrite.
+        redact_roles: Roles whose ``content`` should be redacted. Defaults
+            to assistant-only — humans rarely emit bib codes themselves.
+
+    Returns:
+        A new list of new message dicts. Original dicts are not mutated.
+    """
+    if not redactions:
+        return list(messages)
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") in redact_roles:
+            content = msg.get("content", "")
+            for pattern, replacement in redactions:
+                content = pattern.sub(replacement, content)
+            new_msg = dict(msg)
+            new_msg["content"] = content
+            out.append(new_msg)
+        else:
+            out.append(dict(msg))
+    return out
 
 
 class Memory(ABC):
