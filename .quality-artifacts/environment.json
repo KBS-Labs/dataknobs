@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-02T01:26:47Z",
+  "timestamp": "2026-06-02T14:25:01Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.17 (Homebrew 2026-05-28 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "f39eab9a30797efe3ef894b7454d40a3c9e53037",
+  "git_branch": "sbk/memory-history-redaction",
+  "git_commit": "34cb868a9a8f5c661a69a8cbc874674f46fd58cb",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Read-time history redaction in `BufferMemory`.** New
+  `HistoryRedaction` frozen `StructuredConfig` (exported from
+  `dataknobs_bots.memory`) describes a `(pattern, replacement)` regex
+  rewrite. `BufferMemoryConfig` carries a new
+  `history_redactions: list[HistoryRedaction]` field (default empty —
+  passthrough), and `BufferMemory.get_context` applies the rewrites to
+  assistant-role messages as they are served to the prompt-feed. The
+  underlying deque keeps the original text; the UI, exports, and any
+  consumer reading `memory.messages` directly see the unredacted form.
+  Motivated by the *citation carry-over* leak — bots that emit structured
+  citation tokens (`[bib:N · …]` headers, bare `bib:N` references) would
+  otherwise carry those tokens forward as if they were a reusable source
+  pool on the next turn, even after the underlying retrieval set changed.
+  Patterns are applied in declared order, so list the more specific
+  pattern (a bracketed header) before the more general bare token.
+  `HistoryRedaction.pattern` is required and non-empty; each pattern is
+  eagerly compiled in `__post_init__` so an invalid regex surfaces at
+  config-load time rather than at backend construction time.
+- **`DynaBotConfig.conversation_middleware`.** New optional list of
+  middleware specs (same `{class, params, optional}` shape as
+  `middleware`) forwarded to every `ConversationManager` the bot
+  constructs. Distinct from `middleware` (bot-turn lifecycle hooks) —
+  `conversation_middleware` lives at the LLM-call boundary
+  (`ConversationMiddleware.process_request` / `process_response`) so it
+  can wrap the request/response that hits the provider. The two stay
+  separate fields because the interfaces are structurally different.
+  `DynaBot.from_config(...)` accepts a symmetric
+  `conversation_middleware=` kwarg that replaces the config-driven list
+  with pre-built instances (matching the existing `middleware=` kwarg);
+  the construction helper validates each spec's resolved class against
+  the expected interface so a misplaced spec (a bot-turn `Middleware`
+  listed under `conversation_middleware:`, or vice versa) is rejected at
+  config-load time with a clear error. First use: pairing with
+  `HistoryRedactionMiddleware` from `dataknobs-llm` to apply the same
+  citation-carry-over guard at the manager layer for bots whose memory
+  is not the leak surface.
+
 ## v0.7.0 - 2026-05-26
 
 ### Added

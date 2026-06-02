@@ -55,7 +55,16 @@ class DynaBotConfig(StructuredConfig):
             references) resolved against ``tool_definitions``.
         tool_definitions: Optional named tool definitions referenced by
             ``xref`` entries in ``tools``.
-        middleware: Optional list of middleware specs.
+        middleware: Optional list of bot-level middleware specs
+            (``dataknobs_bots.middleware.Middleware`` — turn-lifecycle hooks).
+        conversation_middleware: Optional list of LLM-call-level middleware
+            specs (``dataknobs_llm.conversations.ConversationMiddleware`` —
+            request/response wraps around ``llm.complete``). Forwarded to
+            every ``ConversationManager`` this bot constructs. Each spec is
+            a dict with ``class`` (dotted import path) and optional
+            ``params`` / ``optional`` keys, same shape as ``middleware``.
+            Distinct from ``middleware`` because the two interfaces are
+            structurally different (bot-turn hooks vs LLM-call wraps).
         system_prompt: Optional system-prompt configuration — a template
             name (smart-detected) or a dict with ``name`` / ``content`` /
             ``rag_configs`` / ``strict``.
@@ -107,6 +116,7 @@ class DynaBotConfig(StructuredConfig):
     tools: list[dict[str, Any]] = field(default_factory=list)
     tool_definitions: dict[str, Any] = field(default_factory=dict)
     middleware: list[dict[str, Any]] = field(default_factory=list)
+    conversation_middleware: list[dict[str, Any]] = field(default_factory=list)
     system_prompt: str | dict[str, Any] | None = None
 
     # --- scalars / misc ---

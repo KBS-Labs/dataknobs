@@ -7,12 +7,13 @@ from dataknobs_llm.conversations import (
     ConversationMiddleware,
     LoggingMiddleware,
     ContentFilterMiddleware,
+    HistoryRedactionMiddleware,
     ValidationMiddleware,
     MetadataMiddleware,
     RateLimitMiddleware,
     DataknobsConversationStorage,
 )
-from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse
+from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse, ToolCall
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 from dataknobs_llm.conversations.storage import ConversationState, ConversationNode
 from dataknobs_common.exceptions import RateLimitError
@@ -20,8 +21,6 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_structures.tree import Tree
 from pathlib import Path
 import tempfile
-from typing import List
-from datetime import datetime
 
 
 def create_test_prompts(prompt_dir: Path):
@@ -122,7 +121,7 @@ class TestLoggingMiddleware:
 
         with caplog.at_level(logging.INFO, logger="test_stream"):
             await manager.add_message(role="user", content="Test stream")
-            async for chunk in manager.stream_complete():
+            async for _chunk in manager.stream_complete():
                 pass  # Consume stream
 
         assert "Sending" in caplog.text
@@ -201,6 +200,227 @@ class TestContentFilterMiddleware:
         # Should not be marked as filtered
         assert response.metadata.get("content_filtered") is not True
         assert "[FILTERED]" not in response.content
+
+
+class TestHistoryRedactionMiddleware:
+    """Test HistoryRedactionMiddleware — read-time rewrite of assistant history.
+
+    The middleware exists to prevent the model from treating its own prior
+    citation tokens (``[bib:N · …]`` headers, bare ``bib:N``) as a pool of
+    reusable sources when those bibs are no longer in this turn's retrieved
+    set. ``process_request`` rewrites assistant-role content; ``process_response``
+    is a passthrough — the persisted assistant node keeps the original text.
+    """
+
+    @pytest.mark.asyncio
+    async def test_redacts_assistant_role_only(self) -> None:
+        """Assistant content is redacted; system and user pass through unchanged."""
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        messages = [
+            LLMMessage(role="system", content="bib:5 stays in system prompt"),
+            LLMMessage(role="user", content="What about bib:5?"),
+            LLMMessage(
+                role="assistant",
+                content=(
+                    "Earlier I cited [bib:5 · vendor · ms-agt] for identity"
+                    " and noted convergence with NIST guidance (bib:3)."
+                ),
+            ),
+        ]
+
+        out = await mw.process_request(messages, state=None)
+
+        assert out[0].content == "bib:5 stays in system prompt"
+        assert out[1].content == "What about bib:5?"
+        assert out[2].content == (
+            "Earlier I cited [prior citation] for identity"
+            " and noted convergence with NIST guidance ([prior citation])."
+        )
+        # Roles preserved.
+        assert [m.role for m in out] == ["system", "user", "assistant"]
+
+    @pytest.mark.asyncio
+    async def test_process_response_is_passthrough(self) -> None:
+        """The middleware never touches the LLM's response."""
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        response = LLMResponse(
+            content="Citing bib:5 in this turn's response.",
+            model="echo",
+            finish_reason="stop",
+        )
+
+        out = await mw.process_response(response, state=None)
+
+        assert out.content == "Citing bib:5 in this turn's response."
+
+    @pytest.mark.asyncio
+    async def test_default_empty_redactions_is_passthrough(self) -> None:
+        """No redactions configured ⇒ messages return verbatim."""
+        mw = HistoryRedactionMiddleware(redactions=[])
+        messages = [
+            LLMMessage(role="assistant", content="Cited [bib:5 · vendor · x]."),
+        ]
+
+        out = await mw.process_request(messages, state=None)
+
+        assert out[0].content == "Cited [bib:5 · vendor · x]."
+
+    @pytest.mark.asyncio
+    async def test_patterns_applied_in_declared_order(self) -> None:
+        """Bracketed-header pattern MUST run before bare-token pattern.
+
+        If the bare-token rule ran first it would consume ``bib:N`` inside
+        the bracket and leave a malformed ``[ · vendor · …]`` header.
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        messages = [
+            LLMMessage(
+                role="assistant",
+                content="See [bib:5 · vendor · ms-agt] and also bib:3.",
+            ),
+        ]
+
+        out = await mw.process_request(messages, state=None)
+
+        assert out[0].content == "See [prior citation] and also [prior citation]."
+
+    @pytest.mark.asyncio
+    async def test_returns_new_message_objects(self) -> None:
+        """Input messages must not be mutated (LLMMessage round-tripping)."""
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        original = LLMMessage(role="assistant", content="Cited bib:5 earlier.")
+
+        out = await mw.process_request([original], state=None)
+
+        # Original unchanged.
+        assert original.content == "Cited bib:5 earlier."
+        # Output redacted.
+        assert out[0].content == "Cited [prior citation] earlier."
+        # New object identity.
+        assert out[0] is not original
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_through_manager_complete(self, test_components) -> None:
+        """Through ConversationManager: the LLM sees redacted assistant history.
+
+        Uses EchoProvider's call tracking — what we assert against is the
+        actual message list the LLM provider received from
+        ``_prepare_completion → _run_pre_middleware``.
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            middleware=[mw],
+        )
+
+        # Seed conversation history with an assistant turn containing bib tokens.
+        await manager.add_message(role="user", content="What did Microsoft publish?")
+        await manager.add_message(
+            role="assistant",
+            content=(
+                "The Agent Governance Toolkit [bib:5 · vendor · ms-agt] covers"
+                " identity. NIST IR 8596 (bib:3) addresses gaps."
+            ),
+        )
+        # New user question for this turn.
+        await manager.add_message(
+            role="user",
+            content="Across those sources, is there a tension?",
+        )
+
+        await manager.complete()
+
+        last_call = test_components["llm"].get_last_call()
+        # Find the assistant-role message the LLM received.
+        seen_messages = last_call["messages"]
+        assistant_msgs = [
+            m for m in seen_messages
+            if (m.role if isinstance(m, LLMMessage) else m.get("role")) == "assistant"
+        ]
+        assert assistant_msgs, "expected at least one assistant-role message in LLM call"
+        first = assistant_msgs[0]
+        assistant_content = first.content if isinstance(first, LLMMessage) else first["content"]
+        # The bracketed bib header AND the bare bib token must both be redacted.
+        assert "bib:5" not in assistant_content
+        assert "bib:3" not in assistant_content
+        assert "[prior citation]" in assistant_content
+
+    @pytest.mark.asyncio
+    async def test_preserves_tool_calls_and_tool_call_id(self) -> None:
+        """Redacting assistant content must NOT drop tool_calls or tool_call_id.
+
+        In agent/tool-use loops, prior assistant turns carry ``tool_calls`` (the
+        invocation record) and downstream ``role="tool"`` messages carry
+        ``tool_call_id`` to pair results with calls. The middleware rebuilds the
+        message when rewriting content — if it forgets these fields the provider
+        sees a tool result with no matching invocation (OpenAI/Anthropic error)
+        or hallucinates around the missing tool calls.
+        """
+        mw = HistoryRedactionMiddleware(
+            redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+        tool_calls = [ToolCall(name="search", parameters={"q": "x"}, id="call_1")]
+        original = LLMMessage(
+            role="assistant",
+            content="Calling search after citing bib:5",
+            tool_calls=tool_calls,
+            tool_call_id="call_root",
+            name="agent",
+        )
+
+        out = await mw.process_request([original], state=None)
+
+        assert out[0].content == "Calling search after citing [prior citation]"
+        assert out[0].tool_calls == tool_calls, (
+            "tool_calls must be preserved when content is redacted"
+        )
+        assert out[0].tool_call_id == "call_root", (
+            "tool_call_id must be preserved when content is redacted"
+        )
+        assert out[0].name == "agent"
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_pattern_key(self) -> None:
+        """A misspelled / missing 'pattern' key fails up-front with a clear error.
+
+        Today a redaction dict without ``"pattern"`` raises ``KeyError`` mid-loop
+        on first request — far from the config-load boundary where the typo
+        actually lives. Validate up-front.
+        """
+        with pytest.raises(ValueError, match="pattern"):
+            HistoryRedactionMiddleware(
+                redactions=[
+                    {"patten": r"\bbib:\d+\b", "replacement": "[x]"},  # typo
+                ],
+            )
 
 
 class TestMetadataMiddleware:

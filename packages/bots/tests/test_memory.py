@@ -1,14 +1,18 @@
 """Tests for memory implementations."""
 
+import re
+
 import pytest
 
 from dataknobs_bots.bot.base import PROVIDER_ROLE_MAIN, PROVIDER_ROLE_SUMMARY_LLM
 from dataknobs_bots.memory import (
     BufferMemory,
+    HistoryRedaction,
     SummaryMemory,
     VectorMemory,
     create_memory_from_config,
 )
+from dataknobs_bots.memory.base import apply_history_redactions
 from dataknobs_data.vector.stores import VectorStoreFactory
 from dataknobs_llm import EchoProvider
 from dataknobs_llm.llm import LLMProviderFactory
@@ -77,6 +81,159 @@ class TestBufferMemory:
 
         context = await memory.get_context("test")
         assert context[0]["metadata"] == metadata
+
+
+class TestBufferMemoryHistoryRedaction:
+    """Tests for BufferMemory history_redactions (read-time message transform)."""
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_applied_to_assistant_role_only(self):
+        """Redaction patterns rewrite assistant content; user content untouched."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message("What does bib:5 cover?", "user")
+        await memory.add_message(
+            "The toolkit [bib:5 · vendor · microsoft-agt] covers identity"
+            " and converges with NIST guidance (bib:3).",
+            "assistant",
+        )
+
+        context = await memory.get_context("test")
+        assert len(context) == 2
+
+        # User message passes through untouched — humans don't emit bib codes.
+        assert context[0]["role"] == "user"
+        assert context[0]["content"] == "What does bib:5 cover?"
+
+        # Assistant content has bracketed header AND bare bib:N redacted.
+        assert context[1]["role"] == "assistant"
+        assert context[1]["content"] == (
+            "The toolkit [prior citation] covers identity"
+            " and converges with NIST guidance ([prior citation])."
+        )
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_preserve_original_buffer(self):
+        """Redaction is read-time only — the stored buffer keeps the original."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        # get_context returns redacted view.
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites [prior citation] here."
+
+        # Underlying buffer is untouched.
+        assert memory.messages[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_default_empty_is_passthrough(self):
+        """No redactions configured ⇒ get_context returns content verbatim."""
+        memory = BufferMemory(max_messages=10)
+
+        await memory.add_message("Cites bib:5 here.", "assistant")
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == "Cites bib:5 here."
+
+    @pytest.mark.asyncio
+    async def test_history_redactions_patterns_applied_in_order(self):
+        """Patterns are applied in declared order — bracketed header before bare."""
+        memory = BufferMemory(
+            max_messages=10,
+            history_redactions=[
+                # Bracketed header MUST come first (longer match) — if the
+                # bare-token rule ran first, it would consume the bib:N inside
+                # the brackets and leave a malformed "[ · vendor · …]".
+                {"pattern": r"\[bib:\d+[^\]]*\]", "replacement": "[prior citation]"},
+                {"pattern": r"\bbib:\d+\b", "replacement": "[prior citation]"},
+            ],
+        )
+
+        await memory.add_message(
+            "See [bib:5 · vendor · microsoft-agt] and also bib:3.",
+            "assistant",
+        )
+
+        context = await memory.get_context("test")
+        assert context[0]["content"] == (
+            "See [prior citation] and also [prior citation]."
+        )
+
+
+class TestHistoryRedactionConfig:
+    """Tests for the ``HistoryRedaction`` config dataclass itself.
+
+    These guard against footguns that surface as content corruption rather
+    than failures, which is why they live next to the read-time tests.
+    """
+
+    def test_empty_pattern_rejected(self) -> None:
+        """An empty regex matches every position — combined with any non-empty
+        replacement it shreds message content. Reject at config-load."""
+        with pytest.raises(ValueError, match="pattern"):
+            HistoryRedaction(pattern="", replacement="X")
+
+    def test_default_construction_rejected(self) -> None:
+        """No-arg ``HistoryRedaction()`` is unsafe (empty pattern default)."""
+        with pytest.raises(ValueError, match="pattern"):
+            HistoryRedaction()
+
+    def test_invalid_regex_rejected_at_construction(self) -> None:
+        """Invalid regex surfaces at config-load time, not consumer build time."""
+        with pytest.raises(re.error):
+            HistoryRedaction(pattern="(unclosed", replacement="")
+
+    def test_valid_construction_round_trips(self) -> None:
+        """Sanity: a well-formed pattern + replacement constructs and round-trips."""
+        r = HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[prior citation]")
+        assert r.pattern == r"\bbib:\d+\b"
+        assert r.replacement == "[prior citation]"
+        assert HistoryRedaction.from_dict(r.to_dict()) == r
+
+
+class TestApplyHistoryRedactions:
+    """Tests for the ``apply_history_redactions`` helper that powers
+    ``BufferMemory.get_context``. None-content tolerance matters for future
+    ``SummaryMemory`` / ``VectorMemory`` adopters of the same helper, where
+    assistant tool-call messages may carry ``content=None``.
+    """
+
+    def test_handles_none_content(self) -> None:
+        """``{"content": None}`` must not crash — tool-call assistant messages
+        legitimately carry no content. Coerce to empty string before regex sub."""
+        patterns = [(re.compile(r"\bbib:\d+\b"), "[x]")]
+        messages = [{"role": "assistant", "content": None}]
+
+        out = apply_history_redactions(messages, patterns)
+
+        # The pattern can't match anything on empty/None content, so the
+        # resulting content is the empty string (or stays None — but either
+        # way must not raise).
+        assert len(out) == 1
+        assert out[0]["role"] == "assistant"
+        # No TypeError raised — that's the load-bearing assertion.
+
+    def test_missing_content_key(self) -> None:
+        """Missing ``content`` key (already handled today) — covered for parity."""
+        patterns = [(re.compile(r"\bbib:\d+\b"), "[x]")]
+        messages = [{"role": "assistant"}]  # no content key at all
+
+        out = apply_history_redactions(messages, patterns)
+
+        assert len(out) == 1
+        assert out[0]["role"] == "assistant"
 
 
 class TestBufferMemoryPopMessages:

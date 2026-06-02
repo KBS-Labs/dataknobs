@@ -259,3 +259,171 @@ class TestFromConfigCombinedInjection:
         assert bot.llm is shared
         assert bot.middleware == [tracker]
         assert len(tracker.turns) == 1
+
+
+# ---------------------------------------------------------------------------
+# ConversationMiddleware injection tests (LLM-call wraps, distinct from
+# the bot-turn `middleware` channel above).
+# ---------------------------------------------------------------------------
+
+
+class TestFromConfigConversationMiddleware:
+    """from_config() supports ConversationMiddleware via both config and kwarg.
+
+    These guard:
+      - the config-driven path (``conversation_middleware:`` list of specs)
+        actually builds and forwards LLM-call wraps to every
+        ``ConversationManager`` the bot creates,
+      - the ``conversation_middleware=`` kwarg replaces the config-driven
+        list symmetrically with the existing ``middleware=`` kwarg, and
+      - a type-mismatched spec (a bot-turn ``Middleware`` listed under
+        ``conversation_middleware:``) is rejected at config-load with a
+        clear error rather than crashing on first message.
+    """
+
+    @pytest.mark.asyncio
+    async def test_config_driven_conversation_middleware_forwarded(self) -> None:
+        """A spec under ``conversation_middleware:`` reaches the ConversationManager.
+
+        The PR's load-bearing claim is that listing a ConversationMiddleware
+        under ``conversation_middleware:`` ends up wrapping the LLM call
+        — this verifies the plumbing end-to-end via the manager's
+        ``middleware`` list.
+        """
+        from dataknobs_llm.conversations import HistoryRedactionMiddleware
+
+        bot = await DynaBot.from_config(
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "conversation_middleware": [
+                    {
+                        "class": (
+                            "dataknobs_llm.conversations."
+                            "HistoryRedactionMiddleware"
+                        ),
+                        "params": {
+                            "redactions": [
+                                {"pattern": r"\bbib:\d+\b", "replacement": "[x]"},
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+        async with bot:
+            ctx = BotContext(conversation_id="conv-1", client_id="t1")
+            # First chat creates the manager; we then inspect its middleware.
+            await bot.chat("hello", ctx)
+            manager = bot.get_conversation_manager(ctx.conversation_id)
+            assert any(
+                isinstance(mw, HistoryRedactionMiddleware)
+                for mw in manager.middleware
+            ), (
+                "HistoryRedactionMiddleware from conversation_middleware: "
+                "should be wired onto the ConversationManager"
+            )
+
+    @pytest.mark.asyncio
+    async def test_conversation_middleware_kwarg_overrides_config(self) -> None:
+        """``conversation_middleware=`` kwarg replaces config-driven middleware."""
+        from dataknobs_llm.conversations import HistoryRedactionMiddleware
+
+        injected = HistoryRedactionMiddleware(
+            redactions=[{"pattern": r"\bsecret:\d+\b", "replacement": "[s]"}],
+        )
+
+        bot = await DynaBot.from_config(
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "conversation_middleware": [
+                    {
+                        "class": (
+                            "dataknobs_llm.conversations."
+                            "HistoryRedactionMiddleware"
+                        ),
+                        "params": {
+                            "redactions": [
+                                {"pattern": r"\bbib:\d+\b", "replacement": "[b]"},
+                            ],
+                        },
+                    },
+                ],
+            },
+            conversation_middleware=[injected],
+        )
+        async with bot:
+            ctx = BotContext(conversation_id="conv-2", client_id="t1")
+            await bot.chat("hello", ctx)
+            manager = bot.get_conversation_manager(ctx.conversation_id)
+            # Only the injected instance — config-driven list is replaced.
+            convo_mws = [
+                m for m in manager.middleware
+                if isinstance(m, HistoryRedactionMiddleware)
+            ]
+            assert len(convo_mws) == 1
+            assert convo_mws[0] is injected
+
+    @pytest.mark.asyncio
+    async def test_empty_conversation_middleware_kwarg_disables(self) -> None:
+        """Empty kwarg list explicitly disables config-driven middleware."""
+        from dataknobs_llm.conversations import HistoryRedactionMiddleware
+
+        bot = await DynaBot.from_config(
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "conversation_middleware": [
+                    {
+                        "class": (
+                            "dataknobs_llm.conversations."
+                            "HistoryRedactionMiddleware"
+                        ),
+                        "params": {
+                            "redactions": [
+                                {"pattern": r"\bbib:\d+\b", "replacement": "[b]"},
+                            ],
+                        },
+                    },
+                ],
+            },
+            conversation_middleware=[],
+        )
+        async with bot:
+            ctx = BotContext(conversation_id="conv-3", client_id="t1")
+            await bot.chat("hello", ctx)
+            manager = bot.get_conversation_manager(ctx.conversation_id)
+            convo_mws = [
+                m for m in manager.middleware
+                if isinstance(m, HistoryRedactionMiddleware)
+            ]
+            assert convo_mws == []
+
+    @pytest.mark.asyncio
+    async def test_type_mismatch_rejected_at_config_load(self) -> None:
+        """A bot-turn Middleware listed under conversation_middleware: is rejected.
+
+        Without the up-front isinstance check, the misplaced spec would
+        crash at first message with ``AttributeError`` (no ``process_request``
+        on ``Middleware``). The fix raises ``ConfigurationError`` at
+        config-load time with a message that names the misplacement.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="conversation_middleware"):
+            await DynaBot.from_config(
+                {
+                    "llm": {"provider": "echo", "model": "test"},
+                    "conversation_storage": {"backend": "memory"},
+                    "conversation_middleware": [
+                        # A bot-turn Middleware in the LLM-call slot.
+                        {
+                            "class": (
+                                "dataknobs_bots.middleware.logging."
+                                "LoggingMiddleware"
+                            ),
+                        },
+                    ],
+                },
+            )

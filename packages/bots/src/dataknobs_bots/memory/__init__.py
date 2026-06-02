@@ -19,7 +19,7 @@ from .bank import (
     MemoryBank,
     SyncBankProtocol,
 )
-from .base import Memory
+from .base import HistoryRedaction, Memory
 from .buffer import BufferMemory
 from .catalog import ArtifactBankCatalog
 from .composite import CompositeMemory
@@ -51,6 +51,7 @@ __all__ = [
     "CompositeMemory",
     "CompositeMemoryConfig",
     "EmptyBankProxy",
+    "HistoryRedaction",
     "Memory",
     "MemoryBank",
     "SummaryMemory",
