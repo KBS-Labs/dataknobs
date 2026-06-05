@@ -229,7 +229,10 @@ print(json.dumps(data["packages"]))
             printf '%s\n' "$CHANGED_INFO" >&2
             exit 1
         fi
-        mapfile -t _changed_fields <<< "$CHANGED_PARSED"
+        _changed_fields=()
+        while IFS= read -r _line; do
+            _changed_fields+=("$_line")
+        done <<< "$CHANGED_PARSED"
         CHANGED_PACKAGES="${_changed_fields[0]}"
         DOCS_CHANGED="${_changed_fields[1]}"
         CHANGE_MODE="${_changed_fields[2]}"
