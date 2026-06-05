@@ -170,6 +170,7 @@ def create_reasoning_from_config(
     *,
     knowledge_base: Any | None = None,
     prompt_resolver: PromptResolver | None = None,
+    prompt_envelope: Any | None = None,
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
@@ -194,6 +195,14 @@ def create_reasoning_from_config(
             for library-based prompt resolution.  Forwarded to strategies
             that support prompt customization (grounded, hybrid, wizard,
             focus guard).
+        prompt_envelope: Optional
+            :class:`~dataknobs_bots.prompts.PromptEnvelope` chosen
+            bot-wide. Forwarded to strategies that wrap context blocks
+            in their own prompts: ``grounded`` consumes it directly to
+            render the synthesis-prompt KB block; ``hybrid`` forwards
+            it to its embedded grounded child so the same style applies.
+            Strategies that don't consume it ignore it via the
+            components-channel signature-aware delivery.
 
     Returns:
         Configured reasoning strategy instance.
@@ -221,4 +230,5 @@ def create_reasoning_from_config(
         config=config,
         knowledge_base=knowledge_base,
         prompt_resolver=prompt_resolver,
+        prompt_envelope=prompt_envelope,
     )

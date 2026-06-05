@@ -81,6 +81,8 @@ class KnowledgeBase(ABC):
         self,
         results: list[dict[str, Any]],
         wrap_in_tags: bool = True,
+        *,
+        envelope: Any = None,
     ) -> str:
         """Format query results for inclusion in an LLM prompt.
 
@@ -89,16 +91,27 @@ class KnowledgeBase(ABC):
 
         Args:
             results: Query results from :meth:`query`.
-            wrap_in_tags: Whether to wrap output in XML-style tags.
+            wrap_in_tags: Whether to wrap output. When ``False``, the
+                body is returned unwrapped. When ``True``: if
+                ``envelope`` is provided, the envelope renders the
+                "Knowledge base" section; otherwise the legacy XML
+                ``<knowledge_base>...</knowledge_base>`` shape is
+                preserved for direct callers that have not migrated to
+                the envelope-aware API.
+            envelope: Optional
+                :class:`~dataknobs_bots.prompts.PromptEnvelope` used to
+                render the wrapper when ``wrap_in_tags`` is ``True``.
 
         Returns:
             Formatted context string.
         """
         texts = [r.get("text", "") for r in results]
         body = "\n\n".join(texts)
-        if wrap_in_tags:
-            return f"<knowledge_base>\n{body}\n</knowledge_base>"
-        return body
+        if not wrap_in_tags:
+            return body
+        if envelope is not None:
+            return envelope.knowledge_base_section(body)
+        return f"<knowledge_base>\n{body}\n</knowledge_base>"
 
     def providers(self) -> dict[str, Any]:
         """Return LLM providers managed by this knowledge base, keyed by role.

@@ -234,16 +234,39 @@ class ContextFormatter:
 
         return "\n\n---\n\n".join(formatted_groups)
 
-    def wrap_for_prompt(self, context: str, tag: str = "knowledge_base") -> str:
-        """Wrap formatted context in XML tags for prompt injection.
+    def wrap_for_prompt(
+        self,
+        context: str,
+        tag: str = "knowledge_base",
+        *,
+        envelope: Any = None,
+    ) -> str:
+        """Wrap formatted context for prompt injection.
 
         Args:
-            context: Formatted context string
-            tag: Tag name to wrap with
+            context: Formatted context string.
+            tag: Tag name used by the legacy XML wrapper and as the
+                ``tag`` passed to the envelope when one is supplied.
+            envelope: Optional
+                :class:`~dataknobs_bots.prompts.PromptEnvelope`. When
+                supplied, the envelope renders the wrapper section
+                (e.g. ``"## Knowledge base"``); otherwise the legacy
+                ``<{tag}>...</{tag}>`` shape is returned for direct
+                callers that have not migrated.
 
         Returns:
-            Context wrapped in XML tags
+            Context wrapped in the envelope's style, or the legacy XML
+            shape, or ``""`` if ``context`` is empty.
         """
         if not context:
             return ""
+        if envelope is not None:
+            # Delegate label resolution to the envelope — canonical
+            # tags like ``"knowledge_base"`` produce ``"Knowledge base"``
+            # via :data:`~dataknobs_bots.prompts.SECTION_LABELS`, matching
+            # the literal label used everywhere else in the codebase.
+            # Unknown tags still fall back to a derivation
+            # (``"custom_context"`` → ``"Custom context"``) so direct
+            # callers with arbitrary tags keep working.
+            return envelope.section_for_tag(tag, context)
         return f"<{tag}>\n{context}\n</{tag}>"

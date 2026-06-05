@@ -177,6 +177,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
         tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
         prompt_resolver: PromptResolver | None = None,
+        prompt_envelope: str | None = None,
         *,
         _components: Mapping[str, Any] | None = None,
         **kwargs: Any,
@@ -252,6 +253,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 prompts from the composed prompt library.  Built automatically
                 by ``from_config()``; pass explicitly only when constructing
                 bots programmatically with custom libraries.
+            prompt_envelope: Envelope style applied to the auto-context
+                user prompt and the grounded-reasoning synthesis-prompt KB
+                block. One of ``"markdown"`` (default), ``"xml"``, or
+                ``"prose"`` (case-insensitive). Mirrors
+                ``DynaBotConfig.prompt_envelope`` for the pre-built shape
+                so a programmatically-constructed bot can pin the legacy
+                ``"xml"`` shape without going through a config mapping.
         """
         # Config-driven shape: from_config / from_config_async / from_components
         # deliver a typed DynaBotConfig (or a config Mapping) in the first
@@ -275,6 +283,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     ("system_prompt_rag_configs", system_prompt_rag_configs),
                     ("context_transform", context_transform),
                     ("prompt_resolver", prompt_resolver),
+                    ("prompt_envelope", prompt_envelope),
                 )
                 if value is not None
             }
@@ -302,18 +311,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # there for both shapes. A callable context_transform is not
         # serializable, so it is omitted from the snapshot and assigned to
         # the live attribute below.
-        snapshot = DynaBotConfig(
-            llm={
+        # Build snapshot kwargs, omitting prompt_envelope when the caller
+        # did not specify it so the DynaBotConfig default applies (one
+        # source of truth for the default; pre-built and config paths
+        # cannot drift).
+        snapshot_kwargs: dict[str, Any] = {
+            "llm": {
                 "temperature": default_temperature,
                 "max_tokens": default_max_tokens,
             },
-            max_tool_iterations=max_tool_iterations,
-            tool_timeout=tool_timeout,
-            tool_loop_timeout=tool_loop_timeout,
-            context_transform=(
+            "max_tool_iterations": max_tool_iterations,
+            "tool_timeout": tool_timeout,
+            "tool_loop_timeout": tool_loop_timeout,
+            "context_transform": (
                 context_transform if isinstance(context_transform, str) else None
             ),
-        )
+        }
+        if prompt_envelope is not None:
+            snapshot_kwargs["prompt_envelope"] = prompt_envelope
+        snapshot = DynaBotConfig(**snapshot_kwargs)
         super().__init__(snapshot, _components=_components)
         self._prebuilt = True
         self._assign_collaborators(
@@ -355,6 +371,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # pre-built shape overrides this with a directly-supplied callable.
         self._context_transform = self._resolve_context_transform(
             self.config.context_transform
+        )
+        # Build the prompt envelope once. The string value was validated
+        # by DynaBotConfig.__post_init__, so the enum lookup here cannot
+        # raise on a valid snapshot.
+        from dataknobs_bots.prompts.envelope import (
+            PromptEnvelope,
+            PromptEnvelopeStyle,
+        )
+
+        self._prompt_envelope = PromptEnvelope(
+            PromptEnvelopeStyle(self.config.prompt_envelope)
         )
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
@@ -966,6 +993,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 reasoning_config,
                 knowledge_base=knowledge_base,
                 prompt_resolver=prompt_resolver,
+                prompt_envelope=self._prompt_envelope,
             )
 
             # Config-driven source construction for strategies that
@@ -2916,38 +2944,55 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                       If provided, this is used instead of the message for RAG.
 
         Returns:
-            Message augmented with context
+            Message augmented with context, wrapped in the style chosen
+            by ``DynaBotConfig.prompt_envelope`` (default markdown). See
+            :class:`~dataknobs_bots.prompts.PromptEnvelope`.
         """
-        contexts = []
+        envelope = self._prompt_envelope
+        sections: list[str] = []
 
-        # Add knowledge context (skip when auto_context is disabled —
-        # KB remains available for tool-based access)
+        # Knowledge context (skip when auto_context is disabled — KB
+        # remains available for tool-based access). Ask the KB layer
+        # for the body text and let the envelope decide the wrapper
+        # shape; this keeps the wrap decision in one place instead of
+        # duplicating it inside every KnowledgeBase implementation.
         if self.knowledge_base and self._kb_auto_context:
-            # Use explicit rag_query if provided, otherwise use message
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                kb_context = self.knowledge_base.format_context(
-                    kb_results, wrap_in_tags=True
+                kb_body = self.knowledge_base.format_context(
+                    kb_results, wrap_in_tags=False
                 )
                 if self._context_transform:
-                    kb_context = self._context_transform(kb_context)
-                contexts.append(kb_context)
+                    kb_body = self._context_transform(kb_body)
+                sections.append(envelope.knowledge_base_section(kb_body))
 
-        # Add memory context
+        # Conversation history context.
         if self.memory:
             mem_results = await self.memory.get_context(message)
             if mem_results:
-                mem_context = "\n\n".join([r["content"] for r in mem_results])
+                mem_body = "\n\n".join(r["content"] for r in mem_results)
                 if self._context_transform:
-                    mem_context = self._context_transform(mem_context)
-                contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
+                    mem_body = self._context_transform(mem_body)
+                sections.append(envelope.conversation_history_section(mem_body))
 
-        # Build full message with clear separation
-        if contexts:
-            context_section = "\n\n".join(contexts)
-            return f"{context_section}\n\n<question>\n{message}\n</question>"
-        return message
+        # No context sections → return the bare message. Wrapping a
+        # lone question with no surrounding context adds no signal and
+        # would surprise direct callers whose configs have neither KB
+        # auto-context nor memory.
+        if not sections:
+            return message
+
+        # Skip the question section when the message is empty. An
+        # empty body would render to ``""`` (the envelope's empty-body
+        # contract) and join with a trailing joiner separator,
+        # producing a malformed prompt ending in ``"\n\n---\n\n"``
+        # (markdown) or ``"\n\n"`` (xml/prose). No real caller passes
+        # an empty message, but the guard keeps the output well-formed
+        # for the contrived (e.g. RAG-query-only) case.
+        if message:
+            sections.append(envelope.question_section(message))
+        return envelope.joiner().join(sections)
 
     @staticmethod
     def _resolve_tool(

@@ -432,9 +432,11 @@ Remember to always verify customer identity before sharing sensitive information
         # KB should be initialized (available for tools)
         assert bot.knowledge_base is not None
 
-        # But auto-context should NOT inject KB results
+        # But auto-context should NOT inject KB results — no envelope of
+        # any style should appear.
         message = await bot._build_message_with_context("How do I configure memory?")
         assert "<knowledge_base>" not in message
+        assert "## Knowledge base" not in message
         assert message == "How do I configure memory?"
 
     @pytest.mark.asyncio
@@ -462,9 +464,9 @@ Remember to always verify customer identity before sharing sensitive information
         # KB auto-context should be on by default
         assert bot._kb_auto_context is True
 
-        # Context should include KB results
+        # Context should include KB results (default markdown envelope)
         message = await bot._build_message_with_context("How do I configure memory?")
-        assert "<question>" in message
+        assert "## Question" in message
 
     @pytest.mark.asyncio
     async def test_prepare_chat_stores_raw_content_when_augmented(self):

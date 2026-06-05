@@ -443,8 +443,8 @@ class TestWizardReasoning:
         must prefer it so extraction sees clean input.
         """
         augmented = (
-            "<knowledge_base>\n[1] Some KB result\n</knowledge_base>\n\n"
-            "<question>\nCreate a grammar tutor\n</question>"
+            "## Knowledge base\n\n[1] Some KB result\n\n---\n\n"
+            "## Question\n\nCreate a grammar tutor"
         )
         raw = "Create a grammar tutor"
         await conversation_manager.add_message(
@@ -484,8 +484,8 @@ class TestWizardReasoning:
 
         # First user message — augmented with KB context
         augmented_1 = (
-            "<knowledge_base>\nKB results\n</knowledge_base>\n\n"
-            "<question>\nI want a math tutor\n</question>"
+            "## Knowledge base\n\nKB results\n\n---\n\n"
+            "## Question\n\nI want a math tutor"
         )
         await conversation_manager.add_message(
             role="user",
@@ -498,8 +498,8 @@ class TestWizardReasoning:
 
         # Second user message — also augmented
         augmented_2 = (
-            "<knowledge_base>\nMore KB results\n</knowledge_base>\n\n"
-            "<question>\nEnable hints please\n</question>"
+            "## Knowledge base\n\nMore KB results\n\n---\n\n"
+            "## Question\n\nEnable hints please"
         )
         await conversation_manager.add_message(
             role="user",
@@ -513,7 +513,7 @@ class TestWizardReasoning:
 
         # Should use raw messages, not augmented ones
         assert "I want a math tutor" in context
-        assert "<knowledge_base>" not in context
+        assert "## Knowledge base" not in context
         # Last message excluded (it's the "current" one)
         assert "Enable hints please" not in context
 
@@ -537,7 +537,7 @@ class TestWizardReasoning:
         # Second message — augmented
         await conversation_manager.add_message(
             role="user",
-            content="<knowledge_base>KB</knowledge_base>\n\n<question>Math</question>",
+            content="## Knowledge base\n\nKB\n\n---\n\n## Question\n\nMath",
             metadata={"raw_content": "Math"},
         )
         await conversation_manager.add_message(
@@ -555,7 +555,7 @@ class TestWizardReasoning:
 
         assert "Hello" in context
         assert "Math" in context
-        assert "<knowledge_base>" not in context
+        assert "## Knowledge base" not in context
         assert "Done" not in context
 
 

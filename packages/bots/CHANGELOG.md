@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`DynaBotConfig.prompt_envelope` selects the user-prompt and
+  synthesis-system-prompt envelope style.** `"markdown"` (default)
+  renders the auto-context user prompt as `## Knowledge base` /
+  `## Conversation history` / `## Question` sections separated by
+  `\n\n---\n\n`, and renders the grounded-reasoning synthesis system
+  prompt's knowledge-base block as `## Knowledge base\n\n...`. `"xml"`
+  reproduces the previous shape byte-for-byte (`<knowledge_base>` /
+  `<conversation_history>` / `<question>` blocks separated by `\n\n`,
+  and the legacy `<knowledge_base>...</knowledge_base>` synthesis-prompt
+  block). `"prose"` renders bare `Label:\n\nbody` sections.
+- New `dataknobs_bots.prompts.PromptEnvelope` and
+  `PromptEnvelopeStyle` re-exports — a small typed helper used at
+  every site that wraps a labeled context block, so the wrap style is
+  chosen in one place and matches across the user prompt and the
+  synthesis system prompt.
+- `KnowledgeBase.format_context`, `RAGKnowledgeBase.format_context`,
+  and `ContextFormatter.wrap_for_prompt` accept a keyword-only
+  `envelope=` argument. When supplied, the wrapper renders in the
+  envelope's style; when omitted, `wrap_in_tags=True` still produces
+  the legacy `<knowledge_base>...</knowledge_base>` shape byte-for-byte
+  so direct callers are unchanged.
+
+### Changed
+
+- The bot-assembled user prompt and the grounded-reasoning synthesis
+  system prompt now default to markdown envelopes. Small
+  instruction-tuned models can complete an XML-wrapped input shape by
+  emitting a matching wrapper element around their reply (for example
+  `<response>...</response>`); switching the default away from XML
+  removes that mirroring cue. Model output bytes will shift on the
+  next turn for consumers on the default. Pin
+  `prompt_envelope: "xml"` to defer the change.
+- The `grounded.synthesis.kb_wrapper` library prompt key is no longer
+  registered. `GroundedReasoning.build_synthesis_system_prompt` now
+  wraps the knowledge-base block through the bot-wide
+  `PromptEnvelope`, so the wrap shape is selected by
+  `DynaBotConfig.prompt_envelope` instead of by a separate library key.
+  Consumers that overrode `grounded.synthesis.kb_wrapper` in a custom
+  prompt library should switch to selecting the envelope style.
+- **`context_transform` now receives the unwrapped KB body.** A
+  consequence of moving the wrap decision into `PromptEnvelope`: the
+  bot now asks the knowledge-base layer for an unwrapped body and
+  hands that to `context_transform` *before* the envelope wraps it
+  (in any style). Pre-fix, the transform saw
+  `"<knowledge_base>\n...\n</knowledge_base>"` because the bot wrapped
+  before transforming. Consumers whose `context_transform` callable
+  pattern-matched on the XML wrappers (e.g. fenced or stripped them)
+  must update their transform to operate on the bare body. Memory
+  context (`conversation_history`) is unaffected — pre-fix already
+  applied the transform to the unwrapped body before wrapping.
+- **`prompt_envelope` validation is case-insensitive.** YAML configs
+  written by humans now accept `"XML"`, `"Markdown"`, `"PROSE"`, etc.
+  Values are normalized to lowercase on the frozen snapshot, so
+  downstream lookups continue to match the lowercase enum values.
+- **`DynaBot.HybridReasoning` now forwards `prompt_envelope` to its
+  grounded child.** A hybrid-strategy bot configured with
+  `prompt_envelope: "xml"` (or `"prose"`) had been silently rendering
+  the synthesis-prompt KB block with the grounded child's default
+  markdown envelope because hybrid did not propagate the collaborator.
+  The envelope now reaches the grounded child unchanged.
+
+### Fixed
+
+- The pre-built `DynaBot(llm=provider, prompt_builder=..., ...)`
+  constructor now accepts a `prompt_envelope` keyword. Programmatic
+  construction (tests, `BotTestHarness`, advanced callers) can pin a
+  non-default envelope without going through a config mapping; absent
+  the keyword, the `DynaBotConfig` default `"markdown"` applies, so
+  every existing call site is unchanged.
+
 ## v0.7.1 - 2026-06-02
 
 ### Added

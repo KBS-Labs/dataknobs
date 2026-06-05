@@ -4,14 +4,19 @@ Prompt keys defined here:
 
 - ``grounded.synthesis`` — Meta-prompt composing synthesis fragments (Jinja2 conditionals)
 - ``grounded.synthesis.*`` — Individual synthesis fragments
-- ``grounded.synthesis.kb_wrapper`` — Knowledge base XML wrapper
 - ``grounded.provenance_template`` — Default provenance template (Jinja2)
 
 The grounded synthesis meta-prompt uses Jinja2 conditionals to include
 fragments based on configuration (require_citations, allow_parametric, etc.).
 
+The knowledge-base wrapper is no longer rendered through this library —
+:class:`~dataknobs_bots.reasoning.grounded.GroundedReasoning` now wraps
+the KB block via the bot-wide
+:class:`~dataknobs_bots.prompts.PromptEnvelope` so the wrap shape is
+chosen in one place and matches the user-prompt envelope.
+
 Consumer: ``GroundedReasoning.build_synthesis_system_prompt()`` resolves
-these keys via the prompt resolver with inline fallback.
+the synthesis-text keys via the prompt resolver with inline fallback.
 """
 
 from dataknobs_llm.prompts.base.types import PromptTemplateDict
@@ -66,11 +71,6 @@ GROUNDED_SYNTHESIS_SUPPLEMENT: PromptTemplateDict = {
         "knowledge base is insufficient, but clearly distinguish "
         "KB-grounded claims from general knowledge."
     ),
-    "template_syntax": "format",
-}
-
-GROUNDED_SYNTHESIS_KB_WRAPPER: PromptTemplateDict = {
-    "template": "\n\n<knowledge_base>\n{kb_context}\n</knowledge_base>",
     "template_syntax": "format",
 }
 
@@ -137,7 +137,6 @@ GROUNDED_PROMPT_KEYS: dict[str, PromptTemplateDict] = {
     "grounded.synthesis.bridge": GROUNDED_SYNTHESIS_BRIDGE,
     "grounded.synthesis.strict": GROUNDED_SYNTHESIS_STRICT,
     "grounded.synthesis.supplement": GROUNDED_SYNTHESIS_SUPPLEMENT,
-    "grounded.synthesis.kb_wrapper": GROUNDED_SYNTHESIS_KB_WRAPPER,
     "grounded.synthesis": GROUNDED_SYNTHESIS_META,
     "grounded.provenance_template": GROUNDED_PROVENANCE_TEMPLATE,
 }

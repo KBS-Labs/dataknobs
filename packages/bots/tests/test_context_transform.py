@@ -66,9 +66,10 @@ async def test_no_context_transform_default_behaviour() -> None:
         await harness.chat("Recall")
 
         content = _get_last_user_content(harness.bot)
-        # Memory content present but not fenced
+        # Memory content present but not fenced — the default markdown
+        # envelope is what _build_message_with_context produces.
         assert "[DATA_START]" not in content
-        assert "<conversation_history>" in content
+        assert "## Conversation history" in content
 
 
 @pytest.mark.asyncio
@@ -105,3 +106,53 @@ async def test_context_transform_constructor_param() -> None:
         context_transform=strip_system_tags,
     )
     assert bot._context_transform is strip_system_tags
+
+
+@pytest.mark.asyncio
+async def test_context_transform_receives_unwrapped_kb_body() -> None:
+    """``context_transform`` sees the unwrapped KB body, not the envelope-wrapped block.
+
+    Behavior change in the envelope refactor: pre-fix, the transform
+    received a ``<knowledge_base>...</knowledge_base>``-wrapped string
+    because the bot called ``format_context(wrap_in_tags=True)`` before
+    handing it to the transform. Post-fix, the envelope owns the
+    wrapper, so the transform receives the unwrapped body. Consumers
+    that pattern-matched on the XML wrappers inside their transform
+    must adapt; this test pins the new contract.
+    """
+    from pathlib import Path
+
+    captured: list[str] = []
+
+    def capture(content: str) -> str:
+        captured.append(content)
+        return content
+
+    test_docs = Path(__file__).parent / "test_docs"
+    async with await BotTestHarness.create(
+        bot_config={
+            "llm": {"provider": "echo", "model": "echo-test"},
+            "conversation_storage": {"backend": "memory"},
+            "knowledge_base": {
+                "enabled": True,
+                "type": "rag",
+                "vector_store": {"backend": "memory", "dimensions": 384},
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+                "documents_path": str(test_docs),
+            },
+            "context_transform": capture,
+        },
+        main_responses=["Answer."],
+    ) as harness:
+        await harness.chat("How do I configure memory?")
+
+    assert captured, "context_transform was not invoked"
+    kb_input = captured[0]
+    # Pre-fix this would have contained ``<knowledge_base>`` and
+    # ``</knowledge_base>``. The contract is now that the envelope
+    # adds those (in XML mode) or markdown headings (in markdown mode)
+    # *after* the transform runs.
+    assert "<knowledge_base>" not in kb_input
+    assert "</knowledge_base>" not in kb_input
+    assert "## Knowledge base" not in kb_input

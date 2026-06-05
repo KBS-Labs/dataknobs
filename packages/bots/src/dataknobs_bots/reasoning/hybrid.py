@@ -101,13 +101,17 @@ class HybridReasoning(
     def _setup(self) -> None:
         """Build the grounded + ReAct child strategies and auto-wrap the KB.
 
-        The ``prompt_resolver`` collaborator (from the mixin's
-        ``components`` channel) is forwarded to the grounded child via its
-        own mixin entry point; the already-typed ``config.grounded`` is
-        passed through ``GroundedReasoning.from_config`` without a dict
-        round-trip.  The ReAct child takes a typed ``ReActReasoningConfig``
-        directly (no collaborators).  When a ``knowledge_base`` is injected
-        and the config does not already declare a ``vector_kb`` source, it
+        The ``prompt_resolver`` and ``prompt_envelope`` collaborators
+        (from the mixin's ``components`` channel) are forwarded to the
+        grounded child via its own mixin entry point so the bot-wide
+        envelope style chosen via ``DynaBotConfig.prompt_envelope``
+        applies to the synthesis system prompt that hybrid emits through
+        :meth:`_build_augmented_prompt`. The already-typed
+        ``config.grounded`` is passed through
+        ``GroundedReasoning.from_config`` without a dict round-trip.
+        The ReAct child takes a typed ``ReActReasoningConfig`` directly
+        (no collaborators).  When a ``knowledge_base`` is injected and
+        the config does not already declare a ``vector_kb`` source, it
         is auto-wrapped through the grounded child — the same guard the
         former ``from_config`` applied.
         """
@@ -116,10 +120,17 @@ class HybridReasoning(
         prompt_resolver: PromptResolver | None = self.components.get(
             "prompt_resolver"
         )
+        # Forward the bot-wide envelope so the grounded child renders
+        # its synthesis-prompt KB block in the same style as the bot's
+        # user-prompt context blocks. Without this, hybrid silently
+        # used the grounded child's default markdown envelope even
+        # when DynaBotConfig.prompt_envelope was "xml" or "prose".
+        prompt_envelope = self.components.get("prompt_envelope")
 
         self._grounded = GroundedReasoning.from_config(
             config.grounded,
             prompt_resolver=prompt_resolver,
+            prompt_envelope=prompt_envelope,
         )
         self._react = ReActReasoning(
             ReActReasoningConfig(

@@ -12,6 +12,7 @@ Modules:
 - ``review`` — Review persona fragments and meta-prompts
 - ``grounded`` — Grounded synthesis fragments and meta-prompts
 - ``focus`` — Focus guidance and drift correction prompts
+- ``envelope`` — Prompt envelope helper for labeled context sections
 - ``defaults`` — Aggregated default prompt library (all modules combined)
 
 Prompt key namespaces:
@@ -22,3 +23,11 @@ Prompt key namespaces:
 - ``grounded.*`` — Grounded synthesis fragments and meta-prompts
 - ``focus.*`` — Focus guidance and drift correction prompts
 """
+
+from dataknobs_bots.prompts.envelope import (
+    SECTION_LABELS,
+    PromptEnvelope,
+    PromptEnvelopeStyle,
+)
+
+__all__ = ["SECTION_LABELS", "PromptEnvelope", "PromptEnvelopeStyle"]

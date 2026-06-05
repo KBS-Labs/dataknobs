@@ -267,6 +267,23 @@ class GroundedReasoning(
             "prompt_resolver"
         )
         self._prompt_resolver = prompt_resolver
+        # Prompt envelope collaborator — wraps the KB block in the
+        # synthesis system prompt in a style chosen bot-wide. Default to
+        # markdown when no envelope is injected (e.g. construction
+        # outside a DynaBot), matching the DynaBotConfig default.
+        from dataknobs_bots.prompts.envelope import (
+            PromptEnvelope,
+            PromptEnvelopeStyle,
+        )
+
+        injected_envelope: PromptEnvelope | None = self.components.get(
+            "prompt_envelope"
+        )
+        self._prompt_envelope: PromptEnvelope = (
+            injected_envelope
+            if injected_envelope is not None
+            else PromptEnvelope(PromptEnvelopeStyle.MARKDOWN)
+        )
         injected_sources: list[GroundedSource] | None = self.components.get(
             "sources"
         )
@@ -1352,12 +1369,22 @@ class GroundedReasoning(
         """
         cfg = synthesis_config or self.config.synthesis
 
-        # Try library-based prompt resolution.  The meta-prompt uses Jinja2
+        # The KB block is always rendered by the prompt envelope — one
+        # consistent shape across the resolver and inline-fallback
+        # paths, in the bot-wide style. A leading ``\n\n`` keeps the
+        # KB block visually separated from the upstream system prompt.
+        # Empty ``kb_context`` collapses to ``""`` so neither branch
+        # below has to re-check.
+        if kb_context:
+            kb_block = (
+                "\n\n" + self._prompt_envelope.knowledge_base_section(kb_context)
+            )
+        else:
+            kb_block = ""
+
+        # Try library-based prompt resolution. The meta-prompt uses Jinja2
         # conditionals to replicate the inline if/elif/else logic below.
         if self._prompt_resolver is not None:
-            kb_section = self._prompt_resolver.resolve(
-                "grounded.synthesis.kb_wrapper", kb_context=kb_context,
-            ) if kb_context else ""
             synthesis_text = self._prompt_resolver.resolve(
                 "grounded.synthesis",
                 require_citations=cfg.require_citations,
@@ -1366,16 +1393,8 @@ class GroundedReasoning(
             )
             if synthesis_text is not None:
                 parts_resolved = [original_system_prompt]
-                if kb_section:
-                    parts_resolved.append(kb_section)
-                elif kb_context:
-                    # Library key missing — use inline wrapper to avoid
-                    # silently dropping knowledge base context.
-                    parts_resolved.append(
-                        "\n\n<knowledge_base>\n"
-                        f"{kb_context}\n"
-                        "</knowledge_base>"
-                    )
+                if kb_block:
+                    parts_resolved.append(kb_block)
                 parts_resolved.append(synthesis_text)
                 if cfg.instruction:
                     parts_resolved.append(cfg.instruction)
@@ -1384,12 +1403,8 @@ class GroundedReasoning(
         # Inline fallback
         parts = [original_system_prompt]
 
-        if kb_context:
-            parts.append(
-                "\n\n<knowledge_base>\n"
-                f"{kb_context}\n"
-                "</knowledge_base>"
-            )
+        if kb_block:
+            parts.append(kb_block)
 
         grounding_lines = [
             "\nBase your response on the knowledge base content provided above.",

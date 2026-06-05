@@ -37,10 +37,18 @@ class TestGroundedPromptKeys:
             "grounded.synthesis.bridge",
             "grounded.synthesis.strict",
             "grounded.synthesis.supplement",
-            "grounded.synthesis.kb_wrapper",
         ]
         for key in expected:
             assert key in GROUNDED_PROMPT_KEYS, f"Missing key: {key}"
+
+    def test_kb_wrapper_key_removed(self) -> None:
+        """The KB wrapper is rendered by ``PromptEnvelope`` now, not the library.
+
+        Pinning the removal so an accidental re-introduction in the
+        registry (which would silently divert the wrap shape away from
+        the bot-wide envelope) fails loudly.
+        """
+        assert "grounded.synthesis.kb_wrapper" not in GROUNDED_PROMPT_KEYS
 
     def test_provenance_template_present(self) -> None:
         assert "grounded.provenance_template" in GROUNDED_PROMPT_KEYS

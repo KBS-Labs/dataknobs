@@ -1090,7 +1090,8 @@ class TestGroundedFactory:
 class TestSynthesisPrompt:
     """Test synthesis prompt construction."""
 
-    def test_citations_required(self) -> None:
+    def test_citations_required_default_envelope_is_markdown(self) -> None:
+        """Default envelope is markdown — no XML tags in the synthesis prompt."""
         cfg = GroundedReasoningConfig(
             synthesis=GroundedSynthesisConfig(
                 require_citations=True,
@@ -1102,9 +1103,25 @@ class TestSynthesisPrompt:
             "KB content here", "Original system prompt",
         )
         assert "Original system prompt" in prompt
-        assert "<knowledge_base>" in prompt
+        assert "## Knowledge base" in prompt
+        assert "<knowledge_base>" not in prompt
         assert "KB content here" in prompt
         assert "section heading" in prompt
+
+    def test_xml_envelope_pins_legacy_shape(self) -> None:
+        """Injecting an XML envelope reproduces the pre-fix synthesis shape."""
+        from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+
+        cfg = GroundedReasoningConfig()
+        strategy = GroundedReasoning.from_config(
+            cfg,
+            prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
+        )
+        prompt = strategy.build_synthesis_system_prompt(
+            "KB content here", "Original system prompt",
+        )
+        assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
+        assert "## Knowledge base" not in prompt
 
     def test_parametric_allowed(self) -> None:
         cfg = GroundedReasoningConfig(
@@ -1122,11 +1139,13 @@ class TestSynthesisPrompt:
         prompt = strategy.build_synthesis_system_prompt("content", "sys")
         assert "Do not fill gaps" in prompt
 
-    def test_empty_context(self) -> None:
+    def test_empty_context_has_no_kb_block(self) -> None:
+        """Empty kb_context emits no wrapper in any envelope style."""
         strategy = GroundedReasoning(config=GroundedReasoningConfig())
         prompt = strategy.build_synthesis_system_prompt("", "sys prompt")
         assert "sys prompt" in prompt
         assert "<knowledge_base>" not in prompt
+        assert "## Knowledge base" not in prompt
 
 
 # ------------------------------------------------------------------
@@ -1774,7 +1793,10 @@ class TestRawContentPreference:
         messages = [
             {
                 "role": "user",
-                "content": "<knowledge_base>chunks</knowledge_base>\nWhat is OAuth?",
+                "content": (
+                    "## Knowledge base\n\nchunks\n\n---\n\n"
+                    "## Question\n\nWhat is OAuth?"
+                ),
                 "metadata": {"raw_content": "What is OAuth?"},
             },
             {"role": "assistant", "content": "OAuth is an authorization framework."},
@@ -1783,7 +1805,7 @@ class TestRawContentPreference:
         context = GroundedReasoning._build_conversation_context(messages, cfg)
         # Should use raw_content, not the augmented content
         assert "What is OAuth?" in context
-        assert "<knowledge_base>" not in context
+        assert "## Knowledge base" not in context
 
     def test_build_conversation_context_falls_back_to_content(self) -> None:
         """Falls back to content when raw_content is absent."""
@@ -3092,7 +3114,10 @@ class TestPublicCompositionAPI:
         plan = strategy.resolve_synthesis("KB context", manager, {})
 
         assert plan.system_prompt is not None
-        assert "knowledge_base" in plan.system_prompt
+        # Markdown envelope renders the KB block as "## Knowledge base"
+        # (the default style). The KB content itself must appear.
+        assert "## Knowledge base" in plan.system_prompt
+        assert "KB context" in plan.system_prompt
         assert "Cite" in plan.system_prompt
 
     def test_resolve_synthesis_with_config_override(self) -> None:
