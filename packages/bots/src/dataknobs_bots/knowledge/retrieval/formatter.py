@@ -234,16 +234,34 @@ class ContextFormatter:
 
         return "\n\n---\n\n".join(formatted_groups)
 
-    def wrap_for_prompt(self, context: str, tag: str = "knowledge_base") -> str:
-        """Wrap formatted context in XML tags for prompt injection.
+    def wrap_for_prompt(
+        self,
+        context: str,
+        tag: str = "knowledge_base",
+        *,
+        envelope: Any = None,
+    ) -> str:
+        """Wrap formatted context for prompt injection.
 
         Args:
-            context: Formatted context string
-            tag: Tag name to wrap with
+            context: Formatted context string.
+            tag: Tag name used by the legacy XML wrapper and as the
+                ``tag`` passed to the envelope when one is supplied.
+            envelope: Optional
+                :class:`~dataknobs_bots.prompts.PromptEnvelope`. When
+                supplied, the envelope renders the wrapper section
+                (e.g. ``"## Knowledge base"``); otherwise the legacy
+                ``<{tag}>...</{tag}>`` shape is returned for direct
+                callers that have not migrated.
 
         Returns:
-            Context wrapped in XML tags
+            Context wrapped in the envelope's style, or the legacy XML
+            shape, or ``""`` if ``context`` is empty.
         """
         if not context:
             return ""
+        if envelope is not None:
+            return envelope.section(
+                tag.replace("_", " ").capitalize(), context, tag=tag
+            )
         return f"<{tag}>\n{context}\n</{tag}>"

@@ -356,6 +356,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._context_transform = self._resolve_context_transform(
             self.config.context_transform
         )
+        # Build the prompt envelope once. The string value was validated
+        # by DynaBotConfig.__post_init__, so the enum lookup here cannot
+        # raise on a valid snapshot.
+        from dataknobs_bots.prompts.envelope import (
+            PromptEnvelope,
+            PromptEnvelopeStyle,
+        )
+
+        self._prompt_envelope = PromptEnvelope(
+            PromptEnvelopeStyle(self.config.prompt_envelope)
+        )
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
@@ -966,6 +977,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 reasoning_config,
                 knowledge_base=knowledge_base,
                 prompt_resolver=prompt_resolver,
+                prompt_envelope=self._prompt_envelope,
             )
 
             # Config-driven source construction for strategies that
@@ -2916,38 +2928,57 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                       If provided, this is used instead of the message for RAG.
 
         Returns:
-            Message augmented with context
+            Message augmented with context, wrapped in the style chosen
+            by ``DynaBotConfig.prompt_envelope`` (default markdown). See
+            :class:`~dataknobs_bots.prompts.PromptEnvelope`.
         """
-        contexts = []
+        envelope = self._prompt_envelope
+        sections: list[str] = []
 
-        # Add knowledge context (skip when auto_context is disabled —
-        # KB remains available for tool-based access)
+        # Knowledge context (skip when auto_context is disabled — KB
+        # remains available for tool-based access). Ask the KB layer
+        # for the body text and let the envelope decide the wrapper
+        # shape; this keeps the wrap decision in one place instead of
+        # duplicating it inside every KnowledgeBase implementation.
         if self.knowledge_base and self._kb_auto_context:
-            # Use explicit rag_query if provided, otherwise use message
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                kb_context = self.knowledge_base.format_context(
-                    kb_results, wrap_in_tags=True
+                kb_body = self.knowledge_base.format_context(
+                    kb_results, wrap_in_tags=False
                 )
                 if self._context_transform:
-                    kb_context = self._context_transform(kb_context)
-                contexts.append(kb_context)
+                    kb_body = self._context_transform(kb_body)
+                sections.append(
+                    envelope.section(
+                        "Knowledge base", kb_body, tag="knowledge_base"
+                    )
+                )
 
-        # Add memory context
+        # Conversation history context.
         if self.memory:
             mem_results = await self.memory.get_context(message)
             if mem_results:
-                mem_context = "\n\n".join([r["content"] for r in mem_results])
+                mem_body = "\n\n".join(r["content"] for r in mem_results)
                 if self._context_transform:
-                    mem_context = self._context_transform(mem_context)
-                contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
+                    mem_body = self._context_transform(mem_body)
+                sections.append(
+                    envelope.section(
+                        "Conversation history",
+                        mem_body,
+                        tag="conversation_history",
+                    )
+                )
 
-        # Build full message with clear separation
-        if contexts:
-            context_section = "\n\n".join(contexts)
-            return f"{context_section}\n\n<question>\n{message}\n</question>"
-        return message
+        # No context sections → return the bare message. Wrapping a
+        # lone question with no surrounding context adds no signal and
+        # would surprise direct callers whose configs have neither KB
+        # auto-context nor memory.
+        if not sections:
+            return message
+
+        sections.append(envelope.section("Question", message, tag="question"))
+        return envelope.joiner().join(sections)
 
     @staticmethod
     def _resolve_tool(

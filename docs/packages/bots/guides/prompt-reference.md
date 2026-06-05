@@ -101,8 +101,15 @@ provenance templates.
 | `grounded.synthesis.bridge` | fragment | format | -- |
 | `grounded.synthesis.strict` | fragment | format | -- |
 | `grounded.synthesis.supplement` | fragment | format | -- |
-| `grounded.synthesis.kb_wrapper` | fragment | format | `kb_context` |
 | `grounded.provenance_template` | template | jinja2 | `results`, `results_by_source` |
+
+The grounded knowledge-base wrapper is no longer a library prompt —
+`GroundedReasoning.build_synthesis_system_prompt` wraps the KB block
+through the bot-wide [`PromptEnvelope`](prompt-envelope.md) so the
+wrap shape matches the user-prompt envelope (see the Prompt Envelope
+guide). Consumers that previously overrode
+`grounded.synthesis.kb_wrapper` should switch to selecting an envelope
+style via `DynaBotConfig.prompt_envelope`.
 
 ## Focus Guard Prompts (`focus.*`)
 

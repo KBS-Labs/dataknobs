@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`DynaBotConfig.prompt_envelope` selects the user-prompt and
+  synthesis-system-prompt envelope style.** `"markdown"` (default)
+  renders the auto-context user prompt as `## Knowledge base` /
+  `## Conversation history` / `## Question` sections separated by
+  `\n\n---\n\n`, and renders the grounded-reasoning synthesis system
+  prompt's knowledge-base block as `## Knowledge base\n\n...`. `"xml"`
+  reproduces the previous shape byte-for-byte (`<knowledge_base>` /
+  `<conversation_history>` / `<question>` blocks separated by `\n\n`,
+  and the legacy `<knowledge_base>...</knowledge_base>` synthesis-prompt
+  block). `"prose"` renders bare `Label:\n\nbody` sections.
+- New `dataknobs_bots.prompts.PromptEnvelope` and
+  `PromptEnvelopeStyle` re-exports — a small typed helper used at
+  every site that wraps a labeled context block, so the wrap style is
+  chosen in one place and matches across the user prompt and the
+  synthesis system prompt.
+- `KnowledgeBase.format_context`, `RAGKnowledgeBase.format_context`,
+  and `ContextFormatter.wrap_for_prompt` accept a keyword-only
+  `envelope=` argument. When supplied, the wrapper renders in the
+  envelope's style; when omitted, `wrap_in_tags=True` still produces
+  the legacy `<knowledge_base>...</knowledge_base>` shape byte-for-byte
+  so direct callers are unchanged.
+
+### Changed
+
+- The bot-assembled user prompt and the grounded-reasoning synthesis
+  system prompt now default to markdown envelopes. Small
+  instruction-tuned models can complete an XML-wrapped input shape by
+  emitting a matching wrapper element around their reply (for example
+  `<response>...</response>`); switching the default away from XML
+  removes that mirroring cue. Model output bytes will shift on the
+  next turn for consumers on the default. Pin
+  `prompt_envelope: "xml"` to defer the change.
+- The `grounded.synthesis.kb_wrapper` library prompt key is no longer
+  registered. `GroundedReasoning.build_synthesis_system_prompt` now
+  wraps the knowledge-base block through the bot-wide
+  `PromptEnvelope`, so the wrap shape is selected by
+  `DynaBotConfig.prompt_envelope` instead of by a separate library key.
+  Consumers that overrode `grounded.synthesis.kb_wrapper` in a custom
+  prompt library should switch to selecting the envelope style.
+
 ## v0.7.1 - 2026-06-02
 
 ### Added

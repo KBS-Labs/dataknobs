@@ -1433,6 +1433,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         self,
         results: list[dict[str, Any]],
         wrap_in_tags: bool = True,
+        *,
+        envelope: Any = None,
     ) -> str:
         """Format search results for LLM context.
 
@@ -1440,14 +1442,22 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
 
         Args:
             results: Search results from query()
-            wrap_in_tags: Whether to wrap in <knowledge_base> tags
+            wrap_in_tags: Whether to wrap the rendered context. When
+                ``False``, the body is returned unwrapped. When
+                ``True``: if ``envelope`` is provided, it renders the
+                wrapper section; otherwise the legacy
+                ``<knowledge_base>...</knowledge_base>`` shape is
+                preserved for direct callers that have not migrated.
+            envelope: Optional
+                :class:`~dataknobs_bots.prompts.PromptEnvelope` used to
+                render the wrapper when ``wrap_in_tags`` is ``True``.
 
         Returns:
             Formatted context string
         """
         context = self.formatter.format(results)
         if wrap_in_tags:
-            context = self.formatter.wrap_for_prompt(context)
+            context = self.formatter.wrap_for_prompt(context, envelope=envelope)
         return context
 
     async def count(

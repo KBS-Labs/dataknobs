@@ -160,11 +160,12 @@ context = formatter.format(results)
 # Format merged chunks
 context = formatter.format_merged(merged_chunks)
 
-# Wrap for prompt injection
+# Wrap for prompt injection — default keeps the legacy XML shape for
+# direct callers (back-compat preserved).
 wrapped = formatter.wrap_for_prompt(context, tag="knowledge_base")
 ```
 
-### Output Example
+### Output Example (legacy XML shape — direct caller default)
 
 ```
 <knowledge_base>
@@ -181,6 +182,24 @@ First, install the package using pip. Then configure your
 API keys in the environment or config file.
 (Source: docs/quickstart.md)
 </knowledge_base>
+```
+
+### Envelope-aware wrap (matches DynaBot's bot-wide style)
+
+Pass a `PromptEnvelope` (see the Prompt Envelope guide) to wrap in
+markdown / xml / prose instead of the legacy default. DynaBot does
+this automatically through its bot-wide `prompt_envelope` choice:
+
+```python
+from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+
+envelope = PromptEnvelope(PromptEnvelopeStyle.MARKDOWN)
+wrapped = formatter.wrap_for_prompt(context, envelope=envelope)
+# Produces:
+#   ## Knowledge base
+#
+#   [1] [0.92] Authentication > OAuth 2.0
+#   ...
 ```
 
 ### Grouping by Source

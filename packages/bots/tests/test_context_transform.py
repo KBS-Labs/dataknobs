@@ -66,9 +66,10 @@ async def test_no_context_transform_default_behaviour() -> None:
         await harness.chat("Recall")
 
         content = _get_last_user_content(harness.bot)
-        # Memory content present but not fenced
+        # Memory content present but not fenced — the default markdown
+        # envelope is what _build_message_with_context produces.
         assert "[DATA_START]" not in content
-        assert "<conversation_history>" in content
+        assert "## Conversation history" in content
 
 
 @pytest.mark.asyncio

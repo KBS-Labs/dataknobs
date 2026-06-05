@@ -73,6 +73,13 @@ class DynaBotConfig(StructuredConfig):
             reaches the prompt. The callable form is supplied
             programmatically at construction time and is therefore not part
             of this serializable snapshot.
+        prompt_envelope: Style used to wrap labeled context sections
+            ("Knowledge base", "Conversation history", "Question") in
+            the user prompt assembled by ``_build_message_with_context``
+            and in the grounded-reasoning synthesis system prompt. One
+            of ``"markdown"`` (default), ``"xml"`` (legacy shape kept as
+            an opt-in escape hatch), or ``"prose"``. See
+            :class:`~dataknobs_bots.prompts.PromptEnvelopeStyle`.
         config_base_path: Optional base directory for resolving relative
             paths in nested configs (e.g. ``wizard_config``).
         max_tool_iterations: Maximum tool-execution rounds before returning.
@@ -121,13 +128,14 @@ class DynaBotConfig(StructuredConfig):
 
     # --- scalars / misc ---
     context_transform: str | None = None
+    prompt_envelope: str = "markdown"
     config_base_path: str | None = None
     max_tool_iterations: int = 5
     tool_timeout: float = 30.0
     tool_loop_timeout: float = 120.0
 
     def __post_init__(self) -> None:
-        """Validate the timeout invariants against the config snapshot.
+        """Validate the timeout + prompt_envelope invariants against the snapshot.
 
         Both construction paths (dict-driven and pre-built collaborator)
         build a ``DynaBotConfig`` snapshot, so validating here covers them
@@ -142,6 +150,19 @@ class DynaBotConfig(StructuredConfig):
                 f"tool_loop_timeout must be non-negative, got "
                 f"{self.tool_loop_timeout}"
             )
+        # Validate prompt_envelope is a known style. Local import keeps
+        # `dataknobs_bots.bot.config` import-cycle-safe (the prompts package
+        # has no back-edge to the bot config).
+        from dataknobs_bots.prompts.envelope import PromptEnvelopeStyle
+
+        try:
+            PromptEnvelopeStyle(self.prompt_envelope)
+        except ValueError as exc:
+            valid = ", ".join(repr(s.value) for s in PromptEnvelopeStyle)
+            raise ValueError(
+                f"prompt_envelope must be one of {valid}, got "
+                f"{self.prompt_envelope!r}"
+            ) from exc
 
 
 __all__ = ["DynaBotConfig"]

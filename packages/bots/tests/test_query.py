@@ -410,7 +410,10 @@ class TestContextualExpander:
         history = [
             {
                 "role": "user",
-                "content": "<knowledge_base>kb chunks here</knowledge_base>\nTell me about neural networks",
+                "content": (
+                    "## Knowledge base\n\nkb chunks here\n\n---\n\n"
+                    "## Question\n\nTell me about neural networks"
+                ),
                 "metadata": {"raw_content": "Tell me about neural networks"},
             },
         ]
@@ -419,7 +422,7 @@ class TestContextualExpander:
 
         # Should extract keywords from raw_content, not augmented content
         assert "neural" in result.lower() or "networks" in result.lower()
-        assert "knowledge_base" not in result.lower()
+        assert "knowledge base" not in result.lower()
 
     def test_falls_back_to_content_without_raw_content(self):
         """Without metadata.raw_content, uses content as before."""

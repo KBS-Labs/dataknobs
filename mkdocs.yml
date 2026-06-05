@@ -242,6 +242,7 @@ nav:
         - Prompt System:
           - packages/bots/guides/prompt-reference.md
           - packages/bots/guides/prompt-customization.md
+          - packages/bots/guides/prompt-envelope.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:
