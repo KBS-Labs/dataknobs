@@ -261,7 +261,12 @@ class ContextFormatter:
         if not context:
             return ""
         if envelope is not None:
-            return envelope.section(
-                tag.replace("_", " ").capitalize(), context, tag=tag
-            )
+            # Delegate label resolution to the envelope — canonical
+            # tags like ``"knowledge_base"`` produce ``"Knowledge base"``
+            # via :data:`~dataknobs_bots.prompts.SECTION_LABELS`, matching
+            # the literal label used everywhere else in the codebase.
+            # Unknown tags still fall back to a derivation
+            # (``"custom_context"`` → ``"Custom context"``) so direct
+            # callers with arbitrary tags keep working.
+            return envelope.section_for_tag(tag, context)
         return f"<{tag}>\n{context}\n</{tag}>"

@@ -203,6 +203,50 @@ class TestDualInputConstructor:
         assert bot.default_max_tokens == 512
         assert bot._max_tool_iterations == 9
 
+    @pytest.mark.asyncio
+    async def test_prebuilt_prompt_envelope_default_is_markdown(self) -> None:
+        """Omitting prompt_envelope on the pre-built shape uses the markdown default."""
+        from dataknobs_bots.prompts import PromptEnvelopeStyle
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        bot = DynaBot(
+            llm=provider,
+            prompt_builder=_make_prompt_builder(),
+            conversation_storage=await _make_storage(),
+        )
+        assert bot.config.prompt_envelope == "markdown"
+        assert bot._prompt_envelope.style is PromptEnvelopeStyle.MARKDOWN
+
+    @pytest.mark.asyncio
+    async def test_prebuilt_prompt_envelope_xml_pins_legacy_shape(self) -> None:
+        """Pre-built shape honors prompt_envelope='xml' just like the config path."""
+        from dataknobs_bots.prompts import PromptEnvelopeStyle
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        bot = DynaBot(
+            llm=provider,
+            prompt_builder=_make_prompt_builder(),
+            conversation_storage=await _make_storage(),
+            prompt_envelope="xml",
+        )
+        assert bot.config.prompt_envelope == "xml"
+        assert bot._prompt_envelope.style is PromptEnvelopeStyle.XML
+
+    @pytest.mark.asyncio
+    async def test_prebuilt_prompt_envelope_prose_round_trips(self) -> None:
+        """Pre-built shape accepts the 'prose' style end-to-end."""
+        from dataknobs_bots.prompts import PromptEnvelopeStyle
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        bot = DynaBot(
+            llm=provider,
+            prompt_builder=_make_prompt_builder(),
+            conversation_storage=await _make_storage(),
+            prompt_envelope="prose",
+        )
+        assert bot.config.prompt_envelope == "prose"
+        assert bot._prompt_envelope.style is PromptEnvelopeStyle.PROSE
+
     def test_no_args_raises(self) -> None:
         with pytest.raises(TypeError, match="`llm` is required"):
             DynaBot()

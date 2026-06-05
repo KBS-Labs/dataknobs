@@ -48,6 +48,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DynaBotConfig.prompt_envelope` instead of by a separate library key.
   Consumers that overrode `grounded.synthesis.kb_wrapper` in a custom
   prompt library should switch to selecting the envelope style.
+- **`context_transform` now receives the unwrapped KB body.** A
+  consequence of moving the wrap decision into `PromptEnvelope`: the
+  bot now asks the knowledge-base layer for an unwrapped body and
+  hands that to `context_transform` *before* the envelope wraps it
+  (in any style). Pre-fix, the transform saw
+  `"<knowledge_base>\n...\n</knowledge_base>"` because the bot wrapped
+  before transforming. Consumers whose `context_transform` callable
+  pattern-matched on the XML wrappers (e.g. fenced or stripped them)
+  must update their transform to operate on the bare body. Memory
+  context (`conversation_history`) is unaffected — pre-fix already
+  applied the transform to the unwrapped body before wrapping.
+- **`prompt_envelope` validation is case-insensitive.** YAML configs
+  written by humans now accept `"XML"`, `"Markdown"`, `"PROSE"`, etc.
+  Values are normalized to lowercase on the frozen snapshot, so
+  downstream lookups continue to match the lowercase enum values.
+- **`DynaBot.HybridReasoning` now forwards `prompt_envelope` to its
+  grounded child.** A hybrid-strategy bot configured with
+  `prompt_envelope: "xml"` (or `"prose"`) had been silently rendering
+  the synthesis-prompt KB block with the grounded child's default
+  markdown envelope because hybrid did not propagate the collaborator.
+  The envelope now reaches the grounded child unchanged.
+
+### Fixed
+
+- The pre-built `DynaBot(llm=provider, prompt_builder=..., ...)`
+  constructor now accepts a `prompt_envelope` keyword. Programmatic
+  construction (tests, `BotTestHarness`, advanced callers) can pin a
+  non-default envelope without going through a config mapping; absent
+  the keyword, the `DynaBotConfig` default `"markdown"` applies, so
+  every existing call site is unchanged.
 
 ## v0.7.1 - 2026-06-02
 

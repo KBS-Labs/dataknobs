@@ -1371,16 +1371,16 @@ class GroundedReasoning(
 
         # The KB block is always rendered by the prompt envelope — one
         # consistent shape across the resolver and inline-fallback
-        # paths, in the bot-wide style. A leading newline keeps the
+        # paths, in the bot-wide style. A leading ``\n\n`` keeps the
         # KB block visually separated from the upstream system prompt.
-        kb_block = (
-            "\n\n"
-            + self._prompt_envelope.section(
-                "Knowledge base", kb_context, tag="knowledge_base"
+        # Empty ``kb_context`` collapses to ``""`` so neither branch
+        # below has to re-check.
+        if kb_context:
+            kb_block = (
+                "\n\n" + self._prompt_envelope.knowledge_base_section(kb_context)
             )
-            if kb_context
-            else ""
-        )
+        else:
+            kb_block = ""
 
         # Try library-based prompt resolution. The meta-prompt uses Jinja2
         # conditionals to replicate the inline if/elif/else logic below.

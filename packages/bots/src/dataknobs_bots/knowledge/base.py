@@ -110,7 +110,7 @@ class KnowledgeBase(ABC):
         if not wrap_in_tags:
             return body
         if envelope is not None:
-            return envelope.section("Knowledge base", body, tag="knowledge_base")
+            return envelope.knowledge_base_section(body)
         return f"<knowledge_base>\n{body}\n</knowledge_base>"
 
     def providers(self) -> dict[str, Any]:

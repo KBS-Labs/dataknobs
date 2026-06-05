@@ -373,6 +373,29 @@ class TestContextFormatter:
         wrapped_prose = formatter.wrap_for_prompt(context, envelope=prose_env)
         assert wrapped_prose == "Knowledge base:\n\nSome context here"
 
+    def test_wrap_for_prompt_envelope_label_matches_canonical_section(self):
+        """The formatter's envelope rendering uses the same label as direct callers.
+
+        ``wrap_for_prompt(context, tag="knowledge_base", envelope=env)``
+        must produce the same bytes as
+        ``env.knowledge_base_section(context)``. This pins the
+        ``ContextFormatter`` <-> ``PromptEnvelope`` consistency that
+        the canonical ``SECTION_LABELS`` mapping enforces.
+        """
+        from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+
+        formatter = ContextFormatter()
+        context = "Some context here"
+        for style in PromptEnvelopeStyle:
+            env = PromptEnvelope(style)
+            via_formatter = formatter.wrap_for_prompt(
+                context, tag="knowledge_base", envelope=env
+            )
+            via_helper = env.knowledge_base_section(context)
+            assert via_formatter == via_helper, (
+                f"formatter/envelope drift for {style.value}"
+            )
+
     def test_group_by_source(self):
         """Test grouping results by source."""
         formatter = ContextFormatter(FormatterConfig(group_by_source=True))

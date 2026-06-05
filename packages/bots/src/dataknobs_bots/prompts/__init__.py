@@ -24,6 +24,10 @@ Prompt key namespaces:
 - ``focus.*`` — Focus guidance and drift correction prompts
 """
 
-from dataknobs_bots.prompts.envelope import PromptEnvelope, PromptEnvelopeStyle
+from dataknobs_bots.prompts.envelope import (
+    SECTION_LABELS,
+    PromptEnvelope,
+    PromptEnvelopeStyle,
+)
 
-__all__ = ["PromptEnvelope", "PromptEnvelopeStyle"]
+__all__ = ["SECTION_LABELS", "PromptEnvelope", "PromptEnvelopeStyle"]

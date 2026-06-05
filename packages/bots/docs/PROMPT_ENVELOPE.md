@@ -56,7 +56,21 @@ bot = await DynaBot.from_config({
 ```
 
 An unknown value raises a clear `ValueError` from
-`DynaBotConfig.__post_init__` listing the accepted values.
+`DynaBotConfig.__post_init__` listing the accepted values. Values are
+case-insensitive — `"XML"`, `"Markdown"`, and `"PROSE"` all work and
+are normalized to lowercase on the snapshot.
+
+For programmatic construction, the pre-built `DynaBot(...)` shape
+accepts an equivalent `prompt_envelope` keyword:
+
+```python
+bot = DynaBot(
+    llm=provider,
+    prompt_builder=builder,
+    conversation_storage=storage,
+    prompt_envelope="xml",  # default "markdown" when omitted
+)
+```
 
 ## Direct callers of `KnowledgeBase.format_context` / `ContextFormatter.wrap_for_prompt`
 
@@ -84,8 +98,21 @@ path automatically — direct callers only need this when they bypass
 from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
 
 env = PromptEnvelope(PromptEnvelopeStyle.MARKDOWN)
-section = env.section("Knowledge base", "[1] body", tag="knowledge_base")
+
+# Named helpers — preferred. The (label, tag) pair for each canonical
+# section lives in `dataknobs_bots.prompts.SECTION_LABELS`, so a rename
+# is one line, not a sweep.
+kb = env.knowledge_base_section("[1] body")
 # → "## Knowledge base\n\n[1] body"
+history = env.conversation_history_section("turn 1: ...")
+question = env.question_section("What is X?")
+
+# Tag-driven helper for the generic case (used by ContextFormatter):
+custom = env.section_for_tag("custom_context", "body")
+# → "## Custom context\n\nbody"  (unknown tag, derived label)
+
+# Generic API still available — every call site spells (label, tag).
+section = env.section("Knowledge base", "[1] body", tag="knowledge_base")
 
 joiner = env.joiner()
 # → "\n\n---\n\n"

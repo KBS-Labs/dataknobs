@@ -177,6 +177,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
         tool_loop_timeout: float = _DEFAULT_TOOL_LOOP_TIMEOUT,
         prompt_resolver: PromptResolver | None = None,
+        prompt_envelope: str | None = None,
         *,
         _components: Mapping[str, Any] | None = None,
         **kwargs: Any,
@@ -252,6 +253,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 prompts from the composed prompt library.  Built automatically
                 by ``from_config()``; pass explicitly only when constructing
                 bots programmatically with custom libraries.
+            prompt_envelope: Envelope style applied to the auto-context
+                user prompt and the grounded-reasoning synthesis-prompt KB
+                block. One of ``"markdown"`` (default), ``"xml"``, or
+                ``"prose"`` (case-insensitive). Mirrors
+                ``DynaBotConfig.prompt_envelope`` for the pre-built shape
+                so a programmatically-constructed bot can pin the legacy
+                ``"xml"`` shape without going through a config mapping.
         """
         # Config-driven shape: from_config / from_config_async / from_components
         # deliver a typed DynaBotConfig (or a config Mapping) in the first
@@ -275,6 +283,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     ("system_prompt_rag_configs", system_prompt_rag_configs),
                     ("context_transform", context_transform),
                     ("prompt_resolver", prompt_resolver),
+                    ("prompt_envelope", prompt_envelope),
                 )
                 if value is not None
             }
@@ -302,18 +311,25 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # there for both shapes. A callable context_transform is not
         # serializable, so it is omitted from the snapshot and assigned to
         # the live attribute below.
-        snapshot = DynaBotConfig(
-            llm={
+        # Build snapshot kwargs, omitting prompt_envelope when the caller
+        # did not specify it so the DynaBotConfig default applies (one
+        # source of truth for the default; pre-built and config paths
+        # cannot drift).
+        snapshot_kwargs: dict[str, Any] = {
+            "llm": {
                 "temperature": default_temperature,
                 "max_tokens": default_max_tokens,
             },
-            max_tool_iterations=max_tool_iterations,
-            tool_timeout=tool_timeout,
-            tool_loop_timeout=tool_loop_timeout,
-            context_transform=(
+            "max_tool_iterations": max_tool_iterations,
+            "tool_timeout": tool_timeout,
+            "tool_loop_timeout": tool_loop_timeout,
+            "context_transform": (
                 context_transform if isinstance(context_transform, str) else None
             ),
-        )
+        }
+        if prompt_envelope is not None:
+            snapshot_kwargs["prompt_envelope"] = prompt_envelope
+        snapshot = DynaBotConfig(**snapshot_kwargs)
         super().__init__(snapshot, _components=_components)
         self._prebuilt = True
         self._assign_collaborators(
@@ -2949,11 +2965,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 )
                 if self._context_transform:
                     kb_body = self._context_transform(kb_body)
-                sections.append(
-                    envelope.section(
-                        "Knowledge base", kb_body, tag="knowledge_base"
-                    )
-                )
+                sections.append(envelope.knowledge_base_section(kb_body))
 
         # Conversation history context.
         if self.memory:
@@ -2962,13 +2974,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 mem_body = "\n\n".join(r["content"] for r in mem_results)
                 if self._context_transform:
                     mem_body = self._context_transform(mem_body)
-                sections.append(
-                    envelope.section(
-                        "Conversation history",
-                        mem_body,
-                        tag="conversation_history",
-                    )
-                )
+                sections.append(envelope.conversation_history_section(mem_body))
 
         # No context sections → return the bare message. Wrapping a
         # lone question with no surrounding context adds no signal and
@@ -2977,7 +2983,15 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if not sections:
             return message
 
-        sections.append(envelope.section("Question", message, tag="question"))
+        # Skip the question section when the message is empty. An
+        # empty body would render to ``""`` (the envelope's empty-body
+        # contract) and join with a trailing joiner separator,
+        # producing a malformed prompt ending in ``"\n\n---\n\n"``
+        # (markdown) or ``"\n\n"`` (xml/prose). No real caller passes
+        # an empty message, but the guard keeps the output well-formed
+        # for the contrived (e.g. RAG-query-only) case.
+        if message:
+            sections.append(envelope.question_section(message))
         return envelope.joiner().join(sections)
 
     @staticmethod

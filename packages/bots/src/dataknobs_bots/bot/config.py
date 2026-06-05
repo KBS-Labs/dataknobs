@@ -78,7 +78,9 @@ class DynaBotConfig(StructuredConfig):
             the user prompt assembled by ``_build_message_with_context``
             and in the grounded-reasoning synthesis system prompt. One
             of ``"markdown"`` (default), ``"xml"`` (legacy shape kept as
-            an opt-in escape hatch), or ``"prose"``. See
+            an opt-in escape hatch), or ``"prose"``. Case-insensitive —
+            ``"XML"`` / ``"Markdown"`` are accepted and normalized to
+            lowercase. See
             :class:`~dataknobs_bots.prompts.PromptEnvelopeStyle`.
         config_base_path: Optional base directory for resolving relative
             paths in nested configs (e.g. ``wizard_config``).
@@ -150,19 +152,41 @@ class DynaBotConfig(StructuredConfig):
                 f"tool_loop_timeout must be non-negative, got "
                 f"{self.tool_loop_timeout}"
             )
-        # Validate prompt_envelope is a known style. Local import keeps
-        # `dataknobs_bots.bot.config` import-cycle-safe (the prompts package
-        # has no back-edge to the bot config).
+        # Validate prompt_envelope is a known style. Case-insensitive:
+        # YAML configs are human-written, so ``"XML"`` / ``"Markdown"``
+        # should not be a parse error. The value is normalized to
+        # lowercase on the frozen snapshot so downstream lookups
+        # (``PromptEnvelopeStyle(self.config.prompt_envelope)``) match
+        # the enum's lowercase values.
+        #
+        # The import is intentionally local — not because there is a
+        # cycle today (``dataknobs_bots.prompts.envelope`` depends only
+        # on stdlib), but as a precaution: ``bot.config`` is imported
+        # very early in the bot lifecycle and a future back-edge in any
+        # ``dataknobs_bots.prompts.*`` module (e.g. a prompt template
+        # type-hinting ``DynaBotConfig``) would silently re-enter this
+        # module mid-import and surface as a confusing
+        # ``PartiallyInitializedModule`` error. Keeping the import
+        # local makes that contract explicit. Python caches the import
+        # after first call, so the per-construction cost is one dict
+        # lookup.
         from dataknobs_bots.prompts.envelope import PromptEnvelopeStyle
 
+        raw = self.prompt_envelope
+        normalized = raw.lower() if isinstance(raw, str) else raw
         try:
-            PromptEnvelopeStyle(self.prompt_envelope)
+            PromptEnvelopeStyle(normalized)
         except ValueError as exc:
             valid = ", ".join(repr(s.value) for s in PromptEnvelopeStyle)
             raise ValueError(
-                f"prompt_envelope must be one of {valid}, got "
-                f"{self.prompt_envelope!r}"
+                f"prompt_envelope must be one of {valid} (case-insensitive), "
+                f"got {raw!r}"
             ) from exc
+        if normalized != raw:
+            # Frozen dataclass — bypass the immutability for the
+            # normalization. The caller's mapping/typed-config is not
+            # mutated; this only touches the snapshot we own.
+            object.__setattr__(self, "prompt_envelope", normalized)
 
 
 __all__ = ["DynaBotConfig"]

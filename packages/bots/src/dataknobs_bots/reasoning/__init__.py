@@ -198,9 +198,11 @@ def create_reasoning_from_config(
         prompt_envelope: Optional
             :class:`~dataknobs_bots.prompts.PromptEnvelope` chosen
             bot-wide. Forwarded to strategies that wrap context blocks
-            in their own prompts (currently grounded / hybrid). Strategies
-            that don't consume it ignore it via the components-channel
-            signature-aware delivery.
+            in their own prompts: ``grounded`` consumes it directly to
+            render the synthesis-prompt KB block; ``hybrid`` forwards
+            it to its embedded grounded child so the same style applies.
+            Strategies that don't consume it ignore it via the
+            components-channel signature-aware delivery.
 
     Returns:
         Configured reasoning strategy instance.

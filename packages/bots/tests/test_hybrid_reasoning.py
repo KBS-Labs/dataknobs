@@ -208,6 +208,82 @@ class TestHybridReasoningConstruction:
 
 
 # ------------------------------------------------------------------
+# Envelope forwarding to the grounded child
+# ------------------------------------------------------------------
+
+
+class TestHybridEnvelopeForwarding:
+    """Hybrid must forward `prompt_envelope` to its grounded child.
+
+    Without forwarding, a hybrid-strategy bot configured with
+    ``DynaBotConfig.prompt_envelope: "xml"`` (or ``"prose"``) would
+    silently get the grounded child's default markdown envelope in the
+    synthesis system prompt — the exact drift the envelope abstraction
+    exists to prevent.
+    """
+
+    def test_xml_envelope_reaches_grounded_synthesis_prompt(self) -> None:
+        """XML envelope injected into hybrid is honored by the grounded child."""
+        from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+
+        config = HybridReasoningConfig.from_dict({})
+        strategy = HybridReasoning.from_config(
+            config,
+            prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
+        )
+        prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
+            "KB content here", "Original system prompt",
+        )
+        assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
+        assert "## Knowledge base" not in prompt
+
+    def test_prose_envelope_reaches_grounded_synthesis_prompt(self) -> None:
+        """Prose envelope injected into hybrid is honored by the grounded child."""
+        from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+
+        config = HybridReasoningConfig.from_dict({})
+        strategy = HybridReasoning.from_config(
+            config,
+            prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.PROSE),
+        )
+        prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
+            "KB content here", "Original system prompt",
+        )
+        assert "Knowledge base:\n\nKB content here" in prompt
+        assert "## Knowledge base" not in prompt
+        assert "<knowledge_base>" not in prompt
+
+    def test_no_envelope_falls_back_to_markdown(self) -> None:
+        """Constructing hybrid without an envelope keeps the markdown default."""
+        config = HybridReasoningConfig.from_dict({})
+        strategy = HybridReasoning(config=config)
+        prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
+            "KB content here", "Original system prompt",
+        )
+        assert "## Knowledge base\n\nKB content here" in prompt
+        assert "<knowledge_base>" not in prompt
+
+    def test_envelope_reaches_hybrid_via_factory(self) -> None:
+        """create_reasoning_from_config forwards envelope all the way through."""
+        from dataknobs_bots.prompts import PromptEnvelope, PromptEnvelopeStyle
+        from dataknobs_bots.reasoning import create_reasoning_from_config
+
+        strategy = create_reasoning_from_config(
+            {
+                "strategy": "hybrid",
+                "grounded": {"intent": {"mode": "static"}},
+                "react": {"max_iterations": 3},
+            },
+            prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
+        )
+        assert isinstance(strategy, HybridReasoning)
+        prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
+            "KB content here", "Original system prompt",
+        )
+        assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
+
+
+# ------------------------------------------------------------------
 # Generate tests (with BotTestHarness)
 # ------------------------------------------------------------------
 
