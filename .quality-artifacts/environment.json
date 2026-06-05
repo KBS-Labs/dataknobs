@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-02T23:05:34Z",
-  "python_version": "Python 3.12.3",
-  "uv_version": "uv 0.9.14",
-  "os": "Linux",
-  "os_version": "6.8.0-110-generic",
-  "git_branch": "sbk/history-redaction-pr2",
-  "git_commit": "f478a721db39f21ff087e424fd1509c93a82bd13",
+  "timestamp": "2026-06-05T19:00:36Z",
+  "python_version": "Python 3.12.12",
+  "uv_version": "uv 0.11.18 (Homebrew 2026-06-01 aarch64-apple-darwin)",
+  "os": "Darwin",
+  "os_version": "24.6.0",
+  "git_branch": "sbk/prompt-envelope-tag-mirroring",
+  "git_commit": "e01dadad867e0732ab3a45ef465c9c4a35fce95b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
