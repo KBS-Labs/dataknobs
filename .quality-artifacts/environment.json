@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-05T19:54:10Z",
+  "timestamp": "2026-06-06T01:43:53Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.18 (Homebrew 2026-06-01 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/prompt-envelope-tag-mirroring",
-  "git_commit": "d3c13aec6ad00312fc7ba6665cfb108a1237f176",
+  "git_branch": "sbk/conversation-manager-seed-metadata-api",
+  "git_commit": "0992f05c17fe4043a87b5ce7de7886596de796fb",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
