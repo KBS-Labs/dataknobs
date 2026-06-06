@@ -1456,6 +1456,64 @@ await manager.add_message(
 )
 ```
 
+#### Pre-state metadata: `seed_metadata` vs `set_metadata`
+
+`ConversationManager` holds metadata in two buckets:
+
+- `state.metadata` — the live, persisted bucket; the unit of persistence.
+- An internal seed bucket — what was passed to `metadata=` on `create()`;
+  copied onto `state.metadata` at the first message.
+
+The existing `set_metadata` / `update_metadata` / `remove_metadata` methods
+write only to `state.metadata`, so they **silently no-op** before the
+first message has materialized state. This is by design — they pair with
+the post-state-only `metadata` property — but it surprises callers that
+want to seed a value before the first turn.
+
+For writes that must survive across the pre-/post-state boundary, use
+the `seed_*` family:
+
+```python
+manager = await ConversationManager.create(
+    llm=llm, prompt_builder=builder, storage=storage,
+)
+
+# Pre-state: set_metadata silently no-ops; seed_metadata works.
+manager.set_metadata("active_project_id", "proj-42")
+assert manager.get_metadata("active_project_id") is None  # !!
+
+manager.seed_metadata("active_project_id", "proj-42")
+assert manager.get_seed_metadata("active_project_id") == "proj-42"
+
+# After the first turn, the seeded value is on state.metadata.
+await manager.add_message(role="user", content="hi")
+assert manager.state.metadata["active_project_id"] == "proj-42"
+```
+
+Use `seed_metadata` when:
+
+- A UI-driven endpoint mutates a conversation-level value (a tenant ID,
+  an active-project ID, an ownership marker) before the first message.
+- A route handler does an ownership check on a not-yet-materialized
+  conversation: `manager.get_seed_metadata("owner")` works pre- and
+  post-state.
+
+Use `set_metadata` (the existing family) when the write should only
+apply once the conversation has at least one message — i.e., per-turn
+state that has no meaning before the first turn.
+
+The full seed-aware family:
+
+| Method | Sibling of |
+|---|---|
+| `seed_metadata(key, value)` | `set_metadata` |
+| `update_seed_metadata(updates)` | `update_metadata` |
+| `remove_seed_metadata(key)` | `remove_metadata` |
+| `get_seed_metadata(key=None, default=None)` | `get_metadata` |
+
+None of the `seed_*` writers auto-persist — call `save()` (or rely on
+the next turn's persisted append) to durably store the write.
+
 ---
 
 ## Complete Examples

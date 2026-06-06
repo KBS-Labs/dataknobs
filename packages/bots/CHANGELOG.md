@@ -78,6 +78,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-default envelope without going through a config mapping; absent
   the keyword, the `DynaBotConfig` default `"markdown"` applies, so
   every existing call site is unchanged.
+- **`ContextPersister.persist()` now correctly persists conversation
+  context across the pre-/post-state boundary.** The previous
+  implementation read `manager.metadata` (a read-only `@property`)
+  and then assigned the mutated dict back to `manager.metadata` —
+  which raised `AttributeError: property 'metadata' has no setter`
+  on every call against a real `ConversationManager`. The call is
+  now routed through `ConversationManager.update_seed_metadata`, so
+  the context section is written to the live `state.metadata` (when
+  state has been materialized) and to the initial-metadata seed
+  bucket (always), with the same replace-not-merge semantic the
+  original implementation intended. Behavioural tests against a real
+  `ConversationManager` pin both the pre-state and post-state paths.
 
 ## v0.7.1 - 2026-06-02
 

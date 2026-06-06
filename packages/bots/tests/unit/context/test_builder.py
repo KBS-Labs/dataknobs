@@ -188,50 +188,13 @@ class TestContextBuilderFromMetadata:
 
 
 class TestContextPersister:
-    """Tests for ContextPersister."""
+    """Tests for ContextPersister.
 
-    def test_persist_to_manager(self) -> None:
-        """Test persisting context to manager."""
-        from dataknobs_bots.context.accumulator import ConversationContext
-
-        context = ConversationContext(conversation_id="conv_123")
-        context.add_assumption(content="Test assumption", confidence=0.8)
-        context.add_section(name="custom", content="data", priority=80)
-
-        manager = MagicMock()
-        manager.metadata = {}
-
-        persister = ContextPersister()
-        persister.persist(context, manager)
-
-        # Check that metadata was updated
-        saved_metadata = manager.metadata
-        assert "context" in saved_metadata
-        assert len(saved_metadata["context"]["assumptions"]) == 1
-        assert len(saved_metadata["context"]["sections"]) == 1
-        assert saved_metadata["context"]["assumptions"][0]["content"] == "Test assumption"
-
-    def test_persist_to_existing_metadata(self) -> None:
-        """Test persisting context to manager with existing metadata."""
-        from dataknobs_bots.context.accumulator import ConversationContext
-
-        context = ConversationContext()
-        context.add_assumption(content="New assumption")
-
-        manager = MagicMock()
-        manager.metadata = {
-            "wizard": {"progress": 0.5},
-            "other": "data",
-        }
-
-        persister = ContextPersister()
-        persister.persist(context, manager)
-
-        # Existing data should be preserved
-        assert "wizard" in manager.metadata
-        assert "other" in manager.metadata
-        # Context data should be added
-        assert "context" in manager.metadata
+    Behavioural pins against a real :class:`ConversationManager` live in
+    :class:`TestContextPersisterAgainstRealManager` below; those cover
+    the persist→read round trip end-to-end. This class is now scoped to
+    the manager-free :meth:`ContextPersister.persist_to_dict` shape.
+    """
 
     def test_persist_to_dict(self) -> None:
         """Test getting context as dict without manager."""
@@ -424,3 +387,36 @@ class TestContextPersisterAgainstRealManager:
         assert section["assumptions"] == []
         assert len(section["sections"]) == 1
         assert section["sections"][0]["name"] == "custom"
+
+    @pytest.mark.asyncio
+    async def test_persist_preserves_other_metadata_keys(self) -> None:
+        """Persisting context must not clobber other metadata keys.
+
+        Pins the "wizard / other top-level keys survive" semantic the
+        legacy mock-based test asserted, but against a real manager so
+        the write path is the production one.
+        """
+        from dataknobs_bots.context.accumulator import ConversationContext
+
+        manager = await self._new_manager()
+        manager.update_seed_metadata(
+            {"wizard": {"progress": 0.5}, "other": "data"}
+        )
+
+        context = ConversationContext(conversation_id=manager.conversation_id)
+        context.add_assumption(content="new")
+
+        persister = ContextPersister()
+        persister.persist(context, manager)
+
+        # Pre-state: read via the seed-aware accessor.
+        assert manager.get_seed_metadata("wizard") == {"progress": 0.5}
+        assert manager.get_seed_metadata("other") == "data"
+        assert manager.get_seed_metadata("context") is not None
+
+        # Post-state: the same keys land on state.metadata after the
+        # first message materializes state.
+        await manager.add_message(role="user", content="hi")
+        assert manager.state.metadata["wizard"] == {"progress": 0.5}
+        assert manager.state.metadata["other"] == "data"
+        assert "context" in manager.state.metadata

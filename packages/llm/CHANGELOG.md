@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Seed-aware metadata API on `ConversationManager`**
+  (`dataknobs_llm.conversations`). `ConversationManager` carries
+  metadata in two buckets: the live `state.metadata` (the unit of
+  persistence) and an internal initial-metadata seed bucket (copied
+  onto `state.metadata` at the first message). The existing
+  `set_metadata` / `update_metadata` / `remove_metadata` family writes
+  only to the live bucket, so it silently no-ops pre-state — by
+  design, paired with the post-state-only `metadata` property. The
+  new `seed_metadata(key, value)` / `update_seed_metadata(updates)` /
+  `remove_seed_metadata(key)` / `get_seed_metadata(key=None,
+  default=None)` family crosses the pre-/post-state boundary by
+  writing to (or reading from) both buckets when both exist, so
+  writes are durable through state materialization and across a
+  subsequent `resume()`-then-rematerialization. The
+  `_writable_buckets()` / `_readable_bucket()` private generator
+  helpers name the two-bucket abstraction once so the four public
+  methods and any future seed-aware mutator share one shape. The
+  existing metadata methods are unchanged; each carries a `See Also:`
+  pointer to its seed sibling so the gap is discoverable from the
+  existing surface. None of the new writers auto-persist — they
+  match the existing sync non-persisting contract; call `save()` or
+  rely on the next persisted append to durably store.
+
 ## v0.6.1 - 2026-06-02
 
 ### Added
