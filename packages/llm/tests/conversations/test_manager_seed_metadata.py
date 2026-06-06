@@ -130,7 +130,8 @@ class TestSeedMetadataNewAPI:
     @pytest.mark.asyncio
     async def test_update_seed_metadata_batch_pre_state(self, test_components):
         """Bulk pre-state write of multiple keys lands on the seed and
-        survives materialization."""
+        survives materialization.
+        """
         manager = await _new_manager(test_components)
 
         manager.update_seed_metadata(
@@ -152,7 +153,8 @@ class TestSeedMetadataNewAPI:
     ):
         """Pre-state remove → key absent post-materialization. Post-state
         remove (under resume, where the buckets diverge) → key absent
-        from both the live dict and the seed bucket."""
+        from both the live dict and the seed bucket.
+        """
         # Pre-state path.
         manager = await _new_manager(test_components)
         manager.seed_metadata("active_project_id", "proj-1")
@@ -188,7 +190,8 @@ class TestSeedMetadataNewAPI:
         self, test_components
     ):
         """``remove_seed_metadata`` on a missing key must not raise — same
-        idempotent shape as ``set``/``update``."""
+        idempotent shape as ``set``/``update``.
+        """
         manager = await _new_manager(test_components)
 
         # Pre-state.
@@ -203,7 +206,8 @@ class TestSeedMetadataNewAPI:
         self, test_components
     ):
         """Pre-state whole-dict return is a copy: mutating it must not
-        write back into the seed bucket."""
+        write back into the seed bucket.
+        """
         manager = await _new_manager(test_components)
         manager.seed_metadata("a", 1)
 
@@ -218,7 +222,8 @@ class TestSeedMetadataNewAPI:
         self, test_components
     ):
         """Post-state whole-dict return is the live ``state.metadata``
-        (consistent with the existing ``metadata`` property)."""
+        (consistent with the existing ``metadata`` property).
+        """
         manager = await _new_manager(test_components)
         await manager.add_message(role="user", content="hi")
 
@@ -233,7 +238,8 @@ class TestSeedMetadataNewAPI:
         self, test_components
     ):
         """Both pre- and post-state, ``get_seed_metadata(key, default)``
-        returns ``default`` when the key is absent."""
+        returns ``default`` when the key is absent.
+        """
         manager = await _new_manager(test_components)
 
         assert manager.get_seed_metadata("missing", default="fallback") == "fallback"
