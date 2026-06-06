@@ -1416,9 +1416,21 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             else:
                 try:
                     t0 = time.monotonic()
+                    # Route through the registry's ``execute_tool`` so
+                    # the registry's ``_execution_tracker`` records the
+                    # call when ``track_executions=True``.  Direct
+                    # ``tool.execute`` would bypass the recording path
+                    # — context-builder consumers of
+                    # ``tool_registry.get_execution_history`` would see
+                    # an empty list on real bot turns.  The registry
+                    # forwards ``_context`` only to tools whose
+                    # ``execute`` accepts ``**kwargs`` (e.g.
+                    # ``ContextAwareTool``); plain Tools are unaffected.
                     result = await asyncio.wait_for(
-                        tool.execute(
-                            **tool_call.parameters, _context=tool_context
+                        self.tool_registry.execute_tool(
+                            tool_name,
+                            **tool_call.parameters,
+                            _context=tool_context,
                         ),
                         timeout=self._tool_timeout,
                     )

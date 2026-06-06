@@ -90,6 +90,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bucket (always), with the same replace-not-merge semantic the
   original implementation intended. Behavioural tests against a real
   `ConversationManager` pin both the pre-state and post-state paths.
+- **`DynaBot._execute_tools` now routes through
+  `ToolRegistry.execute_tool` so the registry's execution tracker is
+  populated on real bot turns.** Pre-fix, DynaBot called
+  `tool.execute()` directly, bypassing the registry's recording code
+  path. Consumers reading `tool_registry.get_execution_history()`
+  always saw an empty list on a real turn — most notably
+  `ContextBuilder._extract_tool_history`, which surfaces tool history
+  into the prompt-rendered context section. The end-to-end chain
+  (DynaBot turn → tool execution → tracker → context history) was
+  broken at the first step. Dispatch now goes through
+  `registry.execute_tool`, whose forwarding semantic was fixed in
+  `dataknobs-llm` (`ContextAwareTool` receives `_context` per its
+  docstring; plain tools are unaffected). DynaBot's per-tool timing,
+  error handling, and `ToolExecution` records on `TurnState` are
+  unchanged — the only behavioural shift is that a registry
+  constructed with `track_executions=True` now sees a record per
+  tool call during a real bot turn.
 
 ## v0.7.1 - 2026-06-02
 

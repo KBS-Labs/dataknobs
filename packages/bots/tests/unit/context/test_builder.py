@@ -337,9 +337,9 @@ class TestContextBuilderToolRegistry:
         tool_registry.register_tool(_NoOpTool(name="search"))
 
         manager = await make_manager()
-        # Execute through the real public path so the registry records
-        # via its own ``_execution_tracker.record`` call site — the same
-        # code path tool dispatch uses in production. ``_context=manager``
+        # Execute through ``execute_tool`` — the same registry method
+        # DynaBot's ``_execute_tools`` routes through in production, so
+        # the recorded code path is the production one. ``_context=manager``
         # lets the registry pull ``conversation_id`` for the record.
         await tool_registry.execute_tool("search", _context=manager)
 

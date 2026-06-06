@@ -104,6 +104,14 @@ from dataknobs_llm.conversations.storage import (
 logger = logging.getLogger(__name__)
 
 
+# Sentinel for distinguishing "default not provided" from "default is
+# None" on get_metadata / get_seed_metadata. The strict-orphan-default
+# contract — passing ``default`` without ``key`` raises TypeError —
+# would otherwise be unable to reject ``get_metadata(default=None)``,
+# the implicit shape every caller used in practice.
+_UNSET: Any = object()
+
+
 class ConversationManager:
     """Manages multi-turn conversations with persistence and branching.
 
@@ -354,6 +362,16 @@ class ConversationManager:
             cache_rag_results=cache_rag_results,
             reuse_rag_on_branch=reuse_rag_on_branch,
         )
+
+        # Alias the seed bucket to the loaded state.metadata dict so the
+        # post-resume two-bucket model matches the post-first-materialization
+        # shape (where add_message passes _initial_metadata to
+        # ConversationState by reference, making them the same dict). With
+        # the alias, the seed-aware family's "write to both buckets"
+        # contract collapses to a single write on the shared dict — and a
+        # consumer doing a post-resume seed_metadata() write sees the
+        # value via both state.metadata and get_seed_metadata().
+        manager._initial_metadata = state.metadata
 
         return manager
 
@@ -1282,6 +1300,11 @@ class ConversationManager:
     async def add_metadata(self, key: str, value: Any) -> None:
         """Add metadata to conversation.
 
+        Async, persisting write to the live ``state.metadata`` bucket.
+        Raises pre-state — no conversation state exists yet to persist
+        onto. For a pre-state-tolerant variant that writes the seed
+        bucket (and persists post-state), see :meth:`add_seed_metadata`.
+
         Args:
             key: Metadata key
             value: Metadata value
@@ -1289,6 +1312,9 @@ class ConversationManager:
         Example:
             >>> await manager.add_metadata("user_id", "alice")
             >>> await manager.add_metadata("session", "abc123")
+
+        See Also:
+            add_seed_metadata: persisting write that works pre-state too.
         """
         if not self.state:
             raise ValueError("No conversation state")
@@ -1472,6 +1498,23 @@ class ConversationManager:
         if self.state:
             await self.storage.save_conversation(self.state)
 
+    async def save(self) -> None:
+        """Persist the conversation's current state to storage.
+
+        Public delegate over :meth:`_save_state`. The mutating metadata
+        helpers (``set_metadata`` / ``update_metadata`` /
+        ``remove_metadata`` and the seed-aware family) do not auto-persist;
+        call this method to durably store their writes without waiting
+        for the next turn's persisted append. Pre-state (no
+        :class:`ConversationState` materialized yet) the call is a silent
+        no-op — there is nothing to persist.
+
+        Example:
+            >>> manager.seed_metadata("active_project_id", "proj-42")
+            >>> await manager.save()
+        """
+        await self._save_state()
+
     @property
     def conversation_id(self) -> str | None:
         """Get conversation ID."""
@@ -1571,7 +1614,11 @@ class ConversationManager:
                 return msg.get("content", "")
         return "You are a helpful assistant."
 
-    def get_metadata(self, key: str | None = None, default: Any = None) -> Any:
+    def get_metadata(
+        self,
+        key: str | None = None,
+        default: Any = _UNSET,
+    ) -> Any:
         """Get conversation metadata.
 
         This provides access to the conversation-level metadata stored in
@@ -1579,11 +1626,18 @@ class ConversationManager:
         user_id, session information, and other contextual data.
 
         Args:
-            key: Specific metadata key to retrieve. If None, returns all metadata.
-            default: Default value if key not found (only used when key is specified)
+            key: Specific metadata key to retrieve. If None, returns all
+                metadata.
+            default: Default value if key not found. Only valid when
+                ``key`` is specified — passing ``default`` without
+                ``key`` raises :class:`TypeError`, since the whole-dict
+                return path has no use for a default.
 
         Returns:
             Metadata value, all metadata dict, or default value
+
+        Raises:
+            TypeError: If ``default`` is provided without ``key``.
 
         Example:
             >>> # Get all metadata
@@ -1601,13 +1655,20 @@ class ConversationManager:
             get_seed_metadata: read that consults the seed bucket
                 pre-state instead of returning the default / ``{}``.
         """
+        if key is None and default is not _UNSET:
+            raise TypeError(
+                "get_metadata: 'default' is only valid when 'key' is "
+                "specified; the whole-dict return path has no use for a "
+                "default"
+            )
+        resolved_default = None if default is _UNSET else default
         if not self.state:
-            return default if key else {}
+            return resolved_default if key else {}
 
         if key is None:
             return self.state.metadata
         else:
-            return self.state.metadata.get(key, default)
+            return self.state.metadata.get(key, resolved_default)
 
     def set_metadata(self, key: str, value: Any) -> None:
         """Set conversation metadata.
@@ -1686,9 +1747,23 @@ class ConversationManager:
     # The existing ``set_metadata`` / ``update_metadata`` /
     # ``remove_metadata`` family silently no-op pre-state because they
     # only touch ``state.metadata``. The four ``seed_*`` methods below
-    # cross the pre-/post-state boundary by writing to both buckets when
-    # both exist, so writes are durable through state materialization
-    # and across a subsequent ``resume()``-then-rematerialization.
+    # cross the pre-/post-state boundary by writing to (or reading
+    # from) both buckets when both exist, so pre-state writes survive
+    # state materialization and post-state writes are visible via both
+    # ``state.metadata`` and the seed bucket. Post-state (including
+    # after :meth:`resume`) the two buckets are aliased to the same
+    # dict, so the "write to both" loop is idempotent — the abstraction
+    # is uniform across the lifecycle.
+    #
+    # Design note: this is a parallel API, not a replacement for the
+    # existing family. The existing ``set_metadata`` / ``metadata``
+    # property pair is symmetric — both return ``{}`` pre-state.
+    # "Fixing" ``set_metadata`` to write to the seed pre-state would
+    # break that symmetry (a write would not show up via the property,
+    # which still returns ``{}`` pre-state), surprising every existing
+    # caller that relies on the post-state-only contract. A parallel
+    # ``seed_*`` family preserves the existing contract while filling
+    # the pre-state-write gap for new callers.
     #
     # The two-bucket abstraction is named once by the
     # ``_writable_buckets()`` / ``_readable_bucket()`` private helpers;
@@ -1698,18 +1773,23 @@ class ConversationManager:
         """Yield the metadata buckets a durable write must touch.
 
         Pre-state: only the seed bucket exists.
-        Post-state (construct-then-materialize same instance): the live
-        ``state.metadata`` IS the seed bucket (passed by reference at
-        materialization — see the ``ConversationState(...)`` call in
-        ``add_message``); the loop iterates the same dict twice and the
-        second write is a redundant overwrite. Harmless, kept for
-        symmetry with the resume path.
-        Post-state (resume path): the live and seed buckets are
-        distinct dicts; both receive the write.
+        Post-state: the live ``state.metadata`` IS the seed bucket
+        (the same dict object). Two paths put them in that shape:
 
-        A future seed-aware mutator (e.g. a hypothetical persisting
-        variant of ``seed_metadata``) iterates this same generator so
-        the "what counts as durable" decision lives in one place.
+        * construct-then-materialize same instance — ``add_message``
+          passes ``self._initial_metadata`` to ``ConversationState`` by
+          reference, so post-materialization both attributes name the
+          same dict.
+        * resume — :meth:`resume` aliases ``_initial_metadata`` to the
+          loaded ``state.metadata``, matching the construct-then-materialize
+          shape so post-resume behaviour is uniform across the
+          post-state lifecycle.
+
+        The loop iterates the same dict twice post-state; the second
+        write is a redundant overwrite. Harmless and intentional — it
+        keeps the generator's call site (the four seed-aware mutators
+        and ``add_seed_metadata``) free of bucket-aliasing logic so
+        "what counts as durable" lives in one place.
         """
         if self.state is not None:
             yield self.state.metadata
@@ -1728,16 +1808,19 @@ class ConversationManager:
         """Set conversation metadata durable through state materialization.
 
         Like :meth:`set_metadata` but works pre-state by also writing to
-        the initial-metadata bucket that's copied onto ``state.metadata``
-        at first materialization. Use this when a value must be
-        observable both before and after the first turn — e.g.,
-        UI-mutable runtime context that an endpoint may touch before
-        the conversation has any persisted state.
+        the initial-metadata bucket that becomes ``state.metadata`` at
+        first materialization. Use this when a value must be observable
+        both before and after the first turn — e.g., UI-mutable runtime
+        context that an endpoint may touch before the conversation has
+        any persisted state.
 
-        Post-state, writes go to both buckets so a subsequent
-        ``resume()``-then-rematerialization picks up the seed cleanly.
-        Does not auto-persist; call :meth:`save` (or rely on the next
-        turn's persisted append) to durably store the write.
+        Post-state (including post-:meth:`resume`) the two buckets are
+        aliased, so the write reaches the live ``state.metadata`` dict
+        once and is immediately observable via both ``state.metadata``
+        and :meth:`get_seed_metadata`. Does not auto-persist; call
+        :meth:`save` (or rely on the next turn's persisted append) to
+        durably store the write. For the persisting variant, use
+        :meth:`add_seed_metadata`.
 
         Args:
             key: Metadata key to set
@@ -1779,9 +1862,11 @@ class ConversationManager:
         """Remove a metadata key from both the live and seed buckets.
 
         Like :meth:`remove_metadata` but also pops the key from the
-        seed bucket so the removal survives state materialization (and
-        a subsequent rematerialization via :meth:`resume`). Idempotent:
-        does not raise if the key is absent.
+        seed bucket so a pre-state removal survives state
+        materialization. Post-state (including post-:meth:`resume`) the
+        two buckets are aliased, so the removal touches one dict and is
+        immediately observable via both accessors. Idempotent: does not
+        raise if the key is absent.
 
         Args:
             key: Metadata key to remove
@@ -1789,10 +1874,41 @@ class ConversationManager:
         for bucket in self._writable_buckets():
             bucket.pop(key, None)
 
+    async def add_seed_metadata(self, key: str, value: Any) -> None:
+        """Add metadata durable through materialization, with persistence.
+
+        The async, persisting analogue of :meth:`seed_metadata` — and the
+        seed-aware analogue of :meth:`add_metadata`. Pre-state, writes
+        to the seed bucket; post-state (including post-:meth:`resume`),
+        writes to the live ``state.metadata`` and persists immediately
+        via :meth:`save`. Unlike :meth:`add_metadata`, the call does not
+        raise pre-state — there is simply no state to persist yet, but
+        the seed-bucket write survives state materialization.
+
+        Args:
+            key: Metadata key to set.
+            value: Metadata value.
+
+        Example:
+            >>> await manager.add_seed_metadata("active_project_id", "proj-42")
+            >>> # Post-state: write is durably persisted; a subsequent
+            >>> # resume() observes the value without an intervening turn.
+
+        See Also:
+            seed_metadata: sync variant — writes the buckets without
+                auto-persisting.
+            add_metadata: live-bucket-only async variant; raises pre-state.
+        """
+        for bucket in self._writable_buckets():
+            bucket[key] = value
+        if self.state is not None:
+            self.state.updated_at = datetime.now()
+        await self._save_state()
+
     def get_seed_metadata(
         self,
         key: str | None = None,
-        default: Any = None,
+        default: Any = _UNSET,
     ) -> Any:
         """Read conversation metadata, transparent across pre-/post-state.
 
@@ -1813,16 +1929,28 @@ class ConversationManager:
         Args:
             key: Specific metadata key to retrieve. If ``None``, returns
                 all metadata.
-            default: Default value if key not found (only used when key
-                is specified).
+            default: Default value if key not found. Only valid when
+                ``key`` is specified — passing ``default`` without
+                ``key`` raises :class:`TypeError`, since the whole-dict
+                return path has no use for a default.
 
         Returns:
             Metadata value, all metadata (live dict post-state, copy
             pre-state), or default value.
+
+        Raises:
+            TypeError: If ``default`` is provided without ``key``.
         """
+        if key is None and default is not _UNSET:
+            raise TypeError(
+                "get_seed_metadata: 'default' is only valid when 'key' "
+                "is specified; the whole-dict return path has no use "
+                "for a default"
+            )
         bucket = self._readable_bucket()
         if key is not None:
-            return bucket.get(key, default)
+            resolved_default = None if default is _UNSET else default
+            return bucket.get(key, resolved_default)
         return bucket if self.state is not None else dict(bucket)
 
     def get_total_cost(self) -> float:
