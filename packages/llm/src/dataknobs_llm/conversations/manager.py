@@ -1740,20 +1740,24 @@ class ConversationManager:
     #   persistence; what every existing ``*_metadata`` method touches.
     # * ``_initial_metadata`` — the seed bucket, holding what was passed
     #   to ``__init__`` / ``create()``; copied onto ``state.metadata`` at
-    #   first message (passed by reference, in fact — see ``add_message``
-    #   line ~549). The seed bucket is the only bucket that exists
-    #   pre-state.
+    #   first message (passed by reference, in fact — see the
+    #   ``ConversationState(..., metadata=self._initial_metadata)``
+    #   construction in ``add_message``). The seed bucket is the only
+    #   bucket that exists pre-state.
     #
     # The existing ``set_metadata`` / ``update_metadata`` /
     # ``remove_metadata`` family silently no-op pre-state because they
-    # only touch ``state.metadata``. The four ``seed_*`` methods below
-    # cross the pre-/post-state boundary by writing to (or reading
-    # from) both buckets when both exist, so pre-state writes survive
-    # state materialization and post-state writes are visible via both
-    # ``state.metadata`` and the seed bucket. Post-state (including
-    # after :meth:`resume`) the two buckets are aliased to the same
-    # dict, so the "write to both" loop is idempotent — the abstraction
-    # is uniform across the lifecycle.
+    # only touch ``state.metadata``. The five ``seed_*`` methods below
+    # (four mutators — ``seed_metadata``, ``update_seed_metadata``,
+    # ``remove_seed_metadata``, ``add_seed_metadata`` — plus the read
+    # ``get_seed_metadata``) cross the pre-/post-state boundary by
+    # writing to (or reading from) both buckets when both exist, so
+    # pre-state writes survive state materialization and post-state
+    # writes are visible via both ``state.metadata`` and the seed
+    # bucket. Post-state (including after :meth:`resume`) the two
+    # buckets are aliased to the same dict, so the "write to both"
+    # loop is idempotent — the abstraction is uniform across the
+    # lifecycle.
     #
     # Design note: this is a parallel API, not a replacement for the
     # existing family. The existing ``set_metadata`` / ``metadata``
@@ -1787,9 +1791,9 @@ class ConversationManager:
 
         The loop iterates the same dict twice post-state; the second
         write is a redundant overwrite. Harmless and intentional — it
-        keeps the generator's call site (the four seed-aware mutators
-        and ``add_seed_metadata``) free of bucket-aliasing logic so
-        "what counts as durable" lives in one place.
+        keeps the generator's call site (the four seed-aware mutators,
+        including ``add_seed_metadata``) free of bucket-aliasing logic
+        so "what counts as durable" lives in one place.
         """
         if self.state is not None:
             yield self.state.metadata
