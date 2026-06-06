@@ -61,12 +61,12 @@ Dataknobs is open-source because we believe in **democratizing access to data** 
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.7.1 |
+| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.7.2 |
 | [dataknobs-common](packages/common/index.md) | Foundation library with exceptions, registries, serialization, and event bus | 1.4.0 |
 | [dataknobs-config](packages/config/index.md) | Modular configuration system with environment variable overrides and factories | 0.4.0 |
 | [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.5.0 |
 | [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows with data modes and resource management | 0.2.0 |
-| [dataknobs-llm](packages/llm/index.md) | Unified LLM abstraction with prompt management and conversations | 0.6.1 |
+| [dataknobs-llm](packages/llm/index.md) | Unified LLM abstraction with prompt management and conversations | 0.6.2 |
 | [dataknobs-structures](packages/structures/index.md) | Core data structures for AI knowledge bases and document processing | 1.0.11 |
 | [dataknobs-utils](packages/utils/index.md) | Utilities for file I/O, JSON processing, HTTP requests, and integrations | 1.2.13 |
 | [dataknobs-xization](packages/xization/index.md) | Text normalization, tokenization, annotation, and markdown chunking library | 1.3.8 |

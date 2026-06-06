@@ -5,6 +5,25 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-06-06
+
+### dataknobs-llm [0.6.2]
+
+#### Added
+- Add seed-metadata API on ConversationManager
+
+#### Fixed
+- Fix ContextPersister.persist and document the seed-metadata API
+
+### dataknobs-bots [0.7.2]
+
+#### Added
+- Add prompt_envelope on DynaBotConfig; markdown default
+
+#### Fixed
+- Fix ContextPersister.persist and document the seed-metadata API
+
+
 ## Release - 2026-06-02
 
 ### dataknobs-xization [1.3.8]
