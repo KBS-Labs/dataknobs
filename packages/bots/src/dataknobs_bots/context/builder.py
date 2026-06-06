@@ -225,14 +225,16 @@ class ContextPersister:
     ) -> None:
         """Persist context to conversation manager metadata.
 
+        Writes the rendered context section through the manager's
+        seed-aware ``update_seed_metadata`` so the call works both
+        before and after the conversation's state has been materialized
+        (e.g. a UI endpoint that runs before the first user turn).
+
         Args:
             context: Context to persist
             manager: ConversationManager instance
         """
-        metadata = getattr(manager, "metadata", {}) or {}
-
-        # Update context section in metadata
-        metadata["context"] = {
+        context_section = {
             "assumptions": [a.to_dict() for a in context.assumptions],
             "sections": [
                 {
@@ -245,8 +247,7 @@ class ContextPersister:
             "updated_at": context.updated_at,
         }
 
-        # Set metadata back on manager
-        manager.metadata = metadata
+        manager.update_seed_metadata({"context": context_section})
 
         logger.debug(
             "Persisted context",

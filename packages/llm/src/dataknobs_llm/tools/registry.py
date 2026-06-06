@@ -5,6 +5,7 @@ and managing tools that can be used with LLMs. Now built on the common
 Registry pattern from dataknobs_common.
 """
 
+import inspect
 import logging
 import time
 from typing import Any, Dict, List, Set
@@ -20,6 +21,31 @@ from dataknobs_llm.tools.observability import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _execute_accepts_var_keyword(tool: Tool) -> bool:
+    """Return whether the tool's ``execute`` accepts arbitrary ``**kwargs``.
+
+    Used by :meth:`ToolRegistry.execute_tool` to decide whether to
+    forward ``_``-prefixed internal params (``_context`` chief among
+    them) to the tool. Tools that declare ``**kwargs`` — chiefly
+    :class:`ContextAwareTool` — opt into receiving them; plain
+    :class:`Tool` subclasses with positional signatures (e.g.
+    ``execute(self, operation, a, b)``) would raise ``TypeError`` on
+    unexpected kwargs, so the registry strips internal params for them.
+
+    Falls back to ``False`` on any inspection failure (built-in
+    methods, C extensions) — strictly safer than forwarding kwargs that
+    might raise.
+    """
+    try:
+        sig = inspect.signature(tool.execute)
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in sig.parameters.values()
+    )
 
 
 class ToolRegistry(Registry[Tool]):
@@ -298,18 +324,29 @@ class ToolRegistry(Registry[Tool]):
 
         return [tool.to_anthropic_tool_definition() for tool in tools_to_include]
 
-    async def execute_tool(self, name: str, **kwargs: Any) -> Any:
+    async def execute_tool(self, name: str, /, **kwargs: Any) -> Any:
         """Execute a tool by name with given parameters.
 
         This is a convenience method for getting and executing a tool
         in a single call. When execution tracking is enabled, records
         timing, parameters, and results for observability.
 
+        The tool-name parameter is positional-only (the ``/`` marker)
+        so that ``kwargs`` may freely include a ``"name"`` key — a
+        common tool parameter (user names, file names, target names)
+        that would otherwise collide with the positional ``name`` and
+        raise ``TypeError: got multiple values for argument 'name'``.
+
         Args:
-            name: Name of the tool to execute
+            name: Name of the tool to execute (positional-only).
             **kwargs: Parameters to pass to the tool. Special parameters
-                starting with '_' (like _context) are passed to the tool
-                but excluded from execution records.
+                starting with ``_`` (like ``_context``) are forwarded to
+                tools whose ``execute`` signature accepts ``**kwargs``
+                (e.g. :class:`ContextAwareTool`) and excluded from
+                execution records. Tools whose ``execute`` signature
+                does not accept ``**kwargs`` receive only the non-``_``
+                params — passing internal params to such a tool would
+                raise ``TypeError``, so the registry strips them.
 
         Returns:
             Tool execution result
@@ -337,20 +374,31 @@ class ToolRegistry(Registry[Tool]):
         """
         tool = self.get_tool(name)
 
-        # Separate internal params from tool params
-        # Internal params (starting with _) are used by the registry but not passed to tools
+        # Separate internal params (starting with ``_``) from the params
+        # that get recorded onto the tracker.  Internal params are
+        # forwarded to tools that can accept them (``execute`` has a
+        # ``**kwargs`` parameter); plain tools whose signatures don't
+        # accept extra kwargs would raise ``TypeError`` if we forwarded.
         tool_params = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-        context = kwargs.get("_context")
+        internal_params = {k: v for k, v in kwargs.items() if k.startswith("_")}
+
+        call_kwargs = (
+            {**tool_params, **internal_params}
+            if internal_params and _execute_accepts_var_keyword(tool)
+            else tool_params
+        )
+
+        context = internal_params.get("_context")
 
         if not self._track_executions or self._execution_tracker is None:
-            return await tool.execute(**tool_params)
+            return await tool.execute(**call_kwargs)
 
         # Extract context ID if available
         context_id = getattr(context, "conversation_id", None) if context else None
 
         start_time = time.time()
         try:
-            result = await tool.execute(**tool_params)
+            result = await tool.execute(**call_kwargs)
             duration_ms = (time.time() - start_time) * 1000
 
             self._execution_tracker.record(

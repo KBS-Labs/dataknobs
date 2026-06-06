@@ -78,6 +78,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-default envelope without going through a config mapping; absent
   the keyword, the `DynaBotConfig` default `"markdown"` applies, so
   every existing call site is unchanged.
+- **`ContextPersister.persist()` now correctly persists conversation
+  context across the pre-/post-state boundary.** The previous
+  implementation read `manager.metadata` (a read-only `@property`)
+  and then assigned the mutated dict back to `manager.metadata` —
+  which raised `AttributeError: property 'metadata' has no setter`
+  on every call against a real `ConversationManager`. The call is
+  now routed through `ConversationManager.update_seed_metadata`, so
+  the context section is written to the live `state.metadata` (when
+  state has been materialized) and to the initial-metadata seed
+  bucket (always), with the same replace-not-merge semantic the
+  original implementation intended. Behavioural tests against a real
+  `ConversationManager` pin both the pre-state and post-state paths.
+- **`DynaBot._execute_tools` now routes through
+  `ToolRegistry.execute_tool` so the registry's execution tracker is
+  populated on real bot turns.** Pre-fix, DynaBot called
+  `tool.execute()` directly, bypassing the registry's recording code
+  path. Consumers reading `tool_registry.get_execution_history()`
+  always saw an empty list on a real turn — most notably
+  `ContextBuilder._extract_tool_history`, which surfaces tool history
+  into the prompt-rendered context section. The end-to-end chain
+  (DynaBot turn → tool execution → tracker → context history) was
+  broken at the first step. Dispatch now goes through
+  `registry.execute_tool`, whose forwarding semantic was fixed in
+  `dataknobs-llm` (`ContextAwareTool` receives `_context` per its
+  docstring; plain tools are unaffected). DynaBot's per-tool timing,
+  error handling, and `ToolExecution` records on `TurnState` are
+  unchanged — the only behavioural shift is that a registry
+  constructed with `track_executions=True` now sees a record per
+  tool call during a real bot turn.
 
 ## v0.7.1 - 2026-06-02
 

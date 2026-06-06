@@ -681,3 +681,120 @@ class TestToolRegistryExecutionTracking:
         assert history[0].parameters["a"] == 7
         assert history[1].parameters["a"] == 8
         assert history[2].parameters["a"] == 9
+
+
+class _KwargsAwareTool(Tool):
+    """Real :class:`Tool` whose ``execute`` accepts ``**kwargs``.
+
+    Stands in for ``ContextAwareTool`` in registry-level tests without
+    pulling in the higher-level abstraction. The ``VAR_KEYWORD`` in the
+    signature is the signal the registry uses to decide whether to
+    forward ``_``-prefixed internal params.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="kwargs_aware", description="captures kwargs")
+        self.last_kwargs: dict | None = None
+
+    @property
+    def schema(self):
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        self.last_kwargs = dict(kwargs)
+        return "ok"
+
+
+class TestExecuteToolForwardsInternalParams:
+    """Pin the registry-execute-tool contract for ``_``-prefixed params.
+
+    The :meth:`ToolRegistry.execute_tool` docstring promises that
+    ``_``-prefixed params (``_context`` chief among them) are *passed to
+    the tool* but *excluded from execution records*. Pre-fix, the
+    implementation only honoured the "excluded from records" half — it
+    silently dropped ``_context`` before calling ``tool.execute``, so a
+    ``ContextAwareTool`` invoked through the registry ran with the empty
+    fallback context. The fix matches the documented contract by
+    forwarding ``_``-prefixed params to tools whose ``execute`` signature
+    can accept them (i.e. has a ``**kwargs`` parameter); plain Tools
+    whose signatures don't accept them are unaffected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_kwargs_aware_tool_receives_internal_params(self):
+        """Reproducing pin — fails on pre-fix HEAD because ``_context``
+        is stripped before reaching the tool. Once the registry
+        forwards to tools accepting ``**kwargs``, the tool sees the
+        context object the caller passed.
+        """
+        registry = ToolRegistry()
+        tool = _KwargsAwareTool()
+        registry.register_tool(tool)
+
+        sentinel = object()
+        await registry.execute_tool("kwargs_aware", _context=sentinel)
+
+        assert tool.last_kwargs is not None
+        assert tool.last_kwargs.get("_context") is sentinel
+
+    @pytest.mark.asyncio
+    async def test_internal_params_still_excluded_from_record(self):
+        """Records continue to exclude ``_``-prefixed params (the
+        existing ``test_execute_tracking_sanitizes_internal_params``
+        pin), even with forwarding enabled.
+        """
+        registry = ToolRegistry(track_executions=True)
+        tool = _KwargsAwareTool()
+        registry.register_tool(tool)
+
+        await registry.execute_tool(
+            "kwargs_aware", real_param=42, _context="ctx"
+        )
+
+        history = registry.get_execution_history()
+        assert len(history) == 1
+        assert history[0].parameters == {"real_param": 42}
+        # Tool still sees the internal param.
+        assert tool.last_kwargs == {"real_param": 42, "_context": "ctx"}
+
+    @pytest.mark.asyncio
+    async def test_plain_tool_unaffected_by_internal_params(self):
+        """Plain Tools whose signatures don't accept ``**kwargs`` keep
+        working — the registry does not blindly forward internal params
+        to them and would otherwise raise ``TypeError``.
+        """
+        registry = ToolRegistry()
+        registry.register_tool(CalculatorTool())
+
+        # Pre-fix this works because internal params are stripped for
+        # ALL tools. Post-fix it must continue to work for plain Tools
+        # because the registry inspects the signature and only forwards
+        # when ``**kwargs`` is present.
+        result = await registry.execute_tool(
+            "calculator", operation="add", a=5, b=3, _context="ignored"
+        )
+        assert result == 8
+
+    @pytest.mark.asyncio
+    async def test_kwargs_may_contain_name_key(self):
+        """A tool parameter named ``"name"`` must not collide with the
+        positional tool-name argument.
+
+        Reproducing pin — fails on pre-fix HEAD with
+        ``TypeError: got multiple values for argument 'name'``.
+        The fix marks the tool-name parameter positional-only so that
+        ``name`` is freely available as a tool kwarg (user names, file
+        names, target names — extremely common shapes in real tool
+        APIs). Without the fix, routing DynaBot through
+        ``execute_tool`` raised on every tool whose params dict carried
+        a ``"name"`` key.
+        """
+        registry = ToolRegistry()
+        tool = _KwargsAwareTool()
+        registry.register_tool(tool)
+
+        await registry.execute_tool(
+            "kwargs_aware", name="Alice", greeting="hi"
+        )
+
+        assert tool.last_kwargs == {"name": "Alice", "greeting": "hi"}

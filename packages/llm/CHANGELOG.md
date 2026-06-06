@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Seed-aware metadata API on `ConversationManager`**
+  (`dataknobs_llm.conversations`). `ConversationManager` carries
+  metadata in two buckets: the live `state.metadata` (the unit of
+  persistence) and an internal initial-metadata seed bucket. On the
+  first `add_message`, the seed bucket is passed *by reference* into
+  `ConversationState.metadata`, so post-first-materialization the two
+  attributes name the same dict. `resume()` aliases the seed bucket to
+  the loaded `state.metadata` so post-resume has the same shape — the
+  two-bucket model is a pre-state distinction only; post-state the
+  buckets are the same dict object. The existing
+  `set_metadata` / `update_metadata` / `remove_metadata` family writes
+  only to the live bucket, so it silently no-ops pre-state — by
+  design, paired with the post-state-only `metadata` property
+  (whose own pre-state return is `{}`). The new
+  `seed_metadata(key, value)` / `update_seed_metadata(updates)` /
+  `remove_seed_metadata(key)` / `get_seed_metadata(key=None)` family
+  crosses the pre-/post-state boundary: pre-state the writers touch
+  the seed bucket (the only bucket that exists), and post-state they
+  touch the shared dict once. `await add_seed_metadata(key, value)` is
+  the async, persisting analogue of `add_metadata` — pre-state it
+  writes the seed bucket without raising, post-state it writes and
+  immediately persists via `save()`. The `_writable_buckets()` /
+  `_readable_bucket()` private generator helpers name the two-bucket
+  abstraction once so the five public methods share one shape. The
+  existing metadata methods are unchanged; each carries a `See Also:`
+  pointer to its seed sibling so the gap is discoverable from the
+  existing surface. None of the sync seed-* writers auto-persist —
+  they match the existing sync non-persisting contract.
+- **Public `ConversationManager.save()`** — durably persists the
+  current state to storage. The metadata-method docstrings (existing
+  AND seed-aware) already referenced `save()` as the public escape
+  hatch for persisting sync writes; the method now exists. Delegates
+  to the pre-existing private `_save_state()`. Silent no-op pre-state
+  (nothing to persist).
+
+### Fixed
+
+- **`get_metadata` / `get_seed_metadata` now reject orphan `default`**.
+  Pre-fix, `get_metadata(default="x")` (no `key`) silently discarded
+  the default and returned the whole bucket dict — a quirk inherited
+  from `dict.get` but ambiguous here because `key` is `Optional`. A
+  consumer writing `manager.get_seed_metadata(default={"fallback": True})`
+  (thinking "give me the bucket, or this fallback if empty") got `{}`,
+  not the fallback. Passing `default` without `key` now raises
+  `TypeError`. The normal `(key, default)` shape is unchanged. Pre-fix
+  callers passing orphan `default` were silently buggy; the strict
+  contract surfaces them at the call site.
+- **`ConversationManager.resume()` now aliases the seed bucket to the
+  loaded `state.metadata`**. Pre-fix, a resumed manager carried two
+  divergent dicts — `_initial_metadata` was empty `{}` while
+  `state.metadata` carried the loaded data. A post-resume
+  `seed_metadata` write reached the empty seed bucket, but that
+  bucket was never consumed again, so the write was effectively dead
+  on the resume path. The alias makes the two attributes name the
+  same dict object, matching the post-first-materialization shape —
+  the two-bucket model collapses post-state across the entire
+  lifecycle. No public-API change; consumers that read `state.metadata`
+  or `get_seed_metadata()` see the same value before and after the
+  fix when only `state.metadata` was populated, but
+  `seed_metadata`/`update_seed_metadata`/`add_seed_metadata` writes
+  on a resumed manager are now operationally meaningful.
+- **`ToolRegistry.execute_tool` now forwards `_`-prefixed internal
+  params to tools that accept `**kwargs`**. The method's docstring
+  promised `_context` was passed to the tool but excluded from
+  execution records; the implementation only honoured the
+  exclusion-from-records half, silently stripping internal params
+  before calling `tool.execute`. A `ContextAwareTool` invoked through
+  the registry ran with the empty fallback context. The fix inspects
+  the tool's `execute` signature: tools declaring `**kwargs` (chiefly
+  `ContextAwareTool`) receive forwarded internal params; plain tools
+  whose signatures don't accept `**kwargs` continue to receive only
+  the non-`_` params (forwarding would otherwise raise `TypeError`).
+  Records continue to exclude `_`-prefixed params, preserving the
+  existing observability contract.
+- **`ToolRegistry.execute_tool`'s tool-name parameter is now
+  positional-only.** Pre-fix the signature was
+  `execute_tool(self, name, **kwargs)`, so a tool whose parameters
+  dict carried a `"name"` key (extremely common — user names, file
+  names, target names) would collide with the positional `name` and
+  raise `TypeError: got multiple values for argument 'name'`. The
+  `/` positional-only marker lets `kwargs` freely include `name`.
+  Surfaced when DynaBot routed its tool dispatch through the
+  registry; the existing test suite did not exercise it because the
+  pre-existing call sites used tool params like `operation` / `a` /
+  `b` / `query` that didn't collide.
+
 ## v0.6.1 - 2026-06-02
 
 ### Added

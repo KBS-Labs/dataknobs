@@ -1456,6 +1456,105 @@ await manager.add_message(
 )
 ```
 
+#### Pre-state metadata: `seed_metadata` vs `set_metadata`
+
+`ConversationManager` holds metadata in two buckets:
+
+- `state.metadata` — the live, persisted bucket; the unit of persistence.
+- An internal seed bucket — what was passed to `metadata=` on `create()`;
+  copied onto `state.metadata` at the first message.
+
+The existing `set_metadata` / `update_metadata` / `remove_metadata` methods
+write only to `state.metadata`, so they **silently no-op** before the
+first message has materialized state. This is by design — they pair with
+the post-state-only `metadata` property — but it surprises callers that
+want to seed a value before the first turn.
+
+For writes that must survive across the pre-/post-state boundary, use
+the `seed_*` family:
+
+```python
+manager = await ConversationManager.create(
+    llm=llm, prompt_builder=builder, storage=storage,
+)
+
+# Pre-state: set_metadata silently no-ops; seed_metadata works.
+manager.set_metadata("active_project_id", "proj-42")
+assert manager.get_metadata("active_project_id") is None  # !!
+
+manager.seed_metadata("active_project_id", "proj-42")
+assert manager.get_seed_metadata("active_project_id") == "proj-42"
+
+# After the first turn, the seeded value is on state.metadata.
+await manager.add_message(role="user", content="hi")
+assert manager.state.metadata["active_project_id"] == "proj-42"
+```
+
+Use `seed_metadata` when:
+
+- A UI-driven endpoint mutates a conversation-level value (a tenant ID,
+  an active-project ID, an ownership marker) before the first message.
+- A route handler does an ownership check on a not-yet-materialized
+  conversation: `manager.get_seed_metadata("owner")` works pre- and
+  post-state.
+
+Use `set_metadata` (the existing family) when the write should only
+apply once the conversation has at least one message — i.e., per-turn
+state that has no meaning before the first turn.
+
+The full seed-aware family:
+
+| Method | Sibling of | Persists immediately? |
+|---|---|---|
+| `seed_metadata(key, value)` | `set_metadata` | No — call `save()` |
+| `update_seed_metadata(updates)` | `update_metadata` | No — call `save()` |
+| `remove_seed_metadata(key)` | `remove_metadata` | No — call `save()` |
+| `await add_seed_metadata(key, value)` | `await add_metadata` | **Yes** (post-state) |
+| `get_seed_metadata(key=None, default=None)` | `get_metadata` | n/a (read) |
+
+The sync `seed_metadata` / `update_seed_metadata` / `remove_seed_metadata`
+trio matches the non-persisting contract of the existing sync family —
+call `await manager.save()` (or rely on the next turn's persisted
+append) to durably store the write. The async `add_seed_metadata` is
+the seed analogue of `add_metadata`: pre-state it writes to the seed
+bucket and short-circuits the persistence step (there is no state to
+persist yet, but the write survives state materialization); post-state
+it writes the live bucket and persists immediately, so a subsequent
+`resume()` observes the value without an intervening turn.
+
+```python
+# Pre-state: works, no persistence yet (nothing to persist).
+await manager.add_seed_metadata("active_project_id", "proj-42")
+
+# After the first turn the seed value lands on state.metadata as usual.
+await manager.add_message(role="user", content="hi")
+assert manager.state.metadata["active_project_id"] == "proj-42"
+
+# Post-state: writes + persists; a fresh resume sees the value.
+await manager.add_seed_metadata("tenant_id", "tenant-a")
+resumed = await ConversationManager.resume(
+    conversation_id=manager.conversation_id,
+    llm=llm, prompt_builder=builder, storage=storage,
+)
+assert resumed.get_seed_metadata("tenant_id") == "tenant-a"
+```
+
+Unlike `add_metadata`, the seed analogue does NOT raise pre-state —
+that's the whole point of being seed-aware.
+
+### `save()`: durably persisting sync writes
+
+Both metadata families include sync writers (`set_metadata`,
+`seed_metadata`, etc.) that mutate in-memory state without
+auto-persisting. `await manager.save()` is the public escape hatch
+that persists the current state to storage. Pre-state the call is a
+silent no-op (there is no state to persist).
+
+```python
+manager.seed_metadata("user_tier", "premium")
+await manager.save()  # durable
+```
+
 ---
 
 ## Complete Examples
