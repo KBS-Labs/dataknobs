@@ -295,3 +295,132 @@ class TestContextBuilderToolRegistry:
 
         assert len(context.tool_history) == 1
         assert context.tool_history[0]["tool_name"] == "fallback"
+
+
+class TestContextPersisterAgainstRealManager:
+    """Behavioural pins exercising :class:`ContextPersister` against a
+    real :class:`ConversationManager`.
+
+    The existing :class:`TestContextPersister` uses ``MagicMock`` for the
+    manager, which silently accepts attribute assignment to ``metadata``
+    — so it did not catch the production bug where the real manager's
+    ``metadata`` is a read-only ``@property``. These tests pin both
+    paths (pre-state and post-state).
+    """
+
+    @staticmethod
+    async def _new_manager():
+        """Build a real :class:`ConversationManager` with echo provider
+        and in-memory storage."""
+        import tempfile
+        from pathlib import Path
+
+        import yaml as _yaml
+
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import (
+            ConversationManager,
+            DataknobsConversationStorage,
+        )
+        from dataknobs_llm.llm import EchoProvider, LLMConfig
+        from dataknobs_llm.prompts import (
+            AsyncPromptBuilder,
+            FileSystemPromptLibrary,
+        )
+
+        tmpdir = tempfile.mkdtemp()
+        prompt_dir = Path(tmpdir) / "prompts"
+        (prompt_dir / "system").mkdir(parents=True)
+        (prompt_dir / "user").mkdir(parents=True)
+        (prompt_dir / "system" / "helpful.yaml").write_text(
+            _yaml.dump({"template": "You are a helpful assistant"})
+        )
+
+        llm = EchoProvider(
+            LLMConfig(
+                provider="echo",
+                model="echo-model",
+                options={"echo_prefix": ""},
+            )
+        )
+        library = FileSystemPromptLibrary(prompt_dir)
+        builder = AsyncPromptBuilder(library=library)
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+        return await ConversationManager.create(
+            llm=llm, prompt_builder=builder, storage=storage
+        )
+
+    @pytest.mark.asyncio
+    async def test_persist_against_pre_state_manager_writes_context_section(
+        self,
+    ) -> None:
+        """Reproducing pin for the latent ``AttributeError`` bug.
+
+        Against HEAD, ``ContextPersister.persist`` does
+        ``manager.metadata = metadata`` against a manager whose
+        ``metadata`` is a read-only ``@property``. This raises
+        ``AttributeError: can't set attribute``. Test fails on HEAD;
+        passes once :meth:`persist` routes through
+        ``update_seed_metadata``.
+        """
+        from dataknobs_bots.context.accumulator import ConversationContext
+
+        manager = await self._new_manager()
+        # Pre-state: no messages added yet.
+        assert manager.state is None
+
+        context = ConversationContext(
+            conversation_id=manager.conversation_id
+        )
+        context.add_assumption(content="user wants tutor", confidence=0.8)
+        context.add_section(name="profile", content="advanced", priority=70)
+
+        persister = ContextPersister()
+        persister.persist(context, manager)  # must not raise
+
+        # After the fix lands, the context section is readable through
+        # the seed accessor pre-state...
+        seeded = manager.get_seed_metadata("context")
+        assert seeded is not None
+        assert len(seeded["assumptions"]) == 1
+        assert seeded["assumptions"][0]["content"] == "user wants tutor"
+        assert len(seeded["sections"]) == 1
+        assert seeded["sections"][0]["name"] == "profile"
+
+        # ...and survives state materialization.
+        await manager.add_message(role="user", content="hi")
+        assert manager.state.metadata["context"]["sections"][0]["name"] == "profile"
+
+    @pytest.mark.asyncio
+    async def test_persist_against_post_state_manager_replaces_section(
+        self,
+    ) -> None:
+        """Post-state path — also raised ``AttributeError`` before the
+        fix. Also pins the original *replace* semantic of the
+        ``metadata["context"] = ...`` write: calling :meth:`persist`
+        again with an updated context replaces the section rather than
+        merging into it.
+        """
+        from dataknobs_bots.context.accumulator import ConversationContext
+
+        manager = await self._new_manager()
+        await manager.add_message(role="user", content="hi")
+        assert manager.state is not None
+
+        persister = ContextPersister()
+
+        first = ConversationContext(conversation_id=manager.conversation_id)
+        first.add_assumption(content="first", confidence=0.5)
+        persister.persist(first, manager)
+        assert manager.state.metadata["context"]["assumptions"][0]["content"] == "first"
+
+        # Second call with a different context — must replace, not merge.
+        second = ConversationContext(conversation_id=manager.conversation_id)
+        second.add_section(name="custom", content="payload", priority=60)
+        persister.persist(second, manager)
+
+        section = manager.state.metadata["context"]
+        assert section["assumptions"] == []
+        assert len(section["sections"]) == 1
+        assert section["sections"][0]["name"] == "custom"
