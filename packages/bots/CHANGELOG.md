@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.7.3 - 2026-06-08
+
 ### Added
 
 - `DynaBot.get_steps_of_type(step_cls)` — typed helper that returns
