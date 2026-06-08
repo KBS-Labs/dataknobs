@@ -5,6 +5,27 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-06-08
+
+### dataknobs-data [0.5.1]
+
+#### Changed
+- Updated dependencies
+
+### dataknobs-fsm [0.2.1]
+
+#### Changed
+- Updated dependencies
+
+### dataknobs-bots [0.7.3]
+
+#### Added
+- Add public accessors for reasoning-strategy state on DynaBot
+
+#### Changed
+- Updated dependencies
+
+
 ## Release - 2026-06-06
 
 ### dataknobs-llm [0.6.2]
