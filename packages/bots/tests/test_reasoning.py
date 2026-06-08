@@ -570,11 +570,11 @@ class TestReActExtraContext:
             },
         }
 
-        bot = await DynaBot.from_config(config)
+        bot = await DynaBot.from_config(
+            config,
+            reasoning_components={"extra_context": {"my_key": "my_value"}},
+        )
         bot.tool_registry.register_tool(ContextCaptureTool())
-
-        # Inject extra_context into the reasoning strategy
-        bot.reasoning_strategy._extra_context = {"my_key": "my_value"}
 
         context = BotContext(
             conversation_id="conv-extra-ctx", client_id="test-client"

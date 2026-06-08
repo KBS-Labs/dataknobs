@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
@@ -606,6 +606,41 @@ class ReasoningStrategy(ABC):
             ``False`` otherwise.
         """
         return False
+
+    def restore_from_checkpoint(  # noqa: B027
+        self,
+        manager: ReasoningManagerProtocol,
+        node_metadata: Mapping[str, Any],
+    ) -> None:
+        """Restore strategy state from a checkpoint node's metadata.
+
+        Called by ``DynaBot.undo_last_turn`` / ``rewind_to_turn`` after
+        the conversation tree is reverted to the checkpoint node, so the
+        strategy can reinstate any per-state buckets it persists into
+        that node's metadata.
+
+        Default: no-op (most strategies hold no per-turn state that
+        survives the node revert).
+
+        Args:
+            manager: ConversationManager being restored.
+            node_metadata: The checkpoint node's metadata dict. The
+                strategy reads only its own keys; foreign keys are
+                ignored.
+        """
+
+    def undo_to_checkpoint(self, checkpoint_node_id: str) -> None:  # noqa: B027
+        """Revert strategy-owned state to a checkpoint node.
+
+        Called by ``DynaBot.undo_last_turn`` / ``rewind_to_turn`` so the
+        strategy can revert any state it tracks against conversation node
+        IDs (e.g. memory banks keyed by checkpoint id).
+
+        Default: no-op (most strategies hold no node-keyed state).
+
+        Args:
+            checkpoint_node_id: The node ID to revert to.
+        """
 
     async def close(self) -> None:  # noqa: B027
         """Release resources held by this strategy.

@@ -171,6 +171,7 @@ def create_reasoning_from_config(
     knowledge_base: Any | None = None,
     prompt_resolver: PromptResolver | None = None,
     prompt_envelope: Any | None = None,
+    **components: Any,
 ) -> ReasoningStrategy:
     """Create reasoning strategy from configuration.
 
@@ -203,6 +204,14 @@ def create_reasoning_from_config(
             it to its embedded grounded child so the same style applies.
             Strategies that don't consume it ignore it via the
             components-channel signature-aware delivery.
+        **components: Additional keyword arguments forwarded into the
+            strategy's components channel via the registry's
+            ``create()``. Strategies pick up the keys they read (e.g.
+            ``ReActReasoning`` reads ``extra_context`` /
+            ``artifact_registry`` / ``review_executor`` /
+            ``context_builder`` / ``prompt_refresher``); unknown keys
+            are silently absorbed onto ``self.components`` by the
+            ``StructuredConfigConsumer`` mixin and ignored.
 
     Returns:
         Configured reasoning strategy instance.
@@ -231,4 +240,5 @@ def create_reasoning_from_config(
         knowledge_base=knowledge_base,
         prompt_resolver=prompt_resolver,
         prompt_envelope=prompt_envelope,
+        **components,
     )
