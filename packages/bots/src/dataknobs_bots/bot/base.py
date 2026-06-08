@@ -12,7 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import (
@@ -534,7 +534,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             return ref
         if isinstance(ref, str):
             from dataknobs_bots.tools.resolve import resolve_callable
-            from dataknobs_common.exceptions import ConfigurationError
 
             try:
                 return resolve_callable(ref)
@@ -755,8 +754,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             return
 
         if not self.config.llm:
-            from dataknobs_common.exceptions import ConfigurationError
-
             raise ConfigurationError(
                 "DynaBot config-driven construction requires an 'llm' "
                 "section (at minimum 'provider' and 'model'), or a pre-built "
@@ -830,8 +827,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             capability_values = {cap.value for cap in capabilities}
             missing = [r for r in requirements if r not in capability_values]
             if missing:
-                from dataknobs_common.exceptions import ConfigurationError
-
                 model_name = self.config.llm.get("model", "unknown")
                 raise ConfigurationError(
                     f"Bot requires capabilities {missing} but model "
@@ -853,8 +848,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 "'backend' will be ignored."
             )
         if not storage_class_path and not has_backend:
-            from dataknobs_common.exceptions import ConfigurationError
-
             raise ConfigurationError(
                 "conversation_storage requires either 'backend' or "
                 "'storage_class'. Use 'backend' for the default "
@@ -1024,8 +1017,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             managed = {"knowledge_base", "prompt_resolver", "prompt_envelope"}
             collisions = managed & extra_components.keys()
             if collisions:
-                from dataknobs_common.exceptions import ConfigurationError
-
                 raise ConfigurationError(
                     f"reasoning_components cannot override bot-managed "
                     f"component(s): {sorted(collisions)}. These are built "
@@ -2782,7 +2773,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
 
         Returns:
             Matching steps in pipeline insertion order; empty list when
-            no match is possible.
+            no match is possible. The returned list is a snapshot —
+            mutations to it do not affect the strategy's step collection.
 
         Example:
             ```python
@@ -3166,8 +3158,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         """
         import importlib
 
-        from dataknobs_common.exceptions import ConfigurationError
-
         optional = (
             tool_config.get("optional", False)
             if isinstance(tool_config, dict)
@@ -3384,8 +3374,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 (always raises, regardless of ``optional``).
         """
         import importlib
-
-        from dataknobs_common.exceptions import ConfigurationError
 
         optional = config.get("optional", False)
         class_path = config.get("class", "<missing>")

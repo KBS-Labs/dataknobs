@@ -21,7 +21,6 @@ from dataknobs_bots.reasoning.base import ReasoningStrategy
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-
 # =====================================================================
 # Helpers
 # =====================================================================
@@ -48,9 +47,11 @@ class _StubManager:
 
 
 def _wizard_config(
-    *, with_banks: bool = False, with_history: bool = False
+    *,
+    bank_names: tuple[str, ...] = (),
+    with_history: bool = False,
 ) -> dict[str, Any]:
-    """Build a minimal valid wizard config, optionally with banks."""
+    """Build a minimal valid wizard config, optionally with named banks."""
     config: dict[str, Any] = {
         "name": "checkpoint-test-wizard",
         "version": "1.0",
@@ -69,13 +70,14 @@ def _wizard_config(
             {"name": "done", "is_end": True, "prompt": "Finished"},
         ],
     }
-    if with_banks:
+    if bank_names:
         config["settings"] = {
             "banks": {
-                "ingredients": {
+                name: {
                     "schema": {"required": ["name"]},
                     "max_records": 10,
-                },
+                }
+                for name in bank_names
             },
         }
     if with_history:  # placeholder for future history-related cases
@@ -83,10 +85,10 @@ def _wizard_config(
     return config
 
 
-def _build_wizard(*, with_banks: bool = False) -> WizardReasoning:
+def _build_wizard(*, bank_names: tuple[str, ...] = ()) -> WizardReasoning:
     """Build a real ``WizardReasoning`` (no mocks) for unit-level tests."""
     loader = WizardConfigLoader()
-    fsm = loader.load_from_dict(_wizard_config(with_banks=with_banks))
+    fsm = loader.load_from_dict(_wizard_config(bank_names=bank_names))
     return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
 
@@ -198,38 +200,43 @@ class TestWizardRestoreFromCheckpoint:
 # =====================================================================
 
 
-class _SpyBank:
-    """Records ``undo_to_checkpoint`` calls for assertions."""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def undo_to_checkpoint(self, checkpoint_node_id: str) -> int:
-        self.calls.append(checkpoint_node_id)
-        return 0
-
-
 class TestWizardUndoToCheckpoint:
-    """``WizardReasoning`` iterates its ``_banks`` and forwards the id."""
+    """``WizardReasoning`` iterates its banks and forwards the id."""
 
     def test_iterates_all_banks_with_checkpoint_id(self) -> None:
-        strategy = _build_wizard()
-        spy_a = _SpyBank()
-        spy_b = _SpyBank()
-        # Replace the wizard's auto-built bank dict with spies so we can
-        # observe forwarding deterministically without depending on the
-        # real MemoryBank.
-        strategy._banks = {"alpha": spy_a, "beta": spy_b}
+        """Two configured banks both have their records past the
+        checkpoint removed — proving the forwarding loop covers every
+        bank, not just the first.
 
-        strategy.undo_to_checkpoint("node-7")
+        Records added at ``"0.0.1"`` are not ancestors of the checkpoint
+        ``"0.0"`` and should be removed; records added at ``"0.0"`` (the
+        checkpoint itself) survive. Asserting the observable bank state
+        rather than the call sequence keeps the test honest against the
+        real ``MemoryBank.undo_to_checkpoint`` contract.
+        """
+        strategy = _build_wizard(bank_names=("alpha", "beta"))
+        banks = strategy.banks
+        assert set(banks) == {"alpha", "beta"}
 
-        assert spy_a.calls == ["node-7"]
-        assert spy_b.calls == ["node-7"]
+        # Each bank gets one ancestor record (kept) + one descendant
+        # record (removed by undo).
+        for name in ("alpha", "beta"):
+            bank = banks[name]
+            assert isinstance(bank, MemoryBank)
+            bank.add({"name": f"{name}-keep"}, source_node_id="0.0")
+            bank.add({"name": f"{name}-drop"}, source_node_id="0.0.1")
+            assert bank.count() == 2
+
+        strategy.undo_to_checkpoint("0.0")
+
+        for name in ("alpha", "beta"):
+            survivors = [r.data["name"] for r in banks[name].all()]
+            assert survivors == [f"{name}-keep"]
 
     def test_noop_when_banks_empty(self) -> None:
         """A wizard with no configured banks has nothing to undo."""
-        strategy = _build_wizard(with_banks=False)
-        assert strategy._banks == {}
+        strategy = _build_wizard()
+        assert dict(strategy.banks) == {}
         # No bank means nothing to forward to — call must not raise.
         strategy.undo_to_checkpoint("node-42")
 
@@ -237,10 +244,11 @@ class TestWizardUndoToCheckpoint:
         """A wizard with a real ``MemoryBank`` undoes cleanly even when the
         bank has no records yet — guards against the loop breaking on
         zero-record edge cases."""
-        strategy = _build_wizard(with_banks=True)
+        strategy = _build_wizard(bank_names=("ingredients",))
+        banks = strategy.banks
         # The wizard's auto-built bank is keyed by config name.
-        assert "ingredients" in strategy._banks
-        bank = strategy._banks["ingredients"]
+        assert "ingredients" in banks
+        bank = banks["ingredients"]
         assert isinstance(bank, MemoryBank)
         # Real ``MemoryBank.undo_to_checkpoint`` returns 0 on empty bank.
         strategy.undo_to_checkpoint("0.0.0")

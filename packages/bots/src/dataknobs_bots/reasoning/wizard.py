@@ -19,6 +19,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.serialization import sanitize_for_json
@@ -1066,6 +1067,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     def extractor(self) -> Any | None:
         """The current extractor instance, or None if not configured."""
         return self._extractor
+
+    @property
+    def banks(self) -> Mapping[str, Any]:
+        """Read-only view of this wizard's memory banks, keyed by name.
+
+        Returns a ``MappingProxyType`` over the internal bank dict so
+        callers can iterate, look up, and inspect banks without being
+        able to mutate the collection. Bank instances themselves are
+        returned by reference — caller code (and tests) interacts with
+        the same ``MemoryBank`` objects the wizard uses.
+        """
+        return MappingProxyType(self._banks)
 
     def set_extractor(self, extractor: Any) -> None:
         """Replace the extractor instance.

@@ -13,6 +13,8 @@ loudly with a ``ConfigurationError``.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -20,10 +22,9 @@ import pytest
 
 from dataknobs_bots import BotContext, DynaBot
 from dataknobs_bots.reasoning.base import ReasoningStrategy
-from dataknobs_bots.reasoning.registry import register_strategy
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_bots.reasoning.registry import get_registry, register_strategy
+from dataknobs_common.exceptions import ConfigurationError, NotFoundError
 from dataknobs_common.structured_config import StructuredConfig, StructuredConfigConsumer
-
 
 # =====================================================================
 # Test fixtures: a minimal strategy that captures its components.
@@ -66,13 +67,21 @@ _TEST_STRATEGY_KEY = "_test_component_capture"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _register_capture_strategy() -> None:
-    """Register the capture strategy once for this module's tests."""
+def _register_capture_strategy() -> Iterator[None]:
+    """Register the capture strategy for this module's tests and remove it
+    on teardown so the process-global strategy registry doesn't accumulate
+    test-only keys across runs."""
     register_strategy(
         _TEST_STRATEGY_KEY,
         _ComponentCaptureStrategy,
         override=True,
     )
+    try:
+        yield
+    finally:
+        # Already unregistered (e.g. a parallel test cleaned up) is fine.
+        with contextlib.suppress(NotFoundError):
+            get_registry().unregister(_TEST_STRATEGY_KEY)
 
 
 # =====================================================================
