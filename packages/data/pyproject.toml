@@ -52,7 +52,7 @@ parquet = [
 vector = [
     "pgvector>=0.2.0",  # PostgreSQL vector extension
     "faiss-cpu>=1.7.4",  # Optional for Faiss backend
-    "chromadb>=1.0.0",  # Optional for Chroma backend; ChromaVectorStore targets the 1.x API
+    "chromadb>=1.0.0",  # Optional for Chroma backend; ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-06-08 — not exposed in this package (ChromaVectorStore uses chromadb.Client / chromadb.PersistentClient only; no HttpClient / server mode)
     "asyncpg>=0.29.0",  # Required for PgVectorStore backend
 ]
 all = [
