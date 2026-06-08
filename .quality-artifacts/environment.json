@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-06T02:55:12Z",
+  "timestamp": "2026-06-08T15:28:22Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.18 (Homebrew 2026-06-01 aarch64-apple-darwin)",
+  "uv_version": "uv 0.11.19 (Homebrew 2026-06-03 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/conversation-manager-seed-metadata-api",
-  "git_commit": "785fdeae48158397307b4cd4118e0e0b5c95927a",
+  "git_branch": "sbk/bots-public-pipeline-step-iteration",
+  "git_commit": "cfa924036200d629625223413c716b9374bfea04",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
