@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from dataknobs_common.exceptions import NotFoundError
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -48,6 +48,10 @@ PROVIDER_ROLE_EXTRACTION = "extraction"
 PROVIDER_ROLE_MEMORY_EMBEDDING = "memory_embedding"
 PROVIDER_ROLE_SUMMARY_LLM = "summary_llm"
 PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
+
+# Type variable for ``DynaBot.get_steps_of_type`` — preserves the caller's
+# requested class as the element type of the returned list.
+_StepT = TypeVar("_StepT")
 
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
@@ -607,6 +611,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
         conversation_middleware: list[ConversationMiddleware] | None = None,
+        reasoning_components: Mapping[str, Any] | None = None,
     ) -> DynaBot:
         """Create DynaBot from configuration.
 
@@ -650,6 +655,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 When provided, replaces any ``conversation_middleware``
                 defined in config.  Use this to inject a shared / per-test
                 middleware instance against an otherwise config-driven bot.
+            reasoning_components: Optional mapping of consumer-supplied
+                collaborators forwarded into the reasoning strategy's
+                ``StructuredConfigConsumer.components`` channel at
+                construction time. Strategies pick up the keys they read
+                (e.g. ``ReActReasoning`` reads ``extra_context`` /
+                ``artifact_registry`` / ``review_executor`` /
+                ``context_builder`` / ``prompt_refresher``); unknown keys
+                are silently absorbed onto ``strategy.components`` and
+                ignored. Bot-managed component names
+                (``knowledge_base``, ``prompt_resolver``,
+                ``prompt_envelope``) raise ``ConfigurationError`` on
+                collision — supply them via the corresponding config
+                sections.
 
         Returns:
             Configured DynaBot instance
@@ -696,11 +714,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             components["middleware"] = middleware
         if conversation_middleware is not None:
             components["conversation_middleware"] = conversation_middleware
+        if reasoning_components is not None:
+            components["reasoning_components"] = reasoning_components
         # Async-canonical construction: route through the structured-config
         # lifecycle (from_config_async → __init__ → _setup → _ainit) rather
         # than returning a half-built instance. The `llm` / `middleware` /
-        # `conversation_middleware` kwargs travel the injected-collaborator
-        # channel to _ainit.
+        # `conversation_middleware` / `reasoning_components` kwargs travel
+        # the injected-collaborator channel to _ainit.
         return await cls.from_config_async(config, **components)
 
     async def _ainit(
@@ -709,6 +729,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         llm: AsyncLLMProvider | None = None,
         middleware: list[Middleware] | None = None,
         conversation_middleware: list[ConversationMiddleware] | None = None,
+        reasoning_components: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> None:
         """Async build: create/adopt the provider, then build collaborators.
@@ -729,6 +750,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             await self._build_collaborators(
                 middleware_override=middleware,
                 conversation_middleware_override=conversation_middleware,
+                reasoning_components=reasoning_components,
             )
             return
 
@@ -755,6 +777,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             await self._build_collaborators(
                 middleware_override=middleware,
                 conversation_middleware_override=conversation_middleware,
+                reasoning_components=reasoning_components,
             )
         except Exception:
             await created_llm.close()
@@ -765,6 +788,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         *,
         middleware_override: list[Middleware] | None = None,
         conversation_middleware_override: list[ConversationMiddleware] | None = None,
+        reasoning_components: Mapping[str, Any] | None = None,
     ) -> None:
         """Build and bind the configured collaborators onto ``self``.
 
@@ -774,6 +798,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         middleware, and the system-prompt fields from ``self.config``.
         Separated so :meth:`_ainit` can guarantee cleanup of an
         internally-created provider if anything here raises.
+
+        Consumer-supplied ``reasoning_components`` are forwarded into the
+        strategy's components channel (alongside the bot-managed
+        ``knowledge_base`` / ``prompt_resolver`` / ``prompt_envelope``
+        collaborators). Collisions on those bot-managed names raise
+        ``ConfigurationError`` to surface configuration errors loudly
+        rather than silently dropping the consumer's value.
         """
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
@@ -989,11 +1020,27 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                         reasoning_config["config_base_path"],
                         config_base_path,
                     )
+            extra_components = dict(reasoning_components or {})
+            managed = {"knowledge_base", "prompt_resolver", "prompt_envelope"}
+            collisions = managed & extra_components.keys()
+            if collisions:
+                from dataknobs_common.exceptions import ConfigurationError
+
+                raise ConfigurationError(
+                    f"reasoning_components cannot override bot-managed "
+                    f"component(s): {sorted(collisions)}. These are built "
+                    f"by DynaBot itself from the bot's config "
+                    f"(knowledge_base section, prompts section, "
+                    f"prompt_envelope field) and forwarded into the "
+                    f"strategy. Configure them through the bot config "
+                    f"rather than overriding here."
+                )
             reasoning_strategy = create_reasoning_from_config(
                 reasoning_config,
                 knowledge_base=knowledge_base,
                 prompt_resolver=prompt_resolver,
                 prompt_envelope=self._prompt_envelope,
+                **extra_components,
             )
 
             # Config-driven source construction for strategies that
@@ -2715,6 +2762,42 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # Delete from storage
         return await self.conversation_storage.delete_conversation(conversation_id)
 
+    def get_steps_of_type(self, step_cls: type[_StepT]) -> list[_StepT]:
+        """Return reasoning-strategy pipeline steps matching ``step_cls``.
+
+        Iterates ``self.reasoning_strategy.steps`` (when the strategy
+        exposes one) and filters by ``isinstance``. Returns an empty
+        list when the bot has no reasoning strategy, when the strategy
+        is not pipeline-shaped (no ``steps`` attribute), or when no
+        step matches.
+
+        Intended for post-construction injection of runtime collaborators
+        that configuration cannot carry (e.g. resources owned by the
+        host application's lifespan). The typed return removes the need
+        for the caller to ``getattr``-chain through the strategy or to
+        write an ``isinstance`` filter inline.
+
+        Args:
+            step_cls: The class to filter by. Subclass instances match.
+
+        Returns:
+            Matching steps in pipeline insertion order; empty list when
+            no match is possible.
+
+        Example:
+            ```python
+            for step in bot.get_steps_of_type(MyHandler):
+                step.attach_service(service)
+            ```
+        """
+        strategy = self.reasoning_strategy
+        if strategy is None:
+            return []
+        steps = getattr(strategy, "steps", None)
+        if steps is None:
+            return []
+        return [s for s in steps if isinstance(s, step_cls)]
+
     async def get_wizard_state(self, conversation_id: str) -> dict[str, Any] | None:
         """Get current wizard state for a conversation.
 
@@ -3508,18 +3591,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     def _restore_wizard_from_node(
         self, manager: ConversationManager, node_id: str
     ) -> None:
-        """Restore wizard FSM state from a checkpoint node's metadata.
+        """Reinstate strategy state from a checkpoint node's metadata.
 
-        Reads ``wizard_fsm_state`` from the node's metadata and restores
-        the wizard reasoning strategy to that state.
-
-        Args:
-            manager: ConversationManager with the conversation tree.
-            node_id: Node ID to restore FSM state from.
+        Bot-side responsibility: locate the node and validate its data
+        shape. Strategy-side responsibility: read its own keys out of
+        the node's metadata and reinstate them. The method name retains
+        its ``wizard`` historical anchor because that's the only strategy
+        today that overrides ``restore_from_checkpoint``; the dispatch
+        itself is strategy-agnostic.
         """
-        if not self.reasoning_strategy:
-            return
-        if not hasattr(self.reasoning_strategy, "_get_wizard_state"):
+        if self.reasoning_strategy is None:
             return
         if manager.state is None:
             return
@@ -3532,36 +3613,17 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         if not isinstance(node_data, ConversationNode):
             return
 
-        fsm_state = node_data.metadata.get("wizard_fsm_state")
-        if not fsm_state:
-            return
-
-        # Write the FSM state to conversation-level metadata so
-        # _get_wizard_state() can pick it up on the next generate() call.
-        wizard_meta = manager.metadata.get("wizard", {})
-        wizard_meta["fsm_state"] = fsm_state
-
-        # Also update top-level keys that normalize_wizard_state() reads
-        # with higher priority than fsm_state.  Without this, stale values
-        # from the pre-undo turn would shadow the restored fsm_state.
-        wizard_meta["current_stage"] = fsm_state.get("current_stage")
-        wizard_meta["data"] = fsm_state.get("data", {})
-        wizard_meta["completed"] = fsm_state.get("completed", False)
-        wizard_meta["history"] = fsm_state.get("history", [])
-
-        manager.metadata["wizard"] = wizard_meta
+        self.reasoning_strategy.restore_from_checkpoint(
+            manager, node_data.metadata
+        )
 
     def _undo_banks_to_checkpoint(self, checkpoint_node_id: str) -> None:
-        """Revert memory banks to the checkpoint via undo_to_checkpoint().
+        """Forward checkpoint-revert to the reasoning strategy.
 
-        Args:
-            checkpoint_node_id: Node ID to revert banks to.
+        Strategies that hold node-keyed state (e.g. wizard memory banks)
+        override ``ReasoningStrategy.undo_to_checkpoint``. Others inherit
+        the base no-op.
         """
-        if not self.reasoning_strategy:
+        if self.reasoning_strategy is None:
             return
-        banks = getattr(self.reasoning_strategy, "_banks", None)
-        if not banks:
-            return
-        for bank in banks.values():
-            if hasattr(bank, "undo_to_checkpoint"):
-                bank.undo_to_checkpoint(checkpoint_node_id)
+        self.reasoning_strategy.undo_to_checkpoint(checkpoint_node_id)

@@ -26,7 +26,14 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
-from .base import ProcessResult, ReasoningStrategy, StreamStageContext, ToolCallSpec, TurnHandle
+from .base import (
+    ProcessResult,
+    ReasoningManagerProtocol,
+    ReasoningStrategy,
+    StreamStageContext,
+    ToolCallSpec,
+    TurnHandle,
+)
 from .observability import (
     TransitionRecord,
     WizardStateSnapshot,
@@ -1101,6 +1108,49 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             self._extractor._owns_provider = False
             return True
         return False
+
+    def restore_from_checkpoint(
+        self,
+        manager: ReasoningManagerProtocol,
+        node_metadata: Mapping[str, Any],
+    ) -> None:
+        """Restore wizard FSM state from a checkpoint node's metadata.
+
+        Reads ``wizard_fsm_state`` from ``node_metadata`` and writes it
+        to ``manager.metadata['wizard']`` so the next ``generate()`` call
+        picks it up via ``_get_wizard_state``. Sets the flat top-level
+        keys (``current_stage`` / ``data`` / ``completed`` / ``history``)
+        that ``normalize_wizard_state`` reads with higher priority than
+        nested ``fsm_state``, so stale pre-undo values don't shadow the
+        restored snapshot.
+
+        Silent no-op when the node has no ``wizard_fsm_state`` (e.g.
+        checkpoints predating wizard activation).
+        """
+        fsm_state = node_metadata.get("wizard_fsm_state")
+        if not fsm_state:
+            return
+
+        wizard_meta = manager.metadata.get("wizard", {})
+        wizard_meta["fsm_state"] = fsm_state
+        wizard_meta["current_stage"] = fsm_state.get("current_stage")
+        wizard_meta["data"] = fsm_state.get("data", {})
+        wizard_meta["completed"] = fsm_state.get("completed", False)
+        wizard_meta["history"] = fsm_state.get("history", [])
+        manager.metadata["wizard"] = wizard_meta
+
+    def undo_to_checkpoint(self, checkpoint_node_id: str) -> None:
+        """Revert wizard memory banks to the checkpoint.
+
+        Iterates the wizard's ``MemoryBank`` instances and forwards
+        the checkpoint id. Banks that don't expose
+        ``undo_to_checkpoint`` are silently skipped (defensive — every
+        ``MemoryBank`` does expose it today, but the existing bot-side
+        guard is retained to match the prior behaviour exactly).
+        """
+        for bank in self._banks.values():
+            if hasattr(bank, "undo_to_checkpoint"):
+                bank.undo_to_checkpoint(checkpoint_node_id)
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
