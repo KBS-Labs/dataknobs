@@ -1366,6 +1366,60 @@ config = {
 
 ---
 
+### Post-Construction Step Injection
+
+Pipeline-shaped reasoning strategies expose their steps as a public
+list. When a step needs a runtime collaborator that the YAML config
+can't carry — for example, a resource owned by your application's
+lifespan — inject it after the bot is built using
+`bot.get_steps_of_type(step_cls)`:
+
+```python
+from myapp.steps import MyHandler
+
+bot = await DynaBot.from_config(config)
+
+for step in bot.get_steps_of_type(MyHandler):
+    step.attach_service(service)
+```
+
+`get_steps_of_type` returns a typed `list[step_cls]`, so the loop body
+calls `step_cls`-specific methods without `isinstance` filtering or
+`cast`. Returns `[]` when the bot has no reasoning strategy or when
+the strategy doesn't expose a `steps` attribute.
+
+---
+
+### Forwarding Strategy Components at Construction
+
+Reasoning strategies that read collaborators from the components
+channel (e.g. ReAct's `extra_context`, `artifact_registry`,
+`review_executor`, `context_builder`, `prompt_refresher`) accept
+those collaborators at construction time. Pass them to
+`DynaBot.from_config` via the `reasoning_components` kwarg:
+
+```python
+bot = await DynaBot.from_config(
+    config,
+    reasoning_components={
+        "extra_context": {"tenant_id": tenant_id, "policy_client": client},
+        "artifact_registry": registry,
+    },
+)
+```
+
+The dict is forwarded into the strategy's components channel; the
+strategy picks up the keys it reads and silently absorbs the rest.
+Use this for bot-lifetime collaborators that the YAML config can't
+carry (auth clients, tenant-scoped resources, application services).
+
+Bot-managed components (`knowledge_base`, `prompt_resolver`,
+`prompt_envelope`) cannot be overridden through this kwarg — supply
+them through the corresponding config fields. A collision raises
+`ConfigurationError` naming the offending key.
+
+---
+
 ### Production Deployment
 
 #### Configuration for Production

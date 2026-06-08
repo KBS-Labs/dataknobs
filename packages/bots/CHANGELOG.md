@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `DynaBot.get_steps_of_type(step_cls)` — typed helper that returns
+  every reasoning-strategy pipeline step that is an instance of
+  `step_cls` as a `list[step_cls]`. Iterates
+  `bot.reasoning_strategy.steps` when the strategy is pipeline-shaped;
+  returns `[]` when the bot has no reasoning strategy or when the
+  strategy has no `steps` attribute. Intended for post-construction
+  injection of runtime collaborators that configuration cannot carry.
+- `ReasoningStrategy.restore_from_checkpoint(manager, node_metadata)`
+  — public hook called by `DynaBot.undo_last_turn` /
+  `rewind_to_turn` so a strategy can reinstate per-state buckets it
+  persists into a checkpoint node's metadata. Default no-op.
+  `WizardReasoning` overrides to restore wizard FSM state from
+  `node_metadata["wizard_fsm_state"]`.
+- `ReasoningStrategy.undo_to_checkpoint(node_id)` — public hook
+  called by `DynaBot.undo_last_turn` / `rewind_to_turn` so a strategy
+  can revert node-keyed state. Default no-op. `WizardReasoning`
+  overrides to undo each `MemoryBank` it owns.
+- `DynaBot.from_config(config, *, reasoning_components=...)` —
+  forwards a consumer-supplied mapping into the reasoning strategy's
+  `StructuredConfigConsumer.components` channel at construction time.
+  Strategies pick up the keys they read (e.g. `ReActReasoning` reads
+  `extra_context`, `artifact_registry`, `review_executor`,
+  `context_builder`, `prompt_refresher`); unknown keys are silently
+  absorbed. Bot-managed components (`knowledge_base`,
+  `prompt_resolver`, `prompt_envelope`) raise `ConfigurationError`
+  on collision — use their respective config fields instead.
+
 ## v0.7.2 - 2026-06-06
 
 ### Added
