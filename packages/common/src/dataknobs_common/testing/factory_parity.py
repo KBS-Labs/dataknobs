@@ -101,10 +101,18 @@ def assert_dataclass_config_matches_ctor(
         for name, p in sig.parameters.items()
         if p.kind is not inspect.Parameter.VAR_KEYWORD
         and p.kind is not inspect.Parameter.VAR_POSITIONAL
-        # ``self`` and ``config`` are framework slots; ``_components`` is
-        # the mixin's internal collaborator channel (injected objects, not
-        # config fields) and is never expected on the config dataclass.
-        and name not in {"self", "config", "_components"} | ignore_params
+        # ``self`` and ``config`` are framework slots; ``_components``
+        # is the mixin's internal collaborator channel (injected
+        # objects, not config fields). ``_forwarded_components`` is the
+        # documented per-class plumbing keyword that adopters with a
+        # back-compat positional ctor shape use to capture
+        # ``from_config``'s ``**kwargs`` and route them into the
+        # mixin's ``_components`` channel (``WizardReasoning`` is the
+        # reference adopter). None of these are expected on the config
+        # dataclass.
+        and name
+        not in {"self", "config", "_components", "_forwarded_components"}
+        | ignore_params
     }
     missing_in_config = ctor_params - config_fields
     # When the ctor accepts ``**kwargs`` (the
@@ -234,7 +242,10 @@ def assert_factory_kwargs_match_ctor(
         set() if accepts_var_kwargs else factory_kwargs - ctor_params
     )
     missing_in_factory = (
-        ctor_params - factory_kwargs - ignore_kwargs - {"config", "_components"}
+        ctor_params
+        - factory_kwargs
+        - ignore_kwargs
+        - {"config", "_components", "_forwarded_components"}
     )
     failures: list[str] = []
     if unknown_in_factory:

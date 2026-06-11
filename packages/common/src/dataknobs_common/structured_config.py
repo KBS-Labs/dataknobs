@@ -1204,6 +1204,48 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         """
         return types.MappingProxyType(self._components)
 
+    #: Names of injected collaborators THIS class consumes itself.
+    #: Excluded from :meth:`forwardable_components` so children built
+    #: by composing strategies do not inherit their parent's own
+    #: collaborators (FSM handles, internal caches, etc.). Defaults to
+    #: empty — only composing strategies need override.
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset()
+
+    def forwardable_components(self) -> dict[str, Any]:
+        """Return collaborators safe to forward to child consumers.
+
+        Returns ``self.components`` minus the names declared in
+        :attr:`INTERNAL_COMPONENTS`. The fresh dict is suitable to
+        spread into a child's construction call::
+
+            class MyComposingStrategy(
+                StructuredConfigConsumer[MyConfig], ReasoningStrategy,
+            ):
+                INTERNAL_COMPONENTS = frozenset(
+                    {"my_internal_collaborator"}
+                )
+
+                def _build_child(self, child_config):
+                    return get_registry().create(
+                        config=child_config,
+                        **self.forwardable_components(),
+                    )
+
+        The wizard reference adopter declares
+        ``INTERNAL_COMPONENTS = frozenset({"wizard_fsm"})`` so per-stage
+        sub-strategies do not receive the outer wizard's FSM handle;
+        every other collaborator threaded through
+        ``WizardReasoning.from_config(config, **components)`` flows
+        through opaquely.
+        """
+        if not self.INTERNAL_COMPONENTS:
+            return dict(self._components)
+        return {
+            k: v
+            for k, v in self._components.items()
+            if k not in self.INTERNAL_COMPONENTS
+        }
+
     @classmethod
     def _coerce_config(
         cls, config: Mapping[str, Any] | StructuredConfig
