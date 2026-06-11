@@ -1418,6 +1418,92 @@ Bot-managed components (`knowledge_base`, `prompt_resolver`,
 them through the corresponding config fields. A collision raises
 `ConfigurationError` naming the offending key.
 
+#### Wizard sub-strategy collaborator forwarding
+
+When a `wizard` reasoning strategy resolves a per-stage `reasoning:`
+sub-strategy, the bot-level construction collaborators it received
+(`knowledge_base`, `prompt_resolver`, `prompt_envelope`, every key in
+`reasoning_components`, and any other consumer-supplied kwarg) land on
+the wizard's `self.components` mapping (via the
+`StructuredConfigConsumer` mixin's standard pass-through channel) and
+are forwarded to that sub-strategy's own `from_config` call.
+
+```yaml
+- name: ground_in_framework
+  reasoning: pipeline
+  reasoning_config:
+    steps:
+      - { type: grounded_retrieval, ... }  # consumes knowledge_base
+      - { type: grounded_synthesis, ... }
+```
+
+The bot's `knowledge_base` reaches the `pipeline` sub-strategy at
+construction time without any per-stage YAML escape hatch.
+
+**Pass-through is opaque.** The wizard does not introspect which keys
+a sub-strategy consumes; each sub-strategy's `from_config` absorbs
+(via `**kwargs`) or consumes what it accepts.
+
+**Per-stage-safe contract.** Strategies with strict
+`from_config(config)` signatures (no `**kwargs` absorption) surface a
+clear `ConfigurationError` if the outer wizard forwards an
+unrecognized key. The convention for wizard-stage-safe strategies is
+`def from_config(cls, config, **kwargs)`.
+
+**The wizard's own FSM is never forwarded.** `WizardReasoning`
+declares `INTERNAL_COMPONENTS = frozenset({"wizard_fsm"})`, so the
+outer wizard's FSM handle stays on `self.components` for the wizard's
+own consumption but is excluded from the
+`forwardable_components()` view used at sub-strategy construction.
+
+#### Building your own composing strategy
+
+The pass-through pattern is a first-class mixin surface. Any class
+adopting `StructuredConfigConsumer` that composes children built from
+a registry can declare what it consumes via `INTERNAL_COMPONENTS` and
+forward the rest via the inherited `forwardable_components()` method
+— no copy-pasted helper, no per-class reimplementation:
+
+```python
+from typing import Any, ClassVar
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.registry import get_registry
+
+class MyComposingStrategy(
+    StructuredConfigConsumer[MyConfig], ReasoningStrategy,
+):
+    #: Declare collaborators THIS class consumes itself.
+    #: Inherited ``forwardable_components()`` excludes these from the
+    #: pass-through to children.
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset(
+        {"my_internal_collaborator"}
+    )
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], **components: Any):
+        built_internal = _build_my_internal_collaborator(config)
+        return cls(
+            config=cls._coerce_config(config),
+            _components={
+                "my_internal_collaborator": built_internal,
+                **components,  # opaque pass-through to children
+            },
+        )
+
+    def _build_child(self, child_config: dict[str, Any]):
+        return get_registry().create(
+            config=child_config,
+            **self.forwardable_components(),  # inherited from mixin
+        )
+```
+
+Consumer composing strategies get the same per-stage forwarding
+discipline as the wizard — and the same single point of evolution
+when the pass-through contract grows (e.g. a future
+`ComposingStrategy` mixin that subsumes child caching and
+`add_source` fan-out).
+
 ---
 
 ### Production Deployment

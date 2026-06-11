@@ -167,6 +167,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     #: the ``StructuredConfigConsumer`` mixin lifecycle).
     CONFIG_CLS: ClassVar[type[WizardReasoningConfig]] = WizardReasoningConfig
 
+    #: Wizard's own consumed collaborator — excluded from the inherited
+    #: :meth:`StructuredConfigConsumer.forwardable_components` so per-stage
+    #: sub-strategies built via :meth:`WizardResponder._resolve_stage_strategy`
+    #: never receive the outer wizard's FSM handle.
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"wizard_fsm"})
+
     def __init__(
         self,
         wizard_fsm: WizardFSM,
@@ -211,6 +217,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         prompt_resolver: PromptResolver | None = None,
         *,
         config: WizardReasoningConfig | None = None,
+        _forwarded_components: Mapping[str, Any] | None = None,
         **config_overrides: Any,
     ):
         """Initialize WizardReasoning.
@@ -363,6 +370,21 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 pre-built-FSM path (the 174 existing call sites), where a thin
                 inert envelope is synthesized instead (see
                 :data:`_INJECTED_FSM_SENTINEL`).
+            _forwarded_components: Opaque collaborator mapping (typically
+                captured by :meth:`from_config` from its own ``**kwargs``)
+                routed into the mixin's ``self.components`` channel alongside
+                ``wizard_fsm``. Consumed via the inherited
+                :meth:`StructuredConfigConsumer.forwardable_components`
+                (which excludes :attr:`INTERNAL_COMPONENTS`, today
+                ``frozenset({"wizard_fsm"})``) for forwarding to per-stage
+                sub-strategies in
+                :meth:`WizardResponder._resolve_stage_strategy`. ``None``
+                (default — the 174 direct-ctor call sites) is treated as
+                ``{}`` (no pass-through; byte-identical to the wizard's
+                behaviour before sub-strategy collaborator forwarding was
+                added). Treated as opaque — the wizard does not
+                introspect; each sub-strategy's ``from_config`` decides
+                which keys it consumes.
             config_overrides: Loose :class:`WizardReasoningConfig` field
                 overrides for the synthesized envelope (direct-ctor path only).
                 Unknown keys raise ``TypeError`` via the dataclass constructor;
@@ -390,7 +412,21 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # ``ReasoningStrategy.__init__`` (initialising greeting/tool/pipeline
         # state), then the no-op ``_setup`` — before this body builds the
         # sub-components from the explicit (FSM-settings-derived) params.
-        super().__init__(config, _components={"wizard_fsm": wizard_fsm})
+        #
+        # Compose ``wizard_fsm`` (the wizard's own consumed collaborator)
+        # with the opaque ``_forwarded_components`` (captured by
+        # :meth:`from_config` from its ``**kwargs``, ``None`` for the 174
+        # direct-ctor call sites) into the mixin's ``_components``
+        # channel. ``self.components`` then exposes the union;
+        # ``self.forwardable_components()`` (inherited from
+        # ``StructuredConfigConsumer``) excludes ``INTERNAL_COMPONENTS``
+        # (today ``frozenset({"wizard_fsm"})``) at forwarding time so
+        # per-stage sub-strategies never receive the outer wizard's FSM
+        # handle.
+        components_for_mixin: dict[str, Any] = {"wizard_fsm": wizard_fsm}
+        if _forwarded_components:
+            components_for_mixin.update(_forwarded_components)
+        super().__init__(config, _components=components_for_mixin)
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
@@ -554,6 +590,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             get_review_executor=lambda: self._review_executor,
             get_context_builder=lambda: self._context_builder,
             get_banks=lambda: self._banks,
+            # Bound method inherited from StructuredConfigConsumer.
+            # Returns ``self.components`` minus ``INTERNAL_COMPONENTS`` —
+            # i.e. ``{"wizard_fsm"}`` is filtered out so per-stage
+            # sub-strategies built by ``_resolve_stage_strategy`` never
+            # receive the outer wizard's FSM handle.
+            get_forwardable_components=self.forwardable_components,
         )
 
         # Inject the real condition evaluator now that the responder
@@ -1583,6 +1625,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             consistent_navigation_lifecycle=typed.consistent_navigation_lifecycle,
             prompt_resolver=kwargs.get("prompt_resolver"),
             config=typed,
+            # Opaque pass-through of from_config's kwargs into the
+            # mixin's _components channel. self.components then exposes
+            # the union (plus wizard_fsm); forwardable_components()
+            # excludes INTERNAL_COMPONENTS at forwarding time.
+            _forwarded_components=kwargs,
         )
 
     async def greet(

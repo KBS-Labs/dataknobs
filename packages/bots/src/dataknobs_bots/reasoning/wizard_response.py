@@ -103,6 +103,7 @@ class WizardResponder:
         get_review_executor: Callable[[], Any | None],
         get_context_builder: Callable[[], Any | None],
         get_banks: Callable[[], dict[str, Any]],
+        get_forwardable_components: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         # Shared references
         self._renderer = renderer
@@ -133,6 +134,14 @@ class WizardResponder:
         self._get_review_executor = get_review_executor
         self._get_context_builder = get_context_builder
         self._get_banks = get_banks
+        # Callback returning the collaborators the parent wizard wants
+        # forwarded to per-stage sub-strategies. Defaults to "return
+        # nothing" so the 174 direct-ctor wizards (no
+        # ``get_forwardable_components`` supplied) keep byte-identical
+        # behaviour — ``**{}`` is a no-op spread on the registry call.
+        self._get_forwardable_components: Callable[[], dict[str, Any]] = (
+            get_forwardable_components or (lambda: {})
+        )
 
     # =====================================================================
     # Public API — called by wizard.py orchestrator
@@ -1584,7 +1593,16 @@ class WizardResponder:
             reasoning_config["verbose"] = verbose
 
         try:
-            return get_registry().create(config=reasoning_config)
+            # Forward the parent wizard's forwardable collaborators
+            # (``self.components`` minus the wizard's
+            # ``INTERNAL_COMPONENTS``) opaquely to the sub-strategy.
+            # Wizard-stage-safe strategies declare ``**kwargs`` and
+            # consume what they accept; strict-signature strategies
+            # surface a clear TypeError documenting the convention.
+            return get_registry().create(
+                config=reasoning_config,
+                **self._get_forwardable_components(),
+            )
         except Exception as e:
             from dataknobs_common.exceptions import ConfigurationError
 
