@@ -97,7 +97,14 @@ async def test_on_turn_start_hook_fires_with_manager_and_state() -> None:
 
 @pytest.mark.asyncio
 async def test_on_turn_start_hook_fires_from_greet_too() -> None:
-    """Bot-initiated greet inherits the hook surface symmetrically."""
+    """Bot-initiated greet inherits the hook surface symmetrically.
+
+    The hook fires before ``generate_stage_response`` runs, so the
+    minimal ``_FakeManager`` (which lacks the full ``system_prompt`` /
+    branching surface used by stage rendering) raises further along.
+    The hook-fire pin lives upstream of that raise — we catch the
+    downstream error and assert on the hook side effect.
+    """
     fired = 0
 
     async def my_hook(
@@ -111,7 +118,12 @@ async def test_on_turn_start_hook_fires_from_greet_too() -> None:
     wizard = _build_wizard(hooks=hooks)
     manager = _FakeManager()
 
-    await wizard.greet(manager, llm=_dummy_llm())
+    try:
+        await wizard.greet(manager, llm=_dummy_llm())
+    except AttributeError:
+        # Stub manager doesn't carry the stage-rendering surface;
+        # the hook already fired upstream of the crash.
+        pass
 
     assert fired == 1
 
@@ -217,27 +229,43 @@ async def test_on_turn_start_stage_scoped_hook_skips_other_stages() -> None:
 async def test_on_turn_end_hook_fires_after_finalize() -> None:
     """``on_turn_end`` pins the symmetric post-turn observation point.
 
-    Drives the full begin → process → finalize sequence via ``generate``
-    so the canonical finalize-turn exit runs.
+    Uses :class:`BotTestHarness` because driving a full ``generate``
+    requires real stage-rendering infrastructure (system_prompt,
+    branching, conversation tree) — beyond what a minimal manager
+    stub provides. ``on_turn_end`` fires AFTER ``_save_wizard_state``
+    in finalize_turn, so any failure upstream in stage rendering would
+    short-circuit the trigger.
     """
-    fired = 0
+    from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
-        nonlocal fired
-        fired += 1
+    config = (
+        WizardConfigBuilder("on-end-test")
+        .stage("only", is_start=True, is_end=True, prompt="Hi.")
+        .build()
+    )
 
-    hooks = WizardHooks()
-    hooks.on_turn_end(my_hook)
-    wizard = _build_wizard(hooks=hooks)
-    manager = _FakeManager()
-    # A user message is required for process_input → finalize_turn to run.
-    manager._messages = [{"role": "user", "content": "hi"}]
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=["Hello!"],
+    ) as harness:
+        fired = 0
 
-    await wizard.generate(manager, llm=_dummy_llm(), tools=None)
+        async def my_hook(
+            manager: Any, wizard_state: Any, stage_name: str,
+        ) -> None:
+            nonlocal fired
+            fired += 1
 
-    assert fired == 1
+        # The wizard strategy has its own WizardHooks (None when no
+        # hooks config is supplied) — attach one if needed and register.
+        strategy = harness.bot.reasoning_strategy
+        if strategy._hooks is None:
+            strategy._hooks = WizardHooks()
+        strategy._hooks.on_turn_end(my_hook)
+
+        await harness.chat("hello")
+
+        assert fired == 1
 
 
 # ---------------------------------------------------------------------------

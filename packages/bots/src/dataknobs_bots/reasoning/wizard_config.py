@@ -17,6 +17,7 @@ mirroring the raw-polymorphic-section norm used elsewhere.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +52,40 @@ class WizardReasoningConfig(StructuredConfig):
         initial_data: Seed data merged into the wizard state at start.
         consistent_navigation_lifecycle: Whether back/skip fire the same
             lifecycle hooks as forward transitions.
+        manager_metadata_inbox_key: Optional ``manager.metadata`` key
+            (or list of keys) whose value (a flat dict) is popped at
+            the start of each turn and merged into
+            :attr:`WizardState.data`.  Implemented internally as an
+            auto-registered ``on_turn_start`` hook (see
+            :func:`dataknobs_bots.reasoning.wizard_inbox.make_metadata_inbox_hook`).
+
+            Cross-turn bridge for per-stage sub-strategy output (e.g.
+            pipeline step signals) into the wizard's transition-eval
+            scope without widening the safe-eval scope.  ``None``
+            (default) disables the bridge — zero behaviour change.
+
+            Bridge contract:
+
+            * **Consume-on-read** — keys are popped, not get'd. Stale
+              signals can't leak.
+            * **None-as-eviction** — inbox value ``{x: None}`` writes
+              ``None`` into ``state.data[x]`` (with the default merge).
+            * **Empty-dict no-op** — ``{}`` is silently skipped (key
+              still popped per consume-on-read).
+            * **Across-turn semantics** — turn N's writer publishes
+              AFTER turn N's transition; turn N+1's ``begin_turn``
+              consumes.
+            * **Multi-key** — list-valued key drains all listed keys
+              per turn.
+            * **greet inherits** — bot-initiated greetings also fire
+              the ``on_turn_start`` hook, so the bridge applies on
+              the greeting turn too.
+        inbox_merge_fn: Optional merge function for inbox payloads.
+            Defaults to :func:`dict.update` (shallow merge).  Consumers
+            supply deep-merge or conflict-resolving mergers as needed.
+            Callable round-trip is by identity (in-process only — not
+            JSON-serializable, mirroring other callable-bearing
+            ``StructuredConfig`` fields).
     """
 
     wizard_config: str | dict[str, Any]
@@ -63,6 +98,8 @@ class WizardReasoningConfig(StructuredConfig):
     review_protocols: dict[str, Any] | None = None
     initial_data: dict[str, Any] | None = None
     consistent_navigation_lifecycle: bool = True
+    manager_metadata_inbox_key: str | list[str] | None = None
+    inbox_merge_fn: Callable[[dict[str, Any], dict[str, Any]], None] | None = None
 
     def __post_init__(self) -> None:
         """Validate ``wizard_config`` is a path string or inline dict.

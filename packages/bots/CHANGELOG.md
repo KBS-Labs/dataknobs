@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `dataknobs_bots.reasoning.lifecycle.LifecycleHooks` —
+  strategy-agnostic turn-lifecycle hook surface
+  (`on_turn_start` / `on_turn_end`, with optional per-stage scope).
+  Loadable from config via `LifecycleHooks.from_config({...})` with
+  dotted-path callback resolution (sync or async callables). Importable
+  standalone — adoptable by any `ReasoningStrategy` implementation, not
+  wizard-specific. Documented adoption recipe in USER_GUIDE.md
+  "Adopting LifecycleHooks in Your Own Reasoning Strategy".
+- Wizard turn-lifecycle hook surface: `on_turn_start` and
+  `on_turn_end` on `WizardHooks`, following the existing
+  `on_enter` / `on_exit` / `on_complete` registration shape.
+  `WizardHooks` composes `LifecycleHooks` internally and forwards
+  registration / triggering through the embedded instance while
+  preserving its own error-handler fan-out (failing hooks still
+  reach `on_error` callbacks before re-raising). Hooks fire from
+  `begin_turn` (AFTER per-turn ephemeral-key clear, BEFORE
+  early-return dispatch) and from `finalize_turn`'s canonical exit
+  (AFTER state save). `greet` symmetrically fires `on_turn_start`
+  so bot-initiated greetings inherit the surface. The embedded
+  instance is exposed read-only via the `WizardHooks.lifecycle`
+  property for detachment scenarios.
+- `WizardReasoningConfig.manager_metadata_inbox_key: str | list[str] | None`
+  — typed knob that auto-registers an `on_turn_start` hook bridging
+  one or more `manager.metadata` keys into `wizard_state.data` at the
+  start of every turn. Consume-on-read (popped, not get'd);
+  None-as-eviction with the default merge; empty-dict and
+  non-mapping payloads tolerated; `greet` inherits the bridge.
+  Cross-turn bridge from per-stage sub-strategy output into the
+  wizard's transition-eval scope without widening the
+  `{data, has, bank, artifact}` safe-eval scope. `None` (default)
+  disables the bridge — zero behaviour change.
+- `WizardReasoningConfig.inbox_merge_fn` — optional merge function
+  for inbox payloads. Defaults to `dict.update` (shallow merge).
+  Consumers supply deep-merge or conflict-resolving mergers as
+  needed.
+- `dataknobs_bots.reasoning.wizard_inbox` module:
+  `make_metadata_inbox_hook` factory (for consumers building
+  custom variants of the bridge) and `write_to_inbox` helper
+  (for writer-side code publishing payloads for the next turn's
+  consumption).
 - `WizardReasoning` now forwards every construction collaborator
   threaded through `WizardReasoning.from_config(config, **kwargs)`
   (`knowledge_base`, `prompt_resolver`, `prompt_envelope`, every key in

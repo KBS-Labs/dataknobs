@@ -436,6 +436,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._extractor = extractor
         self._strict_validation = strict_validation
         self._hooks = hooks
+        # Auto-register the manager-metadata inbox bridge as an
+        # ``on_turn_start`` hook when the typed config field is set.
+        # Constructs a WizardHooks if none was supplied so the inbox
+        # feature works without requiring the consumer to configure
+        # hooks separately.
+        self._maybe_register_inbox_hook()
         self._allow_amendments = allow_post_completion_edits
         self._section_to_stage_mapping = section_to_stage_mapping or {}
 
@@ -1688,6 +1694,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Get start stage metadata and generate the response
         active_fsm = self._subflows.get_active_fsm()
+
+        # Symmetric with begin_turn so bot-initiated greets inherit the
+        # ``on_turn_start`` surface — the auto-registered inbox bridge
+        # (and any consumer hooks) apply on the greeting turn too.
+        if self._hooks is not None:
+            await self._hooks.trigger_turn_start(
+                manager, wizard_state, active_fsm.current_stage,
+            )
         stage = active_fsm.current_metadata
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
@@ -1784,6 +1798,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         for key in self._per_turn_keys:
             wizard_state.data.pop(key, None)
             wizard_state.transient.pop(key, None)
+
+        # Fire turn-start hooks AFTER the per-turn key clear (so a hook
+        # re-populating an ephemeral key isn't immediately wiped) and
+        # BEFORE the user-message read / early-return dispatch (so a
+        # hook can influence amendment / auto-restart / navigation
+        # decisions).
+        if self._hooks is not None:
+            active_fsm = self._subflows.get_active_fsm()
+            await self._hooks.trigger_turn_start(
+                manager, wizard_state, active_fsm.current_stage,
+            )
 
         # Get user message
         handle.user_message = self._get_last_user_message(manager)
@@ -2431,6 +2456,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Save wizard state
         await self._save_wizard_state(pre.manager, pre.wizard_state)
 
+        # Fire on_turn_end at the canonical finalize_turn exit, AFTER
+        # state save (so writer hooks publishing to manager.metadata
+        # for the NEXT turn's inbox observe the persisted state).
+        # NOTE: subflow-push, streaming, and early-return paths do not
+        # fire on_turn_end in v1 — tracked as 164-FU1.
+        if self._hooks is not None:
+            active_fsm = self._subflows.get_active_fsm()
+            await self._hooks.trigger_turn_end(
+                pre.manager, pre.wizard_state, active_fsm.current_stage,
+            )
+
         return response
 
     async def stream_finalize_turn(
@@ -2770,6 +2806,36 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 pipeline_result.new_data_keys if pipeline_result else None
             ),
         )
+
+    def _maybe_register_inbox_hook(self) -> None:
+        """Auto-register the manager-metadata inbox bridge as an
+        ``on_turn_start`` hook when configured.
+
+        No-op when ``manager_metadata_inbox_key`` is ``None``.  Creates
+        a :class:`WizardHooks` if none was supplied so the inbox knob
+        works standalone (without forcing the consumer to also wire
+        up a hooks block).
+        """
+        inbox_key = self.config.manager_metadata_inbox_key
+        if inbox_key is None:
+            return
+
+        from .wizard_hooks import WizardHooks
+        from .wizard_inbox import make_metadata_inbox_hook
+
+        if self._hooks is None:
+            self._hooks = WizardHooks()
+
+        inbox_keys: list[str] = (
+            [inbox_key]
+            if isinstance(inbox_key, str)
+            else list(inbox_key)
+        )
+        inbox_hook = make_metadata_inbox_hook(
+            inbox_keys=inbox_keys,
+            merge_fn=self.config.inbox_merge_fn,
+        )
+        self._hooks.on_turn_start(inbox_hook)
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
