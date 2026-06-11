@@ -1456,6 +1456,67 @@ outer wizard's FSM handle stays on `self.components` for the wizard's
 own consumption but is excluded from the
 `forwardable_components()` view used at sub-strategy construction.
 
+#### Writing a wizard-stage-safe sub-strategy
+
+If you ship a `ReasoningStrategy` that consumers will use as a wizard
+per-stage `reasoning:` strategy, the wizard will forward its
+parent-level shared collaborators (typically `knowledge_base`,
+`prompt_resolver`, `prompt_envelope`, and any consumer-supplied
+`reasoning_components`) into your `from_config` at construction time.
+Your strategy doesn't have to *use* all of those — but it does have
+to *accept* them. Otherwise the wizard's `_resolve_stage_strategy`
+surfaces a `ConfigurationError` whose underlying cause is a
+`TypeError("got an unexpected keyword argument 'X'")` at the very
+first turn that resolves your strategy.
+
+The convention is one line: declare `**kwargs` on `from_config` and
+let it absorb anything you don't consume.
+
+```python
+# ❌ Strict signature — wizard-stage-unsafe. Consumers placing this
+# strategy under a wizard stage will hit:
+#   ConfigurationError: Failed to create strategy 'my_strat' ...
+#     unexpected keyword argument 'knowledge_base' | Hint: ...
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "MyStrategy":
+        return cls(threshold=config.get("threshold", 0.5))
+```
+
+```python
+# ✅ Permissive signature — wizard-stage-safe. Unrelated forwarded
+# keys are absorbed; the strategy still picks out what it actually
+# needs.
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        knowledge_base: Any | None = None,  # used; named for clarity
+        **_: Any,  # absorbs other forwarded collaborators
+    ) -> "MyStrategy":
+        return cls(
+            threshold=config.get("threshold", 0.5),
+            knowledge_base=knowledge_base,
+        )
+```
+
+This convention is also enforced at the abstraction-layer level by
+`StructuredConfigConsumer`'s `_ainit` / `_adopt_components` hooks
+(signature-aware delivery: collaborators a hook doesn't declare are
+not crashed-on, they're dropped at `DEBUG`). But for strategies
+built via the reasoning registry's `create()` — including every
+wizard sub-strategy — the `from_config` signature is the
+load-bearing surface, and the `**kwargs` opt-in is the simplest way
+to be wizard-stage-safe regardless of which collaborators a future
+wizard release decides to forward.
+
+The standalone, no-wizard construction path is unaffected: when no
+caller supplies the extra collaborators, the absorbed `**kwargs` is
+empty and the strategy behaves identically to its strict-signature
+predecessor.
+
 #### Building your own composing strategy
 
 The pass-through pattern is a first-class mixin surface. Any class

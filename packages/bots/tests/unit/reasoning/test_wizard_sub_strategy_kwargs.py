@@ -27,6 +27,7 @@ from dataknobs_bots.reasoning.registry import (
     get_registry,
     register_strategy,
 )
+from dataknobs_common.exceptions import ConfigurationError
 
 
 class _CaptureStrategy(ReasoningStrategy):
@@ -211,17 +212,36 @@ def test_strict_from_config_raises_when_forwarded_unknown_kwarg() -> None:
     signature surfaces a clear error when the wizard forwards a key
     the strategy doesn't accept. The wizard wraps the underlying
     ``TypeError`` as a ``ConfigurationError`` (see
-    ``_resolve_stage_strategy``'s except branch).
+    ``_resolve_stage_strategy``'s except branch). The registry's
+    ``create()`` also interposes an ``OperationError``, so the
+    original ``TypeError`` lives further down the ``__cause__``
+    chain rather than directly under the ``ConfigurationError``.
     """
     wizard = _build_wizard_with_capture_stage(knowledge_base=object())
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(ConfigurationError) as exc_info:
         wizard._resolve_stage_strategy(
             {"reasoning": "strict", "name": "only"}
         )
 
     msg = str(exc_info.value).lower()
     assert "knowledge_base" in msg or "unexpected" in msg
+    # The original TypeError is preserved somewhere in the cause chain.
+    cause: BaseException | None = exc_info.value.__cause__
+    while cause is not None and not isinstance(cause, TypeError):
+        cause = cause.__cause__
+    assert isinstance(cause, TypeError), (
+        "Expected a TypeError somewhere in the __cause__ chain documenting "
+        "the unknown kwarg; got chain ending in "
+        f"{type(exc_info.value.__cause__).__name__}."
+    )
+    # The wrapped ConfigurationError appends a wizard-stage-safe-strategy
+    # hint pointing at the USER_GUIDE convention. Pinned so a regression
+    # that drops the hint surfaces in CI rather than at a consumer's
+    # diagnosis time.
+    assert "Hint:" in str(exc_info.value)
+    assert "**kwargs" in str(exc_info.value)
+    assert "USER_GUIDE.md" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

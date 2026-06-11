@@ -32,6 +32,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _maybe_strict_signature_hint(
+    exc: BaseException,
+    forwarded: dict[str, Any],
+) -> str:
+    """Return a hint string when ``exc`` looks like a strict-signature
+    sub-strategy rejecting a forwarded collaborator.
+
+    The wizard forwards its parent-level shared collaborators (e.g.
+    ``knowledge_base``, ``prompt_resolver``) opaquely to each per-stage
+    sub-strategy. Wizard-stage-safe strategies absorb ``**kwargs`` and
+    consume what they accept. A strict-signature ``from_config`` raises
+    ``TypeError("got an unexpected keyword argument 'X'")`` — we
+    surface that as part of the wrapped ``ConfigurationError``, but
+    consumers seeing it for the first time benefit from a one-line
+    pointer to the convention rather than reverse-engineering it.
+
+    Returns an empty string when the cause chain has no ``TypeError``
+    (so unrelated failures are not falsely annotated).
+    """
+    cur: BaseException | None = exc
+    type_error: TypeError | None = None
+    while cur is not None:
+        if isinstance(cur, TypeError):
+            type_error = cur
+            break
+        cur = cur.__cause__
+    if type_error is None:
+        return ""
+    msg = str(type_error).lower()
+    if "unexpected keyword argument" not in msg:
+        return ""
+    forwarded_keys = sorted(forwarded)
+    keys_repr = ", ".join(forwarded_keys) if forwarded_keys else "<none>"
+    return (
+        " | Hint: the wizard forwards parent-level shared collaborators "
+        f"opaquely to each stage's sub-strategy (this turn: {keys_repr}). "
+        "Wizard-stage-safe sub-strategies should declare a permissive "
+        "``**kwargs`` on ``from_config`` so unrelated forwarded keys are "
+        "absorbed. See packages/bots/docs/USER_GUIDE.md "
+        "(\"Writing a wizard-stage-safe sub-strategy\")."
+    )
+
+
 @dataclass
 class _TemplateResponse:
     """Minimal response object from template-rendered text.
@@ -1592,6 +1635,7 @@ class WizardResponder:
         if "verbose" not in reasoning_config:
             reasoning_config["verbose"] = verbose
 
+        forwarded = self._get_forwardable_components()
         try:
             # Forward the parent wizard's forwardable collaborators
             # (``self.components`` minus the wizard's
@@ -1601,15 +1645,16 @@ class WizardResponder:
             # surface a clear TypeError documenting the convention.
             return get_registry().create(
                 config=reasoning_config,
-                **self._get_forwardable_components(),
+                **forwarded,
             )
         except Exception as e:
             from dataknobs_common.exceptions import ConfigurationError
 
             stage_name = stage.get("name", "?")
+            hint = _maybe_strict_signature_hint(e, forwarded)
             raise ConfigurationError(
                 f"Failed to create strategy '{name}' for wizard "
-                f"stage '{stage_name}': {e}",
+                f"stage '{stage_name}': {e}{hint}",
                 context={"stage": stage_name, "strategy": name},
             ) from e
 

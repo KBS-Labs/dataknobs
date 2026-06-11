@@ -167,10 +167,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     #: the ``StructuredConfigConsumer`` mixin lifecycle).
     CONFIG_CLS: ClassVar[type[WizardReasoningConfig]] = WizardReasoningConfig
 
-    #: Wizard's own consumed collaborator — excluded from the inherited
+    #: Collaborators excluded from the inherited
     #: :meth:`StructuredConfigConsumer.forwardable_components` so per-stage
     #: sub-strategies built via :meth:`WizardResponder._resolve_stage_strategy`
-    #: never receive the outer wizard's FSM handle.
+    #: never receive them. Only contains collaborators that are semantically
+    #: *not shareable* with children — today just the outer wizard's FSM
+    #: handle. Shared infrastructure the wizard also consumes (e.g.
+    #: ``prompt_resolver``, ``knowledge_base``) is intentionally NOT listed
+    #: here: it flows through ``forwardable_components()`` to sub-strategies
+    #: that need it.
     INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"wizard_fsm"})
 
     def __init__(
@@ -1623,6 +1628,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             default_verbose=verbose,
             initial_data=typed.initial_data,
             consistent_navigation_lifecycle=typed.consistent_navigation_lifecycle,
+            # ``prompt_resolver`` is a shared collaborator the wizard
+            # consumes (for its responder) AND forwards: it stays in
+            # ``kwargs`` below so sub-strategies that need it receive it
+            # via ``forwardable_components()``. Only ``INTERNAL_COMPONENTS``
+            # (``wizard_fsm``) is filtered at forwarding time.
             prompt_resolver=kwargs.get("prompt_resolver"),
             config=typed,
             # Opaque pass-through of from_config's kwargs into the
