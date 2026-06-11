@@ -18,6 +18,8 @@ class TestWizardHooksRegistration:
             "complete": 0,
             "restart": 0,
             "error": 0,
+            "turn_start": 0,
+            "turn_end": 0,
         }
 
     def test_on_enter_registration(self) -> None:
@@ -95,15 +97,20 @@ class TestWizardHooksRegistration:
             "complete": 1,
             "restart": 1,
             "error": 1,
+            "turn_start": 0,
+            "turn_end": 0,
         }
 
     def test_clear_hooks(self) -> None:
-        """Test clearing all registered hooks."""
+        """Test clearing all registered hooks — including the composed
+        turn-lifecycle surface (``turn_start`` / ``turn_end``)."""
         hooks = WizardHooks()
 
         hooks.on_enter(lambda s, d: None)
         hooks.on_exit(lambda s, d: None)
         hooks.on_complete(lambda d: None)
+        hooks.on_turn_start(lambda m, s, n: None)
+        hooks.on_turn_end(lambda m, s, n: None)
 
         hooks.clear()
 
@@ -113,6 +120,8 @@ class TestWizardHooksRegistration:
             "complete": 0,
             "restart": 0,
             "error": 0,
+            "turn_start": 0,
+            "turn_end": 0,
         }
 
 
@@ -333,6 +342,8 @@ class TestWizardHooksFromConfig:
             "complete": 0,
             "restart": 0,
             "error": 0,
+            "turn_start": 0,
+            "turn_end": 0,
         }
 
     def test_from_config_invalid_function_format(self) -> None:

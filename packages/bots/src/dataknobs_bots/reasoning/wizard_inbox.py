@@ -51,9 +51,11 @@ def make_metadata_inbox_hook(
 
     The returned hook:
       * Pops each configured key (consume-on-read; stale signals can't leak).
-      * Skips silently when the popped value is empty / ``None``.
-      * Logs a WARNING and skips when a payload is not a mapping
-        (so a writer-side bug doesn't crash the wizard).
+      * Skips silently when the popped value is ``None`` (key not set this
+        turn) or an empty mapping (writer published nothing).
+      * Logs a WARNING and skips when a payload is set but not a mapping
+        (so a writer-side bug — e.g. publishing a list or a scalar —
+        doesn't crash the wizard).
       * Logs a DEBUG line per non-empty merge for traceability.
     """
     merge = merge_fn or _default_merge_fn
@@ -63,7 +65,7 @@ def make_metadata_inbox_hook(
             return
         for key in inbox_keys:
             payload = manager.metadata.pop(key, None)
-            if not payload:
+            if payload is None:
                 continue
             if not isinstance(payload, dict):
                 logger.warning(
@@ -72,6 +74,9 @@ def make_metadata_inbox_hook(
                     key,
                     type(payload).__name__,
                 )
+                continue
+            if not payload:
+                # Empty dict — writer published nothing. Silent skip.
                 continue
             merge(wizard_state.data, payload)
             logger.debug(

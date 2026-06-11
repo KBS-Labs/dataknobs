@@ -158,6 +158,23 @@ class LifecycleHooks:
         if asyncio.iscoroutine(result):
             await result
 
+    # ── Public introspection / reset ──────────────────────────────
+
+    @property
+    def turn_start_count(self) -> int:
+        """Number of registered ``on_turn_start`` callbacks."""
+        return len(self._turn_start_hooks)
+
+    @property
+    def turn_end_count(self) -> int:
+        """Number of registered ``on_turn_end`` callbacks."""
+        return len(self._turn_end_hooks)
+
+    def clear(self) -> None:
+        """Clear all registered turn-lifecycle callbacks."""
+        self._turn_start_hooks.clear()
+        self._turn_end_hooks.clear()
+
     # ── Config-driven loading ─────────────────────────────────────
 
     @classmethod

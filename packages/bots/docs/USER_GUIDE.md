@@ -1229,10 +1229,32 @@ sync or async.
   can re-populate keys cleared above OR influence amendment /
   auto-restart / navigation routing). Also fires from `greet` so
   bot-initiated greetings inherit the surface.
-- `on_turn_end` fires from `finalize_turn` AFTER the state-save
-  round-trip. Today only the canonical finalize-turn exit fires;
-  subflow-push, streaming, and early-return paths do not (tracked
-  as a follow-up).
+- `on_turn_end` fires AFTER the state-save round-trip on every
+  canonical finalize-turn exit: `finalize_turn` and
+  `stream_finalize_turn`, normal and subflow-push variants both.
+  A consumer observing `chat()` and `stream_chat()` sees the same
+  `on_turn_end` firing semantics. Paths still skipped (tracked as
+  a follow-up): early-returns from `begin_turn` / `process_input`
+  (amendment / navigation / validation), stream abandonment via
+  `aclose()`, and the non-conversational `advance()` API.
+
+**Runtime hook attachment.** When the wizard was built without a
+`WizardHooks` instance at construction (e.g., the
+`manager_metadata_inbox_key` knob alone), runtime callers can
+attach turn-lifecycle callbacks via `WizardReasoning`'s public
+surface:
+
+```python
+wizard = bot.reasoning_strategy  # WizardReasoning
+wizard.add_turn_start_hook(bind_tenant)
+wizard.add_turn_end_hook(emit_audit, stage="triage")
+```
+
+Both methods lazy-create the embedded `WizardHooks` if needed, so
+they're safe regardless of construction-time wiring. The full
+legacy surface (`on_enter`, `on_exit`, `on_complete`, `on_restart`,
+`on_error`) remains construction-time only — those hook types
+belong alongside the wizard's immutable configuration.
 
 #### Manager-Metadata Inbox Bridge
 

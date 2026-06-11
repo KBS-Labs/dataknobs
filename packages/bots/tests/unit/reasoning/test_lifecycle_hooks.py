@@ -215,3 +215,57 @@ def test_from_config_with_stage_scoping_round_trips() -> None:
     hooks = LifecycleHooks.from_config(config)
     assert len(hooks._turn_start_hooks) == 1
     assert hooks._turn_start_hooks[0].stage == "alpha"
+
+
+# ---------------------------------------------------------------------------
+# Public introspection + reset
+# ---------------------------------------------------------------------------
+
+
+def test_turn_count_properties_track_registrations() -> None:
+    """``turn_start_count`` / ``turn_end_count`` are the public surfaces
+    ``WizardHooks.hook_count`` and consumer diagnostics use; they replace
+    the prior private-list-length accesses.
+    """
+    LifecycleHooks, _ = _import_lifecycle()
+    hooks = LifecycleHooks()
+    assert hooks.turn_start_count == 0
+    assert hooks.turn_end_count == 0
+
+    async def noop(*_: Any) -> None:
+        pass
+
+    hooks.on_turn_start(noop)
+    hooks.on_turn_start(noop, stage="alpha")
+    hooks.on_turn_end(noop)
+    assert hooks.turn_start_count == 2
+    assert hooks.turn_end_count == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_drains_in_place_and_preserves_identity() -> None:
+    """``clear()`` drops every registered callback AND preserves the
+    instance identity (so a consumer holding a reference via
+    :attr:`WizardHooks.lifecycle` remains attached after a clear).
+    """
+    LifecycleHooks, _ = _import_lifecycle()
+    fired: list[str] = []
+
+    async def cb(manager: Any, state: Any, stage_name: str) -> None:
+        fired.append(stage_name)
+
+    hooks = LifecycleHooks()
+    hooks.on_turn_start(cb)
+    hooks.on_turn_end(cb)
+    assert hooks.turn_start_count == 1
+    assert hooks.turn_end_count == 1
+
+    hooks.clear()
+
+    assert hooks.turn_start_count == 0
+    assert hooks.turn_end_count == 0
+    # Post-clear, the registry still triggers cleanly (no AttributeError
+    # from internal-state replacement) and the callback does NOT fire.
+    await hooks.trigger_turn_start(object(), object(), "x")
+    await hooks.trigger_turn_end(object(), object(), "y")
+    assert fired == []

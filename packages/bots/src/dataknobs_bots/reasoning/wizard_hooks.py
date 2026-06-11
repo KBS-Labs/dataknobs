@@ -580,19 +580,31 @@ class WizardHooks:
                 logger.exception("Error in error handler")
 
     def clear(self) -> None:
-        """Clear all registered hooks."""
+        """Clear ALL registered hooks, including the embedded
+        :class:`LifecycleHooks` turn surface.
+
+        Reset semantics cover every hook type a consumer can register
+        through this class — enter / exit / complete / restart / error
+        (legacy hooks) and turn_start / turn_end (delegated to the
+        composed lifecycle instance). The lifecycle instance identity
+        is preserved (drained in place), so any external reference held
+        via the :attr:`lifecycle` property remains valid post-clear.
+        """
         self._enter_hooks.clear()
         self._exit_hooks.clear()
         self._complete_hooks.clear()
         self._restart_hooks.clear()
         self._error_hooks.clear()
+        self._lifecycle.clear()
 
     @property
     def hook_count(self) -> dict[str, int]:
         """Get count of registered hooks by type.
 
         Returns:
-            Dict mapping hook type to count
+            Dict mapping hook type to count. Includes the composed
+            turn-lifecycle surface (``turn_start`` / ``turn_end``)
+            alongside the legacy wizard hooks.
         """
         return {
             "enter": len(self._enter_hooks),
@@ -600,4 +612,6 @@ class WizardHooks:
             "complete": len(self._complete_hooks),
             "restart": len(self._restart_hooks),
             "error": len(self._error_hooks),
+            "turn_start": self._lifecycle.turn_start_count,
+            "turn_end": self._lifecycle.turn_end_count,
         }

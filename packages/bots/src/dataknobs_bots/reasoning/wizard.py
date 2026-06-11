@@ -54,7 +54,7 @@ from .wizard_grounding import (
     SchemaGroundingFilter,
     ValueExpansionConfig,
 )
-from .wizard_hooks import WizardHooks
+from .wizard_hooks import TurnHookCallback, WizardHooks
 from .wizard_navigation import WizardNavigator
 from .wizard_response import WizardResponder
 from .wizard_subflows import SubflowManager
@@ -1698,10 +1698,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Symmetric with begin_turn so bot-initiated greets inherit the
         # ``on_turn_start`` surface — the auto-registered inbox bridge
         # (and any consumer hooks) apply on the greeting turn too.
-        if self._hooks is not None:
-            await self._hooks.trigger_turn_start(
-                manager, wizard_state, active_fsm.current_stage,
-            )
+        await self._fire_turn_start_hook(manager, wizard_state)
         stage = active_fsm.current_metadata
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
@@ -1804,11 +1801,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # BEFORE the user-message read / early-return dispatch (so a
         # hook can influence amendment / auto-restart / navigation
         # decisions).
-        if self._hooks is not None:
-            active_fsm = self._subflows.get_active_fsm()
-            await self._hooks.trigger_turn_start(
-                manager, wizard_state, active_fsm.current_stage,
-            )
+        await self._fire_turn_start_hook(manager, wizard_state)
 
         # Get user message
         handle.user_message = self._get_last_user_message(manager)
@@ -2415,6 +2408,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 pre.wizard_state, pre.tools, track_render=False,
             )
             await self._save_wizard_state(pre.manager, pre.wizard_state)
+            await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
             return stage_result.response
 
         # ── Normal path: generate response with lifecycle handling ─
@@ -2459,13 +2453,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Fire on_turn_end at the canonical finalize_turn exit, AFTER
         # state save (so writer hooks publishing to manager.metadata
         # for the NEXT turn's inbox observe the persisted state).
-        # NOTE: subflow-push, streaming, and early-return paths do not
-        # fire on_turn_end in v1 — tracked as 164-FU1.
-        if self._hooks is not None:
-            active_fsm = self._subflows.get_active_fsm()
-            await self._hooks.trigger_turn_end(
-                pre.manager, pre.wizard_state, active_fsm.current_stage,
-            )
+        # The same helper fires from the subflow-push exit above and
+        # from both stream_finalize_turn exits. Paths that do NOT fire
+        # on_turn_end (tracked as 164-FU1): early-returns from
+        # begin_turn / process_input, stream abandonment, and advance().
+        await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
 
         return response
 
@@ -2510,6 +2502,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             ):
                 yield chunk
             await self._save_wizard_state(pre.manager, pre.wizard_state)
+            await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
             return
 
         # ── Normal path: stream response with lifecycle handling ──
@@ -2561,8 +2554,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if self._hooks:
                 await self._hooks.trigger_complete(pre.wizard_state.data)
 
-        # Save wizard state (only reached when stream fully consumed)
+        # Save wizard state (only reached when stream fully consumed).
+        # Fire on_turn_end via the shared helper — mirrors finalize_turn's
+        # canonical exit. The stream-abandonment path (aclose() at the
+        # yield above) bypasses both saves and turn_end intentionally
+        # (tracked as 164-FU1).
         await self._save_wizard_state(pre.manager, pre.wizard_state)
+        await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
 
     async def generate(
         self,
@@ -2807,6 +2805,62 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             ),
         )
 
+    # =========================================================================
+    # Public turn-lifecycle hook registration
+    # =========================================================================
+    #
+    # Runtime-attach surface for ``on_turn_start`` / ``on_turn_end``
+    # callbacks. Pairs with the private ``_fire_turn_start_hook`` /
+    # ``_fire_turn_end_hook`` triggers. Lazy-creates a :class:`WizardHooks`
+    # if none was supplied at construction, so consumers (and tests) can
+    # attach turn hooks without re-wiring construction.
+    #
+    # The full :class:`WizardHooks` surface (``on_enter`` / ``on_exit`` /
+    # ``on_complete`` / ``on_restart`` / ``on_error``) is reachable via
+    # the construction-time ``hooks=`` parameter; runtime-attach for those
+    # is intentionally NOT exposed here (they belong at construction time
+    # alongside the wizard's other immutable configuration).
+
+    def add_turn_start_hook(
+        self,
+        callback: TurnHookCallback,
+        *,
+        stage: str | None = None,
+    ) -> None:
+        """Register an ``on_turn_start`` callback at runtime.
+
+        Lazy-creates the embedded :class:`WizardHooks` if none was
+        supplied at construction. Delegates to
+        :meth:`WizardHooks.on_turn_start`.
+
+        Args:
+            callback: ``(manager, wizard_state, stage_name)`` — sync or async.
+            stage: Optional stage name to limit the hook to.
+        """
+        if self._hooks is None:
+            self._hooks = WizardHooks()
+        self._hooks.on_turn_start(callback, stage=stage)
+
+    def add_turn_end_hook(
+        self,
+        callback: TurnHookCallback,
+        *,
+        stage: str | None = None,
+    ) -> None:
+        """Register an ``on_turn_end`` callback at runtime.
+
+        Symmetric to :meth:`add_turn_start_hook`. Lazy-creates the
+        embedded :class:`WizardHooks` if none was supplied at
+        construction. Delegates to :meth:`WizardHooks.on_turn_end`.
+
+        Args:
+            callback: ``(manager, wizard_state, stage_name)`` — sync or async.
+            stage: Optional stage name to limit the hook to.
+        """
+        if self._hooks is None:
+            self._hooks = WizardHooks()
+        self._hooks.on_turn_end(callback, stage=stage)
+
     def _maybe_register_inbox_hook(self) -> None:
         """Auto-register the manager-metadata inbox bridge as an
         ``on_turn_start`` hook when configured.
@@ -2836,6 +2890,48 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             merge_fn=self.config.inbox_merge_fn,
         )
         self._hooks.on_turn_start(inbox_hook)
+
+    async def _fire_turn_start_hook(
+        self, manager: Any, wizard_state: WizardState,
+    ) -> None:
+        """Fire ``on_turn_start`` hooks for the current turn.
+
+        Single canonical fire-point shared by :meth:`begin_turn` and
+        :meth:`greet`. Resolves the active subflow FSM so a turn that
+        starts in a pushed subflow reports the subflow's stage name.
+        No-op when no hooks are configured.
+        """
+        if self._hooks is None:
+            return
+        active_fsm = self._subflows.get_active_fsm()
+        await self._hooks.trigger_turn_start(
+            manager, wizard_state, active_fsm.current_stage,
+        )
+
+    async def _fire_turn_end_hook(
+        self, manager: Any, wizard_state: WizardState,
+    ) -> None:
+        """Fire ``on_turn_end`` hooks for the current turn.
+
+        Single canonical fire-point shared by all four ``finalize_turn``
+        exit paths: :meth:`finalize_turn` normal + subflow-push, and
+        :meth:`stream_finalize_turn` normal + subflow-push. Resolves
+        the active subflow FSM so a turn that ended deep in a subflow
+        reports the subflow's stage name. No-op when no hooks are
+        configured.
+
+        Paths that intentionally do NOT call this helper (tracked as
+        ``164-FU1``): early-returns from :meth:`begin_turn` /
+        :meth:`process_input` (amendment / navigation / validation
+        error / auto-restart), stream abandonment via ``aclose()``,
+        and the non-conversational :meth:`advance` API.
+        """
+        if self._hooks is None:
+            return
+        active_fsm = self._subflows.get_active_fsm()
+        await self._hooks.trigger_turn_end(
+            manager, wizard_state, active_fsm.current_stage,
+        )
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.

@@ -347,3 +347,32 @@ async def test_non_mapping_payload_warns_and_skips(caplog) -> None:
         "not a mapping" in rec.message.lower()
         for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_empty_list_payload_warns_not_silent(caplog) -> None:
+    """An empty list IS a writer bug — must surface as a WARNING, not
+    a silent skip.
+
+    Pre-fix, the inbox check was ``if not payload: continue`` which
+    swallowed empty lists alongside ``None`` / ``{}``. A writer bug
+    publishing a list (empty or otherwise) would never reach the
+    type-check warning. Post-fix, only ``None`` (key not set) and
+    empty dicts (writer published nothing structurally valid) skip
+    silently; lists / scalars / other non-mapping types warn.
+    """
+    wizard = _build_wizard(inbox_key="_inbox")
+    manager = _FakeManager()
+    manager.metadata["_inbox"] = []  # writer bug — falsy non-mapping
+
+    caplog.set_level("WARNING", logger="dataknobs_bots.reasoning.wizard_inbox")
+    await wizard.begin_turn(manager, llm=_dummy_llm(), tools=None)
+
+    assert "_inbox" not in manager.metadata
+    assert any(
+        "not a mapping" in rec.message.lower()
+        for rec in caplog.records
+    ), (
+        "Empty-list payload must produce the non-mapping WARNING — "
+        "the pre-fix ``if not payload:`` check silently swallowed it."
+    )

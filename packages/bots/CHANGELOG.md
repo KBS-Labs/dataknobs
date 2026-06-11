@@ -17,19 +17,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standalone — adoptable by any `ReasoningStrategy` implementation, not
   wizard-specific. Documented adoption recipe in USER_GUIDE.md
   "Adopting LifecycleHooks in Your Own Reasoning Strategy".
+  Public introspection surface: `turn_start_count` /
+  `turn_end_count` properties and a `clear()` method that drains
+  every registered callback in place (preserving instance identity).
 - Wizard turn-lifecycle hook surface: `on_turn_start` and
   `on_turn_end` on `WizardHooks`, following the existing
   `on_enter` / `on_exit` / `on_complete` registration shape.
   `WizardHooks` composes `LifecycleHooks` internally and forwards
   registration / triggering through the embedded instance while
   preserving its own error-handler fan-out (failing hooks still
-  reach `on_error` callbacks before re-raising). Hooks fire from
-  `begin_turn` (AFTER per-turn ephemeral-key clear, BEFORE
-  early-return dispatch) and from `finalize_turn`'s canonical exit
-  (AFTER state save). `greet` symmetrically fires `on_turn_start`
-  so bot-initiated greetings inherit the surface. The embedded
-  instance is exposed read-only via the `WizardHooks.lifecycle`
-  property for detachment scenarios.
+  reach `on_error` callbacks before re-raising). `on_turn_start`
+  fires from `begin_turn` (AFTER per-turn ephemeral-key clear,
+  BEFORE early-return dispatch) and symmetrically from `greet` so
+  bot-initiated greetings inherit the surface. `on_turn_end` fires
+  from every canonical `finalize_turn` exit — including the
+  streaming counterpart `stream_finalize_turn` and the subflow-push
+  exit in both — AFTER `_save_wizard_state` so writer hooks
+  publishing to `manager.metadata` for the next turn's inbox observe
+  persisted state. The embedded instance is exposed read-only via
+  the `WizardHooks.lifecycle` property for detachment scenarios.
+  `WizardHooks.clear()` now drains the embedded lifecycle in place
+  alongside the legacy hook lists; `WizardHooks.hook_count` reports
+  `"turn_start"` / `"turn_end"` counts alongside the legacy keys.
+  Paths that intentionally still skip `on_turn_end` (tracked as
+  follow-up 164-FU1): early-returns from `begin_turn` /
+  `process_input`, stream abandonment via `aclose()`, and the
+  non-conversational `advance()` API.
+- `WizardReasoning.add_turn_start_hook(callback, *, stage=None)` /
+  `WizardReasoning.add_turn_end_hook(callback, *, stage=None)` —
+  public runtime-attach surface for turn-lifecycle callbacks.
+  Lazy-creates the embedded `WizardHooks` if none was supplied at
+  construction, then delegates to `WizardHooks.on_turn_start` /
+  `on_turn_end`. Pairs with the canonical fire-points so
+  observability / audit consumers can attach hooks without
+  re-wiring construction.
 - `WizardReasoningConfig.manager_metadata_inbox_key: str | list[str] | None`
   — typed knob that auto-registers an `on_turn_start` hook bridging
   one or more `manager.metadata` keys into `wizard_state.data` at the
