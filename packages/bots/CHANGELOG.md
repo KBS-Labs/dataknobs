@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `WizardReasoning` now forwards every construction collaborator
+  threaded through `WizardReasoning.from_config(config, **kwargs)`
+  (`knowledge_base`, `prompt_resolver`, `prompt_envelope`, every key in
+  `reasoning_components`, and any other consumer-supplied kwarg) to the
+  per-stage sub-strategy that `WizardResponder._resolve_stage_strategy`
+  builds. The forwarding leverages the
+  `StructuredConfigConsumer.components` pass-through surface plus the
+  new `forwardable_components()` mixin helper (see `dataknobs-common`
+  CHANGELOG). `WizardReasoning` declares
+  `INTERNAL_COMPONENTS = frozenset({"wizard_fsm"})` so the outer
+  wizard's FSM handle is never forwarded to a sub-strategy; every other
+  collaborator flows through opaquely. Closes the structural blocker
+  for per-stage `reasoning: pipeline` (or other composing) sub-
+  strategies that need construction-time collaborators (e.g. a
+  knowledge-base-aware `GroundedRetrieval` step). Strictly additive — a
+  wizard constructed without extras forwards an empty dict (no-op
+  spread on the registry call); the 174 existing direct-ctor call
+  sites opt in via the new `_forwarded_components` keyword-only
+  parameter on `WizardReasoning.__init__`. Consumer composing
+  strategies adopting the same mixin pattern get the same forwarding
+  discipline (see USER_GUIDE.md "Building your own composing
+  strategy").
+
 ## v0.7.3 - 2026-06-08
 
 ### Added

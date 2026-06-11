@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `StructuredConfigConsumer.forwardable_components()` and the
+  `INTERNAL_COMPONENTS: ClassVar[frozenset[str]]` ClassVar — the
+  documented mixin contract for composing classes that build child
+  consumers from a registry. A subclass declares the names of
+  collaborators it consumes itself (default: empty); the helper returns
+  a fresh dict of `self.components` minus those names, ready to spread
+  into a child's construction call. Strictly additive — the empty
+  default makes it a no-op for the 30+ existing adopters that don't
+  compose children. First in-tree adopter is `WizardReasoning` (see the
+  `dataknobs-bots` CHANGELOG); the pattern is the documented extension
+  contract for consumer-authored composing strategies (see the
+  `dataknobs-bots` USER_GUIDE "Building your own composing strategy"
+  subsection).
+- `dataknobs_common.testing.assert_dataclass_config_matches_ctor` and
+  `assert_factory_kwargs_match_ctor` now default-ignore the
+  `_forwarded_components` ctor parameter (alongside the existing `self`,
+  `config`, and `_components`). Mixin adopters with a back-compat
+  positional ctor shape (the `WizardReasoning` / `ResourcePool` pattern)
+  can use the documented `_forwarded_components` plumbing keyword to
+  capture `from_config`'s `**kwargs` and route them into the mixin's
+  `_components` channel without polluting the parity test with a
+  per-class allowlist entry.
+
 ## v1.4.0 - 2026-05-26
 
 ### Added

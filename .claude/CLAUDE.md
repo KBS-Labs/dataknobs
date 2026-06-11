@@ -13,6 +13,7 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 5. **Ollama-first for LLM defaults** - default to local models; commercial providers via config
 6. **Security constraints are non-negotiable** - input validation, HTTP safety, path traversal prevention, sensitive data protection (see `rules/security.md`)
 7. **Dependency management** - permissive licenses only, selection criteria enforced, no duplication (see `rules/dependency-management.md`)
+8. **Consumer extensibility** - bias toward extension points (registries, hooks, injectable parameters) over special-case knobs; capture deferred opportunities with rationale rather than dismissing them; we're building general tools for others to extend (see `rules/consumer-extensibility.md`)
 
 ### This Project's Special Role
 

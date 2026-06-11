@@ -1418,6 +1418,153 @@ Bot-managed components (`knowledge_base`, `prompt_resolver`,
 them through the corresponding config fields. A collision raises
 `ConfigurationError` naming the offending key.
 
+#### Wizard sub-strategy collaborator forwarding
+
+When a `wizard` reasoning strategy resolves a per-stage `reasoning:`
+sub-strategy, the bot-level construction collaborators it received
+(`knowledge_base`, `prompt_resolver`, `prompt_envelope`, every key in
+`reasoning_components`, and any other consumer-supplied kwarg) land on
+the wizard's `self.components` mapping (via the
+`StructuredConfigConsumer` mixin's standard pass-through channel) and
+are forwarded to that sub-strategy's own `from_config` call.
+
+```yaml
+- name: ground_in_framework
+  reasoning: pipeline
+  reasoning_config:
+    steps:
+      - { type: grounded_retrieval, ... }  # consumes knowledge_base
+      - { type: grounded_synthesis, ... }
+```
+
+The bot's `knowledge_base` reaches the `pipeline` sub-strategy at
+construction time without any per-stage YAML escape hatch.
+
+**Pass-through is opaque.** The wizard does not introspect which keys
+a sub-strategy consumes; each sub-strategy's `from_config` absorbs
+(via `**kwargs`) or consumes what it accepts.
+
+**Per-stage-safe contract.** Strategies with strict
+`from_config(config)` signatures (no `**kwargs` absorption) surface a
+clear `ConfigurationError` if the outer wizard forwards an
+unrecognized key. The convention for wizard-stage-safe strategies is
+`def from_config(cls, config, **kwargs)`.
+
+**The wizard's own FSM is never forwarded.** `WizardReasoning`
+declares `INTERNAL_COMPONENTS = frozenset({"wizard_fsm"})`, so the
+outer wizard's FSM handle stays on `self.components` for the wizard's
+own consumption but is excluded from the
+`forwardable_components()` view used at sub-strategy construction.
+
+#### Writing a wizard-stage-safe sub-strategy
+
+If you ship a `ReasoningStrategy` that consumers will use as a wizard
+per-stage `reasoning:` strategy, the wizard will forward its
+parent-level shared collaborators (typically `knowledge_base`,
+`prompt_resolver`, `prompt_envelope`, and any consumer-supplied
+`reasoning_components`) into your `from_config` at construction time.
+Your strategy doesn't have to *use* all of those — but it does have
+to *accept* them. Otherwise the wizard's `_resolve_stage_strategy`
+surfaces a `ConfigurationError` whose underlying cause is a
+`TypeError("got an unexpected keyword argument 'X'")` at the very
+first turn that resolves your strategy.
+
+The convention is one line: declare `**kwargs` on `from_config` and
+let it absorb anything you don't consume.
+
+```python
+# ❌ Strict signature — wizard-stage-unsafe. Consumers placing this
+# strategy under a wizard stage will hit:
+#   ConfigurationError: Failed to create strategy 'my_strat' ...
+#     unexpected keyword argument 'knowledge_base' | Hint: ...
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "MyStrategy":
+        return cls(threshold=config.get("threshold", 0.5))
+```
+
+```python
+# ✅ Permissive signature — wizard-stage-safe. Unrelated forwarded
+# keys are absorbed; the strategy still picks out what it actually
+# needs.
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        knowledge_base: Any | None = None,  # used; named for clarity
+        **_: Any,  # absorbs other forwarded collaborators
+    ) -> "MyStrategy":
+        return cls(
+            threshold=config.get("threshold", 0.5),
+            knowledge_base=knowledge_base,
+        )
+```
+
+This convention is also enforced at the abstraction-layer level by
+`StructuredConfigConsumer`'s `_ainit` / `_adopt_components` hooks
+(signature-aware delivery: collaborators a hook doesn't declare are
+not crashed-on, they're dropped at `DEBUG`). But for strategies
+built via the reasoning registry's `create()` — including every
+wizard sub-strategy — the `from_config` signature is the
+load-bearing surface, and the `**kwargs` opt-in is the simplest way
+to be wizard-stage-safe regardless of which collaborators a future
+wizard release decides to forward.
+
+The standalone, no-wizard construction path is unaffected: when no
+caller supplies the extra collaborators, the absorbed `**kwargs` is
+empty and the strategy behaves identically to its strict-signature
+predecessor.
+
+#### Building your own composing strategy
+
+The pass-through pattern is a first-class mixin surface. Any class
+adopting `StructuredConfigConsumer` that composes children built from
+a registry can declare what it consumes via `INTERNAL_COMPONENTS` and
+forward the rest via the inherited `forwardable_components()` method
+— no copy-pasted helper, no per-class reimplementation:
+
+```python
+from typing import Any, ClassVar
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.registry import get_registry
+
+class MyComposingStrategy(
+    StructuredConfigConsumer[MyConfig], ReasoningStrategy,
+):
+    #: Declare collaborators THIS class consumes itself.
+    #: Inherited ``forwardable_components()`` excludes these from the
+    #: pass-through to children.
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset(
+        {"my_internal_collaborator"}
+    )
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], **components: Any):
+        built_internal = _build_my_internal_collaborator(config)
+        return cls(
+            config=cls._coerce_config(config),
+            _components={
+                "my_internal_collaborator": built_internal,
+                **components,  # opaque pass-through to children
+            },
+        )
+
+    def _build_child(self, child_config: dict[str, Any]):
+        return get_registry().create(
+            config=child_config,
+            **self.forwardable_components(),  # inherited from mixin
+        )
+```
+
+Consumer composing strategies get the same per-stage forwarding
+discipline as the wizard — and the same single point of evolution
+when the pass-through contract grows (e.g. a future
+`ComposingStrategy` mixin that subsumes child caching and
+`add_source` fan-out).
+
 ---
 
 ### Production Deployment
