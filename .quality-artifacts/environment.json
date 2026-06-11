@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-11T16:10:06Z",
+  "timestamp": "2026-06-11T16:38:09Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.20 (Homebrew 2026-06-10 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/wizard-sub-strategy-kwargs-forwarding",
-  "git_commit": "a3a15a28a9e3beaf90d81c1a2cc0466745db5695",
+  "git_commit": "7a16d9578f1d40a5b963a368a1b6a1bc5a0b8683",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
