@@ -1186,6 +1186,207 @@ reasoning:
       - "myapp.hooks:save_project"
 ```
 
+#### Turn-Lifecycle Hooks
+
+`on_enter` / `on_exit` fire on stage transitions. For pre-turn /
+post-turn extension — bridging sub-strategy signals into
+transition-eval scope, tenant context binding, audit trails, writer
+hooks publishing for the next turn — use the turn-lifecycle hooks
+`on_turn_start` / `on_turn_end`:
+
+```python
+from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
+
+async def bind_tenant(manager, wizard_state, stage_name):
+    wizard_state.data["tenant_id"] = manager.metadata.get("tenant_id")
+
+async def emit_audit(manager, wizard_state, stage_name):
+    audit_log.record(stage_name, snapshot=dict(wizard_state.data))
+
+hooks = WizardHooks()
+hooks.on_turn_start(bind_tenant)
+hooks.on_turn_end(emit_audit, stage="triage")  # per-stage scope
+```
+
+**Configuration-based:**
+
+```yaml
+hooks:
+  on_turn_start:
+    - function: "myapp.hooks:bind_tenant"
+  on_turn_end:
+    - function: "myapp.hooks:emit_audit"
+      stage: "triage"
+```
+
+Callbacks receive `(manager, wizard_state, stage_name)` and may be
+sync or async.
+
+**Firing points:**
+
+- `on_turn_start` fires from `begin_turn` AFTER the per-turn
+  ephemeral-key clear and BEFORE early-return dispatch (so a hook
+  can re-populate keys cleared above OR influence amendment /
+  auto-restart / navigation routing). Also fires from `greet` so
+  bot-initiated greetings inherit the surface.
+- `on_turn_end` fires AFTER the state-save round-trip on every
+  canonical finalize-turn exit: `finalize_turn` and
+  `stream_finalize_turn`, normal and subflow-push variants both.
+  A consumer observing `chat()` and `stream_chat()` sees the same
+  `on_turn_end` firing semantics. Paths still skipped (tracked as
+  a follow-up): early-returns from `begin_turn` / `process_input`
+  (amendment / navigation / validation), stream abandonment via
+  `aclose()`, and the non-conversational `advance()` API.
+
+**Runtime hook attachment.** When the wizard was built without a
+`WizardHooks` instance at construction (e.g., the
+`manager_metadata_inbox_key` knob alone), runtime callers can
+attach turn-lifecycle callbacks via `WizardReasoning`'s public
+surface:
+
+```python
+wizard = bot.reasoning_strategy  # WizardReasoning
+wizard.add_turn_start_hook(bind_tenant)
+wizard.add_turn_end_hook(emit_audit, stage="triage")
+```
+
+Both methods lazy-create the embedded `WizardHooks` if needed, so
+they're safe regardless of construction-time wiring. The full
+legacy surface (`on_enter`, `on_exit`, `on_complete`, `on_restart`,
+`on_error`) remains construction-time only — those hook types
+belong alongside the wizard's immutable configuration.
+
+#### Manager-Metadata Inbox Bridge
+
+The wizard transition-eval safe scope (`{data, has, bank,
+artifact}`) intentionally excludes `manager.metadata`. But a
+per-stage sub-strategy (e.g. a pipeline-reasoning step) sometimes
+needs to publish a rules-first signal that the FSM transition
+should gate on — its own context evaporates after the step runs.
+
+The typed knob
+`WizardReasoningConfig.manager_metadata_inbox_key`
+auto-registers a built-in `on_turn_start` hook that pops the named
+`manager.metadata` key(s) and merges their contents into
+`wizard_state.data`:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: configs/wizards/advisor.yaml
+  manager_metadata_inbox_key: "_wizard_inbox"   # str or list[str]
+```
+
+**Multi-key support** — `manager_metadata_inbox_key:
+["_signals", "_audit"]` drains both keys per turn (in declared
+order).
+
+**Custom merge function:**
+
+```python
+from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
+
+def deep_merge(target, source):
+    for k, v in source.items():
+        if isinstance(v, dict) and isinstance(target.get(k), dict):
+            deep_merge(target[k], v)
+        else:
+            target[k] = v
+
+config = WizardReasoningConfig(
+    wizard_config=...,
+    manager_metadata_inbox_key="_inbox",
+    inbox_merge_fn=deep_merge,
+)
+```
+
+**Writer helper** — for consumer code (pipeline steps, custom
+logic) that publishes to the inbox for the NEXT turn:
+
+```python
+from dataknobs_bots.reasoning.wizard_inbox import write_to_inbox
+
+write_to_inbox(manager, "_wizard_inbox", {
+    "_proposal_queued": True,
+    "proposal_id": "asrm",
+})
+```
+
+The writer stamps the payload onto `manager.metadata`; the
+consume-on-read pop on the next turn means each turn's writer
+fully owns that turn's inbox content (no merge-conflict worries
+across turns).
+
+**Bridge contract:**
+
+| Property | Behaviour |
+|---|---|
+| Consume-on-read | Keys are popped, not get'd. Stale signals can't leak. |
+| None-as-eviction | Inbox value `{x: None}` writes `None` into `state.data[x]` (with the default merge). |
+| Empty-dict no-op | `{}` is silently skipped (key still popped). |
+| Non-mapping payload | WARNING logged + skip (writer-side bug doesn't crash the wizard). |
+| Across-turn semantics | Turn N's writer publishes AFTER turn N's transition; turn N+1's `begin_turn` consumes. |
+| `greet` inherits | Bot-initiated greetings also fire the hook, so the bridge applies on the greeting turn too. |
+
+**Why not widen the safe-eval scope?** Exposing `manager` directly
+would let any condition read arbitrary metadata. The inbox is a
+narrow channel: the wizard reads exactly the consumer-configured
+keys per turn.
+
+**Concurrency safety.** The hook runs through the wizard's per-turn
+handle and the `manager` parameter — no instance attributes.
+Multi-replica / multi-tenant runtimes adopting the knob get the
+bridge without inheriting any per-turn shared state hazard.
+
+#### Adopting `LifecycleHooks` in Your Own Reasoning Strategy
+
+The wizard isn't the only composing strategy that wants pre-turn /
+post-turn extension. Any custom `ReasoningStrategy` implementation
+can adopt the same hook surface without rebuilding a hook system —
+or pulling in wizard-specific machinery — by importing the generic
+`LifecycleHooks`:
+
+```python
+from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.lifecycle import LifecycleHooks
+
+
+class MyPipelineReasoning(ReasoningStrategy):
+    def __init__(
+        self,
+        *,
+        steps: list,
+        hooks: LifecycleHooks | None = None,
+    ) -> None:
+        self._steps = steps
+        self._hooks = hooks
+
+    async def generate(self, manager, llm, tools=None, **kwargs):
+        ctx = MyContext(manager=manager, llm=llm, tools=tools)
+        stage_name = "pipeline"  # or e.g. self._current_step.name
+
+        if self._hooks is not None:
+            await self._hooks.trigger_turn_start(manager, ctx, stage_name)
+
+        for step in self._steps:
+            await step.execute(ctx)
+
+        if self._hooks is not None:
+            await self._hooks.trigger_turn_end(manager, ctx, stage_name)
+
+        return ctx.response
+```
+
+The same `on_turn_start` hooks consumers already write for the
+wizard (tenant binding, audit injection, signal bridging) become
+reusable across both strategies. No additional protocol,
+mixin-adoption, or fork required.
+
+The wizard's `WizardHooks` composes `LifecycleHooks` internally;
+consumer composing strategies receiving a `WizardHooks` instance
+can detach the turn-lifecycle surface via the `hooks.lifecycle`
+property if they want to share it with a sibling strategy.
+
 #### Conditional Branching
 
 Create dynamic flows based on user input:

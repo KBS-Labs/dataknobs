@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Union
 
 from .function_resolver import resolve_function
+from .lifecycle import LifecycleHooks, TurnHookCallback
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,17 @@ StageCallback = Callable[[str, dict[str, Any]], Union[None, Awaitable[None]]]
 CompleteCallback = Callable[[dict[str, Any]], Union[None, Awaitable[None]]]
 ErrorCallback = Callable[
     [str, dict[str, Any], Exception], Union[None, Awaitable[None]]
+]
+
+# Re-export so existing consumers can ``from dataknobs_bots.reasoning.wizard_hooks
+# import TurnHookCallback`` without learning the new module path.
+__all__ = [
+    "CompleteCallback",
+    "ErrorCallback",
+    "HookContext",
+    "StageCallback",
+    "TurnHookCallback",
+    "WizardHooks",
 ]
 
 
@@ -130,6 +142,11 @@ class WizardHooks:
         self._complete_hooks: list[CompleteCallback] = []
         self._restart_hooks: list[Callable[[], Any]] = []
         self._error_hooks: list[ErrorCallback] = []
+        # Compose the strategy-agnostic turn-lifecycle surface. The
+        # generic class owns registration / triggering / config-load
+        # for the turn hooks; this wizard-specific class forwards
+        # through it (preserving the wizard's error-handler fan-out).
+        self._lifecycle: LifecycleHooks = LifecycleHooks()
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "WizardHooks":
@@ -202,6 +219,12 @@ class WizardHooks:
             callback = cls._load_callback(hook_ref)
             if callback:
                 hooks.on_error(callback)
+
+        # Delegate turn-lifecycle parsing to the generic LifecycleHooks
+        # loader (same on_turn_start / on_turn_end keys + dotted-path
+        # callbacks). Replace the embedded instance with the loaded one
+        # rather than re-implementing parsing in two places.
+        hooks._lifecycle = LifecycleHooks.from_config(config)
 
         return hooks
 
@@ -344,6 +367,103 @@ class WizardHooks:
         self._error_hooks.append(callback)
         return self
 
+    # ── Turn-lifecycle pass-through ──────────────────────────────
+    # Forwarded to the embedded LifecycleHooks so registration looks
+    # the same to consumers (``hooks.on_turn_start(cb)``). Triggers
+    # wrap the LifecycleHooks call in the wizard's existing error-
+    # handler fan-out so a failing hook still reaches ``on_error``
+    # callbacks.
+
+    def on_turn_start(
+        self,
+        callback: TurnHookCallback,
+        *,
+        stage: str | None = None,
+    ) -> "WizardHooks":
+        """Register a callback for the start of every wizard turn.
+
+        Fires from :meth:`WizardReasoning.begin_turn` AFTER the
+        per-turn ephemeral-key clear, BEFORE the user-message read
+        and any early-return dispatch. Also fires from
+        :meth:`WizardReasoning.greet` so bot-initiated greetings
+        inherit the surface.
+
+        Common consumer uses: bridging sub-strategy signals into
+        transition-eval scope, tenant context binding, audit trail
+        injection, custom validation gating.
+
+        Args:
+            callback: ``(manager, wizard_state, stage_name)`` — sync
+                or async.
+            stage: Optional stage name to limit the hook to.
+
+        Returns:
+            Self, for chaining.
+        """
+        self._lifecycle.on_turn_start(callback, stage=stage)
+        return self
+
+    def on_turn_end(
+        self,
+        callback: TurnHookCallback,
+        *,
+        stage: str | None = None,
+    ) -> "WizardHooks":
+        """Register a callback for the end of every wizard turn.
+
+        Fires from :meth:`WizardReasoning.finalize_turn` after the
+        state-save round-trip. See :meth:`on_turn_start`.
+        """
+        self._lifecycle.on_turn_end(callback, stage=stage)
+        return self
+
+    async def trigger_turn_start(
+        self,
+        manager: Any,
+        wizard_state: Any,
+        stage_name: str,
+    ) -> None:
+        """Trigger all registered ``on_turn_start`` hooks.
+
+        Wraps the LifecycleHooks call in the wizard's existing
+        error-handler fan-out (``_handle_error``) so a failing hook
+        still reaches ``on_error`` callbacks before re-raising.
+        """
+        try:
+            await self._lifecycle.trigger_turn_start(
+                manager, wizard_state, stage_name,
+            )
+        except Exception as e:
+            await self._handle_error(stage_name, wizard_state.data, e)
+            raise
+
+    async def trigger_turn_end(
+        self,
+        manager: Any,
+        wizard_state: Any,
+        stage_name: str,
+    ) -> None:
+        """Trigger all registered ``on_turn_end`` hooks. See
+        :meth:`trigger_turn_start`.
+        """
+        try:
+            await self._lifecycle.trigger_turn_end(
+                manager, wizard_state, stage_name,
+            )
+        except Exception as e:
+            await self._handle_error(stage_name, wizard_state.data, e)
+            raise
+
+    @property
+    def lifecycle(self) -> LifecycleHooks:
+        """Read-only access to the embedded :class:`LifecycleHooks`.
+
+        Useful when a consumer wants to detach the lifecycle surface
+        (e.g. install the wizard's lifecycle hooks on a non-wizard
+        sibling strategy in the same conversation).
+        """
+        return self._lifecycle
+
     async def trigger_enter(self, stage: str, data: dict[str, Any]) -> None:
         """Trigger all registered enter hooks for a stage.
 
@@ -460,19 +580,31 @@ class WizardHooks:
                 logger.exception("Error in error handler")
 
     def clear(self) -> None:
-        """Clear all registered hooks."""
+        """Clear ALL registered hooks, including the embedded
+        :class:`LifecycleHooks` turn surface.
+
+        Reset semantics cover every hook type a consumer can register
+        through this class — enter / exit / complete / restart / error
+        (legacy hooks) and turn_start / turn_end (delegated to the
+        composed lifecycle instance). The lifecycle instance identity
+        is preserved (drained in place), so any external reference held
+        via the :attr:`lifecycle` property remains valid post-clear.
+        """
         self._enter_hooks.clear()
         self._exit_hooks.clear()
         self._complete_hooks.clear()
         self._restart_hooks.clear()
         self._error_hooks.clear()
+        self._lifecycle.clear()
 
     @property
     def hook_count(self) -> dict[str, int]:
         """Get count of registered hooks by type.
 
         Returns:
-            Dict mapping hook type to count
+            Dict mapping hook type to count. Includes the composed
+            turn-lifecycle surface (``turn_start`` / ``turn_end``)
+            alongside the legacy wizard hooks.
         """
         return {
             "enter": len(self._enter_hooks),
@@ -480,4 +612,6 @@ class WizardHooks:
             "complete": len(self._complete_hooks),
             "restart": len(self._restart_hooks),
             "error": len(self._error_hooks),
+            "turn_start": self._lifecycle.turn_start_count,
+            "turn_end": self._lifecycle.turn_end_count,
         }
