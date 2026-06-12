@@ -155,19 +155,15 @@ class KeywordIntentClassifier(IntentClassifier):
                 rule_based=False, raw_reply=raw_message,
             )
 
-        # No phrase match — fall back to the word tier, but exclude
-        # specs that ONLY matched at the phrase tier (impossible here
-        # because we already returned above; kept explicit so the
-        # word-tier branch never sees a phrase-match-only spec).
-        only_word_matches = [
-            spec for spec in word_matches if spec not in phrase_matches
-        ]
-        if len(only_word_matches) == 1:
+        # No phrase match — fall back to the word tier. (The non-empty
+        # phrase branches above all return, so phrase_matches is
+        # guaranteed empty here.)
+        if len(word_matches) == 1:
             return IntentMatchResult(
-                intent=only_word_matches[0], extracted=None,
+                intent=word_matches[0], extracted=None,
                 rule_based=True, raw_reply=raw_message,
             )
-        if len(only_word_matches) > 1:
+        if len(word_matches) > 1:
             # Same-priority ambiguity at the word tier.
             return IntentMatchResult(
                 intent=None, extracted=None,

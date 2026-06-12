@@ -324,12 +324,8 @@ def detect_boolean_signal(
         :class:`dataknobs_llm.intent.KeywordIntentClassifier`
         (``phrase_priority`` mode + injectable tokenizer).
     """
-    # Intra-package import deferred to first call: ``intent/negation.py``
-    # imports :func:`has_negation` and :data:`DEFAULT_NEGATION_KEYWORDS`
-    # from this module, so importing the intent module at module load
-    # time would create a circular edge. By the first call to this
-    # function, both modules are fully loaded; ``sys.modules`` caches
-    # the import on every subsequent call.
+    # Deferred to avoid a circular import at module load time:
+    # ``intent/negation.py`` imports from this module.
     from dataknobs_llm.intent import (
         IntentSpec,
         KeywordIntentClassifier,

@@ -20,6 +20,12 @@ from dataknobs_bots.reasoning.wizard import (
 )
 from dataknobs_bots.reasoning.wizard_grounding import detect_boolean_signal
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+from dataknobs_llm.extraction.grounding import (
+    DEFAULT_NEGATION_KEYWORDS,
+    _word_in_text,
+    has_negation,
+)
+from dataknobs_llm.intent import IntentSpec, KeywordIntentClassifier
 from dataknobs_llm.testing import text_response
 
 
@@ -162,20 +168,6 @@ class TestDetectBooleanSignal:
 # None`` for any case fails this parity check before the consumer
 # sees it.
 # ---------------------------------------------------------------------------
-
-
-# Imports for the parity helper are placed here (not at module top)
-# to group them visually with the parity class below. ``E402`` is the
-# isort/ruff warning for "module level import not at top of file".
-from dataknobs_llm.extraction.grounding import (  # noqa: E402
-    DEFAULT_NEGATION_KEYWORDS,
-    _word_in_text,
-    has_negation,
-)
-from dataknobs_llm.intent import (  # noqa: E402
-    IntentSpec,
-    KeywordIntentClassifier,
-)
 
 
 _PARITY_AFF_NEG_SPECS: tuple[IntentSpec, ...] = (

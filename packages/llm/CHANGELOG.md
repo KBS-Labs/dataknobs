@@ -90,9 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the first-match-wins iteration semantic.
   `dataknobs_llm.extraction.grounding.detect_boolean_signal` opts in
   so multi-word affirmative/negative phrases beat single-word
-  matches (the affirmative-alone-plus-negation flip is handled
-  locally in `detect_boolean_signal`, on top of the classifier's
-  four-quadrant verdict).
+  matches; its public `bool | None` verdict is unchanged.
 
 ## v0.6.2 - 2026-06-06
 
