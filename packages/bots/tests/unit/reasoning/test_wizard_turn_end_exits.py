@@ -144,7 +144,7 @@ async def test_on_turn_end_fires_on_collection_help_early_return() -> None:
                 "prompt": "Collect items.",
                 "collection_mode": "collection",
                 "collection_config": {
-                    "bank": "items",
+                    "bank_name": "items",
                     "done_keywords": ["done"],
                 },
                 "schema": {
@@ -175,6 +175,165 @@ async def test_on_turn_end_fires_on_collection_help_early_return() -> None:
 
         assert any(e["reason"] == "collection_help" for e in fired), (
             f"Expected reason='collection_help'; got {[e['reason'] for e in fired]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_on_turn_end_fires_on_collection_loop_early_return() -> None:
+    """A normal (non-done, non-help) message in a collection-mode stage
+    routes through ``_handle_collection_mode``'s loop return, which fires
+    ``on_turn_end`` with ``reason="collection_loop"``.
+
+    Scripted extraction produces a schema-shaped record; the handler
+    adds it to the bank, renders the stage response, and returns a
+    non-``None`` response object — the loop branch.
+    """
+    config = {
+        "name": "collection-loop-test",
+        "version": "1.0",
+        "stages": [
+            {
+                "name": "collect",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "Collect items.",
+                "collection_mode": "collection",
+                "collection_config": {
+                    "bank_name": "items",
+                    "done_keywords": ["done"],
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "item": {"type": "string"},
+                    },
+                    "required": ["item"],
+                },
+            },
+        ],
+    }
+
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=["Got it — what next?"],
+        extraction_results=[[{"item": "thing1"}]],
+    ) as harness:
+        fired: list[dict[str, Any]] = []
+
+        async def my_hook(event: dict[str, Any]) -> None:
+            fired.append(event)
+
+        harness.bot.reasoning_strategy.add_turn_end_hook(my_hook)
+
+        # Real item content (not "help", not "done") routes through
+        # the loop branch.
+        await harness.chat("thing1")
+
+        assert any(e["reason"] == "collection_loop" for e in fired), (
+            f"Expected reason='collection_loop'; got {[e['reason'] for e in fired]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_on_turn_end_fires_on_confirmation_early_return() -> None:
+    """A stage with ``response_template`` and a fresh extraction routes
+    through the confirmation early-return, which fires ``on_turn_end``
+    with ``reason="confirmation"``.
+
+    The confirmation evaluator's first-render rule fires when
+    ``new_data_keys`` is non-empty and ``confirm_first_render`` defaults
+    to ``True``.
+    """
+    config = {
+        "name": "confirmation-test",
+        "version": "1.0",
+        "stages": [
+            {
+                "name": "ask",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "Pick a color.",
+                "response_template": "You picked {{ data.color }}, right?",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "color": {"type": "string"},
+                    },
+                    "required": ["color"],
+                },
+            },
+        ],
+    }
+
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=["You picked red, right?"],
+        extraction_results=[[{"color": "red"}]],
+    ) as harness:
+        fired: list[dict[str, Any]] = []
+
+        async def my_hook(event: dict[str, Any]) -> None:
+            fired.append(event)
+
+        harness.bot.reasoning_strategy.add_turn_end_hook(my_hook)
+
+        await harness.chat("red")
+
+        assert any(e["reason"] == "confirmation" for e in fired), (
+            f"Expected reason='confirmation'; got {[e['reason'] for e in fired]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_on_turn_end_fires_on_validation_error_early_return() -> None:
+    """A schema-enum violation under ``strict_validation=True`` routes
+    through the validation-error early-return, which fires
+    ``on_turn_end`` with ``reason="validation_error"``.
+
+    Stage has no ``response_template`` (so confirmation does not preempt
+    validation) and the schema declares an enum constraint that the
+    scripted extraction violates.
+    """
+    config = {
+        "name": "validation-error-test",
+        "version": "1.0",
+        "settings": {"strict_validation": True},
+        "stages": [
+            {
+                "name": "pick",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "Pick a color.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "color": {
+                            "type": "string",
+                            "enum": ["red", "blue"],
+                        },
+                    },
+                    "required": ["color"],
+                },
+            },
+        ],
+    }
+
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=["That value isn't allowed; try red or blue."],
+        extraction_results=[[{"color": "purple"}]],
+    ) as harness:
+        fired: list[dict[str, Any]] = []
+
+        async def my_hook(event: dict[str, Any]) -> None:
+            fired.append(event)
+
+        harness.bot.reasoning_strategy.add_turn_end_hook(my_hook)
+
+        await harness.chat("purple")
+
+        assert any(e["reason"] == "validation_error" for e in fired), (
+            f"Expected reason='validation_error'; got {[e['reason'] for e in fired]}"
         )
 
 

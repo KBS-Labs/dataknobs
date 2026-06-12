@@ -1200,6 +1200,8 @@ from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
 async def bind_tenant(event):
     state = event["state"]
     manager = event["manager"]
+    if manager is None:
+        return  # advance() has no manager — see firing-points table
     state.data["tenant_id"] = manager.metadata.get("tenant_id")
 
 async def emit_audit(event):
@@ -1262,7 +1264,7 @@ filter on `reason` alone.
   | Navigation keyword (back / skip / restart) early-return | `"navigation"` | After state save in `begin_turn` |
   | Low-confidence clarification early-return | `"clarification"` | After state save in `process_input` |
   | Collection-mode help intent early-return | `"collection_help"` | After state save in `process_input` |
-  | Collection-mode loop record early-return | `"collection_loop"` | In `process_input` |
+  | Collection-mode loop record early-return | `"collection_loop"` | After state save (inside `_handle_collection_mode`) in `process_input` |
   | Confirmation render early-return | `"confirmation"` | After state save in `process_input` |
   | Strict-validation failure early-return | `"validation_error"` | After state save in `process_input` |
   | Non-conversational `advance()` API | `"advance"` (with `manager=None`) | After the result is built in `advance` |
@@ -1273,6 +1275,20 @@ filter on `reason` alone.
   filter on `event.get("reason") == "normal"`; observability /
   audit / metric consumers typically observe every exit and tag
   records with the reason.
+
+  **Pairing semantics.** Every conversational turn fires exactly
+  one `on_turn_start` followed by exactly one `on_turn_end` —
+  including early-return turns. A turn ending with
+  `reason="amendment"` (or any other early-return reason) still
+  fired its `on_turn_start` at the start of that same turn. The
+  one exception is the non-conversational `advance()` API: it
+  fires only `on_turn_end` (with `reason="advance"`, `manager=None`)
+  and has no paired `on_turn_start`. Consumers correlating
+  start/end events match pairs by `event["manager"]` + the turn
+  ordering observed on a single manager; consumers that need to
+  ignore the unpaired `advance()` end-event filter on
+  `event.get("manager") is None` or `event.get("reason") ==
+  "advance"`.
 
 **Runtime hook attachment.** When the wizard was built without a
 `WizardHooks` instance at construction (e.g., the

@@ -2728,7 +2728,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 llm=provider,
             )
             if result.missing_fields:
-                print(f"Still need: {result.missing_fields}")
+                logger.info("Still need: %s", result.missing_fields)
 
         Note:
             ``on_turn_end`` fires from this method with
@@ -4156,8 +4156,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 stage_definitions=wizard_config.get("stages"),
             )
             if snapshot:
-                print(f"Current stage: {snapshot.current_stage}")
-                print(f"Progress: {snapshot.task_progress_percent}%")
+                logger.info("Current stage: %s", snapshot.current_stage)
+                logger.info("Progress: %s%%", snapshot.task_progress_percent)
             ```
         """
         wizard_meta = metadata.get("wizard")
