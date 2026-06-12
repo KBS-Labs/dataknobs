@@ -15,13 +15,13 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from dataknobs_bots.intent.defaults import DEFAULT_LLM_PROMPT_TEMPLATE
-from dataknobs_bots.intent.protocol import (
+from dataknobs_llm import LLMMessage
+from dataknobs_llm.intent.defaults import DEFAULT_LLM_PROMPT_TEMPLATE
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentMatchResult,
     IntentSpec,
 )
-from dataknobs_llm import LLMMessage
 from dataknobs_llm.llm.base import AsyncLLMProvider
 
 logger = logging.getLogger(__name__)

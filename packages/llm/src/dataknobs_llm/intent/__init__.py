@@ -1,8 +1,9 @@
 """Intent classification — pluggable IntentClassifier protocol.
 
-Forward-looking intent classification for any consumer that needs
-to route user input by intent — wizard advisor flows, tool routers,
-memory query classifiers, etc.
+Forward-looking intent classification for any LLM-layer consumer
+that needs to route user input by intent — tool routers, reasoning
+strategies, RAG query classifiers, downstream packages such as
+``dataknobs-bots`` (wizard advisor flows), etc.
 
 The package ships a small protocol (:class:`IntentClassifier`) plus
 four built-in implementations covering the common cases:
@@ -13,7 +14,7 @@ four built-in implementations covering the common cases:
 * :class:`LLMIntentClassifier` — LLM provider + prompt template
   injectable. Use standalone for LLM-only classification.
 * :class:`CompositeIntentClassifier` — chain classifiers
-  (``first_match`` short-circuit, ``vote`` ensemble). The v3 default
+  (``first_match`` short-circuit, ``vote`` ensemble). The default
   "rule-first, optional LLM fallback" behaviour is just
   ``CompositeIntentClassifier([KeywordIntentClassifier(),
   LLMIntentClassifier()])`` — no special class needed.
@@ -26,15 +27,13 @@ four built-in implementations covering the common cases:
 :data:`intent_classifier_backends` is a
 :class:`Registry[IntentClassifierFactory]` consumers register their
 own backends into (``embedding``, ``fuzzy_match``, locale-specific
-keyword variants). The wizard's ``intent_detection: {classifier:
-<name>, ...}`` block dispatches through it.
+keyword variants). Consumers dispatch through it via
+:func:`create_intent_classifier`.
 
-Wizard-agnostic: the protocol, defaults, and registry have no
-dependencies on the :mod:`dataknobs_bots.reasoning` (wizard) layer.
-The wizard consumes intent classification via the synthesized
-``intent_detection:`` block produced by the ``intent_confirm:``
-primitive, but any other reasoning strategy — ReAct router, tool
-router, memory query classifier — can use this module directly.
+Consumer-agnostic: the protocol, defaults, and registry have no
+dependencies on any consumer layer. Any LLM-layer reasoning
+strategy, tool router, memory query classifier — or downstream
+packages — can use this module directly.
 
 The protocol is intentionally narrow (one async ``classify`` method
 returning :class:`IntentMatchResult`). The ``confidence`` field on
@@ -45,30 +44,35 @@ negation-filter classifiers.
 """
 from __future__ import annotations
 
-from dataknobs_bots.intent.composite import CompositeIntentClassifier
-from dataknobs_bots.intent.defaults import (
+from dataknobs_llm.intent.composite import CompositeIntentClassifier
+from dataknobs_llm.intent.defaults import (
+    DEFAULT_AFFIRMATIVE_SIGNALS,
     DEFAULT_LLM_PROMPT_TEMPLATE,
     DEFAULT_NEGATION_KEYWORDS,
+    DEFAULT_NEGATIVE_SIGNALS,
     DEFAULT_VOCABULARY,
     default_word_boundary_tokenizer,
+    word_in_text,
 )
-from dataknobs_bots.intent.keyword import KeywordIntentClassifier
-from dataknobs_bots.intent.llm import LLMIntentClassifier
-from dataknobs_bots.intent.negation import NegationFilter
-from dataknobs_bots.intent.protocol import (
+from dataknobs_llm.intent.keyword import KeywordIntentClassifier
+from dataknobs_llm.intent.llm import LLMIntentClassifier
+from dataknobs_llm.intent.negation import NegationFilter
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentClassifierFactory,
     IntentMatchResult,
     IntentSpec,
 )
-from dataknobs_bots.intent.registry import (
+from dataknobs_llm.intent.registry import (
     create_intent_classifier,
     intent_classifier_backends,
 )
 
 __all__ = [
+    "DEFAULT_AFFIRMATIVE_SIGNALS",
     "DEFAULT_LLM_PROMPT_TEMPLATE",
     "DEFAULT_NEGATION_KEYWORDS",
+    "DEFAULT_NEGATIVE_SIGNALS",
     "DEFAULT_VOCABULARY",
     "CompositeIntentClassifier",
     "IntentClassifier",
@@ -81,4 +85,5 @@ __all__ = [
     "create_intent_classifier",
     "default_word_boundary_tokenizer",
     "intent_classifier_backends",
+    "word_in_text",
 ]

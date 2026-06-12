@@ -99,7 +99,7 @@ VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
 # and x-extraction.negative_signals.
 #
 # The same single-token vocabularies are also published by
-# :mod:`dataknobs_bots.intent.defaults` (under their public names
+# :mod:`dataknobs_llm.intent.defaults` (under their public names
 # ``DEFAULT_AFFIRMATIVE_SIGNALS`` / ``DEFAULT_NEGATIVE_SIGNALS``) for
 # the keyword intent classifier. They are kept locally here so the
 # wizard layer does not depend on the intent module — the intent

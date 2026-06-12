@@ -5,22 +5,19 @@ injectable ``tokenizer`` (default: word-boundary regex). The
 ``vocabulary`` mapping supplies per-intent default keywords when an
 :class:`IntentSpec` has no ``keywords`` override.
 
-This is the single keyword-classification primitive consumed by:
-
-* The new public :class:`IntentClassifier` API.
-* The wizard's ``intent_detection: {classifier: keyword, ...}`` block
-  (after the v3 re-flooring).
+This is the single keyword-classification primitive registered as
+the ``"keyword"`` backend in :data:`intent_classifier_backends`.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from dataknobs_bots.intent.defaults import (
+from dataknobs_llm.intent.defaults import (
     DEFAULT_VOCABULARY,
     default_word_boundary_tokenizer,
 )
-from dataknobs_bots.intent.protocol import (
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentMatchResult,
     IntentSpec,

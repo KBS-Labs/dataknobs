@@ -9,67 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `dataknobs_bots.intent` module — a pluggable intent-classification
-  surface usable by any reasoning strategy or tool router that needs
-  to route user input by intent. `IntentClassifier` is a small
-  `@runtime_checkable` Protocol with one async `classify(message,
-  intents, **kwargs) -> IntentMatchResult` method. Built-in
-  implementations: `KeywordIntentClassifier` (vocabulary +
-  injectable tokenizer; default tokenizer is word-boundary regex),
-  `LLMIntentClassifier` (provider + prompt template injectable),
-  `CompositeIntentClassifier` (chain backends via `"first_match"`
-  or `"vote"` strategies), and `NegationFilter` (decorator that
-  composes `dataknobs_llm.extraction.grounding.has_negation` to
-  suppress matches under detected negation). `IntentSpec` /
-  `IntentMatchResult` are frozen dataclasses; `IntentMatchResult`
-  carries a `confidence: float | None` field reserved for future
-  calibrated-confidence classifiers (built-ins return `None`).
-  Shared defaults `DEFAULT_VOCABULARY`, `DEFAULT_LLM_PROMPT_TEMPLATE`,
-  `DEFAULT_NEGATION_KEYWORDS`, and `default_word_boundary_tokenizer`
-  are re-exported from the package root.
-- `intent_classifier_backends` — `Registry[IntentClassifierFactory]`
-  in `dataknobs_bots.intent` that mirrors the shape of
-  `event_bus_backends` and `lock_backends`. Built-ins
-  (`"keyword"`, `"llm"`, `"composite"`) auto-register at import;
-  consumers register their own backends (embedding similarity,
-  fuzzy match, locale-specific keyword variants) under any name.
-  The wizard's `intent_detection: {classifier: <name>, ...}` block
-  dispatches through this registry.
-- `create_intent_classifier(name, config=None)` factory in
-  `dataknobs_bots.intent` — resolves a registered backend by name
-  and forwards the config dict to the registered factory. Raises
-  `ValueError` listing every registered backend on unknown name
-  (mirrors `create_event_bus` / `create_lock` shape). The wizard's
-  intent-detection dispatcher uses this helper so the unknown-name
-  error message is consistent with direct callers.
-- `dataknobs_bots.reasoning.stage_synthesizers.stage_synthesizer_backends` —
-  `Registry[StageSynthesizer]` (replaces the prior plain-dict
-  registry). Mirrors the shape of `intent_classifier_backends` /
-  `event_bus_backends` / `lock_backends`. `register_stage_synthesizer`
-  uses `allow_overwrite=True`; re-registering the same `field`
-  overwrites by design (consumers commonly replace the in-tree
-  synthesizer with a customized one). The in-tree
-  `IntentConfirmSynthesizer` is now auto-registered at module
-  import (via a top-level import of `wizard_intent_confirm` from
-  `wizard_loader`) rather than via a deferred side-effect import
-  inside `_synthesize_stages`.
 - `intent_confirm:` wizard stage primitive — declarative block that
   expands at load time into `mode: conversation` +
   `response_template` + (optional) `clarification_template` +
-  `intent_detection` + `schema` + `transitions`. Lets a wizard
-  author propose something, route by `accept` / `decline` / custom
-  intent in one block, and capture user-named alternatives via an
-  `extract:` field. Per-intent `keywords:` overrides, per-intent or
-  block-level `llm_fallback: true` (promotes the classifier to a
-  keyword→LLM composite chain), block-level `negation_filter: true`
-  (wraps the classifier in `NegationFilter`), and
-  `on_no_match: {target?, clarification_template?}` for fallback
-  routing and reprompt copy are all supported. The synthesized
+  `intent_detection` + `schema` + `transitions`. Built atop
+  `dataknobs_llm.intent` for classifier resolution. Wizard authors
+  declare `proposal_template`, an `intents:` map (each intent
+  carries a `target`, optional `keywords:` override, optional
+  `extract:` field name, optional per-intent `llm_fallback: true`),
+  optional `on_no_match: {target?, clarification_template?}` for
+  fallback routing and reprompt copy, block-level `llm_fallback:
+  true` (shorthand for promoting the classifier to a keyword→LLM
+  composite chain), and block-level `negation_filter: true` (wraps
+  the resolved classifier in `NegationFilter`); the
+  `IntentConfirmSynthesizer` expands the rest. The synthesized
   `intent_detection` block sets `per_intent_booleans: true`, so the
   matched intent writes `state.data[intent_name] = True` (the
   back-compat `state.data["_intent"]` key is still written too).
   Zero new runtime branches — every step runs through existing
-  wizard machinery. Documented in USER_GUIDE.md "Wizard-as-advisor:
+  wizard machinery. `IntentConfirmSynthesizer.validate` rejects
+  empty / non-mapping `intents`, intent specs that are not mappings,
+  intents missing a `target`, and intent names that collide with
+  the reserved `_intent` runtime key — all surfaced as
+  `ConfigurationError` with the offending stage and intent named.
+  After expansion the synthesizer removes the original
+  `intent_confirm:` block from the stage dict so the FSM-metadata
+  layer carries only the synthesized primitives — no parallel
+  source of truth. Documented in USER_GUIDE.md "Wizard-as-advisor:
   intent confirmation".
 - `clarification_template:` stage field — optional template rendered
   on re-render of a conversation-mode stage when no extraction or
@@ -82,91 +48,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `iter_stage_synthesizers` / `validate_no_conflicting_fields`
   exports from `dataknobs_bots.reasoning` (also re-exported from
   `dataknobs_bots.reasoning.wizard_loader` for single-module
-  imports). Lets dataknobs and consumers ship higher-level stage
-  primitives that expand into existing wizard machinery at load
-  time. The loader runs registered synthesizers in a dedicated phase
-  BEFORE `_validate_config` and FSM translation, so downstream
-  validator and FSM build code see only the normalized shape.
-  `IntentConfirmSynthesizer` is the in-tree reference adopter.
+  imports), and a `stage_synthesizer_backends:
+  Registry[StageSynthesizer]`. `register_stage_synthesizer` uses
+  `allow_overwrite=True`; re-registering the same `field`
+  overwrites by design (consumers commonly replace the in-tree
+  synthesizer with a customized one). The loader runs registered
+  synthesizers in a dedicated phase BEFORE `_validate_config` and
+  FSM translation, so downstream validator and FSM build code see
+  only the normalized shape. `IntentConfirmSynthesizer` is the
+  in-tree reference adopter; it auto-registers at module import.
   Documented in USER_GUIDE.md "Shipping your own wizard stage
   primitive".
 - `WizardConfigBuilder` recognizes `intent_confirm:` and
   `clarification_template:` on stage configs. `intent_confirm:` is
   carried as a raw dict because the synthesizer expands it before
   the builder's typed `StageConfig` runs.
-
-### Changed
-
-- `WizardExtractor.detect_intent` now dispatches through
-  `dataknobs_bots.intent.intent_classifier_backends`. The
+- `WizardExtractor.detect_intent` dispatches through
+  `dataknobs_llm.intent.intent_classifier_backends`. The
   `intent_detection:` block selects a backend via `classifier:`
   (preferred) and optional `classifier_config:` forwarded to the
   backend's factory. The legacy `method: keyword | llm` /
   `llm_fallback: true` shape is promoted automatically at runtime
   (`method: keyword` → `classifier: keyword`; `method: llm` →
-  `classifier: llm`; `llm_fallback: true` → `classifier:
-  composite` with a keyword→LLM chain), so existing wizard YAML
-  continues to work unchanged. New YAML should use the
-  `classifier:` shape. `negation_filter: true` wraps the resolved
-  classifier in `NegationFilter`. When `per_intent_booleans: true`
-  is set on the block, the matched intent also writes
+  `classifier: llm`; per-intent or block-level `llm_fallback:
+  true` → `classifier: composite` with a keyword→LLM chain), so
+  existing wizard YAML continues to work unchanged. New YAML should
+  use the `classifier:` shape. `negation_filter: true` wraps the
+  resolved classifier in `NegationFilter`. When `per_intent_booleans:
+  true` is set on the block, the matched intent also writes
   `state.data[intent_name] = True` alongside the existing
   `_intent` key.
-- `dataknobs_bots.intent.defaults` is now a true leaf: it no
-  longer reaches into the wizard layer for its default
-  vocabularies or the word-boundary helper. The English yes/no
-  signal sets are published there under public names
-  (`DEFAULT_AFFIRMATIVE_SIGNALS`, `DEFAULT_NEGATIVE_SIGNALS`),
-  alongside `word_in_text` (re-exported from `wizard_utils` for
-  back-compat with the extraction-layer call sites). The wizard
-  layer keeps the same vocabularies locally in `wizard_types` for
-  its boolean-recovery use. This makes the intent module
-  genuinely consumable from non-wizard contexts (ReAct router,
-  tool router, standalone intent classification).
-- `LLMIntentClassifier.classify` now propagates
-  `asyncio.CancelledError` rather than absorbing it into a
-  no-match result, and normalizes the LLM-returned `extracted`
-  payload to the documented `str | None` shape (a single-element
-  list / number / bool is coerced; multi-element list / dict is
-  dropped to `None`). Prompt intent-list ordering follows caller
-  order rather than set-iteration order for prompt-cache hit rate
-  and LLM-eval reproducibility.
-- `IntentConfirmSynthesizer` now removes the original
-  `intent_confirm:` block from the stage dict after expansion, so
-  the FSM-metadata layer carries only the synthesized primitives
-  (`mode`, `response_template`, `intent_detection`, `schema`,
-  `transitions`) — no parallel source of truth.
-- `IntentConfirmSynthesizer.validate` now rejects empty `intents`,
-  non-mapping `intents` values, intent specs that are not mappings,
-  intents missing a `target`, and intent names that collide with
-  the reserved `_intent` runtime key — all surfaced as
-  `ConfigurationError` with the offending stage and intent named.
-- Per-intent `llm_fallback: true` (on any intent in the
-  `intent_confirm:` block) now promotes the stage's classifier to
-  a `composite` chain — matching the USER_GUIDE behaviour. The
-  block-level `llm_fallback: true` shorthand is unchanged.
-- `NegationFilter.classify` returns `rule_based=False` when it
-  suppresses a match (the field describes how an intent was
-  matched; it is semantically vacuous when no intent matched).
-
-### Fixed
-
-- Default keyword intent matching is now word-boundary, not
-  substring. Bare-token vocabulary entries like `"yes"` match a
-  standalone `"yes"` but NOT `"yesterday"`, closing a long-standing
-  foot-gun in the wizard's intent-detection path. Consumers needing
-  the looser substring/fuzzy/n-gram behaviour can inject a custom
-  tokenizer into `KeywordIntentClassifier` (or register their own
-  backend); the existing `KeywordIntentClassifier(tokenizer=...)`
-  signature is the documented extension point.
-- `LLMIntentClassifier` accepts both JSON output (the new
-  `DEFAULT_LLM_PROMPT_TEMPLATE` shape: `{"intent": ...,
-  "extracted": ...}`) AND a bare intent ID (the shape the legacy
-  wizard `intent_detection: {method: llm}` prompt produced).
-  Preserves user-visible behaviour for existing wizards on the
-  legacy prompt template while letting new callers consume the
-  richer structured output.
-
 - `dataknobs_bots.reasoning.lifecycle.LifecycleHooks` —
   strategy-agnostic turn-lifecycle hook surface
   (`on_turn_start` / `on_turn_end`, with optional per-stage scope).

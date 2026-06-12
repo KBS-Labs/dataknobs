@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.intent import (
+from dataknobs_llm.intent import (
     DEFAULT_VOCABULARY,
     CompositeIntentClassifier,
     IntentClassifier,
@@ -461,7 +461,7 @@ class TestClassifierBackendRegistry:
             intent_classifier_backends.unregister("fuzzy_match")
 
     def test_create_intent_classifier_resolves_registered_name(self) -> None:
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         clf = create_intent_classifier("keyword", {})
         assert isinstance(clf, KeywordIntentClassifier)
@@ -469,7 +469,7 @@ class TestClassifierBackendRegistry:
     def test_create_intent_classifier_unknown_name_raises_with_list(
         self,
     ) -> None:
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
             create_intent_classifier("does_not_exist", {})
@@ -483,7 +483,7 @@ class TestClassifierBackendRegistry:
     def test_create_intent_classifier_none_config_defaults_empty(
         self,
     ) -> None:
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         clf = create_intent_classifier("keyword", None)
         assert isinstance(clf, KeywordIntentClassifier)
@@ -494,7 +494,7 @@ class TestClassifierBackendRegistry:
         composite that then fails with a misleading "requires at
         least one inner classifier" message.
         """
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
             create_intent_classifier("composite", {
@@ -506,7 +506,7 @@ class TestClassifierBackendRegistry:
         assert "classifer" in str(exc_info.value)
 
     def test_composite_non_mapping_child_raises(self) -> None:
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
             create_intent_classifier("composite", {
@@ -515,7 +515,7 @@ class TestClassifierBackendRegistry:
         assert "must be a mapping" in str(exc_info.value)
 
     def test_composite_unknown_child_name_raises(self) -> None:
-        from dataknobs_bots.intent import create_intent_classifier
+        from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
             create_intent_classifier("composite", {

@@ -37,7 +37,8 @@ Registration semantics: re-registering the same ``field`` overwrites
 the prior synthesizer (the registry calls
 :meth:`Registry.register` with ``allow_overwrite=True``). This is
 intentionally distinct from sibling registries like
-``intent_classifier_backends``, which raise on duplicate registration
+:data:`dataknobs_llm.intent.intent_classifier_backends`, which raise
+on duplicate registration
 by default — stage synthesizers are typically auto-registered at
 module import, and consumers often want to replace the in-tree
 synthesizer with a customized one for the same field name.
@@ -88,7 +89,8 @@ stage_synthesizer_backends: Registry[StageSynthesizer] = Registry(
 )
 """Registry of stage-primitive synthesizers, keyed by ``field`` name.
 
-Structurally mirrors :data:`intent_classifier_backends`,
+Structurally mirrors
+:data:`dataknobs_llm.intent.intent_classifier_backends`,
 :data:`event_bus_backends`, and :data:`lock_backends`. Thread-safe
 register / lookup / metrics for free.
 

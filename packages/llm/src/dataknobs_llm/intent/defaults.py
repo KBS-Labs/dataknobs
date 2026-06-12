@@ -4,19 +4,18 @@ This module is the canonical home for the small text-classification
 primitives used by:
 
 * :data:`DEFAULT_AFFIRMATIVE_SIGNALS` / :data:`DEFAULT_NEGATIVE_SIGNALS`
-  — single-token English yes/no vocabulary, shared between the
-  :class:`KeywordIntentClassifier` default vocabulary and the
-  wizard-extraction boolean-recovery code.
+  — single-token English yes/no vocabulary, used as the
+  :class:`KeywordIntentClassifier` default vocabulary and importable
+  by any consumer that needs the same primitives for boolean
+  recovery or analogous text-classification tasks.
 * :func:`word_in_text` — case-insensitive word-boundary regex helper.
 * :data:`DEFAULT_NEGATION_KEYWORDS` — re-export of the canonical
   negation set used by :class:`NegationFilter`.
 
-Wizard-layer modules (``wizard_types``, ``wizard_utils``,
-``wizard_extraction``) consume these from here. The dependency
-direction is wizard-layer → :mod:`dataknobs_bots.intent.defaults`,
-not the reverse — keeping the intent module a leaf consumable from
-non-wizard contexts (ReAct router, tool router, standalone intent
-classification).
+This module is a leaf within :mod:`dataknobs_llm.intent`: it has no
+upward dependencies on any consumer layer. LLM-layer reasoning
+strategies, tool routers, and downstream packages (the wizard in
+``dataknobs-bots``, for example) consume these from here.
 """
 from __future__ import annotations
 
@@ -32,11 +31,10 @@ DEFAULT_NEGATION_KEYWORDS = _DEFAULT_NEGATION_KEYWORDS
 
 # ── Single-token English yes/no signals ──────────────────────────────
 #
-# Canonical home: the wizard's boolean-recovery code AND the keyword
-# intent classifier both consume these. Public names; wizard_types.py
-# imports them and re-exports under its private legacy names
-# (``_DEFAULT_AFFIRMATIVE_SIGNALS`` / ``_DEFAULT_NEGATIVE_SIGNALS``)
-# for backward compatibility with extraction-layer call sites.
+# Canonical home for the public vocab. The keyword intent classifier
+# consumes these by name; consumers needing the same primitives for
+# boolean recovery (or analogous text-classification tasks) import
+# them from here directly.
 
 DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset({
     "yes", "confirm", "save", "approve", "correct", "sure",

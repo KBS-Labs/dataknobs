@@ -4,23 +4,22 @@ Mirrors the shape of
 :data:`dataknobs_common.events.event_bus_backends` and
 :data:`dataknobs_common.locks.lock_backends`. Consumers register
 their own classifier backends (embedding-similarity, fuzzy-match,
-locale-specific keyword variants) under a name; the wizard's
-``intent_detection: {classifier: <name>, ...}`` block dispatches
-through this registry.
+locale-specific keyword variants) under a name and resolve them via
+:func:`create_intent_classifier`.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_bots.intent.composite import CompositeIntentClassifier
-from dataknobs_bots.intent.keyword import KeywordIntentClassifier
-from dataknobs_bots.intent.llm import LLMIntentClassifier
-from dataknobs_bots.intent.protocol import (
+from dataknobs_common.registry import Registry
+from dataknobs_llm.intent.composite import CompositeIntentClassifier
+from dataknobs_llm.intent.keyword import KeywordIntentClassifier
+from dataknobs_llm.intent.llm import LLMIntentClassifier
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentClassifierFactory,
 )
-from dataknobs_common.registry import Registry
 
 intent_classifier_backends: Registry[IntentClassifierFactory] = Registry(
     name="intent_classifier_backends",

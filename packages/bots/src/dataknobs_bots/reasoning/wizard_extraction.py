@@ -245,7 +245,7 @@ class WizardExtractor:
         """Detect user intent and store in wizard state data.
 
         Dispatches through the
-        :data:`dataknobs_bots.intent.intent_classifier_backends` registry.
+        :data:`dataknobs_llm.intent.intent_classifier_backends` registry.
         The ``intent_detection:`` block names a registered backend via
         ``classifier:`` (preferred) or the legacy ``method:`` field:
 
@@ -289,7 +289,7 @@ class WizardExtractor:
         if classifier is None:
             return
 
-        from dataknobs_bots.intent import IntentSpec
+        from dataknobs_llm.intent import IntentSpec
         intent_specs = [
             IntentSpec(
                 name=i["id"],
@@ -322,7 +322,7 @@ class WizardExtractor:
         it to a ``composite`` backend chain. Negation filtering
         (``negation_filter: true``) wraps the result.
         """
-        from dataknobs_bots.intent import (
+        from dataknobs_llm.intent import (
             NegationFilter,
             create_intent_classifier,
         )

@@ -23,7 +23,7 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from dataknobs_bots.intent.protocol import (
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentMatchResult,
     IntentSpec,

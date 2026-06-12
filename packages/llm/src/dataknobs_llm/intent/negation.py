@@ -13,13 +13,13 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from dataknobs_bots.intent.defaults import DEFAULT_NEGATION_KEYWORDS
-from dataknobs_bots.intent.protocol import (
+from dataknobs_llm.extraction.grounding import has_negation
+from dataknobs_llm.intent.defaults import DEFAULT_NEGATION_KEYWORDS
+from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentMatchResult,
     IntentSpec,
 )
-from dataknobs_llm.extraction.grounding import has_negation
 
 logger = logging.getLogger(__name__)
 

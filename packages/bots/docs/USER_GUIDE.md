@@ -1502,7 +1502,7 @@ If you need looser matching for I18N, fuzzy matching, n-grams, or
 morphological matching, inject your own tokenizer:
 
 ```python
-from dataknobs_bots.intent import KeywordIntentClassifier
+from dataknobs_llm.intent import KeywordIntentClassifier
 
 def fuzzy_tokenizer(keyword: str, message: str) -> bool:
     # Both args are pre-lowercased.
