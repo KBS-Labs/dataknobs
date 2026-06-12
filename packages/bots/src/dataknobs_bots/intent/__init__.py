@@ -29,23 +29,19 @@ own backends into (``embedding``, ``fuzzy_match``, locale-specific
 keyword variants). The wizard's ``intent_detection: {classifier:
 <name>, ...}`` block dispatches through it.
 
-Wizard-agnostic — no wizard dependencies in the protocol. The
-:mod:`dataknobs_bots.reasoning` package consumes the protocol via
-the synthesized ``intent_detection:`` block produced by the
-``intent_confirm:`` primitive.
+Wizard-agnostic: the protocol, defaults, and registry have no
+dependencies on the :mod:`dataknobs_bots.reasoning` (wizard) layer.
+The wizard consumes intent classification via the synthesized
+``intent_detection:`` block produced by the ``intent_confirm:``
+primitive, but any other reasoning strategy — ReAct router, tool
+router, memory query classifier — can use this module directly.
 
-**Lift trajectory.** This protocol is the wizard-domain narrowing
-of a broader ``Classifier[InputT, LabelT]`` concept. When that
-generic classification surface lands, this module becomes a thin
-intent-domain adapter layer (``IntentDispatcher`` wraps a
-``Classifier[str, str]``) over ``dataknobs_common.classification``
-primitives (with LLM and embedding backends in
-``dataknobs_llm.classification`` and external adapters — sklearn,
-HuggingFace, spaCy — in a future ``dataknobs_ml.classification``
-package). Forward-compat seeds (a ``confidence`` field on
-:class:`IntentMatchResult`, this docstring, and the registry
-docstring) make the lift mechanical: rename + adapter pass, no
-behavior changes.
+The protocol is intentionally narrow (one async ``classify`` method
+returning :class:`IntentMatchResult`). The ``confidence`` field on
+the result is populated by calibrated-confidence backends
+(embedding-similarity, structured-output LLM, sklearn adapters) and
+left ``None`` by the built-in keyword / JSON-output LLM / composite /
+negation-filter classifiers.
 """
 from __future__ import annotations
 
@@ -65,7 +61,10 @@ from dataknobs_bots.intent.protocol import (
     IntentMatchResult,
     IntentSpec,
 )
-from dataknobs_bots.intent.registry import intent_classifier_backends
+from dataknobs_bots.intent.registry import (
+    create_intent_classifier,
+    intent_classifier_backends,
+)
 
 __all__ = [
     "DEFAULT_LLM_PROMPT_TEMPLATE",
@@ -79,6 +78,7 @@ __all__ = [
     "KeywordIntentClassifier",
     "LLMIntentClassifier",
     "NegationFilter",
+    "create_intent_classifier",
     "default_word_boundary_tokenizer",
     "intent_classifier_backends",
 ]

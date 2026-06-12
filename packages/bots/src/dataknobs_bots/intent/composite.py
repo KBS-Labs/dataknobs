@@ -3,17 +3,19 @@
 Two strategies:
 
 * ``"first_match"`` — try each classifier in order; return the first
-  non-None match. Reproduces the v2 default "rule-first, optional
-  LLM fallback" behaviour:
+  non-None match. Reproduces the "rule-first, optional LLM fallback"
+  shape:
   ``CompositeIntentClassifier([KeywordIntentClassifier(),
   LLMIntentClassifier()], strategy="first_match")``.
 * ``"vote"`` — query all classifiers, return the intent with the
   most votes (ties broken by classifier order). Useful for
-  ensemble classification (consumer use cases: critical decisions
-  needing redundancy).
+  ensemble classification when a decision benefits from redundancy.
 
-Consumer-supplied combine strategies are out of scope here —
-follow-up 163-FU8 captures the registry shape for that extension.
+The ``strategy`` parameter is closed (``"first_match"`` |
+``"vote"``). Consumer-supplied combine strategies are not pluggable
+here; consumers needing a custom combiner can wrap the inner
+classifiers in their own ``IntentClassifier`` implementation and
+register it via :data:`intent_classifier_backends`.
 """
 from __future__ import annotations
 

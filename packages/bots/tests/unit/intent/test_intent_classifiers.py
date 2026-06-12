@@ -173,6 +173,121 @@ class TestLLMIntentClassifier:
         assert result.intent.name == "alternative"
         assert result.extracted == "AIAM"
 
+    @pytest.mark.asyncio
+    async def test_provider_error_returns_no_match(self) -> None:
+        """Provider exception is absorbed; caller sees ``intent=None``.
+
+        An LLM classifier is typically one signal among many
+        (composite chain, optional fallback). A provider outage
+        should NOT crash the wizard turn — the classifier returns
+        no-match and logs a warning to make the absorption auditable.
+        """
+        from dataknobs_llm import EchoProvider
+
+        class _RaisingProvider(EchoProvider):
+            async def complete(self, *args: Any, **kwargs: Any) -> Any:
+                raise RuntimeError("simulated provider outage")
+
+        provider = _RaisingProvider({"provider": "echo", "model": "test"})
+        clf = LLMIntentClassifier(llm=provider)
+        result = await clf.classify(
+            "yes please",
+            [IntentSpec(name="accept", target="t")],
+        )
+        assert result.intent is None
+        assert result.extracted is None
+        assert result.raw_reply == "yes please"
+
+    @pytest.mark.asyncio
+    async def test_provider_cancelled_error_is_not_swallowed(self) -> None:
+        """Cancellation must propagate. asyncio.CancelledError is a
+        cooperative signal — swallowing it breaks task cancellation.
+        """
+        import asyncio
+
+        from dataknobs_llm import EchoProvider
+
+        class _CancellingProvider(EchoProvider):
+            async def complete(self, *args: Any, **kwargs: Any) -> Any:
+                raise asyncio.CancelledError()
+
+        provider = _CancellingProvider({"provider": "echo", "model": "test"})
+        clf = LLMIntentClassifier(llm=provider)
+        with pytest.raises(asyncio.CancelledError):
+            await clf.classify(
+                "yes",
+                [IntentSpec(name="accept", target="t")],
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_string_extracted_is_normalized(self) -> None:
+        """Models occasionally return non-string ``extracted`` payloads
+        (list, int, bool). The documented shape is ``str | None``;
+        non-string values are coerced or dropped so the wizard never
+        writes a list/dict into a schema-declared ``string`` field.
+        """
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        cases: list[tuple[str, str | None]] = [
+            ('{"intent": "alt", "extracted": "AIAM"}', "AIAM"),
+            ('{"intent": "alt", "extracted": ["AIAM"]}', "AIAM"),
+            ('{"intent": "alt", "extracted": 42}', "42"),
+            ('{"intent": "alt", "extracted": true}', "True"),
+            ('{"intent": "alt", "extracted": null}', None),
+            ('{"intent": "alt", "extracted": ""}', None),
+            (
+                '{"intent": "alt", "extracted": ["a", "b"]}', None,
+            ),
+            ('{"intent": "alt", "extracted": {"k": 1}}', None),
+        ]
+        for body, expected in cases:
+            provider = EchoProvider({"provider": "echo", "model": "test"})
+            provider.set_responses([text_response(body)])
+            clf = LLMIntentClassifier(llm=provider)
+            result = await clf.classify(
+                "use AIAM instead",
+                [IntentSpec(
+                    name="alt", target="t", extract="framework_name",
+                )],
+            )
+            assert result.intent is not None and result.intent.name == "alt"
+            assert result.extracted == expected, (
+                f"extracted normalization mismatch for {body!r}: "
+                f"got {result.extracted!r}, expected {expected!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_prompt_intent_list_preserves_caller_order(self) -> None:
+        """Intent-list ordering in the rendered prompt follows caller
+        order — not set iteration order. Stabilizes prompt-cache hit
+        rates and LLM-eval reproducibility across runs.
+        """
+        from dataknobs_llm import EchoProvider
+        from dataknobs_llm.testing import text_response
+
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        provider.set_responses([
+            text_response('{"intent": null, "extracted": null}'),
+        ])
+        clf = LLMIntentClassifier(llm=provider)
+        await clf.classify(
+            "hello",
+            [
+                IntentSpec(name="alpha", target="a"),
+                IntentSpec(name="bravo", target="b"),
+                IntentSpec(name="charlie", target="c"),
+            ],
+        )
+        call = provider.get_last_call()
+        assert call is not None
+        rendered = call["messages"][0].content
+        # The names should appear in caller order in the prompt.
+        i_alpha = rendered.index("alpha")
+        i_bravo = rendered.index("bravo")
+        i_charlie = rendered.index("charlie")
+        assert i_alpha < i_bravo < i_charlie
+
 
 # ---------------------------------------------------------------------------
 # CompositeIntentClassifier — chains backends; reproduces v2 default
@@ -344,3 +459,68 @@ class TestClassifierBackendRegistry:
             assert isinstance(clf, _FuzzyMatch)
         finally:
             intent_classifier_backends.unregister("fuzzy_match")
+
+    def test_create_intent_classifier_resolves_registered_name(self) -> None:
+        from dataknobs_bots.intent import create_intent_classifier
+
+        clf = create_intent_classifier("keyword", {})
+        assert isinstance(clf, KeywordIntentClassifier)
+
+    def test_create_intent_classifier_unknown_name_raises_with_list(
+        self,
+    ) -> None:
+        from dataknobs_bots.intent import create_intent_classifier
+
+        with pytest.raises(ValueError) as exc_info:
+            create_intent_classifier("does_not_exist", {})
+        msg = str(exc_info.value)
+        assert "does_not_exist" in msg
+        # Lists every registered backend for self-diagnosis
+        assert "keyword" in msg
+        assert "llm" in msg
+        assert "composite" in msg
+
+    def test_create_intent_classifier_none_config_defaults_empty(
+        self,
+    ) -> None:
+        from dataknobs_bots.intent import create_intent_classifier
+
+        clf = create_intent_classifier("keyword", None)
+        assert isinstance(clf, KeywordIntentClassifier)
+
+    def test_composite_missing_classifier_field_raises(self) -> None:
+        """Typo in ``classifier:`` (e.g. ``classifer:``) must raise
+        with the offending spec, not silently produce an empty
+        composite that then fails with a misleading "requires at
+        least one inner classifier" message.
+        """
+        from dataknobs_bots.intent import create_intent_classifier
+
+        with pytest.raises(ValueError) as exc_info:
+            create_intent_classifier("composite", {
+                "classifiers": [
+                    {"classifer": "keyword"},  # typo
+                ],
+            })
+        assert "missing required 'classifier'" in str(exc_info.value)
+        assert "classifer" in str(exc_info.value)
+
+    def test_composite_non_mapping_child_raises(self) -> None:
+        from dataknobs_bots.intent import create_intent_classifier
+
+        with pytest.raises(ValueError) as exc_info:
+            create_intent_classifier("composite", {
+                "classifiers": ["keyword"],
+            })
+        assert "must be a mapping" in str(exc_info.value)
+
+    def test_composite_unknown_child_name_raises(self) -> None:
+        from dataknobs_bots.intent import create_intent_classifier
+
+        with pytest.raises(ValueError) as exc_info:
+            create_intent_classifier("composite", {
+                "classifiers": [
+                    {"classifier": "does_not_exist"},
+                ],
+            })
+        assert "does_not_exist" in str(exc_info.value)

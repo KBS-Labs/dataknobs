@@ -46,18 +46,15 @@ class IntentMatchResult:
             (keyword, embedding-similarity above threshold);
             ``False`` if matched via LLM classification.
         raw_reply: Preserved user reply for audit/provenance.
-        confidence: NEW IN V4 — calibrated ``[0.0, 1.0]`` confidence in
-            the match, or ``None`` when the underlying classifier
-            doesn't expose calibrated confidence. The built-in
-            classifiers in this PR (keyword, current JSON-output LLM,
-            composite, negation-filter) all return ``None``. Added
-            now as a forward-compat seed for 163-FU12 (lift to generic
-            ``Classifier[InputT, LabelT]``); FU12's
-            ``EmbeddingClassifier`` / ``SklearnClassifier`` /
-            structured-output ``LLMClassifier`` adapters wire backend-
-            specific population. Keeps the dataclass shape stable
-            across the lift so consumers reading ``result.confidence``
-            don't see it appear out of nowhere.
+        confidence: Calibrated ``[0.0, 1.0]`` confidence in the match,
+            or ``None`` when the underlying classifier doesn't expose
+            calibrated confidence. The built-in classifiers (keyword,
+            JSON-output LLM, composite, negation-filter) all return
+            ``None``; calibrated-confidence backends such as
+            embedding-similarity, sklearn, or structured-output LLM
+            adapters populate it. The field is part of the dataclass
+            shape so that consumers reading ``result.confidence`` see
+            a uniform schema across backend kinds.
     """
     intent: IntentSpec | None
     extracted: str | None

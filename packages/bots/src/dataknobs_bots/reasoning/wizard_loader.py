@@ -21,10 +21,16 @@ from dataknobs_fsm.config.builder import FSMBuilder
 from .function_resolver import resolve_functions
 from .stage_synthesizers import (
     StageSynthesizer,
+    iter_stage_synthesizers,
     register_stage_synthesizer,
     unregister_stage_synthesizer,
     validate_no_conflicting_fields,
 )
+# Importing wizard_intent_confirm auto-registers
+# IntentConfirmSynthesizer at module load (side-effect import). Done
+# here at module level so `iter_stage_synthesizers()` reflects the
+# in-tree default before any loader instance is built.
+from . import wizard_intent_confirm as _wizard_intent_confirm  # noqa: F401
 from .wizard_fsm import WizardFSM
 
 __all__ = [
@@ -386,11 +392,9 @@ class WizardConfigLoader:
 
         Consumer-extensible: any consumer can call
         :func:`register_stage_synthesizer` to ship their own primitive.
+        The in-tree :class:`IntentConfirmSynthesizer` is registered at
+        module import (see the ``wizard_intent_confirm`` import above).
         """
-        # Import the reference adopter so it auto-registers on first use.
-        from . import wizard_intent_confirm  # noqa: F401
-        from .stage_synthesizers import iter_stage_synthesizers
-
         synthesizers = iter_stage_synthesizers()
         for stage in wizard_config.get("stages", []):
             for field, synthesizer in synthesizers.items():

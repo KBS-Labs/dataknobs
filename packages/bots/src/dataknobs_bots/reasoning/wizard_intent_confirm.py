@@ -18,12 +18,19 @@ wizard machinery.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .stage_synthesizers import (
     register_stage_synthesizer,
     validate_no_conflicting_fields,
 )
+
+logger = logging.getLogger(__name__)
+
+# Reserved name in ``state.data`` already written by the intent
+# detection path. Using it as an intent name would collide.
+_RESERVED_INTENT_NAMES: frozenset[str] = frozenset({"_intent"})
 
 
 class IntentConfirmSynthesizer:
@@ -32,21 +39,50 @@ class IntentConfirmSynthesizer:
     field = "intent_confirm"
 
     def validate(self, stage: dict[str, Any]) -> None:
+        from dataknobs_common.exceptions import ConfigurationError
+
         validate_no_conflicting_fields(
             stage,
             self.field,
             ["schema", "response_template", "transitions"],
         )
         block = stage[self.field]
-        if not block.get("intents"):
-            from dataknobs_common.exceptions import ConfigurationError
-
-            stage_name = stage.get("name", "<unnamed>")
+        stage_name = stage.get("name", "<unnamed>")
+        intents = block.get("intents")
+        if not intents:
             raise ConfigurationError(
                 f"Stage '{stage_name}': intent_confirm: declares no "
                 f"intents. At least one intent (with target) is required.",
                 context={"stage": stage_name},
             )
+        if not isinstance(intents, dict):
+            raise ConfigurationError(
+                f"Stage '{stage_name}': intent_confirm.intents must be "
+                f"a mapping of intent name → spec, got "
+                f"{type(intents).__name__}.",
+                context={"stage": stage_name},
+            )
+        for name, intent in intents.items():
+            if not isinstance(intent, dict):
+                raise ConfigurationError(
+                    f"Stage '{stage_name}': intent_confirm.intents."
+                    f"{name} must be a mapping (with at least 'target'), "
+                    f"got {type(intent).__name__}.",
+                    context={"stage": stage_name, "intent": name},
+                )
+            if not intent.get("target"):
+                raise ConfigurationError(
+                    f"Stage '{stage_name}': intent_confirm.intents."
+                    f"{name} is missing required 'target'.",
+                    context={"stage": stage_name, "intent": name},
+                )
+            if name in _RESERVED_INTENT_NAMES:
+                raise ConfigurationError(
+                    f"Stage '{stage_name}': intent name '{name}' is "
+                    f"reserved (already used by the intent-detection "
+                    f"runtime). Choose a different name.",
+                    context={"stage": stage_name, "intent": name},
+                )
 
     def synthesize(self, stage: dict[str, Any]) -> None:
         block = stage[self.field]
@@ -74,10 +110,17 @@ class IntentConfirmSynthesizer:
                 entry["extract"] = intent["extract"]
             intent_detection_intents.append(entry)
 
-        # Synthesize the classifier shape. If the primitive declares
-        # llm_fallback=true, expand to a composite chain (keyword first,
-        # LLM second). Otherwise the plain keyword classifier.
-        if block.get("llm_fallback", False):
+        # Synthesize the classifier shape. ``llm_fallback`` opts into a
+        # composite chain (keyword first, LLM second) and may be set
+        # either block-level OR per-intent — any per-intent opt-in
+        # promotes the whole stage to composite, since the classifier
+        # is per-stage rather than per-intent.
+        block_llm_fallback = block.get("llm_fallback", False)
+        per_intent_llm_fallback = any(
+            isinstance(intent, dict) and intent.get("llm_fallback")
+            for intent in intents.values()
+        )
+        if block_llm_fallback or per_intent_llm_fallback:
             classifier_name = "composite"
             classifier_config: dict[str, Any] = {
                 "classifiers": [
@@ -99,7 +142,6 @@ class IntentConfirmSynthesizer:
             "classifier_config": classifier_config,
             "intents": intent_detection_intents,
             "per_intent_booleans": True,
-            "use_default_vocabulary": True,
             "negation_filter": block.get("negation_filter", False),
         }
 
@@ -128,6 +170,12 @@ class IntentConfirmSynthesizer:
                 ),
             })
         stage["transitions"] = transitions
+
+        # 6) Consume the original primitive block. Downstream code
+        #    (stage-field registry, FSM metadata, StageConfig.to_dict)
+        #    sees the fully expanded shape — no orphaned intent_confirm
+        #    block lingering as a parallel source of truth.
+        del stage[self.field]
 
 
 # Auto-register on module import — synthesizer is in-tree.

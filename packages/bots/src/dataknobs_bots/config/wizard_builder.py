@@ -208,10 +208,11 @@ class StageConfig(StructuredConfig):
     intent_detection: IntentDetectionConfig | None = None
     # Stage primitive: declarative propose-then-consent block. Expanded
     # by IntentConfirmSynthesizer at load time into mode/response_template/
-    # intent_detection/schema/transitions. Carried as raw dict because the
-    # expansion runs BEFORE StageConfig is reconstructed from typed
-    # config; round-trips via to_dict are after-expansion (no
-    # intent_confirm key present).
+    # intent_detection/schema/transitions. The synthesizer strips the
+    # primitive block after expansion, so by the time a StageConfig is
+    # reconstructed from post-loader FSM metadata, this field is always
+    # None — it only ever appears on author-written StageConfigs that
+    # have not yet flowed through the loader.
     intent_confirm: dict[str, Any] | None = None
     # Tasks
     tasks: tuple[dict[str, Any], ...] = ()

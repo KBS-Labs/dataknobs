@@ -254,10 +254,10 @@ class WizardExtractor:
            intent_detection:
              classifier: keyword           # or 'llm', 'composite', or any registered name
              classifier_config:            # forwarded to the backend's factory
-               use_default_vocabulary: true
+               # (vocabulary / prompt_template / etc., per backend)
              intents:
-               - { id: accept, keywords: [yes] }
-               - { id: decline, keywords: [no] }
+               - { id: accept, keywords: [yes] }   # per-intent override
+               - { id: decline }                   # falls back to backend's default vocab
              per_intent_booleans: true     # write data[intent.id] = True per match
              negation_filter: true         # wrap classifier in NegationFilter
 
@@ -324,7 +324,7 @@ class WizardExtractor:
         """
         from dataknobs_bots.intent import (
             NegationFilter,
-            intent_classifier_backends,
+            create_intent_classifier,
         )
 
         classifier_name = intent_config.get("classifier")
@@ -359,26 +359,24 @@ class WizardExtractor:
                 if sub.get("classifier") == "llm":
                     sub.setdefault("config", {}).setdefault("llm", llm)
 
-        # Backfill missing per-intent keywords from DEFAULT_VOCABULARY
-        # when the block opts in.
-        if intent_config.get("use_default_vocabulary"):
-            from dataknobs_bots.intent import DEFAULT_VOCABULARY
-            for intent in intent_config.get("intents", []):
-                if not intent.get("keywords"):
-                    intent["keywords"] = list(
-                        DEFAULT_VOCABULARY.get(intent["id"], frozenset())
-                    )
+        # Default-vocabulary fallback for unkeyed intents is the
+        # classifier's responsibility — KeywordIntentClassifier consults
+        # its configured vocabulary (defaults to DEFAULT_VOCABULARY) when
+        # an IntentSpec has no keywords override. Consumer-registered
+        # backends that want the same semantic should follow the same
+        # contract; there is no synthesizer-side backfill.
 
-        factory = intent_classifier_backends.get_optional(classifier_name)
-        if factory is None:
-            logger.warning(
-                "Unknown intent_classifier '%s' (registered: %s); skipping",
-                classifier_name,
-                sorted(intent_classifier_backends.list_keys()),
+        try:
+            classifier = create_intent_classifier(
+                classifier_name, classifier_config,
             )
+        except ValueError as exc:
+            # Wizard semantics: an unknown classifier name in the YAML
+            # is a config error, but the wizard turn shouldn't crash —
+            # log and skip intent detection for the stage. Direct
+            # callers of `create_intent_classifier` see the raise.
+            logger.warning("Skipping intent detection: %s", exc)
             return None
-
-        classifier = factory(classifier_config)
         if intent_config.get("negation_filter"):
             classifier = NegationFilter(classifier)
         return classifier

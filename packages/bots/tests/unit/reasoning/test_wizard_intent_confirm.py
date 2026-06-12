@@ -202,6 +202,159 @@ def test_load_rejects_intent_confirm_plus_transitions() -> None:
         WizardConfigLoader().load_from_dict(bad)
 
 
+def test_load_rejects_empty_intents_dict() -> None:
+    """At least one intent is required for a useful primitive."""
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_common.exceptions import ConfigurationError
+
+    bad = _wizard_with_intent_confirm()
+    bad["stages"][0]["intent_confirm"]["intents"] = {}
+    with pytest.raises(ConfigurationError, match="declares no"):
+        WizardConfigLoader().load_from_dict(bad)
+
+
+def test_load_rejects_intent_without_target() -> None:
+    """Without ``target:``, the synthesizer cannot emit a transition.
+
+    Pre-fix this would crash at synthesize-time with a bare
+    ``KeyError('target')`` carrying no stage context.
+    """
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_common.exceptions import ConfigurationError
+
+    bad = _wizard_with_intent_confirm()
+    bad["stages"][0]["intent_confirm"]["intents"] = {
+        "accept": {},  # missing target
+    }
+    with pytest.raises(ConfigurationError, match="missing required 'target'"):
+        WizardConfigLoader().load_from_dict(bad)
+
+
+def test_load_rejects_non_mapping_intents_value() -> None:
+    """``intents:`` must be a dict (mapping intent name → spec)."""
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_common.exceptions import ConfigurationError
+
+    bad = _wizard_with_intent_confirm()
+    bad["stages"][0]["intent_confirm"]["intents"] = ["accept", "decline"]
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        WizardConfigLoader().load_from_dict(bad)
+
+
+def test_load_rejects_intent_spec_not_a_dict() -> None:
+    """Each intent value must be a mapping (with at least ``target:``)."""
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_common.exceptions import ConfigurationError
+
+    bad = _wizard_with_intent_confirm()
+    bad["stages"][0]["intent_confirm"]["intents"] = {
+        "accept": "accepted",  # bare string instead of dict
+    }
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        WizardConfigLoader().load_from_dict(bad)
+
+
+def test_load_rejects_reserved_intent_name() -> None:
+    """``_intent`` is already used by the intent-detection runtime to
+    record the matched intent name in ``state.data``. Letting a user
+    name an intent ``_intent`` would silently overwrite that bookkeeping
+    key during transition-condition evaluation. Reject at load time
+    with a clear message rather than letting the collision surface as
+    a downstream surprise.
+    """
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_common.exceptions import ConfigurationError
+
+    bad = _wizard_with_intent_confirm()
+    bad["stages"][0]["intent_confirm"]["intents"] = {
+        "_intent": {"target": "accepted"},
+    }
+    with pytest.raises(ConfigurationError, match="reserved"):
+        WizardConfigLoader().load_from_dict(bad)
+
+
+# ---------------------------------------------------------------------------
+# Per-intent llm_fallback wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_intent_llm_fallback_promotes_classifier_to_composite(
+) -> None:
+    """Setting ``llm_fallback: true`` on a single intent (no
+    block-level flag) MUST promote the whole stage's classifier to a
+    composite chain — the documented USER_GUIDE behavior. Pre-fix the
+    per-intent flag was a silent no-op.
+    """
+    from dataknobs_llm.testing import text_response
+
+    config = _wizard_with_intent_confirm(
+        intents={
+            "accept":      {"target": "accepted"},
+            "alternative": {
+                "target": "declined",
+                "extract": "framework_name",
+                "llm_fallback": True,   # ← per-intent only
+            },
+        },
+        # NO block-level llm_fallback
+    )
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=[
+            text_response('{"intent": "alternative", "extracted": "AIAM"}'),
+        ],
+    ) as harness:
+        await harness.greet()
+        await harness.chat("Actually use AIAM instead")
+        # If per-intent llm_fallback had not promoted to composite,
+        # this message would no-match (no keyword) and the wizard
+        # would stay on `propose`.
+        assert harness.wizard_data.get("framework_name") == "AIAM"
+
+
+def test_per_intent_llm_fallback_visible_in_synthesized_classifier() -> None:
+    """Direct synthesis snapshot: per-intent ``llm_fallback`` produces
+    a composite classifier shape even with no block-level flag.
+    """
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+    config = _wizard_with_intent_confirm(
+        intents={
+            "accept":      {"target": "accepted"},
+            "alternative": {
+                "target": "declined",
+                "extract": "framework_name",
+                "llm_fallback": True,
+            },
+        },
+    )
+    fsm = WizardConfigLoader().load_from_dict(config)
+    assert (
+        fsm.stages["propose"]["intent_detection"]["classifier"]
+        == "composite"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Synthesizer strips the original block
+# ---------------------------------------------------------------------------
+
+
+def test_intent_confirm_block_removed_after_synthesis() -> None:
+    """After synthesis the FSM-metadata layer must NOT carry the raw
+    ``intent_confirm`` block as a parallel source of truth — only the
+    expanded primitives.
+    """
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+    fsm = WizardConfigLoader().load_from_dict(
+        _wizard_with_intent_confirm(),
+    )
+    propose_meta = fsm.stages["propose"]
+    assert propose_meta.get("intent_confirm") is None
+
+
 # ---------------------------------------------------------------------------
 # Synthesis snapshot — downstream sees normalized shape
 # ---------------------------------------------------------------------------

@@ -68,6 +68,7 @@ from .stage_synthesizers import (
     StageSynthesizer,
     iter_stage_synthesizers,
     register_stage_synthesizer,
+    stage_synthesizer_backends,
     unregister_stage_synthesizer,
     validate_no_conflicting_fields,
 )
@@ -173,6 +174,7 @@ __all__ = [
     "StageSynthesizer",
     "iter_stage_synthesizers",
     "register_stage_synthesizer",
+    "stage_synthesizer_backends",
     "unregister_stage_synthesizer",
     "validate_no_conflicting_fields",
 ]

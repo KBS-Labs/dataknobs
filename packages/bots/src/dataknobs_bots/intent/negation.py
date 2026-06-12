@@ -73,8 +73,13 @@ class NegationFilter(IntentClassifier):
                 "NegationFilter suppressed intent '%s' for message '%s'",
                 result.intent.name, message,
             )
+            # ``rule_based`` describes "how did we MATCH this intent" —
+            # when the result is no-match, the field is semantically
+            # vacuous. Set False rather than inheriting the inner
+            # result's flag so a downstream observer doesn't see
+            # ``intent=None, rule_based=True`` (a contradictory pair).
             return IntentMatchResult(
                 intent=None, extracted=None,
-                rule_based=result.rule_based, raw_reply=message,
+                rule_based=False, raw_reply=message,
             )
         return result

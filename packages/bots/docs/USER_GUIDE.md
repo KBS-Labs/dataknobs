@@ -1458,7 +1458,20 @@ config validator runs):
   `schema:`, `response_template:`, or `transitions:` — the primitive
   is the source of truth. The loader raises
   `ConfigurationError` naming the collisions.
-- `intents:` must be non-empty.
+- `intents:` must be non-empty and a mapping. Each intent value must
+  be a mapping with at least a `target:`. The loader raises
+  `ConfigurationError` naming the offending intent if any of those
+  invariants is violated.
+
+Naming constraint — intent names occupy the stage's `data` namespace:
+
+- The synthesizer emits one boolean schema property per intent name
+  (e.g. `accept`, `decline`). Those names share the same `state.data`
+  dictionary as every other field the wizard collects, so an intent
+  name like `title` will collide with a later stage's `title` data
+  field. Choose intent names that won't shadow any data field the
+  rest of the wizard consumes. The reserved name `_intent` (still
+  written for back-compat) is also off-limits as an intent name.
 
 Per-intent overrides:
 

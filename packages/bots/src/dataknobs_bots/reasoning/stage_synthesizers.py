@@ -32,6 +32,15 @@ Consumer extensibility::
             # ... expand into wizard primitives in place ...
 
     register_stage_synthesizer(VendorSelectSynthesizer())
+
+Registration semantics: re-registering the same ``field`` overwrites
+the prior synthesizer (the registry calls
+:meth:`Registry.register` with ``allow_overwrite=True``). This is
+intentionally distinct from sibling registries like
+``intent_classifier_backends``, which raise on duplicate registration
+by default — stage synthesizers are typically auto-registered at
+module import, and consumers often want to replace the in-tree
+synthesizer with a customized one for the same field name.
 """
 from __future__ import annotations
 
@@ -39,6 +48,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.registry import Registry
 
 
 @runtime_checkable
@@ -56,7 +66,10 @@ class StageSynthesizer(Protocol):
     * ``synthesize(stage)`` — mutate the stage dict IN PLACE,
       expanding the primitive's declarative block into existing
       wizard primitives (``response_template``, ``intent_detection``,
-      ``schema``, ``transitions``, etc.).
+      ``schema``, ``transitions``, etc.). The synthesizer SHOULD
+      ``del stage[self.field]`` at the end so the FSM-metadata layer
+      does not carry the un-expanded primitive block as a parallel
+      source of truth.
 
     Synthesizers run during a dedicated loader phase BEFORE
     ``_validate_config`` and ``_translate_to_fsm`` — downstream
@@ -70,28 +83,51 @@ class StageSynthesizer(Protocol):
     def synthesize(self, stage: dict[str, Any]) -> None: ...
 
 
-_STAGE_SYNTHESIZERS: dict[str, Any] = {}
+stage_synthesizer_backends: Registry[StageSynthesizer] = Registry(
+    name="stage_synthesizer_backends",
+)
+"""Registry of stage-primitive synthesizers, keyed by ``field`` name.
+
+Structurally mirrors :data:`intent_classifier_backends`,
+:data:`event_bus_backends`, and :data:`lock_backends`. Thread-safe
+register / lookup / metrics for free.
+
+Registration semantics: re-registering the same ``field`` overwrites
+(see module docstring for rationale).
+"""
 
 
-def register_stage_synthesizer(synthesizer: Any) -> None:
+def register_stage_synthesizer(synthesizer: StageSynthesizer) -> None:
     """Register a stage-primitive synthesizer.
 
+    The synthesizer's ``field`` attribute is its registry key.
+    Re-registering the same field overwrites the prior synthesizer.
+
     Args:
-        synthesizer: Object with a ``field: str`` attribute and a
-            ``synthesize(stage)`` method. May optionally provide a
-            ``validate(stage)`` method.
+        synthesizer: Object satisfying the :class:`StageSynthesizer`
+            protocol (``field: str`` attribute, ``synthesize(stage)``
+            method, optional ``validate(stage)``).
     """
-    _STAGE_SYNTHESIZERS[synthesizer.field] = synthesizer
+    stage_synthesizer_backends.register(
+        synthesizer.field, synthesizer, allow_overwrite=True,
+    )
 
 
 def unregister_stage_synthesizer(field: str) -> None:
-    """Remove a registered synthesizer (test/cleanup utility)."""
-    _STAGE_SYNTHESIZERS.pop(field, None)
+    """Remove a registered synthesizer (test/cleanup utility).
+
+    No-op when ``field`` is not registered.
+    """
+    if stage_synthesizer_backends.has(field):
+        stage_synthesizer_backends.unregister(field)
 
 
-def iter_stage_synthesizers() -> Mapping[str, Any]:
-    """Read-only view of the registered synthesizers."""
-    return dict(_STAGE_SYNTHESIZERS)
+def iter_stage_synthesizers() -> Mapping[str, StageSynthesizer]:
+    """Read-only snapshot of the registered synthesizers."""
+    return {
+        key: stage_synthesizer_backends.get(key)
+        for key in stage_synthesizer_backends.list_keys()
+    }
 
 
 def validate_no_conflicting_fields(

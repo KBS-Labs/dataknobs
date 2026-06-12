@@ -280,6 +280,58 @@ class TestSecurity:
         )
         assert result.success is False
 
+    def test_no_format_via_walrus_aliased_method(self) -> None:
+        """Aliasing ``.format`` through a walrus expression must still
+        produce an ``ast.Attribute(attr='format')`` node, so the
+        block fires. Verifies the AST walk doesn't depend on the
+        method being the immediate call target.
+        """
+        result = safe_eval(
+            "(f := ''.format)('{0.__class__}', ())",
+        )
+        assert result.success is False
+        assert "format" in (result.error or "")
+
+    def test_no_format_via_walrus_aliased_method_map(self) -> None:
+        """Same for ``.format_map`` aliased via walrus."""
+        result = safe_eval(
+            "(f := ''.format_map)({'x': ()})",
+        )
+        assert result.success is False
+        assert "format_map" in (result.error or "")
+
+    def test_format_block_is_method_name_scoped(self) -> None:
+        """The ``.format()`` block must match the method name on ANY
+        attribute access — there is no carve-out for arbitrary
+        objects that happen to have a ``.format()`` method. Pin this
+        as a deliberate trade-off: config-authored expressions that
+        need string formatting use f-strings (which go through normal
+        AST validation), not ``.format()``.
+        """
+        # An object with its own .format() method is still blocked.
+        class _Custom:
+            def format(self) -> str:  # noqa: D401 - test fixture
+                return "formatted"
+
+        result = safe_eval("obj.format()", scope={"obj": _Custom()})
+        assert result.success is False
+        assert "format" in (result.error or "")
+
+    def test_format_allowed_when_restrict_builtins_false(self) -> None:
+        """``restrict_builtins=False`` is the trusted-code escape hatch:
+        the AST check (including the ``.format()`` block) is skipped,
+        and the expression runs with full Python builtins. This is the
+        documented behavior — pin it so an over-zealous tightening of
+        the AST validator doesn't silently break trusted-code call
+        sites.
+        """
+        result = safe_eval(
+            "'value is {}'.format(42)",
+            restrict_builtins=False,
+        )
+        assert result.success is True
+        assert result.value == "value is 42"
+
     def test_fstring_dunder_still_blocked(self) -> None:
         """f-strings substitutions go through normal AST validation,
         so dunder access is blocked the same way as bare attribute access.
