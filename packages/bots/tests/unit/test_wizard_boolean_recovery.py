@@ -20,6 +20,12 @@ from dataknobs_bots.reasoning.wizard import (
 )
 from dataknobs_bots.reasoning.wizard_grounding import detect_boolean_signal
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+from dataknobs_llm.extraction.grounding import (
+    DEFAULT_NEGATION_KEYWORDS,
+    _word_in_text,
+    has_negation,
+)
+from dataknobs_llm.intent import IntentSpec, KeywordIntentClassifier
 from dataknobs_llm.testing import text_response
 
 
@@ -147,6 +153,172 @@ class TestDetectBooleanSignal:
 
     def test_nope_negative(self) -> None:
         assert self._detect("Nope.") is False
+
+
+# ---------------------------------------------------------------------------
+# Drift guard: wrapper and classifier path agree on the canonical spec.
+#
+# ``detect_boolean_signal`` dispatches through
+# ``KeywordIntentClassifier(phrase_priority=True)`` wrapped in
+# ``NegationFilter(flip_when_alone={"affirmative": "negative"})``.
+# This class re-derives the wrapper's verdict from the classifier
+# primitives directly and asserts equivalence over the same set of
+# canonical messages exercised by ``TestDetectBooleanSignal``. A
+# future change to either path that produces a different ``bool |
+# None`` for any case fails this parity check before the consumer
+# sees it.
+# ---------------------------------------------------------------------------
+
+
+_PARITY_AFF_NEG_SPECS: tuple[IntentSpec, ...] = (
+    IntentSpec(name="affirmative", target="_boolean_true"),
+    IntentSpec(name="negative", target="_boolean_false"),
+)
+
+
+_PARITY_DEFAULT_CASES: tuple[str, ...] = (
+    "Yes, save it!",
+    "I confirm.",
+    "Looks good, let's go!",
+    "Sounds good to me.",
+    "Go ahead and save.",
+    "No, don't do that.",
+    "Wait, I need to change something.",
+    "Cancel this.",
+    "Not yet, I'm not ready.",
+    "Hold on, let me check.",
+    "Let's start over.",
+    "I like pizza.",
+    "What time is it?",
+    "No, I don't confirm.",
+    "Not yet, but ok maybe.",
+    "Looks good, no changes needed.",
+    "Sure, no worries!",
+    "Don't save it.",
+    "That's not correct.",
+    "",
+    "Yep!",
+    "Nope.",
+)
+
+
+_PARITY_CUSTOM_CASES: tuple[tuple[str, dict], ...] = (
+    (
+        "Ship it!",
+        {"aff": frozenset({"proceed", "ship"})},
+    ),
+    (
+        "Abort!",
+        {"neg": frozenset({"abort", "reject"})},
+    ),
+    (
+        "All systems go!",
+        {"aff_phrases": ("all systems go",)},
+    ),
+    (
+        "Take it back!",
+        {"neg_phrases": ("take it back",)},
+    ),
+)
+
+
+def _classifier_signal(
+    msg: str,
+    *,
+    aff: frozenset[str] | None = None,
+    aff_phrases: tuple[str, ...] | None = None,
+    neg: frozenset[str] | None = None,
+    neg_phrases: tuple[str, ...] | None = None,
+) -> bool | None:
+    """Re-derive the boolean signal directly from the classifier
+    primitives, mirroring ``detect_boolean_signal``'s construction.
+    """
+    aff_signals = aff or _DEFAULT_AFFIRMATIVE_SIGNALS
+    aff_phr = aff_phrases or _DEFAULT_AFFIRMATIVE_PHRASES
+    neg_signals = neg or _DEFAULT_NEGATIVE_SIGNALS
+    neg_phr = neg_phrases or _DEFAULT_NEGATIVE_PHRASES
+
+    msg_lower = msg.lower()
+    classifier = KeywordIntentClassifier(
+        vocabulary={
+            "affirmative": aff_signals,
+            "negative": neg_signals,
+        },
+        phrases={
+            "affirmative": frozenset(aff_phr),
+            "negative": frozenset(neg_phr),
+        },
+        phrase_priority=True,
+    )
+    result = classifier._classify_sync(msg_lower, _PARITY_AFF_NEG_SPECS)
+    if result.intent is None:
+        return None
+    if result.intent.name == "negative":
+        return False
+
+    # Affirmative won — apply the same flip-when-alone semantic that
+    # ``detect_boolean_signal`` applies locally.
+    has_neg_match = (
+        any(_word_in_text(w, msg_lower) for w in neg_signals)
+        or any(_word_in_text(p, msg_lower) for p in neg_phr)
+    )
+    if not has_neg_match:
+        check_neg = DEFAULT_NEGATION_KEYWORDS - neg_signals
+        if check_neg and has_negation(msg_lower, check_neg):
+            return False
+    return True
+
+
+class TestDetectBooleanSignalParityWithClassifier:
+    """Drift guard: wrapper and classifier path return the same verdict.
+
+    Parametrized over the canonical spec exercised by
+    ``TestDetectBooleanSignal``. Without this guard, the wrapper
+    could quietly diverge from the classifier primitives after a
+    future change to either ``KeywordIntentClassifier`` or
+    ``NegationFilter`` — exactly the drift this consolidation
+    eliminates.
+    """
+
+    @pytest.mark.parametrize("message", _PARITY_DEFAULT_CASES)
+    def test_default_vocabulary_parity(self, message: str) -> None:
+        wrapper_signal = detect_boolean_signal(
+            message.lower(),
+            affirmative_signals=_DEFAULT_AFFIRMATIVE_SIGNALS,
+            affirmative_phrases=_DEFAULT_AFFIRMATIVE_PHRASES,
+            negative_signals=_DEFAULT_NEGATIVE_SIGNALS,
+            negative_phrases=_DEFAULT_NEGATIVE_PHRASES,
+        )
+        classifier_signal = _classifier_signal(message)
+        assert wrapper_signal == classifier_signal, (
+            f"Drift for message {message!r}: "
+            f"wrapper={wrapper_signal!r} classifier={classifier_signal!r}"
+        )
+
+    @pytest.mark.parametrize(("message", "overrides"), _PARITY_CUSTOM_CASES)
+    def test_custom_vocabulary_parity(
+        self, message: str, overrides: dict,
+    ) -> None:
+        wrapper_signal = detect_boolean_signal(
+            message.lower(),
+            affirmative_signals=overrides.get(
+                "aff", _DEFAULT_AFFIRMATIVE_SIGNALS,
+            ),
+            affirmative_phrases=overrides.get(
+                "aff_phrases", _DEFAULT_AFFIRMATIVE_PHRASES,
+            ),
+            negative_signals=overrides.get(
+                "neg", _DEFAULT_NEGATIVE_SIGNALS,
+            ),
+            negative_phrases=overrides.get(
+                "neg_phrases", _DEFAULT_NEGATIVE_PHRASES,
+            ),
+        )
+        classifier_signal = _classifier_signal(message, **overrides)
+        assert wrapper_signal == classifier_signal, (
+            f"Drift for message {message!r} overrides={overrides!r}: "
+            f"wrapper={wrapper_signal!r} classifier={classifier_signal!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

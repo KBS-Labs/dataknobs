@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-12T03:29:00Z",
+  "timestamp": "2026-06-12T17:00:29Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.20 (Homebrew 2026-06-10 aarch64-apple-darwin)",
+  "uv_version": "uv 0.11.21 (Homebrew 2026-06-11 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-intent-confirm-stage-primitive",
-  "git_commit": "789f556d4710924b095ebfb035eeba5b0035ca6a",
+  "git_branch": "sbk/boolean-recovery-consolidation",
+  "git_commit": "729c4caf428b04ed39b78836be6689f5974a8719",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

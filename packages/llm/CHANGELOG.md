@@ -79,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   these public names; downstream consumers needing the same
   primitives for boolean recovery or analogous text-classification
   tasks import them from here directly.
+- `KeywordIntentClassifier` `phrase_priority` mode — keyword-only
+  constructor kwargs `phrase_priority: bool = False` and
+  `phrases: Mapping[str, frozenset[str]] | None = None`. When opted
+  in, multi-word phrase matches beat single-word matches; two
+  intents tying at the same tier (both phrase-matched or both
+  word-matched only) resolve to
+  `IntentMatchResult(intent=None, ...)` rather than iteration-order
+  first-match-wins. Default off — every call site without the opt-in
+  keeps the first-match-wins iteration semantic.
+  `dataknobs_llm.extraction.grounding.detect_boolean_signal` opts in
+  so multi-word affirmative/negative phrases beat single-word
+  matches; its public `bool | None` verdict is unchanged.
 
 ## v0.6.2 - 2026-06-06
 
