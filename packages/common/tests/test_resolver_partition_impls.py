@@ -10,7 +10,7 @@ import pytest
 
 from dataknobs_common.resolver import (
     CallablePartitionResolver,
-    CompositePartitionResolver,
+    JoiningPartitionResolver,
     MetadataKeyPartitionResolver,
     NullPartitionResolver,
     TemporalPartitionResolver,
@@ -58,10 +58,36 @@ def test_metadata_key_resolver_uses_default_on_missing_metadata() -> None:
     assert r.resolve(record) == "default"
 
 
-def test_metadata_key_resolver_str_coerces_value() -> None:
+def test_metadata_key_resolver_str_coerces_scalar_value() -> None:
     r = MetadataKeyPartitionResolver(metadata_key="version")
     record = _FakeRecord(metadata={"version": 42})
     assert r.resolve(record) == "42"
+
+
+def test_metadata_key_resolver_non_scalar_falls_back_to_default() -> None:
+    """Non-scalar values (list/dict/set/custom object) resolve to default.
+
+    Silent ``str()`` coercion would corrupt partition names like
+    ``"[1, 2]"`` or ``"{'k': 'v'}"`` which are typically used as table
+    suffixes, collection names, or filesystem paths.
+    """
+    r = MetadataKeyPartitionResolver(metadata_key="tenant_id", default="default")
+    for bad_value in [[1, 2], {"nested": "value"}, {1, 2, 3}, object()]:
+        record = _FakeRecord(metadata={"tenant_id": bad_value})
+        assert r.resolve(record) == "default", f"failed for {bad_value!r}"
+
+
+def test_metadata_key_resolver_accepts_all_scalar_types() -> None:
+    r = MetadataKeyPartitionResolver(metadata_key="key")
+    cases: list[tuple[Any, str]] = [
+        ("string_value", "string_value"),
+        (42, "42"),
+        (3.14, "3.14"),
+        (True, "True"),
+    ]
+    for value, expected in cases:
+        record = _FakeRecord(metadata={"key": value})
+        assert r.resolve(record) == expected
 
 
 # ---- TemporalPartitionResolver ----
@@ -107,11 +133,19 @@ def test_temporal_resolver_missing_timestamp_returns_default() -> None:
     assert r.resolve(record) == "default"
 
 
-def test_temporal_resolver_unsupported_bucket_raises() -> None:
-    r = TemporalPartitionResolver(timestamp_key="ts", bucket="decade")
-    record = _FakeRecord(metadata={"ts": datetime(2026, 3, 15)})
-    with pytest.raises(ValueError):
-        r.resolve(record)
+def test_temporal_resolver_unsupported_bucket_raises_at_construction() -> None:
+    """Bad bucket fails fast at construction, not lazily on first valid value.
+
+    Previously the validation lived in ``_format_bucket`` and only fired
+    when a record with a parseable timestamp was seen — so a typo
+    (``bucket="quarterly"``) silently routed every record to ``default``
+    until the first valid datetime crashed. ``__post_init__`` raises
+    immediately so the typo can't ship.
+    """
+    with pytest.raises(ValueError, match="Unsupported bucket"):
+        TemporalPartitionResolver(timestamp_key="ts", bucket="decade")
+    with pytest.raises(ValueError, match="Unsupported bucket"):
+        TemporalPartitionResolver(timestamp_key="ts", bucket="quarterly")
 
 
 # ---- CallablePartitionResolver ----
@@ -125,26 +159,32 @@ def test_callable_partition_resolver_dispatches() -> None:
     assert r.resolve(record) == "custom_value"
 
 
-# ---- CompositePartitionResolver ----
+# ---- JoiningPartitionResolver ----
 
 
-def test_composite_partition_resolver_joins_with_separator() -> None:
-    r = CompositePartitionResolver(
+def test_joining_partition_resolver_joins_with_unambiguous_separator() -> None:
+    """Recommended usage: pick a separator the sub-resolvers don't produce.
+
+    ``TemporalPartitionResolver`` returns strings containing ``_``
+    (``"2026_q2"`` / ``"2026_m05"``), so ``"::"`` (or ``"/"`` / ``"|"``)
+    keeps the joined key reversibly parseable.
+    """
+    r = JoiningPartitionResolver(
         resolvers=[
             MetadataKeyPartitionResolver("tenant_id"),
             TemporalPartitionResolver("ts", bucket="quarter"),
         ],
-        sep="_",
+        sep="::",
     )
     record = _FakeRecord(metadata={
         "tenant_id": "acme",
         "ts": datetime(2026, 5, 1),
     })
-    assert r.resolve(record) == "acme_2026_q2"
+    assert r.resolve(record) == "acme::2026_q2"
 
 
-def test_composite_partition_resolver_custom_separator() -> None:
-    r = CompositePartitionResolver(
+def test_joining_partition_resolver_custom_separator() -> None:
+    r = JoiningPartitionResolver(
         resolvers=[
             MetadataKeyPartitionResolver("tenant_id"),
             MetadataKeyPartitionResolver("content_type"),
@@ -158,15 +198,15 @@ def test_composite_partition_resolver_custom_separator() -> None:
     assert r.resolve(record) == "acme/legal"
 
 
-def test_composite_partition_resolver_none_subresolver_short_circuits() -> None:
-    """If any sub-resolver returns None, composite returns None.
+def test_joining_partition_resolver_none_subresolver_short_circuits() -> None:
+    """If any sub-resolver returns None, the joiner returns None.
 
     The in-tree partition resolvers default to a string rather than None,
     so this short-circuit requires either a custom resolver or a record
     genuinely unable to produce a partition for one of the component
     dimensions.
     """
-    r = CompositePartitionResolver(
+    r = JoiningPartitionResolver(
         resolvers=[
             MetadataKeyPartitionResolver("tenant_id"),
             CallablePartitionResolver(lambda record: None),
@@ -176,8 +216,8 @@ def test_composite_partition_resolver_none_subresolver_short_circuits() -> None:
     assert r.resolve(record) is None
 
 
-def test_composite_partition_resolver_empty_chain_returns_empty_string() -> None:
+def test_joining_partition_resolver_empty_chain_returns_empty_string() -> None:
     """Empty chain joins to empty string."""
-    r = CompositePartitionResolver(resolvers=[], sep="_")
+    r = JoiningPartitionResolver(resolvers=[], sep="_")
     record = _FakeRecord(metadata={})
     assert r.resolve(record) == ""

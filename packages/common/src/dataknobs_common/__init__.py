@@ -48,8 +48,10 @@ from dataknobs_common.events import (
     create_event_bus,
 )
 from dataknobs_common.capabilities import (
+    CAPABILITY_FAMILIES,
     Capability,
     CapabilityContract,
+    CapabilityLike,
     CapabilityMixin,
     CapabilityNotSupportedError,
     DynamicCapabilityMixin,
@@ -130,9 +132,9 @@ from dataknobs_common.resolver import (
     CachedResolver,
     CallablePartitionResolver,
     CallableResolver,
-    CompositePartitionResolver,
     CompositeResolver,
     DefaultingResolver,
+    JoiningPartitionResolver,
     MappingResolver,
     MetadataKeyPartitionResolver,
     NullPartitionResolver,
@@ -208,8 +210,10 @@ __all__ = [
     "TimeoutError",
     "RateLimitError",
     # Capabilities
+    "CAPABILITY_FAMILIES",
     "Capability",
     "CapabilityContract",
+    "CapabilityLike",
     "CapabilityMixin",
     "DynamicCapabilityMixin",
     "CapabilityNotSupportedError",
@@ -278,7 +282,7 @@ __all__ = [
     "MetadataKeyPartitionResolver",
     "TemporalPartitionResolver",
     "CallablePartitionResolver",
-    "CompositePartitionResolver",
+    "JoiningPartitionResolver",
     # Serialization
     "Serializable",
     "serialize",

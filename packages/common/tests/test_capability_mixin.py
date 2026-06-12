@@ -46,10 +46,15 @@ def test_static_backend_instance_capabilities_matches_classvar() -> None:
 
 
 def test_supports_accepts_raw_string_capability() -> None:
-    """Consumer-defined capabilities expressed as raw strings work."""
+    """Consumer-defined capabilities expressed as raw strings work.
+
+    The ``CapabilityLike`` annotation on ``SUPPORTED_CAPABILITIES``
+    accepts both ``Capability`` enum members and bare strings, so no
+    ``# type: ignore`` is needed.
+    """
 
     class _CustomBackend(CapabilityMixin):
-        SUPPORTED_CAPABILITIES: ClassVar[frozenset] = frozenset({  # type: ignore[assignment]
+        SUPPORTED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset({
             "custom_feature_x",  # consumer-defined; not in the enum
         })
 
@@ -78,8 +83,8 @@ class _DynamicBackend(DynamicCapabilityMixin):
     })
 
     def __init__(self, *, event_bus_configured: bool = False) -> None:
-        super().__init__()
         self._event_bus_configured = event_bus_configured
+        self._init_capability_cache()
 
     def _compute_instance_capabilities(self) -> frozenset[Capability]:
         caps = self.SUPPORTED_CAPABILITIES
@@ -143,3 +148,65 @@ def test_composite_intersection_pattern() -> None:
 
     composite = backend_a.instance_capabilities() & backend_b.instance_capabilities()
     assert composite == frozenset({Capability.STREAMING_READS})
+
+
+# ---- DynamicCapabilityMixin with another base (MI shape) ----
+
+
+class _OtherBase:
+    """A non-mixin base with a positional-arg ``__init__``.
+
+    Models the common adopter shape: a backend already inherits from
+    a base class that takes positional args. The capability mixin must
+    not collide with that base's ``__init__`` signature.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _MultiBaseBackend(DynamicCapabilityMixin, _OtherBase):
+    """Adopter that pairs the mixin with another base.
+
+    The mixin is listed FIRST among bases per the documented contract.
+    The subclass owns its own ``super().__init__(...)`` chain — the
+    mixin no longer forwards ``*args, **kwargs``, so adopters cannot
+    accidentally route kwargs to ``object.__init__``.
+    """
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
+        Capability.STREAMING_READS,
+    })
+
+    def __init__(self, name: str, *, enable_extra: bool = False) -> None:
+        super().__init__(name)
+        self._enable_extra = enable_extra
+        self._init_capability_cache()
+
+    def _compute_instance_capabilities(self) -> frozenset[Capability]:
+        caps = self.SUPPORTED_CAPABILITIES
+        if self._enable_extra:
+            caps = caps | {Capability.EVENT_BUS_EMISSION}
+        return caps
+
+
+def test_multi_base_adopter_constructs_cleanly() -> None:
+    """The mixin coexists with another positional-arg base.
+
+    Previously the mixin's ``__init__(*args, **kwargs)`` forwarder would
+    route a kwarg past ``_OtherBase`` to ``object.__init__`` and raise
+    ``TypeError``. The current contract (subclass calls
+    ``_init_capability_cache()`` explicitly) avoids that footgun.
+    """
+    backend = _MultiBaseBackend("acme", enable_extra=True)
+    assert backend.name == "acme"
+    assert backend.supports(Capability.STREAMING_READS)
+    assert backend.supports(Capability.EVENT_BUS_EMISSION)
+
+
+def test_multi_base_adopter_cache_works() -> None:
+    """Cache initialization succeeds when the mixin is not the only base."""
+    backend = _MultiBaseBackend("acme")
+    first = backend.instance_capabilities()
+    second = backend.instance_capabilities()
+    assert first is second  # cached

@@ -12,6 +12,7 @@ from dataknobs_common.capabilities import (
     CapabilityNotSupportedError,
     require_capability,
 )
+from dataknobs_common.exceptions import DataknobsError, OperationError
 
 
 class _Backend(CapabilityMixin):
@@ -37,7 +38,7 @@ def test_require_capability_raw_string() -> None:
     """Raw-string capabilities work for consumer-defined features."""
 
     class _CustomBackend(CapabilityMixin):
-        SUPPORTED_CAPABILITIES: ClassVar[frozenset] = frozenset({"custom_x"})  # type: ignore[assignment]
+        SUPPORTED_CAPABILITIES: ClassVar[frozenset[str]] = frozenset({"custom_x"})
 
     backend = _CustomBackend()
     require_capability(backend, "custom_x")  # no raise
@@ -67,3 +68,23 @@ def test_error_message_includes_host_class_name() -> None:
     with pytest.raises(CapabilityNotSupportedError) as exc_info:
         require_capability(backend, Capability.SNAPSHOT_ISOLATION)
     assert "_Backend" in str(exc_info.value)
+
+
+def test_error_is_dataknobs_error_hierarchy_member() -> None:
+    """The error must extend DataknobsError so unified catch-all handlers see it."""
+    backend = _Backend()
+    with pytest.raises(DataknobsError) as exc_info:
+        require_capability(backend, Capability.SNAPSHOT_ISOLATION)
+    assert isinstance(exc_info.value, OperationError)
+    assert isinstance(exc_info.value, CapabilityNotSupportedError)
+
+
+def test_error_context_carries_capability_and_host() -> None:
+    """The context dict is populated for structured logging."""
+    backend = _Backend()
+    with pytest.raises(CapabilityNotSupportedError) as exc_info:
+        require_capability(backend, Capability.SNAPSHOT_ISOLATION)
+    assert exc_info.value.context == {
+        "capability": "snapshot_isolation",
+        "host": "_Backend",
+    }

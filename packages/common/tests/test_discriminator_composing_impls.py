@@ -9,6 +9,7 @@ import pytest
 from dataknobs_common.discriminator import (
     AsyncCallableDiscriminator,
     AsyncChainedDiscriminator,
+    AsyncDiscriminator,
     CallableDiscriminator,
     ChainedDiscriminator,
     Discriminator,
@@ -168,6 +169,14 @@ async def test_async_callable_discriminator_dispatches() -> None:
     assert (await d.classify("banana")) == _Kind.B
 
 
+def test_async_callable_discriminator_conforms_to_protocol() -> None:
+    async def fn(v: str) -> _Kind:
+        return _Kind.A
+
+    d = AsyncCallableDiscriminator(fn)
+    assert isinstance(d, AsyncDiscriminator)
+
+
 # ---- AsyncChainedDiscriminator ----
 
 
@@ -199,3 +208,10 @@ async def test_async_chained_empty_returns_default() -> None:
         inner=[], default=_Kind.UNKNOWN
     )
     assert (await d.classify("anything")) == _Kind.UNKNOWN
+
+
+def test_async_chained_discriminator_conforms_to_protocol() -> None:
+    d: AsyncChainedDiscriminator[str, _Kind] = AsyncChainedDiscriminator(
+        inner=[], default=_Kind.UNKNOWN
+    )
+    assert isinstance(d, AsyncDiscriminator)

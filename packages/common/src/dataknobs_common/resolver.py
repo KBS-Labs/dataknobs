@@ -27,7 +27,10 @@ directly or as templates for custom partition logic):
     MetadataKeyPartitionResolver    — extracts from record metadata
     TemporalPartitionResolver       — time bucket from a metadata field
     CallablePartitionResolver       — escape hatch for arbitrary logic
-    CompositePartitionResolver      — joins sub-resolvers with a separator
+    JoiningPartitionResolver        — joins sub-resolvers with a separator
+                                      (distinct from CompositeResolver,
+                                      which ALTERNATES — first-non-None
+                                      wins — rather than concatenates)
 """
 
 from __future__ import annotations
@@ -125,13 +128,18 @@ class DefaultingResolver(Generic[_KeyT, _ValueT]):
     returns.
 
     Useful when downstream code expects always-non-None but the inner
-    resolver may return ``None``.
+    resolver may return ``None``. The :meth:`resolve` return type is
+    deliberately tighter than the :class:`ResourceResolver` Protocol
+    (``_ValueT`` rather than ``_ValueT | None``) — the whole point of
+    this wrapper is to eliminate the ``None`` case for consumers.
+    Passing a ``None`` default defeats the purpose and falls outside
+    the contract.
     """
 
     inner: ResourceResolver[_KeyT, _ValueT]
     default: _ValueT
 
-    def resolve(self, key: _KeyT) -> _ValueT | None:
+    def resolve(self, key: _KeyT) -> _ValueT:
         result = self.inner.resolve(key)
         return result if result is not None else self.default
 
@@ -271,6 +279,14 @@ class MetadataKeyPartitionResolver:
 
     The record is expected to expose a ``metadata`` mapping; resolves to
     ``default`` when the key is missing.
+
+    Only scalar metadata values (``str``, ``int``, ``float``, ``bool``)
+    are accepted as partition identifiers. Non-scalar values (lists,
+    dicts, sets, custom objects) resolve to ``default`` rather than
+    being silently ``str()``-coerced into garbage partition names like
+    ``"[1, 2]"`` or ``"{'k': 'v'}"`` — partition names typically become
+    table suffixes, collection names, or filesystem paths where such
+    coercions are corrupting.
     """
 
     metadata_key: str
@@ -283,17 +299,24 @@ class MetadataKeyPartitionResolver:
         value = metadata.get(self.metadata_key)
         if value is None:
             return self.default
+        if not isinstance(value, (str, int, float, bool)):
+            return self.default
         return str(value)
+
+
+_SUPPORTED_TEMPORAL_BUCKETS = frozenset({"year", "quarter", "month"})
 
 
 @dataclass(frozen=True)
 class TemporalPartitionResolver:
     """Buckets records into partitions by a timestamp metadata field.
 
-    ``bucket`` is one of ``"year"``, ``"quarter"``, ``"month"``. The
-    metadata value at ``timestamp_key`` must be a :class:`datetime` or
-    ISO-8601 string. Returns ``default`` when the field is missing or
-    unparseable.
+    ``bucket`` is one of ``"year"``, ``"quarter"``, ``"month"``;
+    validated at construction (``__post_init__``) so a typo fails fast
+    rather than silently routing every record to ``default`` until the
+    first valid datetime is seen. The metadata value at
+    ``timestamp_key`` must be a :class:`datetime` or ISO-8601 string;
+    returns ``default`` when the field is missing or unparseable.
 
     Examples:
         TemporalPartitionResolver("ingested_at", bucket="quarter")
@@ -303,6 +326,13 @@ class TemporalPartitionResolver:
     timestamp_key: str
     bucket: str = "quarter"
     default: str = "default"
+
+    def __post_init__(self) -> None:
+        if self.bucket not in _SUPPORTED_TEMPORAL_BUCKETS:
+            raise ValueError(
+                f"Unsupported bucket: {self.bucket!r} "
+                f"(expected one of {sorted(_SUPPORTED_TEMPORAL_BUCKETS)})"
+            )
 
     def resolve(self, record: Any) -> str | None:
         metadata = getattr(record, "metadata", None)
@@ -356,22 +386,39 @@ class CallablePartitionResolver:
 
 
 @dataclass(frozen=True)
-class CompositePartitionResolver:
+class JoiningPartitionResolver:
     """Joins sub-resolver partition names with a separator.
 
     Useful for composite partitioning: tenant x time x content-type.
+    The name spells out the JOIN semantic to keep the distinction from
+    :class:`CompositeResolver` unambiguous —
+    :class:`CompositeResolver` ALTERNATES over its inner resolvers
+    (first-non-``None`` wins); this class CONCATENATES every inner
+    resolver's output.
 
-    Example:
-        CompositePartitionResolver(
+    Example::
+
+        JoiningPartitionResolver(
             resolvers=[
                 MetadataKeyPartitionResolver("tenant_id"),
                 TemporalPartitionResolver("ingested_at", bucket="quarter"),
             ],
-            sep="_",
+            sep="::",
         ).resolve(record)
-          → "acme_2026_q2"
+          → "acme::2026_q2"
 
     A ``None`` from any sub-resolver short-circuits the result to ``None``.
+
+    Warning:
+        Choose ``sep`` to be a character no sub-resolver produces in its
+        output. :class:`TemporalPartitionResolver` returns strings
+        containing ``_`` (e.g. ``"2026_q2"`` / ``"2026_m05"``), so
+        ``sep="_"`` over a chain that includes a temporal resolver
+        produces ambiguously-parseable joined keys
+        (``"acme_2026_q2"`` could split as ``["acme", "2026", "q2"]``
+        or ``["acme", "2026_q2"]``). Use ``"::"``, ``"/"``, ``"|"``,
+        or another character no resolver produces when partition keys
+        will be reverse-parsed downstream.
     """
 
     resolvers: Sequence[Any] = field(default_factory=tuple)
@@ -394,9 +441,9 @@ __all__ = [
     "CachedResolver",
     "CallablePartitionResolver",
     "CallableResolver",
-    "CompositePartitionResolver",
     "CompositeResolver",
     "DefaultingResolver",
+    "JoiningPartitionResolver",
     "MappingResolver",
     "MetadataKeyPartitionResolver",
     "NullPartitionResolver",

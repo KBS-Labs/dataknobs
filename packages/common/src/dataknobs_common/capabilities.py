@@ -22,11 +22,18 @@ Consumer-defined capabilities are supported via raw-string capability
 values: pass a string to :meth:`supports` or :func:`require_capability`
 instead of a :class:`Capability` enum member. Implementations comparing
 against ``SUPPORTED_CAPABILITIES`` accept both forms.
+
+This surface is distinct from :class:`dataknobs_llm.ModelCapability`,
+which advertises LLM-specific model features (chat, function calling,
+streaming, vision, etc.) rather than cross-cutting infrastructure
+capabilities. They cover disjoint concept spaces and are not bridged.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import (
     Any,
     ClassVar,
@@ -34,6 +41,8 @@ from typing import (
     Union,
     runtime_checkable,
 )
+
+from dataknobs_common.exceptions import OperationError
 
 
 class Capability(str, Enum):
@@ -69,6 +78,36 @@ class Capability(str, Enum):
     CHANGE_SUBSCRIPTION = "change_subscription"
 
 
+CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
+    "tenancy": frozenset({
+        Capability.TENANT_SCOPED_LOCKS,
+        Capability.TENANT_SCOPED_STATE,
+        Capability.PER_TENANT_RATE_LIMITS,
+    }),
+    "observability": frozenset({
+        Capability.EVENT_BUS_EMISSION,
+        Capability.CALLBACK_REGISTRY,
+        Capability.METRICS_EMISSION,
+    }),
+    "consistency": frozenset({
+        Capability.SNAPSHOT_ISOLATION,
+        Capability.TRANSACTIONAL_METADATA,
+        Capability.STREAMING_READS,
+        Capability.STREAMING_WRITES,
+    }),
+    "composition": frozenset({
+        Capability.KEY_PATTERN_FILTERING,
+        Capability.CHANGE_SUBSCRIPTION,
+    }),
+})
+"""Family → capability-member mapping. Family membership is
+informational only — :meth:`CapabilityMixin.supports` does not honor
+family hierarchies. Useful for consumers wanting "all tenancy
+capabilities" without hand-rolling the set. Immutable via
+:class:`~types.MappingProxyType`.
+"""
+
+
 CapabilityLike = Union[Capability, str]
 
 
@@ -87,12 +126,12 @@ class CapabilityContract(Protocol):
     directly.
     """
 
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]]
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]]
 
     @classmethod
-    def supported_capabilities(cls) -> frozenset[Capability]: ...
+    def supported_capabilities(cls) -> frozenset[CapabilityLike]: ...
 
-    def instance_capabilities(self) -> frozenset[Capability]: ...
+    def instance_capabilities(self) -> frozenset[CapabilityLike]: ...
 
     def supports(self, capability: CapabilityLike) -> bool: ...
 
@@ -115,13 +154,13 @@ class CapabilityMixin:
     :class:`DynamicCapabilityMixin` instead.
     """
 
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset()
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset()
 
     @classmethod
-    def supported_capabilities(cls) -> frozenset[Capability]:
+    def supported_capabilities(cls) -> frozenset[CapabilityLike]:
         return cls.SUPPORTED_CAPABILITIES
 
-    def instance_capabilities(self) -> frozenset[Capability]:
+    def instance_capabilities(self) -> frozenset[CapabilityLike]:
         return type(self).SUPPORTED_CAPABILITIES
 
     def supports(self, capability: CapabilityLike) -> bool:
@@ -139,16 +178,61 @@ class DynamicCapabilityMixin(CapabilityMixin):
     the capability set from ``__init__`` state (e.g. "EVENT_BUS_EMISSION
     only if an event bus was configured").
 
-    The default :meth:`instance_capabilities` caches the computed set on
-    first call. Subclasses needing dynamic recomputation should call
+    The mixin owns a single ``_capability_cache`` field. The first call
+    to :meth:`instance_capabilities` populates it from
+    :meth:`_compute_instance_capabilities`; subsequent calls hit the
+    cache. Subclasses needing dynamic recomputation call
     :meth:`_invalidate_capability_cache` after state changes.
+
+    Subclass ``__init__`` requirements:
+
+    - The mixin does NOT forward ``__init__`` args through cooperative
+      multiple inheritance (the previous ``*args, **kwargs`` shape
+      collided with ``object.__init__`` when adopters' MRO terminated
+      there). Subclasses are responsible for their own
+      ``super().__init__(...)`` chain.
+    - Subclasses MUST call :meth:`_init_capability_cache` exactly once
+      in their ``__init__`` (typically as the LAST line) to initialize
+      the cache field. Forgetting this raises ``AttributeError`` on the
+      first :meth:`instance_capabilities` call.
+    - List :class:`DynamicCapabilityMixin` FIRST among bases so the
+      mixin's resolution wins consistently when the subclass also
+      inherits from a config-consumer or another mixin.
+
+    Example::
+
+        class MyBackend(DynamicCapabilityMixin, OtherBase):
+            SUPPORTED_CAPABILITIES = frozenset({Capability.STREAMING_READS})
+
+            def __init__(self, *, event_bus=None) -> None:
+                super().__init__()  # configures OtherBase
+                self._event_bus = event_bus
+                self._init_capability_cache()
+
+            def _compute_instance_capabilities(self):
+                caps = self.SUPPORTED_CAPABILITIES
+                if self._event_bus is not None:
+                    caps = caps | {Capability.EVENT_BUS_EMISSION}
+                return caps
+
+    Cache initialization is not thread-safe — two threads observing a
+    fresh instance may both compute the set. The result is idempotent
+    (the computed set is invariant for a given instance state) so no
+    data corruption occurs, but redundant computation is possible in
+    multi-threaded sync contexts. Async (single-loop) contexts are
+    unaffected.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._capability_cache: frozenset[Capability] | None = None
+    def _init_capability_cache(self) -> None:
+        """Initialize the capability cache field.
 
-    def _compute_instance_capabilities(self) -> frozenset[Capability]:
+        MUST be called from each subclass's ``__init__``. The cache is
+        explicit because the mixin cannot reliably participate in
+        cooperative MI without dictating the subclass ``__init__`` shape.
+        """
+        self._capability_cache: frozenset[CapabilityLike] | None = None
+
+    def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
         """Override to compute capabilities from instance state.
 
         Default returns the ``ClassVar`` ``SUPPORTED_CAPABILITIES``
@@ -157,7 +241,7 @@ class DynamicCapabilityMixin(CapabilityMixin):
         """
         return type(self).SUPPORTED_CAPABILITIES
 
-    def instance_capabilities(self) -> frozenset[Capability]:
+    def instance_capabilities(self) -> frozenset[CapabilityLike]:
         if self._capability_cache is None:
             self._capability_cache = self._compute_instance_capabilities()
         return self._capability_cache
@@ -171,8 +255,16 @@ class DynamicCapabilityMixin(CapabilityMixin):
         self._capability_cache = None
 
 
-class CapabilityNotSupportedError(Exception):
+class CapabilityNotSupportedError(OperationError):
     """Raised when a required capability is not supported by the host.
+
+    Part of the :class:`~dataknobs_common.exceptions.DataknobsError`
+    hierarchy via :class:`~dataknobs_common.exceptions.OperationError`
+    so consumers catching ``DataknobsError`` see this exception as a
+    member of the unified error surface. The offending capability
+    identifier and host class name are recorded on
+    :attr:`~dataknobs_common.exceptions.DataknobsError.context` for
+    structured logging.
 
     Attributes:
         capability: The capability that was required.
@@ -180,12 +272,14 @@ class CapabilityNotSupportedError(Exception):
     """
 
     def __init__(self, capability: CapabilityLike, host: Any) -> None:
+        cap_str = _normalize_capability(capability)
+        host_class = type(host).__name__
+        super().__init__(
+            f"{host_class} does not support {cap_str!r}",
+            context={"capability": cap_str, "host": host_class},
+        )
         self.capability = capability
         self.host = host
-        cap_str = (
-            capability.value if isinstance(capability, Capability) else str(capability)
-        )
-        super().__init__(f"{type(host).__name__} does not support {cap_str!r}")
 
 
 def require_capability(host: Any, capability: CapabilityLike) -> None:
@@ -215,6 +309,7 @@ def _normalize_capability(capability: CapabilityLike) -> str:
 
 
 __all__ = [
+    "CAPABILITY_FAMILIES",
     "Capability",
     "CapabilityContract",
     "CapabilityLike",

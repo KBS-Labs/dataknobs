@@ -80,14 +80,22 @@ class CallableDiscriminator(Generic[_InputT, _KindT]):
         return self.fn(value)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MappingDiscriminator(Generic[_InputT, _KindT]):
     """Fast lookup against a static mapping.
 
     Returns ``mapping[value]`` if present, ``default`` otherwise. Useful
     for fixed enumerations where the classifier is a small lookup table.
 
-    The input type must be hashable.
+    The input type must be hashable. ``frozen=True`` prevents accidental
+    reassignment of ``mapping`` or ``default`` after construction;
+    ``eq=False`` falls back to identity equality / identity hash because
+    the typical ``mapping`` value (``dict``) is not hashable — opting
+    into dataclass-generated value equality would make
+    :class:`MappingDiscriminator` instances raise ``TypeError`` on
+    ``hash()``. Identity hashing is the right default since two
+    distinct ``MappingDiscriminator`` instances wrapping equal mappings
+    are not generally interchangeable from the consumer's perspective.
     """
 
     mapping: Mapping[_InputT, _KindT]
@@ -107,7 +115,8 @@ class MultiFieldDiscriminator:
     a payload (e.g. key kind + intent + tenant) without coupling the
     consumer's dispatch logic to specific backend interfaces.
 
-    Example:
+    Example::
+
         backend_discriminator = BackendKeyDiscriminator(backend)
         intent_discriminator = CallableDiscriminator(classify_intent)
         multi = MultiFieldDiscriminator({
@@ -120,6 +129,18 @@ class MultiFieldDiscriminator:
     Fields missing from the payload are classified as ``None`` in the
     result dict (not omitted) so consumers can distinguish "missing"
     from "classified as None".
+
+    The result dict iterates in the same order as
+    ``field_discriminators``. Python's built-in ``dict`` (and
+    :class:`collections.OrderedDict`) iterate in insertion order, so
+    the common usage shape (``MultiFieldDiscriminator({...})`` with a
+    dict literal) preserves field-declaration order. The annotation is
+    intentionally :class:`~collections.abc.Mapping` rather than
+    ``dict`` so subclasses, ``MappingProxyType`` wrappers, and other
+    mapping types are accepted — but a hand-rolled
+    :class:`~collections.abc.Mapping` impl with arbitrary iteration
+    order will yield a result dict with unspecified key order. Pass an
+    ordered mapping if downstream code depends on it.
     """
 
     field_discriminators: Mapping[str, Discriminator[Any, Any]]
