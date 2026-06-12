@@ -57,6 +57,7 @@ from .service import (
     get_ingestion_service,
 )
 from .storage import (
+    BackendKeyDiscriminator,
     ChangeSet,
     FileKnowledgeBackend,
     IngestionStatus,
@@ -64,6 +65,7 @@ from .storage import (
     InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
+    KnowledgeKeyKind,
     KnowledgeResourceBackend,
     KnowledgeResourceBackendMixin,
     create_knowledge_backend,
@@ -96,6 +98,7 @@ __all__ = [
     # Storage backends
     "KnowledgeResourceBackend",
     "KnowledgeResourceBackendMixin",
+    "KnowledgeKeyKind",
     "KnowledgeFile",
     "KnowledgeBaseInfo",
     "IngestionStatus",
@@ -105,6 +108,8 @@ __all__ = [
     "InMemoryKnowledgeBackend",
     "FileKnowledgeBackend",
     "S3KnowledgeBackend",
+    # Discriminator adapters
+    "BackendKeyDiscriminator",
     # Ingestion manager (file-backend to vector-store)
     "KnowledgeIngestionManager",
     "IngestionResult",

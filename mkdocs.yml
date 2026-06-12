@@ -220,6 +220,7 @@ nav:
         - Knowledge Base Ingestion:
           - packages/bots/knowledge/ingestion-guide.md
           - packages/bots/knowledge/orchestrator.md
+          - packages/bots/knowledge/event-triggers.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
         - packages/bots/guides/grounded-reasoning.md

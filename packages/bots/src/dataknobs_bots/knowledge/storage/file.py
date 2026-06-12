@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
+from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
     IngestionStatus,
@@ -36,16 +37,27 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     Structure on disk:
         {base_path}/
             {domain_id}/
-                _metadata.json       # KB info and file index
-                content/
+                content/              # consumer-controlled (put_file)
                     file1.md
                     subdir/
                         file2.json
+                _metadata.json        # DK-managed state
+                _snapshots/           # DK-managed state
+                    <version>.json
 
     Suitable for:
     - Local development
     - Testing
     - Single-instance deployments
+
+    Event triggers (filesystem inotify wrappers, polling watchers) MUST
+    filter to the ``content/`` subtree to avoid retriggering on the
+    DK-managed ``_metadata.json`` and ``_snapshots/`` writes the manager
+    emits during ingest. Call :meth:`key_pattern` to derive a glob
+    suitable for ``pathlib.Path.glob`` or an inotify wrapper; see the
+    "Event triggers for knowledge backends" docs page for per-source
+    recipes. Use :meth:`classify_key` for per-event filtering when the
+    watcher cannot pattern-match.
 
     Example:
         ```python
@@ -61,10 +73,6 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         await backend.close()
         ```
     """
-
-    METADATA_FILE = "_metadata.json"
-    CONTENT_DIR = "content"
-    SNAPSHOTS_DIR = "_snapshots"
 
     def __init__(self, base_path: str | Path) -> None:
         """Initialize the file backend.
@@ -119,6 +127,33 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     def _file_path(self, domain_id: str, path: str) -> Path:
         """Get the full path to a file."""
         return self._content_path(domain_id) / path
+
+    def key_pattern(
+        self,
+        kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
+        domain_id: str | None = None,
+    ) -> str:
+        """Filesystem glob pattern matching keys of the given kind.
+
+        Suitable for ``pathlib.Path.glob`` and most inotify wrappers.
+        See the "Event triggers for knowledge backends" docs page for
+        per-source recipes.
+
+        :attr:`KnowledgeKeyKind.UNKNOWN` raises :class:`ValueError`
+        (fails closed — there is no shape for "unrecognized keys").
+        """
+        domain_segment = domain_id if domain_id else "*"
+        base = str(self._base_path)
+        if kind is KnowledgeKeyKind.CONTENT:
+            return f"{base}/{domain_segment}/{self.CONTENT_DIR}/**"
+        if kind is KnowledgeKeyKind.METADATA:
+            return f"{base}/{domain_segment}/{self.METADATA_FILE}"
+        if kind is KnowledgeKeyKind.SNAPSHOT:
+            return f"{base}/{domain_segment}/{self.SNAPSHOTS_DIR}/*"
+        raise ValueError(
+            f"key_pattern is not defined for kind {kind!r} "
+            f"(only CONTENT / METADATA / SNAPSHOT)"
+        )
 
     def _load_metadata(self, domain_id: str) -> dict:
         """Load metadata from disk."""

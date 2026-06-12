@@ -58,6 +58,10 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
     parse_yaml_or_json,
 )
+from dataknobs_common.discriminator import (
+    AsyncDiscriminator,
+    Discriminator,
+)
 from dataknobs_common.exceptions import (
     ConcurrencyError,
     ConfigurationError,
@@ -182,6 +186,9 @@ __all__ = [
     "find_config_file",
     "load_yaml_or_json",
     "parse_yaml_or_json",
+    # Discriminators
+    "Discriminator",
+    "AsyncDiscriminator",
     # Distributed locks
     "DistributedLock",
     "create_lock",

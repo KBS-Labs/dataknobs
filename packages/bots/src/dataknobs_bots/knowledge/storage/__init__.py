@@ -38,7 +38,9 @@ Example:
 from __future__ import annotations
 
 from .backend import KnowledgeResourceBackend
+from .discriminators import BackendKeyDiscriminator
 from .file import FileKnowledgeBackend
+from .key_layout import KnowledgeKeyKind
 from .memory import InMemoryKnowledgeBackend
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
@@ -126,6 +128,10 @@ __all__ = [
     # Protocol
     "KnowledgeResourceBackend",
     "KnowledgeResourceBackendMixin",
+    # Key layout
+    "KnowledgeKeyKind",
+    # Discriminator adapters
+    "BackendKeyDiscriminator",
     # Models
     "KnowledgeFile",
     "KnowledgeBaseInfo",

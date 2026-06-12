@@ -47,6 +47,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `BackendKeyDiscriminator(backend)` adapter (frozen dataclass) —
+  wraps any `KnowledgeResourceBackend`'s `classify_key` method
+  through the generic `Discriminator[str, KnowledgeKeyKind]`
+  Protocol from `dataknobs_common`. Use when composing
+  backend-key classification with other discriminators
+  (payload-field routing, multi-field event-handler dispatch)
+  through the generic protocol shape without coupling consumer
+  code to the backend interface directly. `frozen=True` gives
+  `__eq__` / `__hash__` keyed on the wrapped backend so two
+  adapters around the same backend instance compare equal
+  (useful for adapter-cache lookups). Exported from
+  `dataknobs_bots.knowledge` and
+  `dataknobs_bots.knowledge.storage`.
+- `KnowledgeKeyKind` enum (`CONTENT` / `METADATA` / `SNAPSHOT` /
+  `UNKNOWN`) names the three classes of keys every in-tree
+  `KnowledgeResourceBackend` writes. External event sources
+  (S3 → EventBridge / SQS / SNS / Lambda; filesystem inotify;
+  GCS Pub/Sub) use the enum to filter to the consumer-controlled
+  `CONTENT` subtree and skip the DK-managed `METADATA` /
+  `SNAPSHOT` writes the ingestion manager performs during
+  ingest, which would otherwise create a positive feedback loop.
+  Exported from `dataknobs_bots.knowledge` and
+  `dataknobs_bots.knowledge.storage`.
+- `KnowledgeResourceBackend.classify_key(key) -> KnowledgeKeyKind`
+  and `KnowledgeResourceBackend.key_pattern(kind=CONTENT,
+  domain_id=None) -> str` — the helper API for source-level
+  filtering (`key_pattern`) and per-event filtering
+  (`classify_key`). Each first-party backend ships its own
+  `key_pattern` returning the backend-native pattern dialect:
+  S3 wildcard syntax for `S3KnowledgeBackend` (suitable for
+  EventBridge `wildcard` rules or composed into bucket-notification
+  `prefix` + `suffix` pairs), a `pathlib.Path.glob`-shaped pattern
+  for `FileKnowledgeBackend`, and `""` for `InMemoryKnowledgeBackend`
+  (no event-source filter is meaningful in-process; the empty
+  sentinel preserves protocol symmetry). `key_pattern(UNKNOWN)`
+  raises `ValueError` on the S3 and file backends (fail closed —
+  there is no shape for "unrecognized keys"). `classify_key`
+  inherits a canonical implementation from
+  `KnowledgeResourceBackendMixin` that any out-of-tree backend
+  honoring the documented layout gets for free.
+- `KnowledgeResourceBackendMixin.METADATA_FILE` /
+  `CONTENT_DIR` / `SNAPSHOTS_DIR` `ClassVar[str]` declarations.
+  The canonical layout constants live once at the contract layer
+  so every in-tree backend resolves them via MRO; an out-of-tree
+  backend mixing in `KnowledgeResourceBackendMixin` inherits
+  identical values without redeclaring them.
+- New docs page **"Event triggers for knowledge backends"**
+  (`packages/bots/docs/knowledge/event-triggers.md`) describes
+  the layout diagram, the positive-feedback-loop failure mode
+  external triggers must avoid, and the wiring recipes per
+  source (S3 → EventBridge, S3 bucket notification, filesystem
+  inotify, GCS Pub/Sub, and a generic
+  `classify_key`-driven fallback). Cross-linked from the
+  knowledge-base ingestion guide and `IngestOrchestrator` page.
 - `intent_confirm:` wizard stage primitive — declarative block that
   expands at load time into `mode: conversation` +
   `response_template` + (optional) `clarification_template` +

@@ -18,6 +18,7 @@ from botocore.exceptions import ClientError
 
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 
+from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
     IngestionStatus,
@@ -41,15 +42,28 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     Structure in S3:
         s3://{bucket}/{prefix}/
             {domain_id}/
-                _metadata.json
-                content/
+                content/              # consumer-controlled (put_file)
                     file1.md
                     subdir/file2.json
+                _metadata.json        # DK-managed state
+                _snapshots/           # DK-managed state (snapshot mode)
+                    <version>.json
 
     Suitable for:
     - Production deployments
     - Multi-instance deployments
     - Large knowledge bases
+
+    Event triggers (S3 → EventBridge / SQS / SNS / Lambda) MUST filter
+    to the ``content/`` subtree to avoid retriggering on the DK-managed
+    ``_metadata.json`` and ``_snapshots/`` writes the manager emits
+    during ingest. Call :meth:`key_pattern` to derive the appropriate
+    S3 wildcard for the configured prefix (forwarded verbatim to
+    EventBridge ``wildcard`` rules or composed into bucket-notification
+    ``prefix`` + ``suffix`` pairs); see the
+    "Event triggers for knowledge backends" docs page for per-source
+    recipes. Use :meth:`classify_key` for per-event filtering when
+    pattern-based filtering at the source is unavailable.
 
     Example:
         ```python
@@ -69,10 +83,6 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         await backend.close()
         ```
     """
-
-    METADATA_FILE = "_metadata.json"
-    CONTENT_DIR = "content"
-    SNAPSHOTS_DIR = "_snapshots"
 
     def __init__(
         self,
@@ -166,6 +176,29 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             ),
         )
 
+    @property
+    def bucket(self) -> str:
+        """The S3 bucket name this backend writes to.
+
+        Stable read-only accessor for the constructor's ``bucket``
+        argument. Use this from event-trigger / CDK / CloudFormation
+        glue code that needs the bucket name to wire up notifications
+        — never reach for the private ``_bucket`` attribute.
+        """
+        return self._bucket
+
+    @property
+    def prefix(self) -> str:
+        """The normalized S3 key prefix for this backend.
+
+        Always ends in ``"/"`` (or is empty for a bucket-root layout).
+        Stable read-only accessor for the constructor's ``prefix``
+        argument after normalization. Use this from event-trigger /
+        CDK / CloudFormation glue code rather than the private
+        ``_prefix`` attribute.
+        """
+        return self._prefix
+
     async def initialize(self) -> None:
         """Initialize the S3 client and verify bucket access."""
         self._client = create_boto3_s3_client(self._session_config)
@@ -203,6 +236,39 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         return (
             f"{self._prefix}{domain_id}/{self.SNAPSHOTS_DIR}/"
             f"{version}.json"
+        )
+
+    def key_pattern(
+        self,
+        kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
+        domain_id: str | None = None,
+    ) -> str:
+        """S3-native wildcard pattern matching keys of the given kind.
+
+        Forwarded verbatim into EventBridge ``wildcard`` rules or
+        composed into S3 bucket-notification ``prefix`` + ``suffix``
+        pairs. See the "Event triggers for knowledge backends" docs
+        page for per-source recipes.
+
+        :attr:`KnowledgeKeyKind.UNKNOWN` raises :class:`ValueError`
+        (fails closed — there is no shape for "unrecognized keys").
+        """
+        domain_segment = domain_id if domain_id else "*"
+        if kind is KnowledgeKeyKind.CONTENT:
+            return (
+                f"{self._prefix}{domain_segment}/{self.CONTENT_DIR}/*"
+            )
+        if kind is KnowledgeKeyKind.METADATA:
+            return (
+                f"{self._prefix}{domain_segment}/{self.METADATA_FILE}"
+            )
+        if kind is KnowledgeKeyKind.SNAPSHOT:
+            return (
+                f"{self._prefix}{domain_segment}/{self.SNAPSHOTS_DIR}/*"
+            )
+        raise ValueError(
+            f"key_pattern is not defined for kind {kind!r} "
+            f"(only CONTENT / METADATA / SNAPSHOT)"
         )
 
     def _load_metadata(self, domain_id: str) -> dict:

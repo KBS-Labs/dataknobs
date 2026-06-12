@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `Discriminator[InputT, KindT]` and `AsyncDiscriminator[InputT, KindT]`
+  Protocols (`@runtime_checkable`, in `dataknobs_common.discriminator`,
+  also re-exported from `dataknobs_common`). One generic shape for
+  value-to-kind classification across the codebase — backend-key
+  classifiers, ML-backed label classifiers, and payload-field
+  discriminators can all satisfy a single Protocol shape rather than
+  N specific interfaces. `InputT` is contravariant and `KindT` is
+  covariant, matching the substitution rules a consumer would expect
+  when composing classification pipelines. Implementations MUST be
+  deterministic (same input → same kind within a process) and MUST NOT
+  mutate the input value.
 - `dataknobs_common.expressions.SAFE_BUILTINS` gains
   `frozenset`, `sum`, `any`, `all`, and `reversed`. These extend the
   safe-builtin allowlist used by `safe_eval` / `safe_eval_value`
