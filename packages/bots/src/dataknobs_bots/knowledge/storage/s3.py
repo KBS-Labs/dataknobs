@@ -176,6 +176,29 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             ),
         )
 
+    @property
+    def bucket(self) -> str:
+        """The S3 bucket name this backend writes to.
+
+        Stable read-only accessor for the constructor's ``bucket``
+        argument. Use this from event-trigger / CDK / CloudFormation
+        glue code that needs the bucket name to wire up notifications
+        — never reach for the private ``_bucket`` attribute.
+        """
+        return self._bucket
+
+    @property
+    def prefix(self) -> str:
+        """The normalized S3 key prefix for this backend.
+
+        Always ends in ``"/"`` (or is empty for a bucket-root layout).
+        Stable read-only accessor for the constructor's ``prefix``
+        argument after normalization. Use this from event-trigger /
+        CDK / CloudFormation glue code rather than the private
+        ``_prefix`` attribute.
+        """
+        return self._prefix
+
     async def initialize(self) -> None:
         """Initialize the S3 client and verify bucket access."""
         self._client = create_boto3_s3_client(self._session_config)

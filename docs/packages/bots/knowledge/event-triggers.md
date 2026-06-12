@@ -105,7 +105,7 @@ events.EventPattern(
     source=["aws.s3"],
     detail_type=["Object Created"],
     detail={
-        "bucket": {"name": [s3_backend._bucket]},
+        "bucket": {"name": [s3_backend.bucket]},
         "object": {"key": [{"wildcard": pattern}]},
     },
 )

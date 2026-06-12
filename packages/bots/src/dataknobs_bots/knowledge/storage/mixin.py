@@ -203,7 +203,12 @@ class KnowledgeResourceBackendMixin:
           ``content/_metadata.json`` is still ``CONTENT`` — the
           leading ``content/`` segment wins, preventing false-positives
           on consumer filenames that coincidentally match a state-key
-          name).
+          name). The ``content`` segment wins at *any* depth: a
+          consumer-uploaded file at
+          ``{domain}/content/a/b/content/x.md`` still classifies as
+          ``CONTENT``, matching the :meth:`put_file` key structure
+          (which always writes under the ``content/`` subtree, never
+          alongside it).
         - Terminal segment equal to :attr:`METADATA_FILE` and no
           ``CONTENT_DIR`` ancestor → :attr:`KnowledgeKeyKind.METADATA`.
         - Any segment equal to :attr:`SNAPSHOTS_DIR` and no
