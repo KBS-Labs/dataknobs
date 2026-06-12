@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `dataknobs_common.expressions.SAFE_BUILTINS` gains
+  `frozenset`, `sum`, `any`, `all`, and `reversed`. These extend the
+  safe-builtin allowlist used by `safe_eval` / `safe_eval_value`
+  and shared across every config-authored expression context
+  (wizard transition conditions, field derivation expressions, and
+  any other consumer that builds on the helper). Rationale:
+  `any` / `all` unlock the idiomatic predicate shape used by the
+  wizard `intent_confirm:` primitive's synthesized `on_no_match`
+  condition (`not any(data.get(k) for k in [...])`); `sum` covers
+  the common `sum(1 for x in items if cond)` counting / aggregation
+  pattern in derivation expressions; `reversed` and `frozenset`
+  round out the symmetry with the existing `sorted` and the
+  existing `str`/`int`/`list`/`dict`/`tuple`/`set` type-constructor
+  group. The allowlist still excludes `getattr`, `setattr`,
+  `delattr`, `globals`, `locals`, `compile`, `eval`, `exec`,
+  `__import__`, `open`, and `breakpoint`.
 - `StructuredConfigConsumer.forwardable_components()` and the
   `INTERNAL_COMPONENTS: ClassVar[frozenset[str]]` ClassVar — the
   documented mixin contract for composing classes that build child
@@ -30,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture `from_config`'s `**kwargs` and route them into the mixin's
   `_components` channel without polluting the parity test with a
   per-class allowlist entry.
+
+### Fixed
+- `dataknobs_common.expressions._validate_ast` now blocks
+  `.format()` and `.format_map()` calls on any attribute. The
+  format-spec mini-language performs runtime attribute access via
+  `{N.attr}` syntax that bypasses the existing AST-level dunder
+  check — `'{0.__class__}'.format(())` would have reached the tuple
+  class, and the same chain extends to the classic
+  `__bases__[0].__subclasses__()` sandbox-escape vector. f-strings
+  are unaffected: their substitutions go through normal AST
+  validation, so `f'{x.__class__}'` is still blocked by the dunder
+  check and the legitimate `f'value is {x}'` shape still works.
+  The blocked-call error message recommends f-strings as the
+  replacement.
 
 ## v1.4.0 - 2026-05-26
 

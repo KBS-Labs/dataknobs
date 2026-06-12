@@ -35,6 +35,27 @@ from dataknobs_llm.tools import (
     ToolRegistry,
 )
 
+# Intent classification
+from dataknobs_llm.intent import (
+    CompositeIntentClassifier,
+    DEFAULT_AFFIRMATIVE_SIGNALS,
+    DEFAULT_LLM_PROMPT_TEMPLATE,
+    DEFAULT_NEGATION_KEYWORDS,
+    DEFAULT_NEGATIVE_SIGNALS,
+    DEFAULT_VOCABULARY,
+    IntentClassifier,
+    IntentClassifierFactory,
+    IntentMatchResult,
+    IntentSpec,
+    KeywordIntentClassifier,
+    LLMIntentClassifier,
+    NegationFilter,
+    create_intent_classifier,
+    default_word_boundary_tokenizer,
+    intent_classifier_backends,
+    word_in_text,
+)
+
 # Execution utilities
 from dataknobs_llm.execution.parallel import (
     DeterministicTask,
@@ -101,6 +122,24 @@ __all__ = [
     # Tools
     "Tool",
     "ToolRegistry",
+    # Intent classification
+    "IntentClassifier",
+    "IntentClassifierFactory",
+    "IntentSpec",
+    "IntentMatchResult",
+    "KeywordIntentClassifier",
+    "LLMIntentClassifier",
+    "CompositeIntentClassifier",
+    "NegationFilter",
+    "intent_classifier_backends",
+    "create_intent_classifier",
+    "DEFAULT_VOCABULARY",
+    "DEFAULT_LLM_PROMPT_TEMPLATE",
+    "DEFAULT_NEGATION_KEYWORDS",
+    "DEFAULT_AFFIRMATIVE_SIGNALS",
+    "DEFAULT_NEGATIVE_SIGNALS",
+    "word_in_text",
+    "default_word_boundary_tokenizer",
     # Execution
     "ParallelLLMExecutor",
     "LLMTask",

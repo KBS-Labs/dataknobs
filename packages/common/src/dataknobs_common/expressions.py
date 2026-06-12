@@ -55,13 +55,18 @@ SAFE_BUILTINS: dict[str, Any] = {
     "dict": dict,
     "tuple": tuple,
     "set": set,
+    "frozenset": frozenset,
     # Collection/numeric functions
     "len": len,
     "min": min,
     "max": max,
     "abs": abs,
     "round": round,
+    "sum": sum,
+    "any": any,
+    "all": all,
     "sorted": sorted,
+    "reversed": reversed,
     "isinstance": isinstance,
     "enumerate": enumerate,
     "range": range,
@@ -120,7 +125,12 @@ def _validate_ast(code: str) -> str | None:
     ``__subclasses__``, etc.) which can be used for MRO traversal
     to escape the restricted builtins sandbox.
 
-    Also blocks dunder names used as standalone variables.
+    Also blocks dunder names used as standalone variables, and any
+    ``.format()`` / ``.format_map()`` call — the format-spec
+    mini-language performs runtime attribute access via ``{N.attr}``
+    syntax that bypasses AST-level dunder checks (e.g.
+    ``'{0.__class__}'.format(())`` reaches the tuple class). f-strings
+    are safe because their substitutions go through normal AST nodes.
 
     Returns:
         Error message if unsafe access detected, ``None`` if safe.
@@ -138,13 +148,26 @@ def _validate_ast(code: str) -> str | None:
                     f"Access to dunder attribute '{node.attr}' is not "
                     f"allowed in safe expressions"
                 )
-        # Block dunder names as variables: __builtins__, __import__, etc.
-        if isinstance(node, ast.Name):
-            if node.id.startswith("__") and node.id.endswith("__"):
+            # Block .format() / .format_map() — format-spec attribute
+            # access ({N.attr}) bypasses the AST dunder check.
+            if node.attr in ("format", "format_map"):
                 return (
-                    f"Access to dunder name '{node.id}' is not "
-                    f"allowed in safe expressions"
+                    f"Call to '.{node.attr}()' is not allowed in safe "
+                    f"expressions (format-spec attribute access "
+                    f"bypasses the dunder check). Use an f-string "
+                    f"instead — its substitutions go through normal "
+                    f"AST validation."
                 )
+        # Block dunder names as variables: __builtins__, __import__, etc.
+        if (
+            isinstance(node, ast.Name)
+            and node.id.startswith("__")
+            and node.id.endswith("__")
+        ):
+            return (
+                f"Access to dunder name '{node.id}' is not "
+                f"allowed in safe expressions"
+            )
 
     return None
 

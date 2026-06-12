@@ -27,8 +27,11 @@ from .wizard_grounding import (
     detect_boolean_signal,
     field_keywords,
 )
-from .wizard_utils import word_in_text
 from .wizard_types import (
+    _DEFAULT_AFFIRMATIVE_PHRASES,
+    _DEFAULT_AFFIRMATIVE_SIGNALS,
+    _DEFAULT_NEGATIVE_PHRASES,
+    _DEFAULT_NEGATIVE_SIGNALS,
     RECOVERY_BOOLEAN,
     RECOVERY_CLARIFICATION,
     RECOVERY_DERIVATION,
@@ -39,13 +42,10 @@ from .wizard_types import (
     RecoveryResult,
     StageSchema,
     WizardState,
-    field_is_present,
-    _DEFAULT_AFFIRMATIVE_PHRASES,
-    _DEFAULT_AFFIRMATIVE_SIGNALS,
-    _DEFAULT_NEGATIVE_PHRASES,
-    _DEFAULT_NEGATIVE_SIGNALS,
     _normalize_enum_value,
+    field_is_present,
 )
+from .wizard_utils import word_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -244,23 +244,40 @@ class WizardExtractor:
     ) -> None:
         """Detect user intent and store in wizard state data.
 
-        Examines the stage's ``intent_detection`` configuration and
-        classifies the user message into one of the configured intents.
-        The result is stored in ``state.data["_intent"]`` for use in
-        transition conditions.
+        Dispatches through the
+        :data:`dataknobs_llm.intent.intent_classifier_backends` registry.
+        The ``intent_detection:`` block names a registered backend via
+        ``classifier:`` (preferred) or the legacy ``method:`` field:
 
-        Supports two detection methods:
+        .. code-block:: yaml
 
-        - **keyword**: Fast substring matching against configured keywords.
-          First matching intent wins.
-        - **llm**: Lightweight LLM classification.  Builds a prompt listing
-          intents and their descriptions, asks the LLM to pick one.
+           intent_detection:
+             classifier: keyword           # or 'llm', 'composite', or any registered name
+             classifier_config:            # forwarded to the backend's factory
+               # (vocabulary / prompt_template / etc., per backend)
+             intents:
+               - { id: accept, keywords: [yes] }   # per-intent override
+               - { id: decline }                   # falls back to backend's default vocab
+             per_intent_booleans: true     # write data[intent.id] = True per match
+             negation_filter: true         # wrap classifier in NegationFilter
+
+        Back-compat: ``method: keyword`` is treated as
+        ``classifier: keyword``; ``method: llm`` as ``classifier: llm``.
+        The legacy single-tier behaviour with ``llm_fallback: true`` is
+        promoted to a ``composite`` chain (keyword first, LLM second).
+
+        On match, ``state.data["_intent"]`` is set to the matched intent
+        name. When ``per_intent_booleans: true`` is also set,
+        ``state.data[intent.id] = True`` is written for the matched
+        intent — used by the ``intent_confirm:`` primitive's synthesized
+        transitions; hand-rolled blocks can opt in too.
 
         Args:
-            message: Raw user message text
-            stage: Current stage metadata (must contain ``intent_detection``)
-            state: Current wizard state (``_intent`` is set here)
-            llm: LLM provider instance (used only for ``method: llm``)
+            message: Raw user message text.
+            stage: Current stage metadata (must contain
+                ``intent_detection``).
+            state: Current wizard state (``_intent`` is set here).
+            llm: LLM provider instance — forwarded to LLM backends.
         """
         state.data.pop("_intent", None)
 
@@ -268,45 +285,101 @@ class WizardExtractor:
         if not intent_config:
             return
 
-        method = intent_config.get("method", "keyword")
-        intents = intent_config.get("intents", [])
+        classifier = self._build_intent_classifier(intent_config, llm)
+        if classifier is None:
+            return
 
-        if method == "keyword":
-            lower_msg = message.lower()
-            for intent in intents:
-                if any(kw in lower_msg for kw in intent.get("keywords", [])):
-                    state.data["_intent"] = intent["id"]
-                    logger.debug("Keyword intent detected: %s", intent["id"])
-                    return
-
-        elif method == "llm":
-            intent_list = "\n".join(
-                f"- {i['id']}: {i.get('description', '')}" for i in intents
+        from dataknobs_llm.intent import IntentSpec
+        intent_specs = [
+            IntentSpec(
+                name=i["id"],
+                target=i.get("target", ""),
+                keywords=(
+                    tuple(i["keywords"]) if i.get("keywords") else None
+                ),
+                extract=i.get("extract"),
             )
-            prompt = (
-                f"Classify the user's intent from this message:\n"
-                f'"{message}"\n\n'
-                f"Possible intents:\n{intent_list}\n\n"
-                f"Return ONLY the intent ID, or 'none' if no intent matches."
-            )
-            try:
-                from dataknobs_llm import LLMMessage
+            for i in intent_config.get("intents", [])
+        ]
 
-                response = await llm.complete(
-                    messages=[LLMMessage(role="user", content=prompt)],
-                )
-                if response and response.content:
-                    intent_id = response.content.strip().lower()
-                    valid_ids = {i["id"] for i in intents}
-                    if intent_id in valid_ids:
-                        state.data["_intent"] = intent_id
-                        logger.debug("LLM intent detected: %s", intent_id)
-            except Exception as exc:
-                logger.warning(
-                    "LLM intent detection failed (%s)",
-                    type(exc).__name__,
-                    exc_info=True,
-                )
+        result = await classifier.classify(message, intent_specs)
+        if result.intent is not None:
+            state.data["_intent"] = result.intent.name
+            if intent_config.get("per_intent_booleans", False):
+                state.data[result.intent.name] = True
+            if result.intent.extract and result.extracted is not None:
+                state.data[result.intent.extract] = result.extracted
+            logger.debug("Intent detected: %s", result.intent.name)
+
+    def _build_intent_classifier(
+        self,
+        intent_config: dict[str, Any],
+        llm: Any,
+    ) -> Any:
+        """Build the classifier from the block via the backend registry.
+
+        Handles legacy ``method:`` + ``llm_fallback:`` shape by promoting
+        it to a ``composite`` backend chain. Negation filtering
+        (``negation_filter: true``) wraps the result.
+        """
+        from dataknobs_llm.intent import (
+            NegationFilter,
+            create_intent_classifier,
+        )
+
+        classifier_name = intent_config.get("classifier")
+        classifier_config = dict(intent_config.get("classifier_config", {}))
+
+        # Legacy shape promotion: method:/llm_fallback: → classifier name
+        if classifier_name is None:
+            method = intent_config.get("method", "keyword")
+            llm_fallback = intent_config.get("llm_fallback", False)
+            if method == "keyword" and not llm_fallback:
+                classifier_name = "keyword"
+            elif method == "llm":
+                classifier_name = "llm"
+                classifier_config.setdefault("llm", llm)
+            else:
+                classifier_name = "composite"
+                classifier_config = {
+                    "classifiers": [
+                        {"classifier": "keyword", "config": {}},
+                        {"classifier": "llm", "config": {"llm": llm}},
+                    ],
+                    "strategy": "first_match",
+                }
+
+        # Inject the provider into LLM/composite configs that didn't get
+        # one from explicit consumer config (the synthesizer leaves the
+        # `llm:` key absent so the runtime can supply the active provider).
+        if classifier_name == "llm":
+            classifier_config.setdefault("llm", llm)
+        elif classifier_name == "composite":
+            for sub in classifier_config.get("classifiers", []):
+                if sub.get("classifier") == "llm":
+                    sub.setdefault("config", {}).setdefault("llm", llm)
+
+        # Default-vocabulary fallback for unkeyed intents is the
+        # classifier's responsibility — KeywordIntentClassifier consults
+        # its configured vocabulary (defaults to DEFAULT_VOCABULARY) when
+        # an IntentSpec has no keywords override. Consumer-registered
+        # backends that want the same semantic should follow the same
+        # contract; there is no synthesizer-side backfill.
+
+        try:
+            classifier = create_intent_classifier(
+                classifier_name, classifier_config,
+            )
+        except ValueError as exc:
+            # Wizard semantics: an unknown classifier name in the YAML
+            # is a config error, but the wizard turn shouldn't crash —
+            # log and skip intent detection for the stage. Direct
+            # callers of `create_intent_classifier` see the raise.
+            logger.warning("Skipping intent detection: %s", exc)
+            return None
+        if intent_config.get("negation_filter"):
+            classifier = NegationFilter(classifier)
+        return classifier
 
     @staticmethod
     def is_done_signal(message: str, done_keywords: list[str]) -> bool:

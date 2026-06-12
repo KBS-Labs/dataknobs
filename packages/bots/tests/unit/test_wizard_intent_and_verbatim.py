@@ -434,3 +434,68 @@ class TestVerbatimCaptureInExtraction:
 
         assert result.data == {"_raw_input": "hello"}
         assert result.confidence == 1.0
+
+
+# =====================================================================
+# detect_intent regression pins — word-boundary + per-intent booleans
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_intent_detection_keyword_uses_word_boundary_not_substring() -> None:
+    """Regression pin: ``intent_detection: {method: keyword}`` matches
+    on word boundaries, not substrings.
+
+    Pre-fix: ``"yesterday I was reading"`` substring-matched ``"yes"``
+    and falsely fired ``_intent = accept``.
+    """
+    wizard = _make_wizard()
+    stage: dict[str, Any] = {
+        "name": "collect",
+        "intent_detection": {
+            "method": "keyword",
+            "intents": [
+                {"id": "accept", "keywords": ["yes"]},
+                {"id": "decline", "keywords": ["no"]},
+            ],
+        },
+    }
+    state = WizardState(current_stage="collect")
+
+    await wizard._extraction.detect_intent(
+        "yesterday I was reading", stage, state, llm=None,
+    )
+
+    assert "_intent" not in state.data
+
+
+@pytest.mark.asyncio
+async def test_intent_detection_writes_per_intent_boolean_when_flag_set(
+) -> None:
+    """Adjacent extension: detect_intent optionally writes per-intent
+    booleans (used by the intent_confirm synthesizer).
+
+    Hand-rolled intent_detection blocks can also opt in via
+    ``per_intent_booleans: true``.
+    """
+    wizard = _make_wizard()
+    stage: dict[str, Any] = {
+        "name": "collect",
+        "intent_detection": {
+            "method": "keyword",
+            "per_intent_booleans": True,
+            "intents": [
+                {"id": "accept", "keywords": ["yes"]},
+                {"id": "decline", "keywords": ["no"]},
+            ],
+        },
+    }
+    state = WizardState(current_stage="collect")
+
+    await wizard._extraction.detect_intent(
+        "yes please", stage, state, llm=None,
+    )
+
+    assert state.data.get("accept") is True
+    # Back-compat: the existing _intent key is ALSO written
+    assert state.data.get("_intent") == "accept"

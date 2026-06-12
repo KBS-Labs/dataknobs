@@ -9,6 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `intent_confirm:` wizard stage primitive — declarative block that
+  expands at load time into `mode: conversation` +
+  `response_template` + (optional) `clarification_template` +
+  `intent_detection` + `schema` + `transitions`. Built atop
+  `dataknobs_llm.intent` for classifier resolution. Wizard authors
+  declare `proposal_template`, an `intents:` map (each intent
+  carries a `target`, optional `keywords:` override, optional
+  `extract:` field name, optional per-intent `llm_fallback: true`),
+  optional `on_no_match: {target?, clarification_template?}` for
+  fallback routing and reprompt copy, block-level `llm_fallback:
+  true` (shorthand for promoting the classifier to a keyword→LLM
+  composite chain), and block-level `negation_filter: true` (wraps
+  the resolved classifier in `NegationFilter`); the
+  `IntentConfirmSynthesizer` expands the rest. The synthesized
+  `intent_detection` block sets `per_intent_booleans: true`, so the
+  matched intent writes `state.data[intent_name] = True` (the
+  back-compat `state.data["_intent"]` key is still written too).
+  Zero new runtime branches — every step runs through existing
+  wizard machinery. `IntentConfirmSynthesizer.validate` rejects
+  empty / non-mapping `intents`, intent specs that are not mappings,
+  intents missing a `target`, and intent names that collide with
+  the reserved `_intent` runtime key — all surfaced as
+  `ConfigurationError` with the offending stage and intent named.
+  After expansion the synthesizer removes the original
+  `intent_confirm:` block from the stage dict so the FSM-metadata
+  layer carries only the synthesized primitives — no parallel
+  source of truth. Documented in USER_GUIDE.md "Wizard-as-advisor:
+  intent confirmation".
+- `clarification_template:` stage field — optional template rendered
+  on re-render of a conversation-mode stage when no extraction or
+  intent matched. First render still uses `response_template`;
+  subsequent renders consult `clarification_template` when set.
+  Populated automatically by `intent_confirm:`'s `on_no_match`;
+  hand-rolled conversation-mode stages can use it too.
+- Stage-synthesizer registry — `StageSynthesizer` Protocol plus
+  `register_stage_synthesizer` / `unregister_stage_synthesizer` /
+  `iter_stage_synthesizers` / `validate_no_conflicting_fields`
+  exports from `dataknobs_bots.reasoning` (also re-exported from
+  `dataknobs_bots.reasoning.wizard_loader` for single-module
+  imports), and a `stage_synthesizer_backends:
+  Registry[StageSynthesizer]`. `register_stage_synthesizer` uses
+  `allow_overwrite=True`; re-registering the same `field`
+  overwrites by design (consumers commonly replace the in-tree
+  synthesizer with a customized one). The loader runs registered
+  synthesizers in a dedicated phase BEFORE `_validate_config` and
+  FSM translation, so downstream validator and FSM build code see
+  only the normalized shape. `IntentConfirmSynthesizer` is the
+  in-tree reference adopter; it auto-registers at module import.
+  Documented in USER_GUIDE.md "Shipping your own wizard stage
+  primitive".
+- `WizardConfigBuilder` recognizes `intent_confirm:` and
+  `clarification_template:` on stage configs. `intent_confirm:` is
+  carried as a raw dict because the synthesizer expands it before
+  the builder's typed `StageConfig` runs.
+- `WizardExtractor.detect_intent` dispatches through
+  `dataknobs_llm.intent.intent_classifier_backends`. The
+  `intent_detection:` block selects a backend via `classifier:`
+  (preferred) and optional `classifier_config:` forwarded to the
+  backend's factory. The legacy `method: keyword | llm` /
+  `llm_fallback: true` shape is promoted automatically at runtime
+  (`method: keyword` → `classifier: keyword`; `method: llm` →
+  `classifier: llm`; per-intent or block-level `llm_fallback:
+  true` → `classifier: composite` with a keyword→LLM chain), so
+  existing wizard YAML continues to work unchanged. New YAML should
+  use the `classifier:` shape. `negation_filter: true` wraps the
+  resolved classifier in `NegationFilter`. When `per_intent_booleans:
+  true` is set on the block, the matched intent also writes
+  `state.data[intent_name] = True` alongside the existing
+  `_intent` key.
 - `dataknobs_bots.reasoning.lifecycle.LifecycleHooks` —
   strategy-agnostic turn-lifecycle hook surface
   (`on_turn_start` / `on_turn_end`, with optional per-stage scope).

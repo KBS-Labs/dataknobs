@@ -97,6 +97,16 @@ VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
 # Default signal words for boolean extraction recovery.
 # Overridable per-field via x-extraction.affirmative_signals
 # and x-extraction.negative_signals.
+#
+# The same single-token vocabularies are also published by
+# :mod:`dataknobs_llm.intent.defaults` (under their public names
+# ``DEFAULT_AFFIRMATIVE_SIGNALS`` / ``DEFAULT_NEGATIVE_SIGNALS``) for
+# the keyword intent classifier. They are kept locally here so the
+# wizard layer does not depend on the intent module — the intent
+# module is a leaf consumable from non-wizard contexts. If the
+# vocabularies diverge in the future (e.g. intent classification
+# adopts a richer phrase list), the duplication makes that
+# divergence easy.
 _DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset({
     "yes", "confirm", "save", "approve", "correct", "sure",
     "ok", "okay", "agreed", "accept", "absolutely", "definitely",

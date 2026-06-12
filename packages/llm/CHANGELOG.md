@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `dataknobs_llm.intent` module — pluggable intent-classification
+  surface for any LLM-layer consumer that needs to route user input
+  by intent (tool routers, reasoning strategies, RAG query
+  classifiers, downstream packages with wizard or routing flows that
+  consume an `intent_detection:` block). `IntentClassifier` is a small
+  `@runtime_checkable` Protocol with one async
+  `classify(message, intents, **kwargs) -> IntentMatchResult`
+  method. `IntentSpec` and `IntentMatchResult` are frozen
+  dataclasses; `IntentMatchResult.confidence: float | None` is
+  reserved for future calibrated-confidence classifiers (the
+  built-in keyword / JSON-output LLM / composite / negation-filter
+  classifiers return `None`).
+- `KeywordIntentClassifier` — rule-based classifier with injectable
+  `vocabulary` and `tokenizer`. Default tokenizer is
+  `default_word_boundary_tokenizer` (word-boundary regex): a bare
+  vocabulary entry `"yes"` matches a standalone `"yes"` but not the
+  `"yes"` substring of `"yesterday"`. Inject a custom tokenizer for
+  I18N / fuzzy / N-gram / morphological matching.
+- `LLMIntentClassifier` — LLM-backed classifier with injectable
+  `llm: AsyncLLMProvider | None` and `prompt_template`. Lenient
+  response parsing accepts both the `DEFAULT_LLM_PROMPT_TEMPLATE`
+  JSON shape (`{"intent": ..., "extracted": ...}`) and a bare
+  intent ID matched against the configured intent names. The
+  extracted payload is coerced to the documented `str | None` shape
+  (single-element list / number / bool is coerced; multi-element
+  list / dict drops to `None`). Prompt intent-list ordering follows
+  caller order rather than set-iteration order for prompt-cache hit
+  rate and LLM-eval reproducibility. Provider errors are absorbed
+  with a warning so an LLM outage returns no-match rather than
+  crashing the caller; `asyncio.CancelledError` propagates.
+- `CompositeIntentClassifier` — chains backends with
+  `"first_match"` (default) or `"vote"` strategies. First-match is
+  the standard "keyword first, optional LLM fallback" shape:
+  `CompositeIntentClassifier([KeywordIntentClassifier(),
+  LLMIntentClassifier()])`. Vote queries every backend and breaks
+  ties by classifier order. Construction with an empty
+  classifier list raises `ValueError`.
+- `NegationFilter` — decorator wrapping any `IntentClassifier` to
+  drop matches when
+  `dataknobs_llm.extraction.grounding.has_negation` fires on the
+  message. Constructor takes `negation_keywords` (defaults to
+  `DEFAULT_NEGATION_KEYWORDS`) and an optional `suppress_intents`
+  whitelist (`None` suppresses all matches under negation). A
+  `NegationFilter`-suppressed match carries `rule_based=False`
+  (suppression is post-classify, not a rule match in its own
+  right).
+- `intent_classifier_backends` — `Registry[IntentClassifierFactory]`
+  in `dataknobs_llm.intent` mirroring the shape of
+  `dataknobs_common.events.event_bus_backends` and
+  `dataknobs_common.locks.lock_backends`. Built-in factories
+  (`"keyword"`, `"llm"`, `"composite"`) auto-register at import;
+  consumers register their own backends (embedding similarity,
+  fuzzy match, locale-specific keyword variants) under any name.
+- `create_intent_classifier(name, config=None)` factory — resolves
+  a registered backend by name and forwards the config dict to the
+  registered factory. Raises `ValueError` listing every registered
+  backend on unknown name (mirrors `create_event_bus` /
+  `create_lock` shape). Composite child specs are themselves
+  `{"classifier": <name>, "config": {...}}` mappings; a child
+  missing the `classifier:` discriminator raises rather than
+  silently dropping.
+- Package-root re-exports for `dataknobs_llm.intent`:
+  `DEFAULT_VOCABULARY`, `DEFAULT_LLM_PROMPT_TEMPLATE`,
+  `DEFAULT_NEGATION_KEYWORDS`, `DEFAULT_AFFIRMATIVE_SIGNALS`,
+  `DEFAULT_NEGATIVE_SIGNALS`, `word_in_text`, and
+  `default_word_boundary_tokenizer`. The single-token English
+  yes/no vocabularies live in `dataknobs_llm.intent.defaults` under
+  these public names; downstream consumers needing the same
+  primitives for boolean recovery or analogous text-classification
+  tasks import them from here directly.
+
 ## v0.6.2 - 2026-06-06
 
 ### Added

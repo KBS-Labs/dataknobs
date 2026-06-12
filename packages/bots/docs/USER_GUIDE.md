@@ -1387,6 +1387,232 @@ consumer composing strategies receiving a `WizardHooks` instance
 can detach the turn-lifecycle surface via the `hooks.lifecycle`
 property if they want to share it with a sibling strategy.
 
+#### Wizard-as-advisor: intent confirmation
+
+Many wizards reach a turn where the bot proposes something and the
+user just says *yes* or *no* (sometimes *"actually, use X instead"*).
+Hand-rolling that turn means writing a one-off response template, an
+intent-detection block, a boolean schema, and a routing transition —
+four moving parts that all have to line up.
+
+The `intent_confirm:` stage primitive expresses the same shape in
+one declarative block. At load time the wizard expands it into
+existing primitives (`mode: conversation` + `response_template` +
+`intent_detection` + `schema` + `transitions`); at runtime every
+step goes through the existing wizard machinery. There is no new
+dispatch surface — `intent_confirm:` is pure sugar.
+
+```yaml
+stages:
+  - name: propose_framework
+    is_start: true
+    intent_confirm:
+      proposal_template: |
+        I'd suggest the ASRM framework for this. Want to use it?
+      intents:
+        accept:
+          target: configure_asrm
+        decline:
+          target: pick_alternative
+        alternative:
+          target: configure_alternative
+          extract: framework_name      # captures the user-named value
+          llm_fallback: true            # opt-in LLM tier for this intent
+      on_no_match:
+        clarification_template: "Was that a yes, no, or another framework?"
+
+  - name: configure_asrm
+    is_end: true
+    response_template: "Activated ASRM."
+
+  - name: pick_alternative
+    is_end: true
+    response_template: "Skipped."
+
+  - name: configure_alternative
+    is_end: true
+    response_template: "Activating {{ framework_name }}."
+```
+
+What the synthesized stage looks like under the hood (visible in the
+loader output and in stage metadata):
+
+- `mode: conversation` — first render emits `proposal_template`
+  literally (no LLM call). Subsequent renders run intent detection.
+- `response_template: <proposal_template>` — the first-turn proposal.
+- `clarification_template: <on_no_match.clarification_template>` —
+  optional; shown on re-render when no intent matched.
+- `intent_detection:` — keyword classifier by default, composite
+  (keyword → LLM) when any intent declares `llm_fallback: true` (or
+  when the top-level block sets `llm_fallback: true`).
+- `schema:` — `{name: boolean}` per intent, plus `{extract_field:
+  string}` for every intent declaring `extract:`.
+- `transitions:` — one per intent (`condition: "data.get(name) ==
+  True"`), plus an optional `on_no_match` fallback (`condition: "not
+  any(data.get(k) for k in [<intent names>])"`).
+
+Validation rules (enforced at load time, before the broader wizard
+config validator runs):
+
+- A stage that declares `intent_confirm:` cannot also declare
+  `schema:`, `response_template:`, or `transitions:` — the primitive
+  is the source of truth. The loader raises
+  `ConfigurationError` naming the collisions.
+- `intents:` must be non-empty and a mapping. Each intent value must
+  be a mapping with at least a `target:`. The loader raises
+  `ConfigurationError` naming the offending intent if any of those
+  invariants is violated.
+
+Naming constraint — intent names occupy the stage's `data` namespace:
+
+- The synthesizer emits one boolean schema property per intent name
+  (e.g. `accept`, `decline`). Those names share the same `state.data`
+  dictionary as every other field the wizard collects, so an intent
+  name like `title` will collide with a later stage's `title` data
+  field. Choose intent names that won't shadow any data field the
+  rest of the wizard consumes. The reserved name `_intent` (still
+  written for back-compat) is also off-limits as an intent name.
+
+Per-intent overrides:
+
+- `keywords: [...]` — replace the default vocabulary entry for that
+  intent name. `accept` / `decline` / `unclear` ship with sensible
+  English defaults from `DEFAULT_VOCABULARY`. Other intent names fall
+  back to per-intent `keywords:` (or LLM matching when
+  `llm_fallback: true`).
+- `extract: <field_name>` — when the LLM tier matches this intent,
+  the user-named payload is written to `state.data[field_name]` and
+  becomes available to the next stage's templates (e.g.
+  `{{ framework_name }}`).
+- `llm_fallback: true` (per-intent OR at the block level) — promote
+  the classifier from `keyword` to a `composite` chain (keyword first,
+  LLM second).
+- `negation_filter: true` (block level) — wrap the classifier in
+  `NegationFilter` so `"no, I don't want to accept that"` doesn't
+  match `accept`.
+
+#### Word-boundary keyword matching
+
+The default keyword classifier matches whole tokens — `"yes"`
+matches a standalone `"yes"` but NOT a substring of `"yesterday"`.
+This closes the long-standing foot-gun where bare-token vocabulary
+entries would silently substring-match unrelated user input.
+
+If you need looser matching for I18N, fuzzy matching, n-grams, or
+morphological matching, inject your own tokenizer:
+
+```python
+from dataknobs_llm.intent import KeywordIntentClassifier
+
+def fuzzy_tokenizer(keyword: str, message: str) -> bool:
+    # Both args are pre-lowercased.
+    return keyword in message  # substring fallback
+
+classifier = KeywordIntentClassifier(tokenizer=fuzzy_tokenizer)
+```
+
+Pass `tokenizer=` to the keyword classifier (or register a backend
+that does so under your own name in `intent_classifier_backends`).
+The signature is `(keyword: str, message: str) -> bool`; both
+arguments arrive pre-lowercased.
+
+#### Shipping your own wizard stage primitive
+
+`intent_confirm:` is one example of a *stage primitive* — a
+declarative block that the loader expands into existing wizard
+primitives. You can ship your own. The loader iterates a registry
+of `StageSynthesizer` objects during a dedicated synthesis phase
+that runs BEFORE config validation and FSM translation, so the
+downstream validator and FSM build see only the normalized shape.
+
+Minimum surface area:
+
+```python
+from typing import Any
+
+from dataknobs_bots.reasoning import (
+    register_stage_synthesizer,
+    validate_no_conflicting_fields,
+)
+
+
+class VendorSelectSynthesizer:
+    """Expand `vendor_select:` into a routing stage."""
+
+    field = "vendor_select"
+
+    # Optional: load-time invariants. Skip when there are none.
+    def validate(self, stage: dict[str, Any]) -> None:
+        validate_no_conflicting_fields(
+            stage, self.field,
+            ["schema", "response_template", "transitions"],
+        )
+        block = stage[self.field]
+        if not block.get("vendors"):
+            from dataknobs_common.exceptions import ConfigurationError
+            raise ConfigurationError(
+                f"Stage '{stage.get('name')}': vendor_select: requires "
+                "non-empty vendors.",
+            )
+
+    def synthesize(self, stage: dict[str, Any]) -> None:
+        block = stage[self.field]
+        stage["response_template"] = block["prompt"]
+        stage["schema"] = {
+            "type": "object",
+            "properties": {
+                "vendor": {"type": "string", "enum": list(block["vendors"])},
+            },
+        }
+        stage["transitions"] = [
+            {
+                "target": block["target"],
+                "condition": "data.get('vendor') is not None",
+            },
+        ]
+
+
+register_stage_synthesizer(VendorSelectSynthesizer())
+```
+
+After registration, every wizard config loaded by
+`WizardConfigLoader.load_from_dict` (and the bot's
+`reasoning.wizard_config:` path) picks up your primitive
+automatically:
+
+```yaml
+stages:
+  - name: pick_vendor
+    is_start: true
+    vendor_select:
+      prompt: "Which vendor?"
+      vendors: [acme, contoso, northwind]
+      target: configure_vendor
+```
+
+Notes on the synthesizer contract:
+
+- **`field`** — the YAML key your primitive claims. Must be unique
+  across registered synthesizers (later registration overwrites).
+- **`synthesize(stage)`** — mutates the stage dict IN PLACE. Expand
+  the primitive into whatever combination of `response_template`,
+  `intent_detection`, `schema`, `transitions`, `clarification_template`,
+  etc. you need. Populate fields from `KNOWN_STAGE_FIELDS` (in
+  `wizard_loader`) — unknown fields are warned about by the
+  validator and ignored by the FSM build pipeline.
+- **`validate(stage)`** — optional. Raise `ConfigurationError` for any
+  load-time invariant violation. `validate_no_conflicting_fields()`
+  is the standard helper for "primitive vs hand-rolled" collision
+  errors.
+- **Zero new runtime branches.** A synthesizer is pure load-time
+  YAML transformation. After it runs, the loader validates and
+  translates as if the consumer wrote the expanded shape by hand.
+
+For test/teardown, `unregister_stage_synthesizer(field)` removes a
+registration. The full registry surface is also re-exported from
+`dataknobs_bots.reasoning.wizard_loader` for callers that prefer
+the single-module import.
+
 #### Conditional Branching
 
 Create dynamic flows based on user input:
