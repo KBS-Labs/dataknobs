@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, BinaryIO, Protocol, runtime_checkable
 
+from .key_layout import KnowledgeKeyKind
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -33,13 +35,28 @@ class KnowledgeResourceBackend(Protocol):
     - FileKnowledgeBackend: For local development
     - S3KnowledgeBackend: For production deployments
 
-    Structure:
+    Layout (per knowledge base, under a backend-specific prefix):
+
         {domain_id}/
-            _metadata.json       # KB info and file index
-            content/
+            content/              # consumer-controlled (put_file)
                 file1.md
                 subdir/
                     file2.json
+            _metadata.json        # DK-managed state (do NOT trigger on)
+            _snapshots/           # DK-managed state (do NOT trigger on)
+                <version>.json
+
+    External event-trigger wiring (S3 → EventBridge / SQS / SNS / Lambda;
+    filesystem inotify; GCS Pub/Sub; etc.) MUST filter to the ``content/``
+    subtree and exclude ``_metadata.json`` and ``_snapshots/``. The
+    ingestion manager writes state files back through this backend during
+    ingest; an undifferentiated trigger creates a positive feedback loop.
+
+    Use :meth:`key_pattern` for source-level filtering when the event
+    source supports patterns (recommended — filtering upstream avoids
+    paying the message-receive cost for state writes); use
+    :meth:`classify_key` for per-event filtering when patterns are not
+    supported. See :class:`KnowledgeKeyKind` for the enum vocabulary.
 
     Example:
         ```python
@@ -350,5 +367,69 @@ class KnowledgeResourceBackend(Protocol):
                 identity and the backend cannot resolve it to a snapshot
                 (predates retention / unknown). Consumers fall back to a
                 full re-ingest.
+        """
+        ...
+
+    # --- Key Layout ---
+
+    def classify_key(self, key: str) -> KnowledgeKeyKind:
+        """Classify a key by its position in the backend's layout.
+
+        For external event sources that cannot pattern-match (or when
+        post-event classification is preferable to pre-event filtering),
+        consumers call this on every received event to skip non-``CONTENT``
+        writes.
+
+        Prefer :meth:`key_pattern` for source-level filtering when the
+        event source supports patterns — filtering upstream is cheaper
+        than receiving + classifying every event.
+
+        See :class:`KnowledgeKeyKind`.
+        """
+        ...
+
+    def key_pattern(
+        self,
+        kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
+        domain_id: str | None = None,
+    ) -> str:
+        """Backend-native pattern matching all keys of the given kind.
+
+        For :attr:`KnowledgeKeyKind.CONTENT` (the default), the pattern
+        matches every key a consumer's :meth:`put_file` would land at —
+        the appropriate filter for external event triggers.
+
+        For :attr:`KnowledgeKeyKind.METADATA` or
+        :attr:`KnowledgeKeyKind.SNAPSHOT`, the pattern matches the
+        DK-managed state keys — useful for consumers that explicitly want
+        to subscribe to state writes (audit logs, snapshot archival).
+
+        :attr:`KnowledgeKeyKind.UNKNOWN` is not a meaningful ``kind`` —
+        there is no shape for "the pattern of unrecognized keys."
+        Backends that produce a real pattern (``S3KnowledgeBackend`` /
+        ``FileKnowledgeBackend``) raise :class:`ValueError` in that
+        case so a consumer that mistakenly threads an ``UNKNOWN`` kind
+        into an infrastructure template gets a clear error at
+        construction time. ``InMemoryKnowledgeBackend`` returns the
+        empty sentinel for every ``kind`` (no event-source filter is
+        meaningful in-process).
+
+        When ``domain_id`` is ``None``, the pattern matches every domain;
+        otherwise it scopes to that one. The pattern dialect is the
+        backend's native one — consumers should treat the return value as
+        an opaque string forwarded verbatim to the event source:
+
+        - ``S3KnowledgeBackend`` returns S3 wildcard syntax
+          (``{prefix}{domain or '*'}/content/*``) suitable for
+          EventBridge ``wildcard`` rules or S3 bucket notification
+          ``prefix`` + ``suffix`` combinations.
+        - ``FileKnowledgeBackend`` returns a glob-shaped pattern
+          (``{base}/{domain or '*'}/content/**``) suitable for
+          ``pathlib.Path.glob`` and most inotify wrappers.
+        - ``InMemoryKnowledgeBackend`` returns ``""`` — no event-source
+          filter is meaningful for in-process storage; the method exists
+          for protocol symmetry.
+
+        See :class:`KnowledgeKeyKind`.
         """
         ...

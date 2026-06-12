@@ -27,8 +27,9 @@ base default remains for out-of-tree backends.
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
+from .key_layout import KnowledgeKeyKind
 from .models import ChangeSet, InvalidVersionError
 
 if TYPE_CHECKING:
@@ -36,12 +37,26 @@ if TYPE_CHECKING:
 
 
 class KnowledgeResourceBackendMixin:
-    """Canonical change detection built on ``list_files()`` + a snapshot.
+    """Canonical change detection + key-layout classification.
 
     Mixed into every in-tree backend. Relies only on the backend's own
     :meth:`get_info` and :meth:`list_files` (both part of the
     ``KnowledgeResourceBackend`` protocol), so it is backend-agnostic.
+
+    Declares the three layout constants (``METADATA_FILE`` /
+    ``CONTENT_DIR`` / ``SNAPSHOTS_DIR``) once at the contract layer:
+    any backend honoring the documented layout inherits identical
+    values and the default :meth:`classify_key` implementation for
+    free. A backend with a non-standard layout overrides the constants
+    (and inherits the same :meth:`classify_key` against the overridden
+    values) or overrides :meth:`classify_key` entirely.
     """
+
+    # --- Layout constants (consumed by classify_key + each backend) ---
+
+    METADATA_FILE: ClassVar[str] = "_metadata.json"
+    CONTENT_DIR: ClassVar[str] = "content"
+    SNAPSHOTS_DIR: ClassVar[str] = "_snapshots"
 
     # --- Required of any backend (supplied by the concrete class) ---
 
@@ -174,3 +189,40 @@ class KnowledgeResourceBackendMixin:
         unretained version.
         """
         return {}
+
+    # --- Key-layout classification (shared) ---
+
+    def classify_key(self, key: str) -> KnowledgeKeyKind:
+        """Classify a key by its position in the backend's layout.
+
+        Inspects the key's path segments (split on ``"/"``) against the
+        declared layout constants:
+
+        - Any segment equal to :attr:`CONTENT_DIR` →
+          :attr:`KnowledgeKeyKind.CONTENT` (so a content file named
+          ``content/_metadata.json`` is still ``CONTENT`` — the
+          leading ``content/`` segment wins, preventing false-positives
+          on consumer filenames that coincidentally match a state-key
+          name).
+        - Terminal segment equal to :attr:`METADATA_FILE` and no
+          ``CONTENT_DIR`` ancestor → :attr:`KnowledgeKeyKind.METADATA`.
+        - Any segment equal to :attr:`SNAPSHOTS_DIR` and no
+          ``CONTENT_DIR`` ancestor → :attr:`KnowledgeKeyKind.SNAPSHOT`.
+        - Anything else → :attr:`KnowledgeKeyKind.UNKNOWN`.
+
+        Prefer :meth:`key_pattern` (per-backend) for source-level
+        filtering when the event source supports patterns — filtering
+        upstream avoids paying the message-receive cost for state
+        writes. Use :meth:`classify_key` for per-event filtering when
+        patterns are not supported.
+        """
+        segments = [s for s in key.split("/") if s]
+        if not segments:
+            return KnowledgeKeyKind.UNKNOWN
+        if self.CONTENT_DIR in segments:
+            return KnowledgeKeyKind.CONTENT
+        if segments[-1] == self.METADATA_FILE:
+            return KnowledgeKeyKind.METADATA
+        if self.SNAPSHOTS_DIR in segments:
+            return KnowledgeKeyKind.SNAPSHOT
+        return KnowledgeKeyKind.UNKNOWN

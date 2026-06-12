@@ -64,6 +64,7 @@ from .storage import (
     InvalidVersionError,
     KnowledgeBaseInfo,
     KnowledgeFile,
+    KnowledgeKeyKind,
     KnowledgeResourceBackend,
     KnowledgeResourceBackendMixin,
     create_knowledge_backend,
@@ -96,6 +97,7 @@ __all__ = [
     # Storage backends
     "KnowledgeResourceBackend",
     "KnowledgeResourceBackendMixin",
+    "KnowledgeKeyKind",
     "KnowledgeFile",
     "KnowledgeBaseInfo",
     "IngestionStatus",

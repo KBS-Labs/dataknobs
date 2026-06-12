@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from .backend import KnowledgeResourceBackend
 from .file import FileKnowledgeBackend
+from .key_layout import KnowledgeKeyKind
 from .memory import InMemoryKnowledgeBackend
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
@@ -126,6 +127,8 @@ __all__ = [
     # Protocol
     "KnowledgeResourceBackend",
     "KnowledgeResourceBackendMixin",
+    # Key layout
+    "KnowledgeKeyKind",
     # Models
     "KnowledgeFile",
     "KnowledgeBaseInfo",

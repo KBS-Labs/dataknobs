@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import BinaryIO
 
+from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
 from .models import (
     IngestionStatus,
@@ -32,6 +33,12 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     - Short-lived processes
 
     Note: All data is lost when the instance is garbage collected.
+
+    Event triggers: not meaningful for in-process storage — there is no
+    external observer to filter. :meth:`key_pattern` exists for protocol
+    symmetry and returns the empty string ``""``; :meth:`classify_key`
+    inherits the canonical implementation from the mixin and works
+    against the same constants every other in-tree backend uses.
 
     Example:
         ```python
@@ -282,6 +289,31 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # Always written through: a non-SWAPPING transition passes the
         # default None and so clears any stale in-flight swap token.
         kb_info.generation = generation
+
+    # --- Key Layout ---
+    #
+    # classify_key comes from KnowledgeResourceBackendMixin against the
+    # canonical METADATA_FILE / CONTENT_DIR / SNAPSHOTS_DIR constants
+    # (same as every in-tree backend). key_pattern returns the empty
+    # string because no external observer can filter against in-process
+    # storage; the method exists for protocol symmetry so consumer code
+    # can call it uniformly across every backend without branching.
+
+    def key_pattern(
+        self,
+        kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
+        domain_id: str | None = None,
+    ) -> str:
+        """No event-source filter is meaningful for in-process storage.
+
+        Returns ``""`` (an explicitly empty sentinel) so contract tests
+        can assert the method exists and is callable for every backend
+        without conflating "method missing" with "method present, value
+        meaningfully empty." The ``kind`` and ``domain_id`` arguments
+        are accepted for protocol symmetry but ignored.
+        """
+        del kind, domain_id  # accepted for protocol symmetry, ignored
+        return ""
 
     # --- Change Detection ---
     #
