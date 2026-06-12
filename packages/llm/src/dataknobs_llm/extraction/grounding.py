@@ -297,6 +297,16 @@ def detect_boolean_signal(
     to avoid double-counting) to catch negated affirmatives like
     ``"I will skip confirming"``.
 
+    The four-quadrant verdict (no signal, negative alone, affirmative
+    alone, both present) is delegated to
+    :class:`~dataknobs_llm.intent.KeywordIntentClassifier` (with
+    ``phrase_priority=True``) so the keyword-iteration loop is shared
+    with the rest of the intent module. The
+    affirmative-alone-plus-negation-keyword flip is layered on top
+    locally: it only fires when the classifier's verdict is
+    affirmative AND no negative signal/phrase matches anywhere in the
+    message (matching the pre-classifier semantic).
+
     Args:
         msg_lower: Lowercased user message.
         affirmative_signals: Single-word affirmative keywords.
@@ -309,53 +319,65 @@ def detect_boolean_signal(
     Returns:
         ``True`` if affirmative signal detected, ``False`` if negative
         signal detected, ``None`` if ambiguous or no signal.
+
+    See Also:
+        :class:`dataknobs_llm.intent.KeywordIntentClassifier`
+        (``phrase_priority`` mode + injectable tokenizer).
     """
+    # Intra-package import deferred to first call: ``intent/negation.py``
+    # imports :func:`has_negation` and :data:`DEFAULT_NEGATION_KEYWORDS`
+    # from this module, so importing the intent module at module load
+    # time would create a circular edge. By the first call to this
+    # function, both modules are fully loaded; ``sys.modules`` caches
+    # the import on every subsequent call.
+    from dataknobs_llm.intent import (
+        IntentSpec,
+        KeywordIntentClassifier,
+    )
+
     neg_kw = (
         negation_keywords
         if negation_keywords is not None
         else DEFAULT_NEGATION_KEYWORDS
     )
 
-    # Check for phrase matches (multi-word, word-boundary aware)
-    has_affirmative_phrase = any(
-        _word_in_text(p, msg_lower) for p in affirmative_phrases
+    classifier = KeywordIntentClassifier(
+        vocabulary={
+            "affirmative": affirmative_signals,
+            "negative": negative_signals,
+        },
+        phrases={
+            "affirmative": frozenset(affirmative_phrases),
+            "negative": frozenset(negative_phrases),
+        },
+        phrase_priority=True,
     )
-    has_negative_phrase = any(
-        _word_in_text(p, msg_lower) for p in negative_phrases
+    specs = (
+        IntentSpec(name="affirmative", target="_boolean_true"),
+        IntentSpec(name="negative", target="_boolean_false"),
     )
 
-    # Check for single-word signal matches (word-boundary aware)
-    has_affirmative_word = any(
-        _word_in_text(w, msg_lower) for w in affirmative_signals
-    )
-    has_negative_word = any(
-        _word_in_text(w, msg_lower) for w in negative_signals
-    )
-
-    has_aff = has_affirmative_phrase or has_affirmative_word
-    has_neg = has_negative_phrase or has_negative_word
-
-    if not has_aff and not has_neg:
+    result = classifier._classify_sync(msg_lower, specs)
+    if result.intent is None:
         return None
-
-    if has_neg and not has_aff:
+    if result.intent.name == "negative":
         return False
 
-    if has_aff and not has_neg:
-        # Check for negation that could flip the affirmative.
+    # Affirmative won. The flip applies only when the affirmative is
+    # "alone" — no negative signal/phrase matches the message. (The
+    # phrase-priority classifier can resolve to affirmative even when
+    # a negative word is present, via the phrase tier beating the
+    # word tier; that case is the legitimate affirmative verdict and
+    # must not flip.)
+    has_neg_match = (
+        any(_word_in_text(w, msg_lower) for w in negative_signals)
+        or any(_word_in_text(p, msg_lower) for p in negative_phrases)
+    )
+    if not has_neg_match:
         check_neg = neg_kw - negative_signals
         if check_neg and has_negation(msg_lower, check_neg):
             return False
-        return True
-
-    # Both affirmative and negative signals present — ambiguous.
-    # Phrases carry stronger intent than single words.
-    if has_negative_phrase and not has_affirmative_phrase:
-        return False
-    if has_affirmative_phrase and not has_negative_phrase:
-        return True
-
-    return None
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────

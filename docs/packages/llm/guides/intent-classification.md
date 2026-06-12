@@ -111,6 +111,57 @@ match is fast and runs first; the LLM tier only runs when the keyword
 classifier returns no match. The `NegationFilter` then drops `accept`
 matches when negation is detected, leaving `decline` matches alone.
 
+## Phrase-priority mode
+
+`KeywordIntentClassifier` ships an opt-in `phrase_priority` mode that
+makes multi-word phrases beat single-word matches and surfaces
+same-tier ambiguity instead of resolving by iteration order. The
+extraction layer's
+`dataknobs_llm.extraction.grounding.detect_boolean_signal` helper
+opts in to preserve the load-bearing affirmative/negative
+two-tier-vocabulary semantic.
+
+- `phrase_priority=True` with a `phrases` mapping makes multi-word
+  phrases beat single-word matches.
+- Two intents tying at the same tier (both phrase-matched or both
+  word-matched only) return `intent=None` — useful when the caller
+  wants ambiguity surfaced rather than resolved by iteration order.
+
+```python
+from dataknobs_llm.intent import (
+    IntentSpec,
+    KeywordIntentClassifier,
+)
+
+specs = [
+    IntentSpec(name="affirmative", target="accept"),
+    IntentSpec(name="negative", target="decline"),
+]
+
+clf = KeywordIntentClassifier(
+    vocabulary={
+        "affirmative": frozenset({"yes", "confirm"}),
+        "negative": frozenset({"no", "cancel"}),
+    },
+    phrases={
+        "affirmative": frozenset({"looks good", "sounds good"}),
+        "negative": frozenset({"not yet", "hold on"}),
+    },
+    phrase_priority=True,
+)
+
+# "no, looks good" → affirmative wins (phrase beats negative word)
+# "yes and no"     → None (both word-tier matches, ambiguous)
+# "not yet, but ok maybe" → negative wins (phrase beats word)
+```
+
+Classification work is pure-CPU: `classify()` is a thin async
+wrapper over the private `_classify_sync()` core. Same-package
+synchronous callers (notably `detect_boolean_signal`) dispatch
+through the sync core directly. Default behaviour is unchanged when
+the mode is not opted in — the iteration-order first-match-wins
+semantic is byte-identical to the pre-`phrase_priority` shape.
+
 ## Re-exports
 
 `DEFAULT_VOCABULARY`, `DEFAULT_LLM_PROMPT_TEMPLATE`,
