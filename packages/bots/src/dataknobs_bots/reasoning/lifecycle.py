@@ -8,21 +8,50 @@ composing strategies (e.g. pipeline-shaped strategies) adopt by:
 
 1. Accepting an optional ``hooks: LifecycleHooks | None = None``
    constructor parameter.
-2. Firing ``await hooks.trigger_turn_start(...)`` at the start of
-   each turn (after per-turn ephemeral state is reset; before
-   any early-return dispatch).
-3. Firing ``await hooks.trigger_turn_end(...)`` at the end of each
-   turn (after the strategy's state-save / response-return).
+2. Building an event dict and firing
+   ``await hooks.trigger_turn_start(event)`` at the start of each
+   turn (after per-turn ephemeral state is reset; before any
+   early-return dispatch).
+3. Building an event dict and firing
+   ``await hooks.trigger_turn_end(event)`` at the end of each turn,
+   including early-return / abandonment exits — discriminate exit
+   type via the documented ``reason`` key on the event.
 
 Hooks are loadable from config via :meth:`from_config` with
 dotted-path callback resolution — same shape consumers already
 know from :class:`WizardHooks`.
 
 Per-strategy / per-stage scoping is the responsibility of each
-adopting strategy: pass a meaningful ``stage_name`` string to
-``trigger_turn_start`` / ``trigger_turn_end`` (e.g. the wizard
-passes the current FSM state name; a pipeline strategy could pass
-the active step or a constant ``"pipeline"``).
+adopting strategy: the trigger reads ``event["stage"]`` to match
+stage-scoped registrations (the wizard passes the current FSM
+state name; a pipeline strategy could pass the active step or a
+constant ``"pipeline"``).
+
+Event payload
+-------------
+
+Triggers carry a single ``event: dict[str, Any]`` argument. The
+contract is intentionally narrow at the protocol level (it's an
+opaque dict so adopters add subsystem-specific keys without
+extending the trigger signature), but adopting strategies are
+expected to populate the following common keys:
+
+- ``stage``: ``str`` — the stage / step name the trigger fires
+  against. The trigger's stage-scope matching reads this key.
+- ``phase``: ``"start"`` or ``"end"`` — discriminator for callbacks
+  that registered against both surfaces.
+- ``reason``: ``str`` — discriminator for *why* the turn is
+  entering / exiting. The wizard publishes ``"normal"`` for the
+  canonical finalize-turn exit, ``"amendment"`` / ``"navigation"``
+  / ``"clarification"`` / ``"collection_help"`` /
+  ``"collection_loop"`` / ``"confirmation"`` / ``"validation_error"``
+  for early-return exits, ``"abandoned"`` for stream abandonment,
+  and ``"advance"`` for the non-conversational ``advance()`` API.
+- ``manager``: the conversation manager (or ``None`` when the
+  trigger fires from a non-conversational API like the wizard's
+  ``advance()``).
+- ``state``: the strategy-specific state object (e.g.
+  ``WizardState`` for the wizard).
 
 Today's surface is intentionally narrow (just turn_start /
 turn_end). Additional lifecycle points (on_transition,
@@ -30,7 +59,7 @@ on_response_generated, on_step_start, etc.) are captured as
 follow-up rather than speculated here — when the next adopter
 surfaces a concrete need, the right shape will be clear.
 
-**Lift trajectory (follow-up).** This class is one of seven
+**Lift trajectory (follow-up).** This class is one of several
 in-process named-callback registries currently inline in
 ``dataknobs-bots`` (the wizard's ``on_enter`` / ``on_exit`` /
 ``on_complete`` / ``on_restart`` / ``on_error`` + this class's
@@ -38,24 +67,21 @@ in-process named-callback registries currently inline in
 ``ExecutionTracker``). A future consolidation can extract the
 shared registration-trigger-from_config pattern into a generic
 ``CallbackRegistry[CallbackT]`` in ``dataknobs_common.callbacks``;
-each of the seven adopters becomes a thin typed wrapper. The same
-consolidation can layer an optional ``EventBus`` substrate so
-external pub-sub systems (observability, alerting, webhook
-delivery, cross-process audit) attach as event subscribers without
-writing a custom hook per system. In-process callback semantics
-would be unchanged across both layers (this class's typed
-``on_turn_start`` / ``on_turn_end`` API stays as-is); external
-fan-out would be opt-in via a future ``also_publish_to(bus,
-topic_prefix=...)`` method.
+each adopter becomes a thin typed wrapper. The same consolidation
+can layer an optional ``EventBus`` substrate so external pub-sub
+systems (observability, alerting, webhook delivery, cross-process
+audit) attach as event subscribers without writing a custom hook
+per system. The opaque event-dict shape this class already
+publishes feeds bus subscribers directly — no translation step
+when the substrate lands.
 
 **Proposed topic-naming convention** for the future bus layer:
-``lifecycle:<strategy>:<event>:<scope?>`` — e.g.
-``lifecycle:wizard:turn:start:propose``,
-``lifecycle:pipeline:turn:end``. Seeded here so when the bus layer
-ships, the cross-strategy subscription convention is already set.
-Consumer adoption of the typed surface today is forward-compatible
-with both the in-process consolidation and the opt-in bus
-substrate.
+``<subsystem>:<operation>:<phase>`` — e.g. ``wizard:turn:start``,
+``pipeline:turn:end``, ``ingest:domain:start``. Seeded here so
+when the bus layer ships, the cross-strategy subscription
+convention is already set. Consumer adoption of the typed surface
+today is forward-compatible with both the in-process consolidation
+and the opt-in bus substrate.
 """
 from __future__ import annotations
 
@@ -69,12 +95,13 @@ from typing import Any, Union
 logger = logging.getLogger(__name__)
 
 
-# Callback signature for turn-lifecycle hooks. Matches the existing
-# WizardHooks shape: (manager, state, stage_name).
+# Callback signature for turn-lifecycle hooks. The single argument is
+# the opaque event dict described in the module docstring — adopters
+# add subsystem-specific keys without extending the trigger signature.
 #
 # Sync OR async return is accepted (the trigger awaits awaitable
 # returns and treats non-awaitable returns as already-complete).
-TurnHookCallback = Callable[[Any, Any, str], Union[Awaitable[None], None]]
+TurnHookCallback = Callable[[dict[str, Any]], Union[Awaitable[None], None]]
 
 
 @dataclass(frozen=True)
@@ -107,10 +134,13 @@ class LifecycleHooks:
         """Register a turn-start callback.
 
         Args:
-            callback: Function ``(manager, state, stage_name)`` — sync
-                or async.
+            callback: Function ``(event: dict[str, Any])`` — sync or
+                async. See the module docstring for the canonical
+                event-payload keys (``stage`` / ``phase`` / ``reason`` /
+                ``manager`` / ``state``).
             stage: Optional stage name to limit the hook to. ``None``
-                (default) fires for every stage.
+                (default) fires for every stage. Matched against
+                ``event["stage"]``.
 
         Returns:
             Self, for chaining.
@@ -130,31 +160,32 @@ class LifecycleHooks:
 
     # ── Triggering ────────────────────────────────────────────────
 
-    async def trigger_turn_start(
-        self, manager: Any, state: Any, stage_name: str,
-    ) -> None:
+    async def trigger_turn_start(self, event: dict[str, Any]) -> None:
         """Fire all matching turn-start callbacks (global + this stage).
 
-        Callbacks fire in registration order. Sync callbacks return
-        immediately; async callbacks are awaited before the next runs.
+        Stage-scoped registrations match when ``event["stage"]`` equals
+        the registered stage; global registrations (``stage=None``)
+        always fire. Callbacks fire in registration order. Sync
+        callbacks return immediately; async callbacks are awaited
+        before the next runs.
         """
+        stage_name = event.get("stage")
         for reg in self._turn_start_hooks:
             if reg.stage is None or reg.stage == stage_name:
-                await self._invoke(reg.callback, manager, state, stage_name)
+                await self._invoke(reg.callback, event)
 
-    async def trigger_turn_end(
-        self, manager: Any, state: Any, stage_name: str,
-    ) -> None:
+    async def trigger_turn_end(self, event: dict[str, Any]) -> None:
         """Fire all matching turn-end callbacks. See :meth:`trigger_turn_start`."""
+        stage_name = event.get("stage")
         for reg in self._turn_end_hooks:
             if reg.stage is None or reg.stage == stage_name:
-                await self._invoke(reg.callback, manager, state, stage_name)
+                await self._invoke(reg.callback, event)
 
     @staticmethod
     async def _invoke(
-        callback: TurnHookCallback, manager: Any, state: Any, stage_name: str,
+        callback: TurnHookCallback, event: dict[str, Any],
     ) -> None:
-        result = callback(manager, state, stage_name)
+        result = callback(event)
         if asyncio.iscoroutine(result):
             await result
 

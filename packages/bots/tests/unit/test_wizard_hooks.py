@@ -109,8 +109,8 @@ class TestWizardHooksRegistration:
         hooks.on_enter(lambda s, d: None)
         hooks.on_exit(lambda s, d: None)
         hooks.on_complete(lambda d: None)
-        hooks.on_turn_start(lambda m, s, n: None)
-        hooks.on_turn_end(lambda m, s, n: None)
+        hooks.on_turn_start(lambda event: None)
+        hooks.on_turn_end(lambda event: None)
 
         hooks.clear()
 

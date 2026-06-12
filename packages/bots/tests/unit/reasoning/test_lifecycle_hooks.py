@@ -2,7 +2,12 @@
 
 Exercises the class directly (no wizard dependency) so that
 non-wizard ``ReasoningStrategy`` adopters can rely on the same
-contract the wizard's ``WizardHooks`` composes.
+contract the wizard's ``WizardHooks`` composes. Callbacks and
+triggers exchange a single opaque ``event: dict[str, Any]``
+payload — adopters add subsystem-specific keys without extending
+the trigger signature. See the
+:mod:`dataknobs_bots.reasoning.lifecycle` module docstring for
+canonical event keys.
 """
 from __future__ import annotations
 
@@ -20,6 +25,11 @@ def _import_lifecycle():
     return LifecycleHooks, TurnHookCallback
 
 
+def _evt(stage: str = "s", **extra: Any) -> dict[str, Any]:
+    """Canonical event payload for tests — minimal shape plus overrides."""
+    return {"stage": stage, "phase": "start", "reason": "normal", **extra}
+
+
 # ---------------------------------------------------------------------------
 # Registration + triggering — async callback
 # ---------------------------------------------------------------------------
@@ -28,19 +38,20 @@ def _import_lifecycle():
 @pytest.mark.asyncio
 async def test_on_turn_start_fires_registered_async_callback() -> None:
     LifecycleHooks, _ = _import_lifecycle()
-    fired: list[tuple[Any, Any, str]] = []
+    fired: list[dict[str, Any]] = []
 
-    async def cb(manager: Any, state: Any, stage_name: str) -> None:
-        fired.append((manager, state, stage_name))
+    async def cb(event: dict[str, Any]) -> None:
+        fired.append(event)
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(cb)
 
-    mgr, state = object(), object()
-    await hooks.trigger_turn_start(mgr, state, "stage_a")
+    event = _evt(stage="stage_a", manager=object(), state=object())
+    await hooks.trigger_turn_start(event)
 
     assert len(fired) == 1
-    assert fired[0] == (mgr, state, "stage_a")
+    assert fired[0] is event
+    assert fired[0]["stage"] == "stage_a"
 
 
 @pytest.mark.asyncio
@@ -48,13 +59,13 @@ async def test_on_turn_end_fires_registered_async_callback() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     fired: list[str] = []
 
-    async def cb(manager: Any, state: Any, stage_name: str) -> None:
-        fired.append(stage_name)
+    async def cb(event: dict[str, Any]) -> None:
+        fired.append(event["stage"])
 
     hooks = LifecycleHooks()
     hooks.on_turn_end(cb)
 
-    await hooks.trigger_turn_end(object(), object(), "stage_b")
+    await hooks.trigger_turn_end(_evt(stage="stage_b", phase="end"))
     assert fired == ["stage_b"]
 
 
@@ -68,13 +79,13 @@ async def test_sync_callback_accepted_for_turn_start() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     fired = 0
 
-    def sync_cb(manager: Any, state: Any, stage_name: str) -> None:
+    def sync_cb(event: dict[str, Any]) -> None:
         nonlocal fired
         fired += 1
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(sync_cb)
-    await hooks.trigger_turn_start(object(), object(), "s")
+    await hooks.trigger_turn_start(_evt())
     assert fired == 1
 
 
@@ -88,14 +99,14 @@ async def test_stage_scoped_hook_fires_only_for_its_stage() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     seen: list[str] = []
 
-    async def cb(manager: Any, state: Any, stage_name: str) -> None:
-        seen.append(stage_name)
+    async def cb(event: dict[str, Any]) -> None:
+        seen.append(event["stage"])
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(cb, stage="alpha")
 
-    await hooks.trigger_turn_start(object(), object(), "alpha")
-    await hooks.trigger_turn_start(object(), object(), "beta")
+    await hooks.trigger_turn_start(_evt(stage="alpha"))
+    await hooks.trigger_turn_start(_evt(stage="beta"))
     assert seen == ["alpha"]
 
 
@@ -104,14 +115,14 @@ async def test_global_hook_fires_for_every_stage() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     seen: list[str] = []
 
-    async def cb(manager: Any, state: Any, stage_name: str) -> None:
-        seen.append(stage_name)
+    async def cb(event: dict[str, Any]) -> None:
+        seen.append(event["stage"])
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(cb)  # no stage = global
 
-    await hooks.trigger_turn_start(object(), object(), "alpha")
-    await hooks.trigger_turn_start(object(), object(), "beta")
+    await hooks.trigger_turn_start(_evt(stage="alpha"))
+    await hooks.trigger_turn_start(_evt(stage="beta"))
     assert seen == ["alpha", "beta"]
 
 
@@ -125,17 +136,17 @@ async def test_multiple_callbacks_fire_in_registration_order() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     order: list[str] = []
 
-    async def first(manager: Any, state: Any, stage_name: str) -> None:
+    async def first(event: dict[str, Any]) -> None:
         order.append("first")
 
-    async def second(manager: Any, state: Any, stage_name: str) -> None:
+    async def second(event: dict[str, Any]) -> None:
         order.append("second")
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(first)
     hooks.on_turn_start(second)
 
-    await hooks.trigger_turn_start(object(), object(), "s")
+    await hooks.trigger_turn_start(_evt())
     assert order == ["first", "second"]
 
 
@@ -149,8 +160,8 @@ async def test_trigger_on_empty_registry_is_noop() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     hooks = LifecycleHooks()
     # Must not raise — no hooks registered.
-    await hooks.trigger_turn_start(object(), object(), "s")
-    await hooks.trigger_turn_end(object(), object(), "s")
+    await hooks.trigger_turn_start(_evt())
+    await hooks.trigger_turn_end(_evt(phase="end"))
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +178,8 @@ async def test_from_config_loads_dotted_path_callbacks(monkeypatch) -> None:
     # resolver can find it.
     fired: list[str] = []
 
-    async def _registered_hook(manager: Any, state: Any, stage_name: str) -> None:
-        fired.append(stage_name)
+    async def _registered_hook(event: dict[str, Any]) -> None:
+        fired.append(event["stage"])
 
     import sys
     sys.modules[__name__]._registered_hook = _registered_hook  # type: ignore[attr-defined]
@@ -182,8 +193,8 @@ async def test_from_config_loads_dotted_path_callbacks(monkeypatch) -> None:
         ],
     }
     hooks = LifecycleHooks.from_config(config)
-    await hooks.trigger_turn_start(object(), object(), "x")
-    await hooks.trigger_turn_end(object(), object(), "y")
+    await hooks.trigger_turn_start(_evt(stage="x"))
+    await hooks.trigger_turn_end(_evt(stage="y", phase="end"))
     assert fired == ["x", "y"]
 
 
@@ -206,7 +217,7 @@ def test_from_config_with_stage_scoping_round_trips() -> None:
         ],
     }
 
-    async def _registered_hook_for_stage(*args: Any) -> None:
+    async def _registered_hook_for_stage(event: dict[str, Any]) -> None:
         pass
 
     import sys
@@ -232,7 +243,7 @@ def test_turn_count_properties_track_registrations() -> None:
     assert hooks.turn_start_count == 0
     assert hooks.turn_end_count == 0
 
-    async def noop(*_: Any) -> None:
+    async def noop(event: dict[str, Any]) -> None:
         pass
 
     hooks.on_turn_start(noop)
@@ -251,8 +262,8 @@ async def test_clear_drains_in_place_and_preserves_identity() -> None:
     LifecycleHooks, _ = _import_lifecycle()
     fired: list[str] = []
 
-    async def cb(manager: Any, state: Any, stage_name: str) -> None:
-        fired.append(stage_name)
+    async def cb(event: dict[str, Any]) -> None:
+        fired.append(event["stage"])
 
     hooks = LifecycleHooks()
     hooks.on_turn_start(cb)
@@ -266,6 +277,6 @@ async def test_clear_drains_in_place_and_preserves_identity() -> None:
     assert hooks.turn_end_count == 0
     # Post-clear, the registry still triggers cleanly (no AttributeError
     # from internal-state replacement) and the callback does NOT fire.
-    await hooks.trigger_turn_start(object(), object(), "x")
-    await hooks.trigger_turn_end(object(), object(), "y")
+    await hooks.trigger_turn_start(_evt(stage="x"))
+    await hooks.trigger_turn_end(_evt(stage="y", phase="end"))
     assert fired == []

@@ -1824,6 +1824,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             if amendment_response:
                 await self._save_wizard_state(manager, wizard_state)
                 handle.early_response = amendment_response
+                await self._fire_turn_end_hook(
+                    manager, wizard_state, reason="amendment",
+                )
                 return handle
 
         # Auto-restart when the wizard can't meaningfully continue:
@@ -1873,6 +1876,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if nav_result:
             await self._save_wizard_state(manager, wizard_state)
             handle.early_response = nav_result
+            await self._fire_turn_end_hook(
+                manager, wizard_state, reason="navigation",
+            )
             return handle
 
         # Capture skip_extraction flag for process_input
@@ -2016,6 +2022,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             await self._save_wizard_state(manager, wizard_state)
             result.early_response = response
             result.action = "collection_help"
+            await self._fire_turn_end_hook(
+                manager, wizard_state, reason="collection_help",
+            )
             return result
         else:
             # Structured mode: extract data and validate
@@ -2069,6 +2078,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     )
                     result.early_response = response
                     result.action = "clarification"
+                    await self._fire_turn_end_hook(
+                        manager, wizard_state, reason="clarification",
+                    )
                     return result
 
                 # Reset clarification attempts on viable extraction
@@ -2100,6 +2112,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     if col_response is not None:
                         result.early_response = col_response
                         result.action = "collection_loop"
+                        await self._fire_turn_end_hook(
+                            manager, wizard_state, reason="collection_loop",
+                        )
                         return result
 
                 # Decide whether to render a confirmation before
@@ -2163,6 +2178,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     await self._save_wizard_state(manager, wizard_state)
                     result.early_response = response
                     result.action = "confirmation"
+                    await self._fire_turn_end_hook(
+                        manager, wizard_state, reason="confirmation",
+                    )
                     return result
 
                 # Validate against stage schema
@@ -2181,6 +2199,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         self._response.add_wizard_metadata(response, wizard_state, stage)
                         result.early_response = response
                         result.action = "validation_error"
+                        await self._fire_turn_end_hook(
+                            manager, wizard_state, reason="validation_error",
+                        )
                         return result
 
             result.action = "extracted"
@@ -2453,10 +2474,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Fire on_turn_end at the canonical finalize_turn exit, AFTER
         # state save (so writer hooks publishing to manager.metadata
         # for the NEXT turn's inbox observe the persisted state).
-        # The same helper fires from the subflow-push exit above and
-        # from both stream_finalize_turn exits. Paths that do NOT fire
-        # on_turn_end (tracked as 164-FU1): early-returns from
-        # begin_turn / process_input, stream abandonment, and advance().
+        # reason="normal" — the helper defaults discriminate this from
+        # the early-return / stream-abandonment / advance fire-points.
         await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
 
         return response
@@ -2492,75 +2511,93 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         pre = await self._finalize_preamble(handle, tool_results)
 
-        # ── Subflow push: stream response and return ─────────────
-        if pre.subflow_pushed:
+        # ``state_saved`` discriminates abandonment from normal completion
+        # in the GeneratorExit branch below. The canonical save→fire pair
+        # runs only when the stream consumer drains the iterator; if
+        # ``aclose()`` raises ``GeneratorExit`` at any of the yield points
+        # below, the except branch fires ``on_turn_end`` with
+        # ``reason="abandoned"`` instead.
+        state_saved = False
+        try:
+            # ── Subflow push: stream response and return ─────────────
+            if pre.subflow_pushed:
+                stream_ctx = StreamStageContext()
+                async for chunk in self._response.stream_generate_stage_response(
+                    pre.manager, pre.llm, pre.subflow_new_stage,
+                    pre.wizard_state, pre.tools, stream_ctx,
+                    track_render=False,
+                ):
+                    yield chunk
+                await self._save_wizard_state(pre.manager, pre.wizard_state)
+                state_saved = True
+                await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
+                return
+
+            # ── Normal path: stream response with lifecycle handling ──
+
+            # Yield auto-advance messages as initial chunk
+            if pre.auto_advance_messages:
+                prefix = "\n\n".join(pre.auto_advance_messages) + "\n\n"
+                yield LLMStreamResponse(delta=prefix, is_final=False)
+
+            # Stream stage response.
             stream_ctx = StreamStageContext()
             async for chunk in self._response.stream_generate_stage_response(
-                pre.manager, pre.llm, pre.subflow_new_stage,
-                pre.wizard_state, pre.tools, stream_ctx,
-                track_render=False,
+                pre.manager, pre.llm, pre.new_stage, pre.wizard_state,
+                pre.tools, stream_ctx,
             ):
                 yield chunk
-            await self._save_wizard_state(pre.manager, pre.wizard_state)
-            await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
-            return
 
-        # ── Normal path: stream response with lifecycle handling ──
+            # ── Post-stream work (only reached when fully consumed) ──
 
-        # Yield auto-advance messages as initial chunk
-        if pre.auto_advance_messages:
-            prefix = "\n\n".join(pre.auto_advance_messages) + "\n\n"
-            yield LLMStreamResponse(delta=prefix, is_final=False)
-
-        # Stream stage response.
-        # If the caller abandons the stream via aclose(), GeneratorExit
-        # is thrown at the yield point and the code below never runs —
-        # state is NOT saved, consistent with DynaBot's stream_fully_consumed
-        # guard.
-        stream_ctx = StreamStageContext()
-        async for chunk in self._response.stream_generate_stage_response(
-            pre.manager, pre.llm, pre.new_stage, pre.wizard_state,
-            pre.tools, stream_ctx,
-        ):
-            yield chunk
-
-        # ── Post-stream work (only reached when fully consumed) ──
-
-        # Check for tool-initiated restart.
-        # In the non-streaming path, execute_restart replaces the response
-        # entirely.  In streaming, the stage response has already been
-        # yielded — we can't un-yield it.  Instead, perform the restart
-        # cleanup (reset state, FSM back to start) without emitting a
-        # replacement response.  The consumer's next turn will see the
-        # restarted wizard and generate the first-stage greeting naturally.
-        if stream_ctx.tool_restart_requested:
-            logger.info("Wizard restart signaled by restart_wizard tool (streaming)")
-            await self._navigator.restart_cleanup(
-                pre.wizard_state, pre.user_message,
-            )
-
-        # Check for tool-initiated completion
-        elif not pre.completed_before and stream_ctx.tool_completion_requested:
-            pre.wizard_state.completed = True
-            completion_summary = stream_ctx.tool_completion_summary
-            if completion_summary:
-                logger.info(
-                    "Wizard completion signaled by complete_wizard tool: %s",
-                    completion_summary,
+            # Check for tool-initiated restart.
+            # In the non-streaming path, execute_restart replaces the response
+            # entirely.  In streaming, the stage response has already been
+            # yielded — we can't un-yield it.  Instead, perform the restart
+            # cleanup (reset state, FSM back to start) without emitting a
+            # replacement response.  The consumer's next turn will see the
+            # restarted wizard and generate the first-stage greeting naturally.
+            if stream_ctx.tool_restart_requested:
+                logger.info("Wizard restart signaled by restart_wizard tool (streaming)")
+                await self._navigator.restart_cleanup(
+                    pre.wizard_state, pre.user_message,
                 )
-                pre.wizard_state.data["_completion_summary"] = completion_summary
-            else:
-                logger.info("Wizard completion signaled by complete_wizard tool")
-            if self._hooks:
-                await self._hooks.trigger_complete(pre.wizard_state.data)
 
-        # Save wizard state (only reached when stream fully consumed).
-        # Fire on_turn_end via the shared helper — mirrors finalize_turn's
-        # canonical exit. The stream-abandonment path (aclose() at the
-        # yield above) bypasses both saves and turn_end intentionally
-        # (tracked as 164-FU1).
-        await self._save_wizard_state(pre.manager, pre.wizard_state)
-        await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
+            # Check for tool-initiated completion
+            elif not pre.completed_before and stream_ctx.tool_completion_requested:
+                pre.wizard_state.completed = True
+                completion_summary = stream_ctx.tool_completion_summary
+                if completion_summary:
+                    logger.info(
+                        "Wizard completion signaled by complete_wizard tool: %s",
+                        completion_summary,
+                    )
+                    pre.wizard_state.data["_completion_summary"] = completion_summary
+                else:
+                    logger.info("Wizard completion signaled by complete_wizard tool")
+                if self._hooks:
+                    await self._hooks.trigger_complete(pre.wizard_state.data)
+
+            # Save wizard state (only reached when stream fully consumed).
+            # Fire on_turn_end via the shared helper — mirrors finalize_turn's
+            # canonical exit.
+            await self._save_wizard_state(pre.manager, pre.wizard_state)
+            state_saved = True
+            await self._fire_turn_end_hook(pre.manager, pre.wizard_state)
+        except GeneratorExit:
+            # Stream consumer abandoned the iterator (``aclose()``). State
+            # is NOT saved (consistent with DynaBot's
+            # ``stream_fully_consumed`` guard), but ``on_turn_end`` still
+            # fires with ``reason="abandoned"`` so observability /
+            # audit / metric consumers see every turn-exit. The
+            # ``state_saved`` flag guards against double-firing on the
+            # already-completed normal path.
+            if not state_saved:
+                await self._fire_turn_end_hook(
+                    pre.manager, pre.wizard_state,
+                    reason="abandoned", state_saved=False,
+                )
+            raise
 
     async def generate(
         self,
@@ -2692,6 +2729,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             )
             if result.missing_fields:
                 print(f"Still need: {result.missing_fields}")
+
+        Note:
+            ``on_turn_end`` fires from this method with
+            ``reason="advance"`` and ``manager=None``. The
+            non-conversational API has no ``ConversationManager``
+            to bind; observability / audit consumers that rely on
+            ``event["manager"]`` should filter on ``reason`` or
+            check for ``manager`` presence. Stage-lifecycle hooks
+            (``on_enter`` / ``on_exit``) continue to fire on their
+            own surface, distinct from the turn-lifecycle surface.
         """
         extract_mode = isinstance(user_input, str)
         if extract_mode and llm is None and navigation is None:
@@ -2776,7 +2823,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             ),
         }
 
-        return WizardAdvanceResult(
+        advance_result = WizardAdvanceResult(
             state=state,
             stage_name=state.current_stage,
             stage_prompt=self._renderer.render(
@@ -2804,6 +2851,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 pipeline_result.new_data_keys if pipeline_result else None
             ),
         )
+
+        # Fire turn-lifecycle ``on_turn_end`` on the non-conversational
+        # advance path. ``manager`` is ``None`` (this API has no
+        # ConversationManager); consumers depending on the manager
+        # filter on ``reason`` or check for presence.
+        await self._fire_turn_end_hook(
+            None, state, reason="advance",
+        )
+
+        return advance_result
 
     # =========================================================================
     # Public turn-lifecycle hook registration
@@ -2834,7 +2891,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         :meth:`WizardHooks.on_turn_start`.
 
         Args:
-            callback: ``(manager, wizard_state, stage_name)`` — sync or async.
+            callback: ``(event: dict[str, Any])`` — sync or async.
+                See :mod:`dataknobs_bots.reasoning.lifecycle` for the
+                canonical event-payload keys.
             stage: Optional stage name to limit the hook to.
         """
         if self._hooks is None:
@@ -2854,7 +2913,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         construction. Delegates to :meth:`WizardHooks.on_turn_end`.
 
         Args:
-            callback: ``(manager, wizard_state, stage_name)`` — sync or async.
+            callback: ``(event: dict[str, Any])`` — sync or async.
+                See :mod:`dataknobs_bots.reasoning.lifecycle` for the
+                canonical event-payload keys.
             stage: Optional stage name to limit the hook to.
         """
         if self._hooks is None:
@@ -2892,46 +2953,91 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._hooks.on_turn_start(inbox_hook)
 
     async def _fire_turn_start_hook(
-        self, manager: Any, wizard_state: WizardState,
+        self,
+        manager: Any,
+        wizard_state: WizardState,
+        *,
+        reason: str = "normal",
+        **extra: Any,
     ) -> None:
         """Fire ``on_turn_start`` hooks for the current turn.
 
         Single canonical fire-point shared by :meth:`begin_turn` and
-        :meth:`greet`. Resolves the active subflow FSM so a turn that
-        starts in a pushed subflow reports the subflow's stage name.
-        No-op when no hooks are configured.
+        :meth:`greet`. Builds the opaque event payload
+        (``stage`` / ``phase`` / ``reason`` / ``manager`` / ``state`` +
+        any caller-supplied ``extra``) and dispatches to
+        :meth:`WizardHooks.trigger_turn_start`. Resolves the active
+        subflow FSM so a turn that starts in a pushed subflow reports
+        the subflow's stage name. No-op when no hooks are configured.
+
+        Args:
+            manager: The conversation manager (or ``None`` for the
+                non-conversational :meth:`advance` API).
+            wizard_state: The current wizard state.
+            reason: Discriminator key (default ``"normal"``).
+            **extra: Additional keys merged into the event payload.
+                Caller-supplied keys override defaults; ``stage`` /
+                ``phase`` are always set by this helper.
         """
         if self._hooks is None:
             return
         active_fsm = self._subflows.get_active_fsm()
-        await self._hooks.trigger_turn_start(
-            manager, wizard_state, active_fsm.current_stage,
-        )
+        event: dict[str, Any] = {
+            "reason": reason,
+            "manager": manager,
+            "state": wizard_state,
+            **extra,
+            "stage": active_fsm.current_stage,
+            "phase": "start",
+        }
+        await self._hooks.trigger_turn_start(event)
 
     async def _fire_turn_end_hook(
-        self, manager: Any, wizard_state: WizardState,
+        self,
+        manager: Any,
+        wizard_state: WizardState,
+        *,
+        reason: str = "normal",
+        **extra: Any,
     ) -> None:
         """Fire ``on_turn_end`` hooks for the current turn.
 
-        Single canonical fire-point shared by all four ``finalize_turn``
-        exit paths: :meth:`finalize_turn` normal + subflow-push, and
-        :meth:`stream_finalize_turn` normal + subflow-push. Resolves
-        the active subflow FSM so a turn that ended deep in a subflow
-        reports the subflow's stage name. No-op when no hooks are
-        configured.
+        Single canonical fire-point shared by every turn-end exit:
+        the canonical :meth:`finalize_turn` and
+        :meth:`stream_finalize_turn` paths (normal + subflow-push,
+        ``reason="normal"``); the seven early-return exits from
+        :meth:`begin_turn` (``"amendment"`` / ``"navigation"``) and
+        :meth:`process_input` (``"clarification"`` /
+        ``"collection_help"`` / ``"collection_loop"`` /
+        ``"confirmation"`` / ``"validation_error"``); the stream
+        abandonment path (``"abandoned"``); and the non-conversational
+        :meth:`advance` API (``"advance"``, with ``manager=None``).
+        Resolves the active subflow FSM so a turn that ended deep in
+        a subflow reports the subflow's stage name. No-op when no
+        hooks are configured.
 
-        Paths that intentionally do NOT call this helper (tracked as
-        ``164-FU1``): early-returns from :meth:`begin_turn` /
-        :meth:`process_input` (amendment / navigation / validation
-        error / auto-restart), stream abandonment via ``aclose()``,
-        and the non-conversational :meth:`advance` API.
+        Args:
+            manager: The conversation manager (or ``None`` for the
+                non-conversational :meth:`advance` API).
+            wizard_state: The current wizard state.
+            reason: Discriminator key (default ``"normal"``).
+            **extra: Additional keys merged into the event payload
+                (e.g. ``state_saved=False`` from the stream-abandonment
+                path). Caller-supplied keys override defaults;
+                ``stage`` / ``phase`` are always set by this helper.
         """
         if self._hooks is None:
             return
         active_fsm = self._subflows.get_active_fsm()
-        await self._hooks.trigger_turn_end(
-            manager, wizard_state, active_fsm.current_stage,
-        )
+        event: dict[str, Any] = {
+            "reason": reason,
+            "manager": manager,
+            "state": wizard_state,
+            **extra,
+            "stage": active_fsm.current_stage,
+            "phase": "end",
+        }
+        await self._hooks.trigger_turn_end(event)
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
