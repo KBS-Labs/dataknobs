@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `BackendKeyDiscriminator(backend)` adapter (frozen dataclass) —
+  wraps any `KnowledgeResourceBackend`'s `classify_key` method
+  through the generic `Discriminator[str, KnowledgeKeyKind]`
+  Protocol from `dataknobs_common`. Use when composing
+  backend-key classification with other discriminators
+  (payload-field routing, multi-field event-handler dispatch)
+  through the generic protocol shape without coupling consumer
+  code to the backend interface directly. `frozen=True` gives
+  `__eq__` / `__hash__` keyed on the wrapped backend so two
+  adapters around the same backend instance compare equal
+  (useful for adapter-cache lookups). Exported from
+  `dataknobs_bots.knowledge` and
+  `dataknobs_bots.knowledge.storage`.
 - `KnowledgeKeyKind` enum (`CONTENT` / `METADATA` / `SNAPSHOT` /
   `UNKNOWN`) names the three classes of keys every in-tree
   `KnowledgeResourceBackend` writes. External event sources

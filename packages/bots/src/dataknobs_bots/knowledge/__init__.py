@@ -57,6 +57,7 @@ from .service import (
     get_ingestion_service,
 )
 from .storage import (
+    BackendKeyDiscriminator,
     ChangeSet,
     FileKnowledgeBackend,
     IngestionStatus,
@@ -107,6 +108,8 @@ __all__ = [
     "InMemoryKnowledgeBackend",
     "FileKnowledgeBackend",
     "S3KnowledgeBackend",
+    # Discriminator adapters
+    "BackendKeyDiscriminator",
     # Ingestion manager (file-backend to vector-store)
     "KnowledgeIngestionManager",
     "IngestionResult",
