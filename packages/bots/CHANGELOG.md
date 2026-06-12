@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `LifecycleHooks` / `WizardHooks` turn-lifecycle triggers
+  (`trigger_turn_start` / `trigger_turn_end`) take a single opaque
+  `event: dict[str, Any]` argument; `TurnHookCallback` is
+  `Callable[[dict[str, Any]], None | Awaitable[None]]`. The
+  wizard publishes canonical event keys `stage`, `phase`,
+  `reason`, `manager`, and `state`; adopters attach
+  subsystem-specific keys (e.g. the stream-abandonment path
+  attaches `state_saved=False`) without extending the protocol
+  signature. Hook callbacks read named keys off the event
+  payload. Documented in USER_GUIDE.md "Turn-Lifecycle Hooks".
+- `WizardReasoning` fires `on_turn_end` on every turn exit, with a
+  per-site `reason` discriminator on the event payload:
+  `"normal"` from the canonical `finalize_turn` /
+  `stream_finalize_turn` save→fire path (including subflow-push
+  variants and the streaming counterpart); `"amendment"` /
+  `"navigation"` from the `begin_turn` early-return paths;
+  `"clarification"` / `"collection_help"` / `"collection_loop"` /
+  `"confirmation"` / `"validation_error"` from the
+  `process_input` early-return paths; `"abandoned"` (with
+  `state_saved=False`) from the stream-abandonment path when the
+  consumer calls `aclose()` on the async iterator; and
+  `"advance"` (with `manager=None`) from the non-conversational
+  `advance()` API. A consumer observing `chat()` and
+  `stream_chat()` sees the same fire-points for the same
+  conversation outcomes. State-mirroring consumers ignore
+  non-advancing turns by filtering on
+  `event.get("reason") == "normal"`; observability / audit /
+  metric consumers typically observe every exit and tag records
+  with the reason. The shared `_fire_turn_end_hook` helper
+  resolves the active subflow FSM at every site, so
+  `event["stage"]` reflects the deepest pushed subflow at the
+  fire-point.
+- `make_metadata_inbox_hook` reads `manager` / `state` / `stage`
+  from the event payload — matches the
+  `Callable[[dict[str, Any]], ...]` trigger contract.
+
 ### Added
 
 - `intent_confirm:` wizard stage primitive — declarative block that
@@ -99,19 +137,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fires from `begin_turn` (AFTER per-turn ephemeral-key clear,
   BEFORE early-return dispatch) and symmetrically from `greet` so
   bot-initiated greetings inherit the surface. `on_turn_end` fires
-  from every canonical `finalize_turn` exit — including the
-  streaming counterpart `stream_finalize_turn` and the subflow-push
-  exit in both — AFTER `_save_wizard_state` so writer hooks
-  publishing to `manager.metadata` for the next turn's inbox observe
-  persisted state. The embedded instance is exposed read-only via
-  the `WizardHooks.lifecycle` property for detachment scenarios.
-  `WizardHooks.clear()` now drains the embedded lifecycle in place
-  alongside the legacy hook lists; `WizardHooks.hook_count` reports
-  `"turn_start"` / `"turn_end"` counts alongside the legacy keys.
-  Paths that intentionally still skip `on_turn_end` (tracked as
-  follow-up 164-FU1): early-returns from `begin_turn` /
-  `process_input`, stream abandonment via `aclose()`, and the
-  non-conversational `advance()` API.
+  on every turn exit with a per-site `reason` discriminator (see
+  the Changed entry for the full reason table). The embedded
+  instance is exposed read-only via the `WizardHooks.lifecycle`
+  property for detachment scenarios. `WizardHooks.clear()` drains
+  the embedded lifecycle in place alongside the legacy hook lists;
+  `WizardHooks.hook_count` reports `"turn_start"` / `"turn_end"`
+  counts alongside the legacy keys.
 - `WizardReasoning.add_turn_start_hook(callback, *, stage=None)` /
   `WizardReasoning.add_turn_end_hook(callback, *, stage=None)` —
   public runtime-attach surface for turn-lifecycle callbacks.

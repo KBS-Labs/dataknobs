@@ -68,13 +68,17 @@ def _dummy_llm() -> Any:
 
 @pytest.mark.asyncio
 async def test_on_turn_start_hook_fires_with_manager_and_state() -> None:
-    """Pins the basic registration → trigger contract."""
-    fired_with: list[tuple[Any, Any, str]] = []
+    """Pins the basic registration → trigger contract.
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
-        fired_with.append((manager, wizard_state, stage_name))
+    Callbacks receive the opaque event payload published by
+    :meth:`WizardReasoning._fire_turn_start_hook` — ``stage`` /
+    ``phase`` / ``reason`` / ``manager`` / ``state`` are the
+    canonical wizard keys.
+    """
+    fired_events: list[dict[str, Any]] = []
+
+    async def my_hook(event: dict[str, Any]) -> None:
+        fired_events.append(event)
 
     hooks = WizardHooks()
     hooks.on_turn_start(my_hook)
@@ -83,11 +87,13 @@ async def test_on_turn_start_hook_fires_with_manager_and_state() -> None:
 
     handle = await wizard.begin_turn(manager, llm=_dummy_llm(), tools=None)
 
-    assert len(fired_with) == 1
-    fired_manager, fired_state, fired_stage = fired_with[0]
-    assert fired_manager is manager
-    assert fired_state is handle.wizard_state
-    assert fired_stage == "only"
+    assert len(fired_events) == 1
+    event = fired_events[0]
+    assert event["manager"] is manager
+    assert event["state"] is handle.wizard_state
+    assert event["stage"] == "only"
+    assert event["phase"] == "start"
+    assert event["reason"] == "normal"
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +113,7 @@ async def test_on_turn_start_hook_fires_from_greet_too() -> None:
     """
     fired = 0
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
+    async def my_hook(event: dict[str, Any]) -> None:
         nonlocal fired
         fired += 1
 
@@ -148,10 +152,8 @@ async def test_on_turn_start_hook_runs_after_per_turn_clear() -> None:
     loader = WizardConfigLoader()
     fsm = loader.load_from_dict(wizard_dict)
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
-        wizard_state.data["_intent"] = "hook_set"
+    async def my_hook(event: dict[str, Any]) -> None:
+        event["state"].data["_intent"] = "hook_set"
 
     hooks = WizardHooks()
     hooks.on_turn_start(my_hook)
@@ -188,10 +190,8 @@ async def test_on_turn_start_hook_runs_after_per_turn_clear() -> None:
 async def test_on_turn_start_stage_specific_scoping() -> None:
     fired_stages: list[str] = []
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
-        fired_stages.append(stage_name)
+    async def my_hook(event: dict[str, Any]) -> None:
+        fired_stages.append(event["stage"])
 
     hooks = WizardHooks()
     hooks.on_turn_start(my_hook, stage="only")
@@ -206,10 +206,8 @@ async def test_on_turn_start_stage_specific_scoping() -> None:
 async def test_on_turn_start_stage_scoped_hook_skips_other_stages() -> None:
     fired_stages: list[str] = []
 
-    async def my_hook(
-        manager: Any, wizard_state: Any, stage_name: str,
-    ) -> None:
-        fired_stages.append(stage_name)
+    async def my_hook(event: dict[str, Any]) -> None:
+        fired_stages.append(event["stage"])
 
     hooks = WizardHooks()
     hooks.on_turn_start(my_hook, stage="other_stage_not_in_wizard")
@@ -250,9 +248,7 @@ async def test_on_turn_end_hook_fires_after_finalize() -> None:
     ) as harness:
         fired = 0
 
-        async def my_hook(
-            manager: Any, wizard_state: Any, stage_name: str,
-        ) -> None:
+        async def my_hook(event: dict[str, Any]) -> None:
             nonlocal fired
             fired += 1
 
@@ -273,9 +269,7 @@ async def test_on_turn_end_hook_fires_after_finalize() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _track_calls(
-    manager: Any, wizard_state: Any, stage_name: str,
-) -> None:
+async def _track_calls(event: dict[str, Any]) -> None:
     """Module-level callable used by the from_config test."""
 
 
@@ -330,8 +324,8 @@ def test_wizard_hooks_clear_drops_turn_hooks_too() -> None:
     """
     hooks = WizardHooks()
     hooks.on_enter(lambda stage, data: None)
-    hooks.on_turn_start(lambda manager, state, stage_name: None)
-    hooks.on_turn_end(lambda manager, state, stage_name: None)
+    hooks.on_turn_start(lambda event: None)
+    hooks.on_turn_end(lambda event: None)
 
     counts = hooks.hook_count
     assert counts["enter"] == 1
@@ -355,7 +349,7 @@ def test_wizard_hooks_clear_preserves_lifecycle_identity() -> None:
     """
     hooks = WizardHooks()
     cached_lifecycle = hooks.lifecycle
-    hooks.on_turn_start(lambda manager, state, stage_name: None)
+    hooks.on_turn_start(lambda event: None)
 
     hooks.clear()
 
@@ -397,8 +391,8 @@ async def test_add_turn_start_hook_lazy_creates_hooks() -> None:
     """
     fired_stages: list[str] = []
 
-    async def my_hook(manager: Any, wizard_state: Any, stage_name: str) -> None:
-        fired_stages.append(stage_name)
+    async def my_hook(event: dict[str, Any]) -> None:
+        fired_stages.append(event["stage"])
 
     wizard = _build_wizard(hooks=None)  # NO hooks at construction
     wizard.add_turn_start_hook(my_hook)
@@ -434,7 +428,7 @@ async def test_add_turn_end_hook_lazy_creates_hooks() -> None:
     ) as harness:
         fired = 0
 
-        async def my_hook(*_: Any) -> None:
+        async def my_hook(event: dict[str, Any]) -> None:
             nonlocal fired
             fired += 1
 
@@ -455,7 +449,7 @@ def test_add_turn_start_hook_appends_to_existing_hooks() -> None:
     hooks.on_enter(lambda stage, data: None)  # pre-existing legacy hook
     wizard = _build_wizard(hooks=hooks)
 
-    async def my_hook(*_: Any) -> None:
+    async def my_hook(event: dict[str, Any]) -> None:
         pass
 
     wizard.add_turn_start_hook(my_hook)
@@ -477,9 +471,9 @@ async def test_on_turn_end_fires_from_stream_finalize_turn() -> None:
 
     Subflow-push exits (sync + streaming) share the same
     ``_fire_turn_end_hook`` helper, so they're transitively covered.
-    Paths still skipped (tracked as 164-FU1): early-returns from
-    begin_turn / process_input, stream abandonment via ``aclose()``,
-    and the non-conversational ``advance`` API.
+    Per-reason fire-points (early-returns, stream abandonment, the
+    non-conversational ``advance()`` API) are exercised by
+    ``test_wizard_turn_end_exits.py``.
     """
     from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
@@ -493,11 +487,10 @@ async def test_on_turn_end_fires_from_stream_finalize_turn() -> None:
         wizard_config=config,
         main_responses=["Streamed reply"],
     ) as harness:
-        fired = 0
+        fired_events: list[dict[str, Any]] = []
 
-        async def my_hook(*_: Any) -> None:
-            nonlocal fired
-            fired += 1
+        async def my_hook(event: dict[str, Any]) -> None:
+            fired_events.append(event)
 
         harness.bot.reasoning_strategy.add_turn_end_hook(my_hook)
 
@@ -506,10 +499,12 @@ async def test_on_turn_end_fires_from_stream_finalize_turn() -> None:
         async for _chunk in harness.bot.stream_chat("hello", harness.context):
             pass
 
-        assert fired == 1, (
+        assert len(fired_events) == 1, (
             "on_turn_end must fire after stream_finalize_turn's "
-            "save_wizard_state — closes 164-FU1 Tier A for streaming."
+            "save_wizard_state"
         )
+        # Canonical exit publishes reason="normal".
+        assert fired_events[0]["reason"] == "normal"
 
 
 # ---------------------------------------------------------------------------
@@ -580,13 +575,11 @@ async def test_on_turn_end_fires_from_finalize_turn_subflow_push() -> None:
     ) as harness:
         fire_log: list[str] = []
 
-        async def my_hook(
-            manager: Any, wizard_state: Any, stage_name: str,
-        ) -> None:
+        async def my_hook(event: dict[str, Any]) -> None:
             # Capture the stage name to confirm the active subflow FSM is
             # reported (not the parent's stage) — a save→fire reorder
             # would also drop this signal.
-            fire_log.append(stage_name)
+            fire_log.append(event["stage"])
 
         harness.bot.reasoning_strategy.add_turn_end_hook(my_hook)
 

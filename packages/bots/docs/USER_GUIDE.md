@@ -1197,11 +1197,19 @@ hooks publishing for the next turn — use the turn-lifecycle hooks
 ```python
 from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
 
-async def bind_tenant(manager, wizard_state, stage_name):
-    wizard_state.data["tenant_id"] = manager.metadata.get("tenant_id")
+async def bind_tenant(event):
+    state = event["state"]
+    manager = event["manager"]
+    if manager is None:
+        return  # advance() has no manager — see firing-points table
+    state.data["tenant_id"] = manager.metadata.get("tenant_id")
 
-async def emit_audit(manager, wizard_state, stage_name):
-    audit_log.record(stage_name, snapshot=dict(wizard_state.data))
+async def emit_audit(event):
+    audit_log.record(
+        event["stage"],
+        reason=event["reason"],
+        snapshot=dict(event["state"].data),
+    )
 
 hooks = WizardHooks()
 hooks.on_turn_start(bind_tenant)
@@ -1219,8 +1227,23 @@ hooks:
       stage: "triage"
 ```
 
-Callbacks receive `(manager, wizard_state, stage_name)` and may be
-sync or async.
+**Event payload.** Callbacks receive a single opaque `event:
+dict[str, Any]` and may be sync or async. The wizard publishes
+these canonical keys; consumers depend on them by name:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `stage` | `str` | The FSM stage name resolved at fire-point (the active subflow's stage when inside a pushed subflow). Per-stage scoping (`stage=` on registration) matches against this key. |
+| `phase` | `"start"` or `"end"` | Discriminator for callbacks registered against both surfaces. |
+| `reason` | `str` | Why the trigger fired. The wizard publishes `"normal"` from the canonical save→fire path; `"amendment"` / `"navigation"` / `"clarification"` / `"collection_help"` / `"collection_loop"` / `"confirmation"` / `"validation_error"` from the early-return exits; `"abandoned"` from stream abandonment; `"advance"` from the non-conversational `advance()` API. |
+| `manager` | `ConversationManager \| None` | The bot's conversation manager, or `None` on the `advance()` path (which has no manager). |
+| `state` | `WizardState` | The wizard state at the fire-point. Always present. |
+
+Adopters add their own keys without extending the trigger
+signature — the wizard's stream-abandonment path attaches
+`state_saved=False` so consumers can distinguish abandonment from
+the normal save→fire path on that basis when they don't want to
+filter on `reason` alone.
 
 **Firing points:**
 
@@ -1229,14 +1252,43 @@ sync or async.
   can re-populate keys cleared above OR influence amendment /
   auto-restart / navigation routing). Also fires from `greet` so
   bot-initiated greetings inherit the surface.
-- `on_turn_end` fires AFTER the state-save round-trip on every
-  canonical finalize-turn exit: `finalize_turn` and
-  `stream_finalize_turn`, normal and subflow-push variants both.
+- `on_turn_end` fires on **every** turn exit — discriminated via
+  `event["reason"]`:
+
+  | Exit path | `reason` value | Where the fire happens |
+  |---|---|---|
+  | Canonical `finalize_turn` (normal + subflow-push) | `"normal"` | AFTER `_save_wizard_state` |
+  | Streaming canonical (normal + subflow-push, fully consumed) | `"normal"` | AFTER `_save_wizard_state` |
+  | Stream abandonment (`aclose()`) | `"abandoned"` (with `state_saved=False`) | `GeneratorExit` branch in `stream_finalize_turn` |
+  | Post-completion amendment early-return | `"amendment"` | After state save in `begin_turn` |
+  | Navigation keyword (back / skip / restart) early-return | `"navigation"` | After state save in `begin_turn` |
+  | Low-confidence clarification early-return | `"clarification"` | After state save in `process_input` |
+  | Collection-mode help intent early-return | `"collection_help"` | After state save in `process_input` |
+  | Collection-mode loop record early-return | `"collection_loop"` | After state save (inside `_handle_collection_mode`) in `process_input` |
+  | Confirmation render early-return | `"confirmation"` | After state save in `process_input` |
+  | Strict-validation failure early-return | `"validation_error"` | After state save in `process_input` |
+  | Non-conversational `advance()` API | `"advance"` (with `manager=None`) | After the result is built in `advance` |
+
   A consumer observing `chat()` and `stream_chat()` sees the same
-  `on_turn_end` firing semantics. Paths still skipped (tracked as
-  a follow-up): early-returns from `begin_turn` / `process_input`
-  (amendment / navigation / validation), stream abandonment via
-  `aclose()`, and the non-conversational `advance()` API.
+  set of fire-points for the same conversation outcomes. State-
+  mirroring consumers that want to ignore non-advancing turns
+  filter on `event.get("reason") == "normal"`; observability /
+  audit / metric consumers typically observe every exit and tag
+  records with the reason.
+
+  **Pairing semantics.** Every conversational turn fires exactly
+  one `on_turn_start` followed by exactly one `on_turn_end` —
+  including early-return turns. A turn ending with
+  `reason="amendment"` (or any other early-return reason) still
+  fired its `on_turn_start` at the start of that same turn. The
+  one exception is the non-conversational `advance()` API: it
+  fires only `on_turn_end` (with `reason="advance"`, `manager=None`)
+  and has no paired `on_turn_start`. Consumers correlating
+  start/end events match pairs by `event["manager"]` + the turn
+  ordering observed on a single manager; consumers that need to
+  ignore the unpaired `advance()` end-event filter on
+  `event.get("manager") is None` or `event.get("reason") ==
+  "advance"`.
 
 **Runtime hook attachment.** When the wizard was built without a
 `WizardHooks` instance at construction (e.g., the
@@ -1366,16 +1418,37 @@ class MyPipelineReasoning(ReasoningStrategy):
         stage_name = "pipeline"  # or e.g. self._current_step.name
 
         if self._hooks is not None:
-            await self._hooks.trigger_turn_start(manager, ctx, stage_name)
+            await self._hooks.trigger_turn_start({
+                "stage": stage_name,
+                "phase": "start",
+                "reason": "normal",
+                "manager": manager,
+                "state": ctx,
+            })
 
         for step in self._steps:
             await step.execute(ctx)
 
         if self._hooks is not None:
-            await self._hooks.trigger_turn_end(manager, ctx, stage_name)
+            await self._hooks.trigger_turn_end({
+                "stage": stage_name,
+                "phase": "end",
+                "reason": "normal",
+                "manager": manager,
+                "state": ctx,
+            })
 
         return ctx.response
 ```
+
+Triggers exchange a single opaque `event: dict[str, Any]` so
+adopters can attach subsystem-specific keys (e.g. a step counter,
+a per-step latency, a `reason` discriminator) without changing the
+protocol signature. The wizard publishes a documented set of
+canonical keys (`stage` / `phase` / `reason` / `manager` /
+`state`) — see "Turn-Lifecycle Hooks" above; non-wizard adopters
+are encouraged to publish the same names for cross-strategy
+hook portability.
 
 The same `on_turn_start` hooks consumers already write for the
 wizard (tenant binding, audit injection, signal bridging) become

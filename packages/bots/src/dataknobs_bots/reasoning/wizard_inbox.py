@@ -60,7 +60,12 @@ def make_metadata_inbox_hook(
     """
     merge = merge_fn or _default_merge_fn
 
-    async def _hook(manager: Any, wizard_state: Any, stage_name: str) -> None:
+    async def _hook(event: dict[str, Any]) -> None:
+        manager = event.get("manager")
+        wizard_state = event.get("state")
+        stage_name = event.get("stage", "")
+        if manager is None or wizard_state is None:
+            return
         if not hasattr(manager, "metadata"):
             return
         for key in inbox_keys:

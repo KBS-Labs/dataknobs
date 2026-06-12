@@ -393,8 +393,12 @@ class WizardHooks:
         injection, custom validation gating.
 
         Args:
-            callback: ``(manager, wizard_state, stage_name)`` — sync
-                or async.
+            callback: ``(event: dict[str, Any])`` — sync or async.
+                See :mod:`dataknobs_bots.reasoning.lifecycle` for
+                the canonical event-payload keys
+                (``stage`` / ``phase`` / ``reason`` / ``manager`` /
+                ``state``). The wizard publishes ``reason="normal"``
+                from the canonical turn-start fire-points.
             stage: Optional stage name to limit the hook to.
 
         Returns:
@@ -412,17 +416,19 @@ class WizardHooks:
         """Register a callback for the end of every wizard turn.
 
         Fires from :meth:`WizardReasoning.finalize_turn` after the
-        state-save round-trip. See :meth:`on_turn_start`.
+        state-save round-trip and from every early-return exit
+        (amendment / navigation / validation / collection-mode /
+        confirmation / clarification) with the matching ``reason``
+        key. Also fires from ``stream_finalize_turn`` (including
+        the ``aclose()`` abandonment path with ``reason="abandoned"``)
+        and from the non-conversational :meth:`advance` API with
+        ``reason="advance"``. See :meth:`on_turn_start` for the
+        callback contract.
         """
         self._lifecycle.on_turn_end(callback, stage=stage)
         return self
 
-    async def trigger_turn_start(
-        self,
-        manager: Any,
-        wizard_state: Any,
-        stage_name: str,
-    ) -> None:
+    async def trigger_turn_start(self, event: dict[str, Any]) -> None:
         """Trigger all registered ``on_turn_start`` hooks.
 
         Wraps the LifecycleHooks call in the wizard's existing
@@ -430,29 +436,33 @@ class WizardHooks:
         still reaches ``on_error`` callbacks before re-raising.
         """
         try:
-            await self._lifecycle.trigger_turn_start(
-                manager, wizard_state, stage_name,
-            )
+            await self._lifecycle.trigger_turn_start(event)
         except Exception as e:
-            await self._handle_error(stage_name, wizard_state.data, e)
+            await self._handle_error_from_event(event, e)
             raise
 
-    async def trigger_turn_end(
-        self,
-        manager: Any,
-        wizard_state: Any,
-        stage_name: str,
-    ) -> None:
+    async def trigger_turn_end(self, event: dict[str, Any]) -> None:
         """Trigger all registered ``on_turn_end`` hooks. See
         :meth:`trigger_turn_start`.
         """
         try:
-            await self._lifecycle.trigger_turn_end(
-                manager, wizard_state, stage_name,
-            )
+            await self._lifecycle.trigger_turn_end(event)
         except Exception as e:
-            await self._handle_error(stage_name, wizard_state.data, e)
+            await self._handle_error_from_event(event, e)
             raise
+
+    async def _handle_error_from_event(
+        self, event: dict[str, Any], error: Exception,
+    ) -> None:
+        """Bridge an event-shaped failure back into the legacy
+        ``on_error`` fan-out, which expects ``(stage, data, error)``.
+        """
+        stage = event.get("stage", "")
+        state = event.get("state")
+        data = getattr(state, "data", {}) if state is not None else {}
+        if not isinstance(data, dict):
+            data = {}
+        await self._handle_error(stage, data, error)
 
     @property
     def lifecycle(self) -> LifecycleHooks:
