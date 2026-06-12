@@ -47,6 +47,14 @@ from dataknobs_common.events import (
     Subscription,
     create_event_bus,
 )
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityContract,
+    CapabilityMixin,
+    CapabilityNotSupportedError,
+    DynamicCapabilityMixin,
+    require_capability,
+)
 from dataknobs_common.config_loading import (
     DEFAULT_CONFIG_EXTENSIONS,
     ConfigLoadError,
@@ -59,8 +67,14 @@ from dataknobs_common.config_loading import (
     parse_yaml_or_json,
 )
 from dataknobs_common.discriminator import (
+    AsyncCallableDiscriminator,
+    AsyncChainedDiscriminator,
     AsyncDiscriminator,
+    CallableDiscriminator,
+    ChainedDiscriminator,
     Discriminator,
+    MappingDiscriminator,
+    MultiFieldDiscriminator,
 )
 from dataknobs_common.exceptions import (
     ConcurrencyError,
@@ -108,6 +122,23 @@ from dataknobs_common.registry import (
     CachedRegistry,
     PluginRegistry,
     Registry,
+)
+from dataknobs_common.resolver import (
+    AsyncCachedResolver,
+    AsyncCallableResolver,
+    AsyncResourceResolver,
+    CachedResolver,
+    CallablePartitionResolver,
+    CallableResolver,
+    CompositePartitionResolver,
+    CompositeResolver,
+    DefaultingResolver,
+    MappingResolver,
+    MetadataKeyPartitionResolver,
+    NullPartitionResolver,
+    NullResolver,
+    ResourceResolver,
+    TemporalPartitionResolver,
 )
 from dataknobs_common.serialization import (
     Serializable,
@@ -176,6 +207,13 @@ __all__ = [
     "SerializationError",
     "TimeoutError",
     "RateLimitError",
+    # Capabilities
+    "Capability",
+    "CapabilityContract",
+    "CapabilityMixin",
+    "DynamicCapabilityMixin",
+    "CapabilityNotSupportedError",
+    "require_capability",
     # Config loading
     "DEFAULT_CONFIG_EXTENSIONS",
     "ConfigLoadError",
@@ -189,6 +227,12 @@ __all__ = [
     # Discriminators
     "Discriminator",
     "AsyncDiscriminator",
+    "CallableDiscriminator",
+    "MappingDiscriminator",
+    "MultiFieldDiscriminator",
+    "ChainedDiscriminator",
+    "AsyncCallableDiscriminator",
+    "AsyncChainedDiscriminator",
     # Distributed locks
     "DistributedLock",
     "create_lock",
@@ -219,6 +263,22 @@ __all__ = [
     "CachedRegistry",
     "AsyncRegistry",
     "PluginRegistry",
+    # Resource resolvers
+    "ResourceResolver",
+    "AsyncResourceResolver",
+    "MappingResolver",
+    "CallableResolver",
+    "DefaultingResolver",
+    "CachedResolver",
+    "CompositeResolver",
+    "NullResolver",
+    "AsyncCallableResolver",
+    "AsyncCachedResolver",
+    "NullPartitionResolver",
+    "MetadataKeyPartitionResolver",
+    "TemporalPartitionResolver",
+    "CallablePartitionResolver",
+    "CompositePartitionResolver",
     # Serialization
     "Serializable",
     "serialize",

@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- Declarative capability advertisement in `dataknobs_common.capabilities`
+  (also re-exported from `dataknobs_common`). The `Capability` enum
+  declares stable identifiers for cross-cutting optional features
+  organized into families: tenancy (`TENANT_SCOPED_LOCKS`,
+  `TENANT_SCOPED_STATE`, `PER_TENANT_RATE_LIMITS`), observability
+  (`EVENT_BUS_EMISSION`, `CALLBACK_REGISTRY`, `METRICS_EMISSION`),
+  consistency (`SNAPSHOT_ISOLATION`, `TRANSACTIONAL_METADATA`,
+  `STREAMING_READS`, `STREAMING_WRITES`), and composition
+  (`KEY_PATTERN_FILTERING`, `CHANGE_SUBSCRIPTION`). Members are
+  `str`-typed for stable serialization and JSON-friendly logging.
+  Classes advertise via the `CapabilityContract` protocol —
+  `CapabilityMixin` reads from a
+  `SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]]` declaration;
+  `DynamicCapabilityMixin` computes the capability set from `__init__`
+  state via the `_compute_instance_capabilities()` override hook with a
+  cache invalidated through `_invalidate_capability_cache()`.
+  `require_capability(host, capability)` is a pre-call guard;
+  `CapabilityNotSupportedError` carries the offending capability and the
+  host for diagnostic reporting. Consumer-defined capabilities are
+  supported via raw strings — `supports()` and `require_capability()`
+  accept either `Capability` enum members or arbitrary strings.
+- Composing reference implementations in `dataknobs_common.discriminator`
+  (also re-exported from `dataknobs_common`): `CallableDiscriminator`
+  (wraps a `Callable[[InputT], KindT]` for ad-hoc classifier construction),
+  `MappingDiscriminator` (fast lookup against a static `Mapping` with a
+  `default` fallback), `MultiFieldDiscriminator` (classifies multiple
+  fields of a mapping-shaped payload via per-field discriminators —
+  missing fields surface as `None` in the result dict so consumers can
+  distinguish "absent" from "classified as None"; field-declaration
+  order preserved), and `ChainedDiscriminator` (tries each inner
+  discriminator in order; the first result that differs from `default`
+  wins). Async siblings `AsyncCallableDiscriminator` and
+  `AsyncChainedDiscriminator` round out the surface; the latter mixes
+  sync and async inner discriminators in a single chain. Useful for
+  event-routing pipelines that classify multiple aspects of a payload
+  through one composable Protocol surface, and for layered
+  classification (cheap rule → expensive fallback).
+- Generic resource-lookup-by-key Protocols
+  (`ResourceResolver[KeyT, ValueT]` and
+  `AsyncResourceResolver[KeyT, ValueT]`) in `dataknobs_common.resolver`,
+  also re-exported from `dataknobs_common`. Single `resolve(key)` method
+  returning the value or `None`; idempotent at the protocol level and
+  non-mutating on the input key. Reference implementations include
+  `MappingResolver` (wraps a `Mapping`), `CallableResolver`,
+  `DefaultingResolver` (substitutes a default for `None`),
+  `CachedResolver` (LRU; `None` returns are NOT cached so transient
+  misses don't persist), `CompositeResolver` (first non-`None` wins),
+  `NullResolver` (always returns `None`), and async siblings
+  `AsyncCallableResolver` and `AsyncCachedResolver` (asyncio-Lock-guarded
+  insertion). Five vector-store partition resolvers
+  (`NullPartitionResolver`, `MetadataKeyPartitionResolver`,
+  `TemporalPartitionResolver`, `CallablePartitionResolver`,
+  `CompositePartitionResolver`) cover the common partition shapes:
+  per-tenant, per-content-type, temporal bucketing
+  (`year`/`quarter`/`month`), arbitrary callable, and composite
+  combinations joined by a separator.
 - `Discriminator[InputT, KindT]` and `AsyncDiscriminator[InputT, KindT]`
   Protocols (`@runtime_checkable`, in `dataknobs_common.discriminator`,
   also re-exported from `dataknobs_common`). One generic shape for
