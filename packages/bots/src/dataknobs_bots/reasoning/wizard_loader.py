@@ -19,7 +19,22 @@ from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
 from .function_resolver import resolve_functions
+from .stage_synthesizers import (
+    StageSynthesizer,
+    register_stage_synthesizer,
+    unregister_stage_synthesizer,
+    validate_no_conflicting_fields,
+)
 from .wizard_fsm import WizardFSM
+
+__all__ = [
+    "StageSynthesizer",
+    "WizardConfigLoader",
+    "load_wizard_config",
+    "register_stage_synthesizer",
+    "unregister_stage_synthesizer",
+    "validate_no_conflicting_fields",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +115,7 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     # Prompts and templates
     _StageField("prompt", default=""),
     _StageField("response_template"),
+    _StageField("clarification_template"),
     _StageField("confirmation_template"),
     _StageField("llm_assist", default=False),
     _StageField("llm_assist_prompt"),
@@ -127,6 +143,7 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     _StageField("context_generation"),
     _StageField("mode"),
     _StageField("intent_detection"),
+    _StageField("intent_confirm"),
     _StageField("navigation"),
     # Collection
     _StageField("collection_mode"),
@@ -305,6 +322,13 @@ class WizardConfigLoader:
         if not wizard_config["stages"]:
             raise ValueError("Wizard config must have at least one stage")
 
+        # Expand stage primitives via the synthesizer registry.
+        # Runs BEFORE _validate_config so the broader validator and the
+        # FSM build pipeline see the post-expansion shape (a pre-synthesis
+        # `intent_confirm:` stage has no schema/response_template and
+        # would otherwise trip the "pure LLM-driven" warning).
+        self._synthesize_stages(wizard_config)
+
         # Warn about common config issues
         self._validate_config(wizard_config)
 
@@ -348,6 +372,33 @@ class WizardConfigLoader:
             subflow_registry=subflow_registry,
             transform_context_factory=transform_context_factory,
         )
+
+    def _synthesize_stages(self, wizard_config: dict[str, Any]) -> None:
+        """Apply registered stage synthesizers.
+
+        Iterates each registered
+        :class:`~dataknobs_bots.reasoning.stage_synthesizers.StageSynthesizer`;
+        for each stage that declares the synthesizer's field, validates
+        (when ``validate`` is defined) then expands the primitive in
+        place. Runs BEFORE :meth:`_validate_config` and
+        :meth:`_translate_to_fsm` so the broader validator and the FSM
+        build pipeline see the post-expansion shape.
+
+        Consumer-extensible: any consumer can call
+        :func:`register_stage_synthesizer` to ship their own primitive.
+        """
+        # Import the reference adopter so it auto-registers on first use.
+        from . import wizard_intent_confirm  # noqa: F401
+        from .stage_synthesizers import iter_stage_synthesizers
+
+        synthesizers = iter_stage_synthesizers()
+        for stage in wizard_config.get("stages", []):
+            for field, synthesizer in synthesizers.items():
+                if field in stage and stage[field] is not None:
+                    validate = getattr(synthesizer, "validate", None)
+                    if callable(validate):
+                        validate(stage)
+                    synthesizer.synthesize(stage)
 
     def _validate_config(self, wizard_config: dict[str, Any]) -> None:
         """Validate wizard config and warn about common issues.
@@ -517,6 +568,10 @@ class WizardConfigLoader:
             arcs=arcs,
             metadata={
                 "prompt": stage.get("prompt", ""),
+                "response_template": stage.get("response_template"),
+                "clarification_template": stage.get(
+                    "clarification_template",
+                ),
                 "suggestions": stage.get("suggestions", []),
                 "help_text": stage.get("help_text"),
                 "can_skip": stage.get("can_skip", False),

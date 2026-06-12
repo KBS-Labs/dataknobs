@@ -240,18 +240,33 @@ class WizardResponder:
         """
         stage_name = stage.get("name", "unknown")
         response_template = stage.get("response_template")
+        clarification_template = stage.get("clarification_template")
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
         is_conversation_mode = stage.get("mode") == "conversation"
         is_first_render = state.get_render_count(stage_name) == 0
-        use_template = response_template and (
-            not is_conversation_mode or is_first_render
-        )
+
+        # Conversation-mode stages render `response_template` on first
+        # render only. On subsequent renders, use `clarification_template`
+        # when set (lets the stage nudge differently when the user hasn't
+        # engaged — e.g. intent_confirm's "Was that a yes or no?"
+        # reprompt). Stages without a clarification_template fall through
+        # to LLM mode after the first render (existing behaviour).
+        active_template: str | None = None
+        if is_conversation_mode:
+            if is_first_render:
+                active_template = response_template
+            elif clarification_template:
+                active_template = clarification_template
+        else:
+            active_template = response_template
+
+        use_template = bool(active_template)
 
         if use_template:
             content, llm_response = await self._resolve_template_content(
-                manager, llm, stage, state, response_template, wizard_snapshot,
+                manager, llm, stage, state, active_template, wizard_snapshot,
             )
             response = llm_response if llm_response is not None else (
                 self.create_template_response(content)

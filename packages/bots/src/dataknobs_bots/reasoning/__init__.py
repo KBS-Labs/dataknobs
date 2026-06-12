@@ -12,9 +12,9 @@ from .base import (
     ProcessResult,
     ReasoningManagerProtocol,
     ReasoningStrategy,
-    StreamStageContext,
-    StreamingPhasedProtocol,
     StrategyCapabilities,
+    StreamingPhasedProtocol,
+    StreamStageContext,
     ToolCallSpec,
     TurnHandle,
 )
@@ -30,51 +30,30 @@ from .grounded_config import (
 from .hybrid import HybridReasoning
 from .hybrid_config import HybridReasoningConfig
 from .observability import (
+    # Re-exported FSM types
+    ExecutionHistoryQuery,
+    ExecutionRecord,
+    ExecutionStats,
+    ExecutionTracker,
     # Task tracking types
     TaskCompletionTrigger,
     TaskStatus,
-    WizardTask,
-    WizardTaskList,
     # Wizard-specific types
     TransitionHistoryQuery,
     TransitionRecord,
     TransitionStats,
     TransitionTracker,
     WizardStateSnapshot,
+    WizardTask,
+    WizardTaskList,
     create_transition_record,
     # Conversion utilities
     execution_record_to_transition_record,
     transition_record_to_execution_record,
     transition_stats_to_execution_stats,
-    # Re-exported FSM types
-    ExecutionHistoryQuery,
-    ExecutionRecord,
-    ExecutionStats,
-    ExecutionTracker,
 )
 from .react import ReActReasoning, ReActTurnHandle
 from .react_config import ReActReasoningConfig
-from .simple import SimpleReasoning
-from .simple_config import SimpleReasoningConfig
-from .task_injection import (
-    TaskInjectionContext,
-    TaskInjectionResult,
-    TaskInjector,
-)
-from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
-from .wizard_config import WizardReasoningConfig
-from .wizard_response import StageResponseResult
-from .wizard_types import (
-    NavigationCommandConfig,
-    NavigationConfig,
-    RecoveryResult,
-    ToolResultMappingEntry,
-    WizardTurnHandle,
-)
-from .wizard_derivations import DerivationRule, FieldTransform
-from .wizard_fsm import WizardFSM
-from .wizard_hooks import WizardHooks
-from .wizard_loader import WizardConfigLoader, load_wizard_config
 from .registry import (
     StrategyFactory,
     get_registry,
@@ -82,6 +61,34 @@ from .registry import (
     is_strategy_registered,
     list_strategies,
     register_strategy,
+)
+from .simple import SimpleReasoning
+from .simple_config import SimpleReasoningConfig
+from .stage_synthesizers import (
+    StageSynthesizer,
+    iter_stage_synthesizers,
+    register_stage_synthesizer,
+    unregister_stage_synthesizer,
+    validate_no_conflicting_fields,
+)
+from .task_injection import (
+    TaskInjectionContext,
+    TaskInjectionResult,
+    TaskInjector,
+)
+from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
+from .wizard_config import WizardReasoningConfig
+from .wizard_derivations import DerivationRule, FieldTransform
+from .wizard_fsm import WizardFSM
+from .wizard_hooks import WizardHooks
+from .wizard_loader import WizardConfigLoader, load_wizard_config
+from .wizard_response import StageResponseResult
+from .wizard_types import (
+    NavigationCommandConfig,
+    NavigationConfig,
+    RecoveryResult,
+    ToolResultMappingEntry,
+    WizardTurnHandle,
 )
 
 __all__ = [
@@ -162,6 +169,12 @@ __all__ = [
     "ExecutionHistoryQuery",
     "ExecutionStats",
     "ExecutionTracker",
+    # Stage-synthesizer registry
+    "StageSynthesizer",
+    "iter_stage_synthesizers",
+    "register_stage_synthesizer",
+    "unregister_stage_synthesizer",
+    "validate_no_conflicting_fields",
 ]
 
 

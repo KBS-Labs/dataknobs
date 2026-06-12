@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
 import yaml
+
 from dataknobs_common.structured_config import StructuredConfig
 
 from .validation import ValidationResult
@@ -197,6 +198,7 @@ class StageConfig(StructuredConfig):
     extraction_model: str | None = None
     # Response generation
     response_template: str | None = None
+    clarification_template: str | None = None
     confirmation_template: str | None = None
     llm_assist: bool = False
     llm_assist_prompt: str | None = None
@@ -204,6 +206,13 @@ class StageConfig(StructuredConfig):
     # Conversation mode
     mode: str | None = None
     intent_detection: IntentDetectionConfig | None = None
+    # Stage primitive: declarative propose-then-consent block. Expanded
+    # by IntentConfirmSynthesizer at load time into mode/response_template/
+    # intent_detection/schema/transitions. Carried as raw dict because the
+    # expansion runs BEFORE StageConfig is reconstructed from typed
+    # config; round-trips via to_dict are after-expansion (no
+    # intent_confirm key present).
+    intent_confirm: dict[str, Any] | None = None
     # Tasks
     tasks: tuple[dict[str, Any], ...] = ()
     # Per-stage navigation keyword overrides
