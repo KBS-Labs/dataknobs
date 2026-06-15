@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `BackendRegistry[T_co]` runtime_checkable Protocol in
+  `dataknobs_common.registry` (also re-exported from
+  `dataknobs_common`). Stable `isinstance` target for "is this thing a
+  registry-like object?" across both the item-shape `Registry` and the
+  factory-shape `PluginRegistry`. Deliberately minimal — only `name`
+  (property), `has(key)`, `list_keys()`, and `unregister(key)` —
+  covering the four methods every registry-like adopter must offer.
+  Both `Registry` and `PluginRegistry` structurally conform without
+  any inheritance refactor. Joins `ResourceResolver`, `Discriminator`,
+  and `CapabilityContract` as the cross-cutting Protocols re-exported
+  from the top-level namespace. Consumers needing
+  registry-kind-specific methods (`create` / `create_async` /
+  `get_factory` for `PluginRegistry`; `get_metrics` / `list_items` /
+  `items` / `count` / `clear` for `Registry`) should `isinstance`
+  against the concrete class.
+- `PluginRegistry.create()` and `PluginRegistry.create_async()` shape
+  their not-found error via two opt-in constructor kwargs:
+  `not_found_kind: str | None = None` and
+  `not_found_exception: type[Exception] = NotFoundError`. The default
+  shape is unchanged (`NotFoundError("Plugin '<key>' not registered",
+  context={...})` — the principled `DataknobsError`-rooted form
+  consumers catch programmatically). Setting
+  `not_found_kind="event bus backend"` plus
+  `not_found_exception=ValueError` produces
+  `ValueError("Unknown event bus backend: <key>. Available backends:
+  <sorted-keys>")` for domain shims preserving a historical
+  `ValueError` contract. Non-`DataknobsError` exception classes
+  receive the message only (no `context=` kwarg, which would crash
+  stdlib exceptions).
+- `PluginRegistry.register()` accepts `allow_overwrite=` as a
+  keyword-only alias for `override=`, matching the
+  `Registry.register()` spelling. When explicitly `True` or `False`,
+  `allow_overwrite` wins; `None` (the default) leaves `override`
+  unmodified. Positional registrations and `override=`-keyword
+  registrations behave identically to before this alias was added.
+- `PluginRegistry.has(key)` delegates to `is_registered(key)`. Added so
+  `PluginRegistry` structurally conforms to the new `BackendRegistry`
+  Protocol.
+- `PluginRegistry` documents the per-input-shape registry split
+  convention in its class docstring (with a worked example): when
+  adopting `PluginRegistry` for a Protocol parameterized by input
+  shape (`ResourceResolver[KeyT, ValueT]`, `Discriminator[InputT,
+  KindT]`), prefer N typed registries — one per concrete input shape —
+  over one flat registry with `validate_type=Any`. The typed
+  `validate_type=` is load-bearing under consumer-extensibility: an
+  out-of-tree backend conforming to the wrong Protocol shape would
+  silently register and only fail at use-time without the constraint.
 - Declarative capability advertisement in `dataknobs_common.capabilities`
   (also re-exported from `dataknobs_common`). The `Capability` enum
   declares stable identifiers for cross-cutting optional features
