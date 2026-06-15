@@ -417,6 +417,17 @@ async def create_rate_limiter_async(config: dict) -> RateLimiter:
     type as ``create_rate_limiter``; the surface is shipped for API
     symmetry and consumer-extensibility (an out-of-tree backend's
     ``from_config_async`` is detected and awaited).
+
+    Raises:
+        ValueError: If the backend is not registered, or required rate
+            config is missing. Normalization runs *before* backend
+            dispatch, so a missing-``rates`` config raises here rather
+            than from the backend factory.
+        OperationError: If the backend factory raises during construction
+            (invalid backend-specific config, missing optional
+            dependency, etc.). Wraps the originating exception via
+            ``__cause__``. Same behaviour as the sync
+            :func:`create_rate_limiter`.
     """
 ```
 

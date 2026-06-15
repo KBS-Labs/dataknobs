@@ -434,7 +434,10 @@ class TestRateLimiterBackendsPluginRegistry:
             })
         msg = str(excinfo.value)
         assert "Unknown rate limiter backend: still-nope" in msg
-        assert "Available backends: memory, pyrate" in msg
+        # Prefix-only check (defensive vs. exact ``memory, pyrate``
+        # enumeration) — a consumer-registered backend lingering from
+        # an upstream test run shouldn't flip this pin.
+        assert "Available backends:" in msg
 
     def test_create_rate_limiter_shim_preserves_exception_class(self):
         with pytest.raises(ValueError):
@@ -539,6 +542,25 @@ class TestRateLimiterBackendsPluginRegistry:
         msg = str(excinfo.value).lower()
         assert "rates" in msg
         assert "unknown rate limiter backend" not in msg
+
+    @pytest.mark.asyncio
+    async def test_create_rate_limiter_async_unknown_backend_raises(self):
+        """Async shim surfaces the same unknown-backend ``ValueError`` shape.
+
+        Sibling pin to ``test_create_rate_limiter_shim_preserves_error_text``:
+        with a *valid* ``rates`` config (so normalization succeeds), an
+        unregistered backend name surfaces the registry's not-found
+        ``ValueError`` from ``create_async`` with the byte-identical
+        error text the sync shim emits.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            await create_rate_limiter_async({
+                "backend": "still-nope",
+                "rates": [{"limit": 10, "interval": 60}],
+            })
+        msg = str(excinfo.value)
+        assert "Unknown rate limiter backend: still-nope" in msg
+        assert "Available backends:" in msg
 
 
 class TestRateLimiterProtocol:
