@@ -302,6 +302,74 @@ class TestLockFactory:
         assert isinstance(create_lock({"backend": "memory"}), InProcessLock)
 
 
+class TestLockBackendsPluginRegistry:
+    """Pin the PR-C consolidation onto ``PluginRegistry`` / ``BackendRegistry``
+    and the sync/async ``create_lock`` shim parity.
+
+    Mirrors :class:`TestEventBusBackendsPluginRegistry` in ``test_events.py``
+    — the two registries share one abstraction, so the cross-validation
+    here is that ``not_found_kind="lock backend"`` + ``not_found_exception
+    =ValueError`` produce byte-identical error shape to the legacy
+    hand-rolled ``create_lock`` body, and the async shim resolves to the
+    same instance type as the sync shim.
+    """
+
+    def test_lock_backends_is_plugin_registry(self) -> None:
+        from dataknobs_common.locks import lock_backends
+        from dataknobs_common.registry import PluginRegistry
+
+        assert isinstance(lock_backends, PluginRegistry)
+
+    def test_lock_backends_is_backend_registry(self) -> None:
+        from dataknobs_common.locks import lock_backends
+        from dataknobs_common.registry import BackendRegistry
+
+        assert isinstance(lock_backends, BackendRegistry)
+
+    def test_create_lock_shim_preserves_error_text(self) -> None:
+        """The not-found message is byte-identical to the pre-migration
+        hand-rolled text (sorted backends, no extra punctuation)."""
+        with pytest.raises(ValueError) as excinfo:
+            create_lock({"backend": "still-nope"})
+        msg = str(excinfo.value)
+        assert "Unknown lock backend: still-nope" in msg
+        assert "Available backends: memory, postgres" in msg
+
+    def test_create_lock_shim_preserves_exception_class(self) -> None:
+        """The not-found raise is a plain ``ValueError`` (the historical
+        contract), not the ``NotFoundError`` ``PluginRegistry`` defaults
+        to. The ``not_found_exception=ValueError`` ctor knob is the seam
+        keeping the pre-migration call-site catches valid."""
+        with pytest.raises(ValueError):
+            create_lock({"backend": "still-nope"})
+
+    async def test_create_lock_async_returns_same_type_as_sync(self) -> None:
+        """Every built-in lock backend constructs synchronously; the async
+        shim is shipped for API symmetry and consumer-extensibility, and
+        must return the same instance type as the sync shim for an
+        identical config dict."""
+        from dataknobs_common.locks import create_lock_async
+
+        sync_lock = create_lock({"backend": "memory"})
+        async_lock = await create_lock_async({"backend": "memory"})
+        assert type(sync_lock) is type(async_lock)
+        assert isinstance(async_lock, InProcessLock)
+        await sync_lock.close()
+        await async_lock.close()
+
+    async def test_create_lock_async_preserves_error_shape(self) -> None:
+        """The async shim's not-found raise is the same shape as sync —
+        same exception class, same message wording (the symmetry guard
+        for the ``create_async`` path through ``_resolve_factory``)."""
+        from dataknobs_common.locks import create_lock_async
+
+        with pytest.raises(ValueError) as excinfo:
+            await create_lock_async({"backend": "still-nope"})
+        msg = str(excinfo.value)
+        assert "Unknown lock backend: still-nope" in msg
+        assert "Available backends: memory, postgres" in msg
+
+
 class TestPostgresKeyspace:
     """Pure-function tests for ``_key_to_bigint`` — no database.
 

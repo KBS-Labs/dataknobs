@@ -96,6 +96,7 @@ from dataknobs_common.locks import (
     InProcessLock,
     LockFactory,
     create_lock,
+    create_lock_async,
     lock_backends,
 )
 from dataknobs_common.metadata import enforce_immutable_keys
@@ -243,6 +244,7 @@ __all__ = [
     # Distributed locks
     "DistributedLock",
     "create_lock",
+    "create_lock_async",
     "lock_backends",
     "LockFactory",
     "InProcessLock",
