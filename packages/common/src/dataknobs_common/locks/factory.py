@@ -79,7 +79,11 @@ def _create_postgres_lock(config: dict[str, Any]) -> DistributedLock:
 
     # ``from_config`` routes the dict through ``PostgresLockConfig.from_dict``
     # → ``_normalize_dict`` → ``normalize_postgres_connection_config``,
-    # identical resolution to direct ``PostgresAdvisoryLock(config=config)``.
+    # equivalent to ``PostgresAdvisoryLock.from_config(config)``. The
+    # normalizer can raise ``ConfigurationError`` (no resolvable DSN) or
+    # ``ValueError`` (shell-unsafe ``host``/``database``); both are
+    # wrapped in ``OperationError`` by ``PluginRegistry.create()`` with
+    # the originating exception preserved on ``__cause__``.
     return PostgresAdvisoryLock.from_config(config)
 
 

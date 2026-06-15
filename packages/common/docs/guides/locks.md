@@ -369,6 +369,14 @@ async def create_lock_async(config: dict) -> DistributedLock:
     instance type as :func:`create_lock`; the surface is shipped for
     API symmetry and consumer-extensibility (an out-of-tree backend's
     ``from_config_async`` is detected and awaited).
+
+    Raises:
+        ValueError: If the backend is not registered (message lists all
+            registered backends).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.); the
+            originating exception is preserved on ``__cause__``. Same
+            behaviour as the sync :func:`create_lock`.
     """
 ```
 

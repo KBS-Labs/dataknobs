@@ -255,21 +255,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_lock()` / `create_lock_async()` are now wrapped in
   `OperationError` (with the original exception preserved via
   `__cause__`) — previously they propagated unwrapped as the
-  originating type. The only built-in path that surfaces this in
-  practice today is the `postgres` backend, whose construction routes
-  through `PostgresLockConfig.from_dict` →
-  `normalize_postgres_connection_config` and can raise
-  `ConfigurationError` when no connection config is resolvable; that
-  exception is now wrapped. The unknown-backend path is NOT affected
-  — it still raises `ValueError` with the same `"Unknown lock
-  backend: <key>. Available backends: …"` message text, and it is
-  raised *before* the `OperationError` wrapper engages, so it can
-  never surface as `OperationError`. Consumers catching the
-  originating type around `create_lock()` to catch *construction*
-  failures should switch to catching the common base `DataknobsError`
-  (which covers `OperationError` and `ConfigurationError`) — the
-  unknown-backend `ValueError` propagates separately and needs no
-  special-casing to distinguish.
+  originating type. Each built-in backend raises its own exception
+  type from its construction path: `PostgresAdvisoryLock` raises
+  `ConfigurationError` from `normalize_postgres_connection_config`
+  when no connection config is resolvable, or `ValueError` from
+  `_validate_url_component` (via the normalizer) when `host` or
+  `database` contain shell-unsafe characters; `InProcessLock` has no
+  construction-time validation today (defaulted fields, no
+  `__post_init__`), so it doesn't surface this change in practice —
+  but if a future validation is added or an out-of-tree backend's
+  factory raises during construction, the same wrapping applies. The
+  unknown-backend path is NOT affected — it still raises `ValueError`
+  with the same `"Unknown lock backend: <key>. Available backends:
+  …"` message text, and it is raised *before* the `OperationError`
+  wrapper engages, so it can never surface as `OperationError`.
+  Consumers catching the originating type around `create_lock()` to
+  catch *construction* failures should switch to catching the common
+  base `DataknobsError` (which covers `OperationError` and
+  `ConfigurationError`) — the unknown-backend `ValueError` propagates
+  separately and needs no special-casing to distinguish. Tests
+  asserting on specific exception types around invalid construction
+  config need the same update.
 - `dataknobs_common.locks.lock_backends` is now a
   `PluginRegistry[DistributedLock]` (was `Registry[LockFactory]`). The
   registration surface (`lock_backends.register("name", factory)`),
