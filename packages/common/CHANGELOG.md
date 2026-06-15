@@ -228,6 +228,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the async shim returns the same instance type as the sync shim; the
   surface is shipped for API symmetry and consumer-extensibility. Also
   re-exported from the top-level `dataknobs_common` namespace.
+- `dataknobs_common.resolver.resolver_backends` —
+  `PluginRegistry[ResourceResolver[Any, Any]]` exposing a
+  consumer-extensibility surface for generic key→value resolvers.
+  Built-in factories: `"mapping"`, `"callable"`, `"composite"`,
+  `"defaulting"`, `"cached"`, `"null"` (one per in-tree reference
+  implementation). Factory signature is
+  `(config: dict[str, Any]) -> ResourceResolver[Any, Any]`. Register a
+  custom backend with `resolver_backends.register("name", factory)` and
+  select it via `resolver_backends.create({"backend": "name", ...})` —
+  or, when the discriminator field is unset, the default `"mapping"`
+  factory is selected (the `config_key_default` semantic), letting a
+  `{"mapping": {...}}` config skip the discriminator entirely.
+  `validate_type=ResourceResolver` pins the registered backends to the
+  `ResourceResolver` Protocol so a structurally non-conforming factory
+  return fails fast at `create()`-time rather than at use-time.
+  Conforms to `BackendRegistry`. Also re-exported from the top-level
+  `dataknobs_common` namespace.
+- `dataknobs_common.resolver.partition_resolver_backends` —
+  `PluginRegistry[Any]` exposing a consumer-extensibility surface for
+  vector-store partition resolvers (record→partition-name lookups).
+  Built-in factories: `"null"` (default), `"metadata_key"`,
+  `"temporal"`, `"callable"`, `"joining"`. Distinct namespace from
+  `resolver_backends` per the per-input-shape split convention
+  documented on `PluginRegistry` — partition resolvers key on a record
+  rather than a `KeyT`, and no declared partition Protocol exists, so
+  `validate_type=` is intentionally unset (a flat registry with
+  `validate_type=ResourceResolver` would silently accept either input
+  shape and only fail at use-time). Register a custom backend with
+  `partition_resolver_backends.register("name", factory)` and select it
+  via `partition_resolver_backends.create({"backend": "name", ...})`.
+  Conforms to `BackendRegistry`. Also re-exported from the top-level
+  `dataknobs_common` namespace. Neither resolver registry ships a
+  standalone `create_resolver()` / `create_partition_resolver()`
+  convenience shim (asymmetric with the `create_event_bus()` /
+  `create_lock()` / `create_rate_limiter()` shape from earlier in the
+  series) — the registries are surfaced directly. There is no top-level
+  rate / category parsing step to perform ahead of dispatch (which is
+  what justified the shim in the rate-limiter case), and a
+  `{"mapping": {...}}` config can already skip the discriminator via
+  `config_key_default="mapping"`, so a shim would add no value over
+  `resolver_backends.create({...})`.
 
 ### Changed
 - **Breaking:** Backend-factory construction errors raised by
