@@ -677,3 +677,79 @@ class TestEventBusRegistry:
 
         with pytest.raises(OperationError):
             event_bus_backends.register("memory", lambda c: InMemoryEventBus())
+
+
+class TestEventBusBackendsPluginRegistry:
+    """Pins for the ``event_bus_backends`` registry shape after the
+    config-driven factory consolidation.
+
+    The ``event_bus_backends`` registry is a
+    :class:`~dataknobs_common.registry.PluginRegistry` parametrized with
+    ``not_found_kind="event bus backend"`` and
+    ``not_found_exception=ValueError``. These tests pin:
+
+    - The registry's concrete type.
+    - :class:`~dataknobs_common.registry.BackendRegistry` Protocol
+      conformance (so consumer ``isinstance`` checks against the shared
+      Protocol succeed).
+    - The error-message text + exception class for unknown backends
+      (regression pin against the pre-consolidation hand-rolled shim).
+    - Sync/async API symmetry for :func:`create_event_bus` /
+      :func:`create_event_bus_async`.
+    """
+
+    def test_event_bus_backends_is_plugin_registry(self):
+        from dataknobs_common.events import event_bus_backends
+        from dataknobs_common.registry import PluginRegistry
+
+        assert isinstance(event_bus_backends, PluginRegistry)
+
+    def test_event_bus_backends_is_backend_registry(self):
+        from dataknobs_common.events import event_bus_backends
+        from dataknobs_common.registry import BackendRegistry
+
+        assert isinstance(event_bus_backends, BackendRegistry)
+
+    def test_create_event_bus_shim_preserves_error_text(self):
+        """``"Unknown event bus backend: <name>. Available backends: …"``
+        — the exact text the pre-consolidation shim emitted, now produced
+        by ``PluginRegistry`` via the ``not_found_kind`` opt-in.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            create_event_bus({"backend": "still-nope"})
+
+        msg = str(excinfo.value)
+        assert "Unknown event bus backend: still-nope" in msg
+        assert "Available backends:" in msg
+        # Sorted, including the four built-ins.
+        assert "memory" in msg
+        assert "postgres" in msg
+        assert "redis" in msg
+        assert "sqs" in msg
+
+    def test_create_event_bus_shim_preserves_exception_class(self):
+        """``ValueError`` — preserved via ``not_found_exception`` opt-in
+        (default would be ``NotFoundError``).
+        """
+        with pytest.raises(ValueError):
+            create_event_bus({"backend": "still-nope"})
+
+    @pytest.mark.asyncio
+    async def test_create_event_bus_async_returns_same_type_as_sync(self):
+        from dataknobs_common.events import create_event_bus_async
+
+        sync_bus = create_event_bus({"backend": "memory"})
+        async_bus = await create_event_bus_async({"backend": "memory"})
+        assert type(sync_bus) is type(async_bus)
+        assert isinstance(async_bus, InMemoryEventBus)
+
+    @pytest.mark.asyncio
+    async def test_create_event_bus_async_preserves_error_shape(self):
+        from dataknobs_common.events import create_event_bus_async
+
+        with pytest.raises(ValueError) as excinfo:
+            await create_event_bus_async({"backend": "still-nope"})
+
+        msg = str(excinfo.value)
+        assert "Unknown event bus backend: still-nope" in msg
+        assert "Available backends:" in msg

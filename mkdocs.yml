@@ -73,6 +73,7 @@ nav:
       - packages/common/locks.md
       - packages/common/structured-config.md
       - packages/common/serialization.md
+      - packages/common/plugin-registry.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:

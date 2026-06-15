@@ -191,6 +191,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture `from_config`'s `**kwargs` and route them into the mixin's
   `_components` channel without polluting the parity test with a
   per-class allowlist entry.
+- `dataknobs_common.events.create_event_bus_async(config)` — async
+  counterpart to `create_event_bus`. Dispatches through
+  `event_bus_backends.create_async(config=config)` so out-of-tree
+  backends exposing `from_config_async` are detected and awaited. Today
+  every built-in backend constructs synchronously, so the async shim
+  returns the same instance type as the sync shim; the surface is
+  shipped for API symmetry and consumer-extensibility.
+
+### Changed
+- `dataknobs_common.events.event_bus_backends` is now a
+  `PluginRegistry[EventBus]` (was `Registry[EventBusFactory]`). The
+  registration surface (`event_bus_backends.register("name", factory)`),
+  the `create_event_bus({"backend": "name", ...})` resolution shape,
+  the unknown-backend error message text, and the `ValueError`
+  exception class are unchanged. The `EventBusFactory` typealias is
+  preserved. Consumers checking "is this a registry-like thing?" via
+  `isinstance(event_bus_backends, Registry)` should switch to
+  `isinstance(event_bus_backends, BackendRegistry)` — the shared
+  runtime_checkable Protocol both `Registry` and `PluginRegistry`
+  structurally conform to. The `event_bus_backends.unregister(name)`
+  return value is now `None` (was the previously-registered factory);
+  existing in-tree usages discard the return value.
 
 ### Fixed
 - `dataknobs_common.expressions._validate_ast` now blocks
