@@ -146,6 +146,8 @@ from dataknobs_common.resolver import (
     NullResolver,
     ResourceResolver,
     TemporalPartitionResolver,
+    partition_resolver_backends,
+    resolver_backends,
 )
 from dataknobs_common.serialization import (
     Serializable,
@@ -293,6 +295,8 @@ __all__ = [
     "TemporalPartitionResolver",
     "CallablePartitionResolver",
     "JoiningPartitionResolver",
+    "partition_resolver_backends",
+    "resolver_backends",
     # Serialization
     "Serializable",
     "serialize",

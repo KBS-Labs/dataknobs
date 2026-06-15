@@ -48,6 +48,8 @@ from typing import (
     runtime_checkable,
 )
 
+from dataknobs_common.registry import PluginRegistry
+
 KeyT_contra = TypeVar("KeyT_contra", contravariant=True)
 ValueT_co = TypeVar("ValueT_co", covariant=True)
 _KeyT = TypeVar("_KeyT")
@@ -434,6 +436,128 @@ class JoiningPartitionResolver:
         return self.sep.join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Registry-extensible factory surfaces
+# ---------------------------------------------------------------------------
+#
+# Two registries — one per input shape — per the per-input-shape split
+# convention documented on ``PluginRegistry`` (see also
+# ``packages/common/docs/guides/registries.md``). ``ResourceResolver`` keys
+# on ``KeyT``; partition resolvers key on a record. A single flat registry
+# with ``validate_type=Any`` would silently accept either shape and only
+# fail at use-time. Splitting lets ``resolver_backends`` pin its typed
+# constraint while ``partition_resolver_backends`` (whose entries share no
+# declared Protocol) stays open.
+
+
+# Generic resolver registry: KeyT -> ValueT shape (mappings, callables,
+# composites, caches, defaulting wrappers).
+resolver_backends: PluginRegistry[ResourceResolver[Any, Any]] = PluginRegistry(
+    name="resolver_backends",
+    validate_type=ResourceResolver,
+    config_key="backend",
+    config_key_default="mapping",
+    not_found_kind="resolver backend",
+    not_found_exception=ValueError,
+)
+
+
+def _make_mapping_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
+    return MappingResolver(mapping=config["mapping"])
+
+
+def _make_callable_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
+    return CallableResolver(fn=config["fn"])
+
+
+def _make_composite_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
+    return CompositeResolver(resolvers=config["resolvers"])
+
+
+def _make_defaulting_resolver(
+    config: dict[str, Any],
+) -> ResourceResolver[Any, Any]:
+    return DefaultingResolver(
+        inner=config["inner"], default=config["default"]
+    )
+
+
+def _make_cached_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
+    return CachedResolver(
+        inner=config["inner"], max_size=config.get("max_size", 128)
+    )
+
+
+def _make_null_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
+    return NullResolver()
+
+
+resolver_backends.register("mapping", _make_mapping_resolver)
+resolver_backends.register("callable", _make_callable_resolver)
+resolver_backends.register("composite", _make_composite_resolver)
+resolver_backends.register("defaulting", _make_defaulting_resolver)
+resolver_backends.register("cached", _make_cached_resolver)
+resolver_backends.register("null", _make_null_resolver)
+
+
+# Partition resolver registry: record -> str | None shape. Distinct from
+# ``resolver_backends`` (key-shaped input) per the split convention; no
+# shared partition Protocol exists, so ``validate_type=`` is intentionally
+# omitted.
+partition_resolver_backends: PluginRegistry[Any] = PluginRegistry(
+    name="partition_resolver_backends",
+    config_key="backend",
+    config_key_default="null",
+    not_found_kind="partition resolver backend",
+    not_found_exception=ValueError,
+)
+
+
+def _make_null_partition(config: dict[str, Any]) -> NullPartitionResolver:
+    return NullPartitionResolver(default=config.get("default", "default"))
+
+
+def _make_metadata_key_partition(
+    config: dict[str, Any],
+) -> MetadataKeyPartitionResolver:
+    return MetadataKeyPartitionResolver(
+        metadata_key=config["metadata_key"],
+        default=config.get("default", "default"),
+    )
+
+
+def _make_temporal_partition(
+    config: dict[str, Any],
+) -> TemporalPartitionResolver:
+    return TemporalPartitionResolver(
+        timestamp_key=config["timestamp_key"],
+        bucket=config.get("bucket", "quarter"),
+        default=config.get("default", "default"),
+    )
+
+
+def _make_callable_partition(
+    config: dict[str, Any],
+) -> CallablePartitionResolver:
+    return CallablePartitionResolver(fn=config["fn"])
+
+
+def _make_joining_partition(
+    config: dict[str, Any],
+) -> JoiningPartitionResolver:
+    return JoiningPartitionResolver(
+        resolvers=config["resolvers"],
+        sep=config.get("sep", "_"),
+    )
+
+
+partition_resolver_backends.register("null", _make_null_partition)
+partition_resolver_backends.register("metadata_key", _make_metadata_key_partition)
+partition_resolver_backends.register("temporal", _make_temporal_partition)
+partition_resolver_backends.register("callable", _make_callable_partition)
+partition_resolver_backends.register("joining", _make_joining_partition)
+
+
 __all__ = [
     "AsyncCachedResolver",
     "AsyncCallableResolver",
@@ -450,4 +574,6 @@ __all__ = [
     "NullResolver",
     "ResourceResolver",
     "TemporalPartitionResolver",
+    "partition_resolver_backends",
+    "resolver_backends",
 ]
