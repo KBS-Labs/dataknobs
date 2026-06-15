@@ -1414,10 +1414,11 @@ class PluginRegistry(Generic[T]):
 
         Returns the resolved factory, the canonical key (for error
         context), and the possibly key-stripped config. Raises
-        ``ValueError`` (unresolvable key) / ``NotFoundError`` (unknown
-        key) directly — both callers invoke this *before* their
-        factory-invocation ``try`` so these propagate unwrapped, matching
-        the historical contract.
+        ``ValueError`` (unresolvable key) or ``self._not_found_exception``
+        (unknown key — :class:`NotFoundError` by default; opt-in via the
+        ``not_found_exception`` ctor kwarg) directly — both callers
+        invoke this *before* their factory-invocation ``try`` so these
+        propagate unwrapped, matching the historical contract.
         """
         self._ensure_initialized()
 
@@ -1458,7 +1459,7 @@ class PluginRegistry(Generic[T]):
                 context = {
                     "key": key,
                     "registry": self._name,
-                    "available": list(self._factories.keys()),
+                    "available": available,
                 }
                 exc_cls = self._not_found_exception
                 if issubclass(exc_cls, DataknobsError):

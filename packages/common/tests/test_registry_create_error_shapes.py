@@ -120,6 +120,24 @@ def test_create_unknown_key_lists_available_sorted() -> None:
     )
 
 
+def test_create_unknown_key_default_shape_context_available_is_sorted() -> None:
+    """``context["available"]`` is sorted so consumers reading the
+    structured context match what the human-readable message renders.
+    """
+    registry: PluginRegistry[Any] = PluginRegistry("test_context_sort")
+    # Register out-of-alphabetical-order to confirm sort
+    registry.register("zebra", lambda config: {"config": config})
+    registry.register("aardvark", lambda config: {"config": config})
+    registry.register("monkey", lambda config: {"config": config})
+
+    with pytest.raises(NotFoundError) as excinfo:
+        registry.create(key="missing")
+
+    assert excinfo.value.context["available"] == [
+        "aardvark", "monkey", "zebra",
+    ]
+
+
 def test_unknown_key_message_handles_value_error_no_context() -> None:
     """``ValueError`` (and other non-DataknobsError classes) must NOT
     receive a ``context=`` kwarg — they would crash with ``TypeError``.
@@ -197,6 +215,25 @@ def test_backend_registry_protocol_rejects_non_conforming() -> None:
             return "fake"
 
     assert not isinstance(NotARegistry(), BackendRegistry)
+
+
+# ---------------------------------------------------------------------------
+# has() alias on PluginRegistry (delegates to is_registered)
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_registry_has_returns_true_for_registered_key() -> None:
+    registry: PluginRegistry[Any] = PluginRegistry("test_has_true")
+    registry.register("known", lambda config: {"config": config})
+
+    assert registry.has("known") is True
+
+
+def test_plugin_registry_has_returns_false_for_missing_key() -> None:
+    registry: PluginRegistry[Any] = PluginRegistry("test_has_false")
+    registry.register("known", lambda config: {"config": config})
+
+    assert registry.has("missing") is False
 
 
 # ---------------------------------------------------------------------------
