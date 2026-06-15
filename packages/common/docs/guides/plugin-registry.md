@@ -87,6 +87,24 @@ partition_resolver_backends: PluginRegistry[Any] = PluginRegistry(
 
 If a consumer later surfaces "actually we wanted one flat registry," the cost of being wrong is one line per entry (move entries between registries; deprecate the smaller one). The choice is reversible; the typed pin is not.
 
+## `BackendRegistry` Protocol
+
+Consumers writing tooling that asks "is this thing a registry-like object?" should `isinstance` against the runtime_checkable `BackendRegistry` Protocol instead of the concrete `Registry` or `PluginRegistry` classes:
+
+```python
+from dataknobs_common import BackendRegistry, PluginRegistry, Registry
+
+items = Registry[str]("items")
+plugins = PluginRegistry[Any]("plugins")
+
+assert isinstance(items, BackendRegistry)
+assert isinstance(plugins, BackendRegistry)
+```
+
+`BackendRegistry` is deliberately minimal — it covers the four methods every registry-like adopter must offer: the `name` property, `has(key)`, `list_keys()`, and `unregister(key)`. Members specific to one shape — `create()` / `create_async()` / `get_factory()` for `PluginRegistry`; `get_metrics()` / `list_items()` / `items()` / `count()` / `clear()` for `Registry` — are NOT in the Protocol. Consumers needing those features should `isinstance` against the concrete class.
+
+`BackendRegistry` joins `ResourceResolver`, `Discriminator`, and `CapabilityContract` as the cross-cutting runtime_checkable Protocols re-exported from the top-level `dataknobs_common` namespace.
+
 ## `get()` vs `create()`
 
 The registry supports two modes of instantiation with different calling conventions:

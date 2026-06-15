@@ -134,6 +134,11 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
     Raises:
         ValueError: If the backend is not registered. The message lists all
             registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. This includes the
+            ``ValueError`` raised by ``SqsEventBusConfig`` when ``queue_url``
+            is missing.
 
     Example:
         ```python
@@ -158,12 +163,35 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
     # ``from .bus import EventBus`` without a module-load cycle.
     from .registry import event_bus_backends
 
-    backend = config.get("backend", "memory")
-    factory = event_bus_backends.get_optional(backend)
-    if factory is None:
-        available = ", ".join(sorted(event_bus_backends.list_keys()))
-        raise ValueError(
-            f"Unknown event bus backend: {backend}. "
-            f"Available backends: {available}"
-        )
-    return factory(config)
+    return event_bus_backends.create(config=config)
+
+
+async def create_event_bus_async(config: dict[str, Any]) -> EventBus:
+    """Async-symmetric counterpart to :func:`create_event_bus`.
+
+    For backends whose construction is asynchronous (eager-connecting
+    pools, LLM-warmed wrappers, …). Today every built-in backend
+    constructs synchronously, so this function returns the same instance
+    type as :func:`create_event_bus`; the surface is shipped for API
+    symmetry and consumer-extensibility (an out-of-tree backend's
+    ``from_config_async`` is detected and awaited via
+    :meth:`PluginRegistry.create_async`).
+
+    Args:
+        config: Configuration dict with a 'backend' key and
+            backend-specific options.
+
+    Returns:
+        EventBus instance.
+
+    Raises:
+        ValueError: If the backend is not registered. The message lists
+            all registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. Same behaviour as
+            the sync :func:`create_event_bus`.
+    """
+    from .registry import event_bus_backends
+
+    return await event_bus_backends.create_async(config=config)

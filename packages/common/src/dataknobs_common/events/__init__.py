@@ -60,7 +60,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .bus import EventBus, create_event_bus
+from .bus import EventBus, create_event_bus, create_event_bus_async
 from .config import (
     EventBusConfig,
     MemoryEventBusConfig,
@@ -80,6 +80,7 @@ __all__ = [
     "EventBus",
     # Factory
     "create_event_bus",
+    "create_event_bus_async",
     # Plugin registry
     "event_bus_backends",
     "EventBusFactory",

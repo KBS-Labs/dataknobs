@@ -1,9 +1,9 @@
 """Registry-extensible factory for event bus backends.
 
 ``create_event_bus()`` resolves the ``backend`` config key through this
-registry instead of a sealed ``if/elif`` chain. Out-of-tree consumers can
-add a custom :class:`~dataknobs_common.events.bus.EventBus` backend without
-forking DataKnobs::
+registry. Out-of-tree consumers can add a custom
+:class:`~dataknobs_common.events.bus.EventBus` backend without forking
+DataKnobs::
 
     from dataknobs_common.events import event_bus_backends, create_event_bus
 
@@ -14,10 +14,15 @@ forking DataKnobs::
     event_bus_backends.register("kafka", _make_kafka_bus)
     bus = create_event_bus({"backend": "kafka", "brokers": "..."})
 
-This mirrors the data-layer factories (``async_backends``,
-``VectorStoreFactory``) and the sibling lock registry
-(``dataknobs_common.locks.lock_backends``); the three stay structurally
-consistent.
+The registry is a :class:`~dataknobs_common.registry.PluginRegistry` —
+the shared config-driven factory abstraction also used by
+``lock_backends`` and the bots-side ``memory_backends`` /
+``knowledge_base_backends`` / ``source_backends``. Resolution of the
+``backend`` discriminator, the not-found error shape ("Unknown event bus
+backend: <name>. Available backends: …"), the ``ValueError`` exception
+class, and the lazy-init flow live in :class:`PluginRegistry`; this
+module declares the per-domain knobs (kind label, validate_type, default
+backend) and the four built-in backend factories.
 
 Each built-in wrapper imports its concrete backend *lazily* (inside the
 factory call) so importing this module never pulls optional backend
@@ -30,21 +35,33 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from dataknobs_common.registry import Registry
+from dataknobs_common.registry import PluginRegistry
 
 from .bus import EventBus
 
 EventBusFactory = Callable[[dict[str, Any]], EventBus]
-"""A backend factory: maps a config dict to an :class:`EventBus`."""
+"""A backend factory: maps a config dict to an :class:`EventBus`.
 
-event_bus_backends: Registry[EventBusFactory] = Registry(
-    name="event_bus_backends"
+Preserved as a public typealias for out-of-tree consumers that annotate
+their factory closures. The registry holds factories of this shape; no
+behavioural difference from the underlying ``Callable``.
+"""
+
+event_bus_backends: PluginRegistry[EventBus] = PluginRegistry(
+    name="event_bus_backends",
+    validate_type=EventBus,
+    config_key="backend",
+    config_key_default="memory",
+    not_found_kind="event bus backend",
+    not_found_exception=ValueError,
 )
 """Registry of named :data:`EventBusFactory` callables.
 
 Register a custom backend with
 ``event_bus_backends.register("name", factory)`` and select it via
-``create_event_bus({"backend": "name", ...})``.
+``create_event_bus({"backend": "name", ...})``. The registry conforms
+to :class:`~dataknobs_common.registry.BackendRegistry` for ``isinstance``
+checks.
 """
 
 
@@ -77,8 +94,10 @@ def _create_sqs_bus(config: dict[str, Any]) -> EventBus:
     # Lazy: aioboto3 (optional [sqs] extra) is imported only here, so a
     # consumer that never selects "sqs" needs no AWS dependency. The
     # config dict flows through ``SqsEventBusConfig.from_dict``, so a
-    # missing ``queue_url`` surfaces as the dataclass's ``ValueError``
-    # — same error class as the legacy direct-kwarg path.
+    # missing ``queue_url`` raises ``ValueError`` in
+    # ``SqsEventBusConfig.__post_init__``; the ``PluginRegistry.create()``
+    # wrapper re-raises it as ``OperationError`` (with the original
+    # ``ValueError`` preserved on ``__cause__``).
     from .sqs import SqsEventBus
 
     return SqsEventBus.from_config(config)

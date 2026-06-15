@@ -572,18 +572,50 @@ def create_event_bus(config: dict) -> EventBus:
     Raises:
         ValueError: If the backend is not registered (message lists all
             registered backends).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. This includes the
+            ``ValueError`` raised by ``SqsEventBusConfig`` when
+            ``queue_url`` is missing.
+    """
+
+
+async def create_event_bus_async(config: dict) -> EventBus:
+    """Async-symmetric counterpart to ``create_event_bus``.
+
+    Dispatches via ``event_bus_backends.create_async(config=config)`` so
+    a custom backend's ``from_config_async`` is detected and awaited.
+    Built-in backends construct synchronously; the async shim returns
+    the same instance type as the sync shim.
+
+    Raises:
+        ValueError: If the backend is not registered.
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. Same behaviour as
+            the sync :func:`create_event_bus`.
     """
 ```
 
 ### Plugin Registry
 
 ```python
-event_bus_backends: Registry[EventBusFactory]
-# EventBusFactory = Callable[[dict[str, Any]], EventBus]
+event_bus_backends: PluginRegistry[EventBus]
+# EventBusFactory = Callable[[dict[str, Any]], EventBus]   # typealias preserved
 
 event_bus_backends.register("name", factory)   # add a backend
 event_bus_backends.list_keys()                  # registered backend names
 ```
+
+`event_bus_backends` is a
+[`PluginRegistry`](plugin-registry.md) parametrized with
+`not_found_kind="event bus backend"` and `not_found_exception=ValueError`,
+so an unknown backend resolves to the historical
+`ValueError("Unknown event bus backend: <key>. Available backends: …")`
+message. It conforms to the cross-cutting
+[`BackendRegistry`](plugin-registry.md#backendregistry-protocol) Protocol — consumers checking
+"is this thing a registry?" via `isinstance(event_bus_backends,
+BackendRegistry)` succeed.
 
 See [Custom Backends](#custom-backends-plugin-registry) for usage.
 
