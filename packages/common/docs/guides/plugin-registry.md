@@ -57,6 +57,35 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 | `config_key_default` | `str \| None` | `None` | Fallback when `config_key` field is absent |
 | `strip_config_key` | `bool` | `False` | Remove key field from config before passing to factory |
 | `on_first_access` | `Callable \| None` | `None` | Lazy init callback (supports re-entrant `register()` calls) |
+| `not_found_kind` | `str \| None` | `None` | Opt-in kind label rendered into the not-found error from `create()` / `create_async()`. When set (e.g. `"event bus backend"`), the message becomes `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`. When `None`, the historical `"Plugin '<key>' not registered"` text is used. |
+| `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
+
+## Per-input-shape Split Convention
+
+When using `PluginRegistry` for a Protocol parameterized by input shape (e.g. `ResourceResolver[KeyT, ValueT]`, `Discriminator[InputT, KindT]`), prefer N typed registries (one per concrete input shape) over one flat registry with `validate_type=Any`.
+
+The typed `validate_type=` is load-bearing under consumer-extensibility: an out-of-tree backend that structurally conforms to the wrong Protocol shape would silently register and only fail at use-time without the constraint.
+
+Worked example — generic resolvers (`KeyT → ValueT | None` lookups) and partition resolvers (`record → str | None` lookups) get separate registries:
+
+```python
+from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.resolver import ResourceResolver
+
+resolver_backends: PluginRegistry[ResourceResolver[Any, Any]] = PluginRegistry(
+    name="resolver_backends",
+    config_key="backend",
+    config_key_default="mapping",
+)
+
+partition_resolver_backends: PluginRegistry[Any] = PluginRegistry(
+    name="partition_resolver_backends",
+    config_key="backend",
+    config_key_default="null",
+)
+```
+
+If a consumer later surfaces "actually we wanted one flat registry," the cost of being wrong is one line per entry (move entries between registries; deprecate the smaller one). The choice is reversible; the typed pin is not.
 
 ## `get()` vs `create()`
 

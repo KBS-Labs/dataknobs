@@ -121,6 +121,7 @@ from dataknobs_common.transitions import (
 )
 from dataknobs_common.registry import (
     AsyncRegistry,
+    BackendRegistry,
     CachedRegistry,
     PluginRegistry,
     Registry,
@@ -263,10 +264,11 @@ __all__ = [
     "InvalidTransitionError",
     "TransitionValidator",
     # Registry
-    "Registry",
-    "CachedRegistry",
     "AsyncRegistry",
+    "BackendRegistry",
+    "CachedRegistry",
     "PluginRegistry",
+    "Registry",
     # Resource resolvers
     "ResourceResolver",
     "AsyncResourceResolver",

@@ -53,12 +53,61 @@ from typing import (
     Dict,
     Generic,
     List,
+    Protocol,
     TypeVar,
+    runtime_checkable,
 )
 
-from dataknobs_common.exceptions import NotFoundError, OperationError
+from dataknobs_common.exceptions import (
+    DataknobsError,
+    NotFoundError,
+    OperationError,
+)
 
 T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+
+
+@runtime_checkable
+class BackendRegistry(Protocol, Generic[T_co]):
+    """Common surface across :class:`Registry`-shape and
+    :class:`PluginRegistry`-shape adopters.
+
+    A registry-like object — addressable by string key, list-able,
+    membership-testable, unregister-able. Both :class:`Registry` and
+    :class:`PluginRegistry` structurally conform without inheritance.
+
+    Consumers writing tooling that introspects "is this thing a
+    registry?" should ``isinstance`` against this Protocol, not against
+    the concrete classes (which cover different specialization axes —
+    :class:`Registry` holds items, :class:`PluginRegistry` constructs
+    them from factories — and have diverged method sets accordingly).
+
+    The Protocol is deliberately minimal: only the four methods every
+    registry-like object must offer. ``PluginRegistry``-specific methods
+    (``create``, ``create_async``, ``get_factory``) and
+    ``Registry``-specific methods (``get_metrics``, ``list_items``,
+    ``items``, ``count``, ``clear``) are NOT in the Protocol —
+    consumers needing those features should ``isinstance`` against the
+    concrete class.
+    """
+
+    @property
+    def name(self) -> str:
+        """Registry name for identification / logging."""
+        ...
+
+    def has(self, key: str) -> bool:
+        """Test membership."""
+        ...
+
+    def list_keys(self) -> List[str]:
+        """Enumerate registered keys."""
+        ...
+
+    def unregister(self, key: str) -> Any:
+        """Remove a registration. Return value varies by registry kind."""
+        ...
 
 
 class Registry(Generic[T]):
@@ -719,11 +768,35 @@ class PluginRegistry(Generic[T]):
     - Default fallback when plugin not found
     - Instance caching
     - Type validation
+    - Per-domain not-found error shape (``not_found_kind`` /
+      ``not_found_exception``) so consolidating shims preserve their
+      historical error text and exception class
 
     This pattern is useful when you need to:
     - Register different implementations of an interface
     - Create instances on-demand with configuration
     - Provide graceful fallbacks for unregistered keys
+
+    Registry split convention:
+        When using ``PluginRegistry`` for a Protocol parameterized by
+        input shape (e.g. ``ResourceResolver[KeyT, ValueT]``,
+        ``Discriminator[InputT, KindT]``), prefer N typed registries
+        (one per concrete input shape) over one flat registry with
+        ``validate_type=Any``. The typed ``validate_type=`` is
+        load-bearing under consumer-extensibility: an out-of-tree
+        backend that structurally conforms to the wrong Protocol shape
+        would silently register and only fail at use-time without the
+        constraint.
+
+        Example: ``resolver_backends`` (for ``KeyT -> ValueT`` lookups)
+        is separate from ``partition_resolver_backends`` (for
+        ``record -> str | None`` lookups) — distinct input shapes get
+        distinct typed registries.
+
+        If a consumer later surfaces "actually we wanted one flat
+        registry," the cost of being wrong is one line per entry (move
+        entries between registries; deprecate the smaller one). The
+        choice is reversible; the typed pin is not.
 
     Args:
         name: Registry name
@@ -779,6 +852,8 @@ class PluginRegistry(Generic[T]):
         config_key_default: str | None = None,
         strip_config_key: bool = False,
         on_first_access: Callable[["PluginRegistry[T]"], None] | None = None,
+        not_found_kind: str | None = None,
+        not_found_exception: type[Exception] = NotFoundError,
     ):
         """Initialize plugin registry.
 
@@ -796,6 +871,24 @@ class PluginRegistry(Generic[T]):
             on_first_access: Callback invoked once before first public method
                 access. Receives the registry instance. Supports re-entrant
                 calls (e.g. callback calling ``register()``).
+            not_found_kind: Opt-in kind label rendered into the
+                ``create()`` / ``create_async()`` not-found error message
+                when a domain shim wants per-kind text. When ``None``
+                (default), the historical
+                ``"Plugin '<key>' not registered"`` text is used.
+                Setting this to e.g. ``"event bus backend"`` produces
+                ``"Unknown event bus backend: <key>. Available backends:
+                <sorted-keys>"``.
+            not_found_exception: Exception class raised on
+                ``create()`` / ``create_async()`` not-found.  Defaults to
+                :class:`NotFoundError` (the more principled
+                ``DataknobsError``-rooted shape for consumers catching
+                programmatically). Domain shims preserving a historical
+                ``ValueError`` contract can opt in by passing
+                ``not_found_exception=ValueError``. Non-
+                ``DataknobsError`` classes are called with the message
+                only (no ``context=`` kwarg) since stdlib exceptions
+                would crash on the unknown keyword.
         """
         self._name = name
         self._factories: Dict[str, type[T] | Callable[..., T]] = {}
@@ -810,6 +903,8 @@ class PluginRegistry(Generic[T]):
         self._initializer = on_first_access
         self._initialized = on_first_access is None
         self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._not_found_kind = not_found_kind
+        self._not_found_exception = not_found_exception
 
     def _canon(self, key: str) -> str:
         """Canonicalize a key if configured."""
@@ -850,6 +945,8 @@ class PluginRegistry(Generic[T]):
         factory: type[T] | Callable[..., T],
         override: bool = False,
         metadata: Dict[str, Any] | None = None,
+        *,
+        allow_overwrite: bool | None = None,
     ) -> None:
         """Register a plugin class or factory.
 
@@ -857,6 +954,15 @@ class PluginRegistry(Generic[T]):
             key: Unique identifier for the plugin
             factory: Plugin class or factory function that creates instances
             override: If True, allow overriding existing registration
+            metadata: Optional metadata to attach to the registration
+            allow_overwrite: Alias for ``override`` matching the
+                :class:`Registry`-style spelling. When ``None`` (default),
+                the ``override`` flag is used unmodified. When explicitly
+                ``True`` or ``False``, this value wins (the more explicit
+                opt-in / opt-out spelling). Use whichever name fits the
+                surrounding code; positional registrations and
+                ``override=`` keyword registrations behave identically to
+                before this alias was added.
 
         Raises:
             OperationError: If key already registered and override=False
@@ -876,6 +982,9 @@ class PluginRegistry(Generic[T]):
             # See create() docstring for details.
             ```
         """
+        if allow_overwrite is not None:
+            override = allow_overwrite
+
         self._ensure_initialized()
         key = self._canon(key)
 
@@ -949,6 +1058,15 @@ class PluginRegistry(Generic[T]):
 
         with self._lock:
             return key in self._factories
+
+    def has(self, key: str) -> bool:
+        """Alias for :meth:`is_registered`.
+
+        Provided so :class:`PluginRegistry` structurally conforms to the
+        :class:`BackendRegistry` Protocol, which mirrors the
+        :meth:`Registry.has` spelling.
+        """
+        return self.is_registered(key)
 
     def get(
         self,
@@ -1296,10 +1414,11 @@ class PluginRegistry(Generic[T]):
 
         Returns the resolved factory, the canonical key (for error
         context), and the possibly key-stripped config. Raises
-        ``ValueError`` (unresolvable key) / ``NotFoundError`` (unknown
-        key) directly — both callers invoke this *before* their
-        factory-invocation ``try`` so these propagate unwrapped, matching
-        the historical contract.
+        ``ValueError`` (unresolvable key) or ``self._not_found_exception``
+        (unknown key — :class:`NotFoundError` by default; opt-in via the
+        ``not_found_exception`` ctor kwarg) directly — both callers
+        invoke this *before* their factory-invocation ``try`` so these
+        propagate unwrapped, matching the historical contract.
         """
         self._ensure_initialized()
 
@@ -1328,14 +1447,24 @@ class PluginRegistry(Generic[T]):
 
         with self._lock:
             if key not in self._factories:
-                raise NotFoundError(
-                    f"Plugin '{key}' not registered",
-                    context={
-                        "key": key,
-                        "registry": self._name,
-                        "available": list(self._factories.keys()),
-                    },
-                )
+                available = sorted(self._factories.keys())
+                if self._not_found_kind is not None:
+                    message = (
+                        f"Unknown {self._not_found_kind}: {key}. "
+                        f"Available backends: {', '.join(available)}"
+                    )
+                else:
+                    message = f"Plugin '{key}' not registered"
+
+                context = {
+                    "key": key,
+                    "registry": self._name,
+                    "available": available,
+                }
+                exc_cls = self._not_found_exception
+                if issubclass(exc_cls, DataknobsError):
+                    raise exc_cls(message, context=context)
+                raise exc_cls(message)
             return self._factories[key], key, config
 
     def list_keys(self) -> List[str]:
@@ -1480,8 +1609,9 @@ class PluginRegistry(Generic[T]):
 
 
 __all__ = [
-    "Registry",
-    "CachedRegistry",
     "AsyncRegistry",
+    "BackendRegistry",
+    "CachedRegistry",
     "PluginRegistry",
+    "Registry",
 ]
