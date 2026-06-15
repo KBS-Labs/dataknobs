@@ -13,6 +13,8 @@ from dataknobs_common.ratelimit import (
     RateLimiterConfig,
     RateLimitStatus,
     create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
 )
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import (
@@ -398,6 +400,145 @@ class TestCreateRateLimiter:
             create_rate_limiter({
                 "rates": [{"limit": 10}],  # missing 'interval'
             })
+
+
+class TestRateLimiterBackendsPluginRegistry:
+    """Tests pinning the PluginRegistry consolidation of rate_limiter_backends.
+
+    ``create_rate_limiter`` dispatches the ``backend`` key through a
+    ``PluginRegistry`` (instead of an inline ``if/elif`` chain) and
+    exposes the symmetric ``create_rate_limiter_async`` sibling. These
+    tests pin (a) the registry's protocol conformance, (b) the not-found
+    error shape, and (c) the consumer-extensibility capability the
+    registry surface provides (out-of-tree backends register without
+    forking ``limiter.py``).
+    """
+
+    def test_rate_limiter_backends_is_plugin_registry(self):
+        from dataknobs_common.ratelimit import rate_limiter_backends
+        from dataknobs_common.registry import PluginRegistry
+
+        assert isinstance(rate_limiter_backends, PluginRegistry)
+
+    def test_rate_limiter_backends_is_backend_registry(self):
+        from dataknobs_common.ratelimit import rate_limiter_backends
+        from dataknobs_common.registry import BackendRegistry
+
+        assert isinstance(rate_limiter_backends, BackendRegistry)
+
+    def test_create_rate_limiter_shim_preserves_error_text(self):
+        with pytest.raises(ValueError) as excinfo:
+            create_rate_limiter({
+                "backend": "still-nope",
+                "rates": [{"limit": 10, "interval": 60}],
+            })
+        msg = str(excinfo.value)
+        assert "Unknown rate limiter backend: still-nope" in msg
+        assert "Available backends: memory, pyrate" in msg
+
+    def test_create_rate_limiter_shim_preserves_exception_class(self):
+        with pytest.raises(ValueError):
+            create_rate_limiter({
+                "backend": "still-nope",
+                "rates": [{"limit": 10, "interval": 60}],
+            })
+
+    @pytest.mark.asyncio
+    async def test_create_rate_limiter_custom_backend_via_registry(self):
+        """Out-of-tree backend registers + resolves through the public registry.
+
+        The registry surface is the consumer-extensibility capability:
+        custom backends register and select without forking
+        ``limiter.py``.
+        """
+
+        class _TrackingLimiter:
+            def __init__(self, parsed: RateLimiterConfig) -> None:
+                self.parsed = parsed
+
+            async def acquire(
+                self,
+                name: str = "default",
+                weight: int = 1,
+                timeout: float | None = None,
+            ) -> None:
+                return None
+
+            async def try_acquire(
+                self, name: str = "default", weight: int = 1
+            ) -> bool:
+                return True
+
+            async def get_status(
+                self, name: str = "default"
+            ) -> RateLimitStatus:
+                limit = self.parsed.default_rates[0].limit
+                return RateLimitStatus(
+                    name=name,
+                    current_count=0,
+                    limit=limit,
+                    remaining=limit,
+                    reset_after=0.0,
+                )
+
+            async def reset(self, name: str | None = None) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        parsed_seen: RateLimiterConfig | None = None
+
+        def _make_tracking(
+            config: dict[str, object], *, parsed: RateLimiterConfig
+        ) -> RateLimiter:
+            nonlocal parsed_seen
+            parsed_seen = parsed
+            return _TrackingLimiter(parsed)
+
+        rate_limiter_backends.register("custom-test", _make_tracking)
+        try:
+            limiter = create_rate_limiter({
+                "backend": "custom-test",
+                "rates": [{"limit": 42, "interval": 60}],
+            })
+            assert isinstance(limiter, _TrackingLimiter)
+            assert parsed_seen is not None
+            assert parsed_seen.default_rates[0].limit == 42
+        finally:
+            rate_limiter_backends.unregister("custom-test")
+
+    @pytest.mark.asyncio
+    async def test_create_rate_limiter_async_returns_same_type_as_sync(self):
+        sync_limiter = create_rate_limiter({
+            "backend": "memory",
+            "rates": [{"limit": 10, "interval": 60}],
+        })
+        async_limiter = await create_rate_limiter_async({
+            "backend": "memory",
+            "rates": [{"limit": 10, "interval": 60}],
+        })
+        assert type(sync_limiter) is type(async_limiter)
+        assert isinstance(async_limiter, InMemoryRateLimiter)
+        await sync_limiter.close()
+        await async_limiter.close()
+
+    @pytest.mark.asyncio
+    async def test_create_rate_limiter_async_normalization_runs_first(self):
+        """Async shim must run ``_parse_config`` ahead of backend dispatch.
+
+        A missing-``rates`` config raises ``ValueError`` from the
+        normalizer rather than reaching the backend factory — even when
+        the backend name itself is bogus, the normalization error wins.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            await create_rate_limiter_async({"backend": "still-nope"})
+        # The normalization error contains "rates", NOT
+        # "Unknown rate limiter backend" — proving normalization
+        # ran before the registry dispatch.
+        msg = str(excinfo.value).lower()
+        assert "rates" in msg
+        assert "unknown rate limiter backend" not in msg
 
 
 class TestRateLimiterProtocol:

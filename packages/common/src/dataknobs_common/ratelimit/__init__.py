@@ -62,7 +62,12 @@ Configuration Examples:
 
 from __future__ import annotations
 
-from .limiter import RateLimiter, create_rate_limiter
+from .limiter import (
+    RateLimiter,
+    create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
+)
 from .memory import InMemoryRateLimiter
 from .types import RateLimit, RateLimiterConfig, RateLimitStatus
 
@@ -71,6 +76,8 @@ __all__ = [
     "RateLimiter",
     # Factory
     "create_rate_limiter",
+    "create_rate_limiter_async",
+    "rate_limiter_backends",
     # Types
     "RateLimit",
     "RateLimiterConfig",

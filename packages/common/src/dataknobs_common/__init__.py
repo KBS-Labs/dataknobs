@@ -110,6 +110,8 @@ from dataknobs_common.ratelimit import (
     RateLimiterConfig,
     RateLimitStatus,
     create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
 )
 from dataknobs_common.retry import (
     BackoffStrategy,
@@ -255,6 +257,8 @@ __all__ = [
     # Rate Limiting
     "RateLimiter",
     "create_rate_limiter",
+    "create_rate_limiter_async",
+    "rate_limiter_backends",
     "RateLimit",
     "RateLimiterConfig",
     "RateLimitStatus",
