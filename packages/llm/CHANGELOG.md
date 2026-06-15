@@ -55,21 +55,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NegationFilter`-suppressed match carries `rule_based=False`
   (suppression is post-classify, not a rule match in its own
   right).
-- `intent_classifier_backends` — `Registry[IntentClassifierFactory]`
-  in `dataknobs_llm.intent` mirroring the shape of
-  `dataknobs_common.events.event_bus_backends` and
-  `dataknobs_common.locks.lock_backends`. Built-in factories
-  (`"keyword"`, `"llm"`, `"composite"`) auto-register at import;
-  consumers register their own backends (embedding similarity,
-  fuzzy match, locale-specific keyword variants) under any name.
+- `intent_classifier_backends` —
+  `PluginRegistry[IntentClassifier]` in `dataknobs_llm.intent`
+  mirroring the shape of
+  `dataknobs_common.events.event_bus_backends`,
+  `dataknobs_common.locks.lock_backends`, and
+  `dataknobs_common.ratelimit.rate_limiter_backends`. Built-in
+  factories (`"keyword"`, `"llm"`, `"composite"`) auto-register at
+  import; consumers register their own backends (embedding
+  similarity, fuzzy match, locale-specific keyword variants) under
+  any name. The registry is parametrized with
+  `validate_type=IntentClassifier` so an out-of-tree factory
+  returning a non-conforming instance fails at `create()` time
+  rather than at first use; `not_found_kind="intent_classifier"` +
+  `not_found_exception=ValueError` preserves a plain `ValueError`
+  (not the `NotFoundError` default) on unknown name. Conforms to
+  `BackendRegistry` for `isinstance` checks. `IntentClassifierFactory`
+  typealias preserved.
 - `create_intent_classifier(name, config=None)` factory — resolves
-  a registered backend by name and forwards the config dict to the
-  registered factory. Raises `ValueError` listing every registered
-  backend on unknown name (mirrors `create_event_bus` /
-  `create_lock` shape). Composite child specs are themselves
+  a registered backend by name through
+  `intent_classifier_backends.create(key=name, config=...)` (the
+  explicit-key mode of `PluginRegistry.create`, since no
+  `config_key` is configured). Raises `ValueError` listing every
+  registered backend on unknown name; the message shape is
+  `Unknown intent_classifier: <name>. Available backends:
+  <sorted-keys>` — same shape produced by `create_event_bus` /
+  `create_lock` / `create_rate_limiter` for their respective kinds.
+  Factory failures (invalid config, missing required fields, etc.)
+  are wrapped in `OperationError` with the originating exception
+  preserved on `__cause__`. Composite child specs are themselves
   `{"classifier": <name>, "config": {...}}` mappings; a child
   missing the `classifier:` discriminator raises rather than
   silently dropping.
+- `create_intent_classifier_async(name, config=None)` — async
+  counterpart to `create_intent_classifier` that dispatches via
+  `intent_classifier_backends.create_async(...)` so an out-of-tree
+  classifier whose factory exposes `from_config_async` (or returns
+  an awaitable) is detected and awaited. Built-in classifiers
+  construct synchronously; the async shim returns the same
+  instance type as the sync shim for identical input.
 - Package-root re-exports for `dataknobs_llm.intent`:
   `DEFAULT_VOCABULARY`, `DEFAULT_LLM_PROMPT_TEMPLATE`,
   `DEFAULT_NEGATION_KEYWORDS`, `DEFAULT_AFFIRMATIVE_SIGNALS`,

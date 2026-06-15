@@ -25,10 +25,13 @@ four built-in implementations covering the common cases:
   ``"no, I don't want to accept"`` foot-gun).
 
 :data:`intent_classifier_backends` is a
-:class:`Registry[IntentClassifierFactory]` consumers register their
+:class:`~dataknobs_common.registry.PluginRegistry` of
+:data:`IntentClassifierFactory` callables that consumers register their
 own backends into (``embedding``, ``fuzzy_match``, locale-specific
 keyword variants). Consumers dispatch through it via
-:func:`create_intent_classifier`.
+:func:`create_intent_classifier` (or
+:func:`create_intent_classifier_async` for backends whose construction
+is asynchronous).
 
 Consumer-agnostic: the protocol, defaults, and registry have no
 dependencies on any consumer layer. Any LLM-layer reasoning
@@ -65,6 +68,7 @@ from dataknobs_llm.intent.protocol import (
 )
 from dataknobs_llm.intent.registry import (
     create_intent_classifier,
+    create_intent_classifier_async,
     intent_classifier_backends,
 )
 
@@ -83,6 +87,7 @@ __all__ = [
     "LLMIntentClassifier",
     "NegationFilter",
     "create_intent_classifier",
+    "create_intent_classifier_async",
     "default_word_boundary_tokenizer",
     "intent_classifier_backends",
     "word_in_text",
