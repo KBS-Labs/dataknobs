@@ -167,6 +167,19 @@ def _composite_factory(config: dict[str, Any]) -> IntentClassifier:
     would surface later as a misleading "requires at least one inner
     classifier" error pointing at the wrong root cause (a typo in
     ``classifier:`` would have rejected the entry without saying so).
+
+    Sync-recursion limitation: child specs are resolved through the
+    sync :func:`create_intent_classifier` unconditionally, even when
+    this factory is invoked through :func:`create_intent_classifier_async`.
+    Every built-in classifier (``"keyword"``, ``"llm"``, ``"composite"``)
+    constructs synchronously, so the limitation is invisible today; an
+    out-of-tree backend that requires the async construction path
+    (factory exposing ``from_config_async``, or factory returning an
+    awaitable) is NOT supported as a composite child — the sync call
+    would discard the awaitable and produce an unawaited coroutine in
+    place of the classifier. A consumer hitting this should wrap the
+    async-constructed instance and pass it through a sync factory, or
+    file an issue requesting structural async-aware composite recursion.
     """
     child_specs = config.get("classifiers", [])
     children: list[IntentClassifier] = []

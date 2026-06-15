@@ -21,6 +21,7 @@ Pins the public registry surface after the
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ from dataknobs_llm.intent import (
     CompositeIntentClassifier,
     IntentClassifier,
     IntentMatchResult,
+    IntentSpec,
     KeywordIntentClassifier,
     create_intent_classifier,
     create_intent_classifier_async,
@@ -161,7 +163,7 @@ class TestIntentClassifierBackendsPluginRegistry:
             async def classify(
                 self,
                 message: str,
-                intents: Any,
+                intents: Sequence[IntentSpec],
                 **_: Any,
             ) -> IntentMatchResult:
                 return IntentMatchResult(
