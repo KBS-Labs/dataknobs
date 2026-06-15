@@ -386,6 +386,11 @@ class RateLimiter(Protocol):
 def create_rate_limiter(config: dict) -> RateLimiter:
     """Create a rate limiter from configuration.
 
+    Parses the top-level rate / category config and dispatches the
+    ``backend`` key through the ``rate_limiter_backends`` registry, so
+    out-of-tree consumers can register and select a custom backend
+    without forking DataKnobs.
+
     Args:
         config: Configuration dict with rate and backend settings.
 
@@ -393,9 +398,79 @@ def create_rate_limiter(config: dict) -> RateLimiter:
         RateLimiter implementation.
 
     Raises:
-        ValueError: If backend is unknown or config is invalid.
+        ValueError: If the backend is not registered, or required rate
+            config is missing.
+        OperationError: If the backend factory raises during construction
+            (invalid backend-specific config, missing optional
+            dependency, etc.). Wraps the originating exception via
+            ``__cause__``.
+    """
+
+
+async def create_rate_limiter_async(config: dict) -> RateLimiter:
+    """Async-symmetric counterpart to ``create_rate_limiter``.
+
+    Performs the same top-level rate / category normalization as the
+    sync shim ahead of the registry dispatch, then dispatches through
+    ``rate_limiter_backends.create_async``. Today every built-in backend
+    constructs synchronously, so this function returns the same instance
+    type as ``create_rate_limiter``; the surface is shipped for API
+    symmetry and consumer-extensibility (an out-of-tree backend's
+    ``from_config_async`` is detected and awaited).
+
+    Raises:
+        ValueError: If the backend is not registered, or required rate
+            config is missing. Normalization runs *before* backend
+            dispatch, so a missing-``rates`` config raises here rather
+            than from the backend factory.
+        OperationError: If the backend factory raises during construction
+            (invalid backend-specific config, missing optional
+            dependency, etc.). Wraps the originating exception via
+            ``__cause__``. Same behaviour as the sync
+            :func:`create_rate_limiter`.
     """
 ```
+
+### Plugin Registry
+
+```python
+rate_limiter_backends: PluginRegistry[RateLimiter]
+```
+
+The factory function dispatches the `backend` key through this
+[PluginRegistry](plugin-registry.md). Out-of-tree consumers can
+register additional backends (a direct Redis or etcd limiter, an
+HTTP-call quota tracker, an internal cloud-quota integration) without
+forking DataKnobs:
+
+```python
+from dataknobs_common.ratelimit import (
+    rate_limiter_backends,
+    create_rate_limiter,
+    RateLimiterConfig,
+)
+
+def _make_quota_limiter(config, *, parsed: RateLimiterConfig):
+    from my_pkg.quota_limiter import QuotaRateLimiter
+    return QuotaRateLimiter(parsed, url=config["url"])
+
+rate_limiter_backends.register("quota_http", _make_quota_limiter)
+
+limiter = create_rate_limiter({
+    "backend": "quota_http",
+    "rates": [{"limit": 100, "interval": 60}],
+    "url": "https://quota.internal/api",
+})
+```
+
+Backend factory signature is
+`(config: dict, *, parsed: RateLimiterConfig) -> RateLimiter` — the
+parsed `RateLimiterConfig` is forwarded from the shim so backends
+don't re-parse the rate / category config.
+
+The registry conforms to
+[BackendRegistry](plugin-registry.md#backendregistry-protocol), the
+shared `isinstance` target across `Registry` and `PluginRegistry`.
 
 ### RateLimitError
 
@@ -428,6 +503,8 @@ from dataknobs_common.ratelimit import (
     RateLimiter,
     # Factory
     create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
     # Types
     RateLimit,
     RateLimiterConfig,
@@ -436,8 +513,14 @@ from dataknobs_common.ratelimit import (
     InMemoryRateLimiter,
 )
 
-# Exception (also available from dataknobs_common.exceptions)
-from dataknobs_common import RateLimitError
+# Also re-exported from the top-level namespace
+from dataknobs_common import (
+    create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
+    RateLimiter,
+    RateLimitError,  # also available from dataknobs_common.exceptions
+)
 
 # Pyrate backend (import directly — requires pyrate-limiter)
 from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
