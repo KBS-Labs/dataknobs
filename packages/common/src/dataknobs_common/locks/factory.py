@@ -1,9 +1,9 @@
 """Registry-extensible factory for distributed-lock backends.
 
 ``create_lock()`` resolves the ``backend`` config key through this
-registry instead of a sealed ``if/elif`` chain. Out-of-tree consumers
-can add a custom :class:`~dataknobs_common.locks.lock.DistributedLock`
-backend (Redis, etcd, ZooKeeper, …) without forking DataKnobs::
+registry. Out-of-tree consumers can add a custom
+:class:`~dataknobs_common.locks.lock.DistributedLock` backend
+(Redis, etcd, ZooKeeper, …) without forking DataKnobs::
 
     from dataknobs_common.locks import lock_backends, create_lock
 
@@ -14,14 +14,20 @@ backend (Redis, etcd, ZooKeeper, …) without forking DataKnobs::
     lock_backends.register("redis", _make_redis_lock)
     lock = create_lock({"backend": "redis", "url": "..."})
 
-This is the exact structural mirror of
-:data:`dataknobs_common.events.event_bus_backends`; the two stay
-consistent so the pattern is learned once and applied everywhere.
+The registry is a :class:`~dataknobs_common.registry.PluginRegistry` —
+the shared config-driven factory abstraction also used by
+``event_bus_backends`` and the bots-side ``memory_backends`` /
+``knowledge_base_backends`` / ``source_backends``. Resolution of the
+``backend`` discriminator, the not-found error shape ("Unknown lock
+backend: <name>. Available backends: …"), the ``ValueError`` exception
+class, and the lazy-init flow live in :class:`PluginRegistry`; this
+module declares the per-domain knobs (kind label, validate_type, default
+backend) and the two built-in backend factories.
 
 Each built-in wrapper imports its concrete backend *lazily* (inside the
 factory call) so importing this module never pulls optional backend
-dependencies at module load time, preserving the ``dependencies = []``
-base install.
+dependencies (asyncpg) at module load time, preserving the
+``dependencies = []`` base install.
 """
 
 from __future__ import annotations
@@ -29,19 +35,33 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from dataknobs_common.registry import Registry
+from dataknobs_common.registry import PluginRegistry
 
 from .lock import DistributedLock
 
 LockFactory = Callable[[dict[str, Any]], DistributedLock]
-"""A backend factory: maps a config dict to a :class:`DistributedLock`."""
+"""A backend factory: maps a config dict to a :class:`DistributedLock`.
 
-lock_backends: Registry[LockFactory] = Registry(name="lock_backends")
+Preserved as a public typealias for out-of-tree consumers that annotate
+their factory closures. The registry holds factories of this shape; no
+behavioural difference from the underlying ``Callable``.
+"""
+
+lock_backends: PluginRegistry[DistributedLock] = PluginRegistry(
+    name="lock_backends",
+    validate_type=DistributedLock,
+    config_key="backend",
+    config_key_default="memory",
+    not_found_kind="lock backend",
+    not_found_exception=ValueError,
+)
 """Registry of named :data:`LockFactory` callables.
 
 Register a custom backend with
 ``lock_backends.register("name", factory)`` and select it via
-``create_lock({"backend": "name", ...})``.
+``create_lock({"backend": "name", ...})``. The registry conforms
+to :class:`~dataknobs_common.registry.BackendRegistry` for ``isinstance``
+checks.
 """
 
 
@@ -93,6 +113,9 @@ def create_lock(config: dict[str, Any]) -> DistributedLock:
     Raises:
         ValueError: If the backend is not registered. The message lists
             all registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``.
 
     Example:
         ```python
@@ -101,15 +124,33 @@ def create_lock(config: dict[str, Any]) -> DistributedLock:
         lock = create_lock({})  # equivalent — "memory" is the default
         ```
     """
-    backend = config.get("backend", "memory")
-    # NOTE: Registry.get() raises NotFoundError; only get_optional()
-    # returns None. This must mirror create_event_bus() exactly — the
-    # two factories share one corrected resolution pattern.
-    factory = lock_backends.get_optional(backend)
-    if factory is None:
-        available = ", ".join(sorted(lock_backends.list_keys()))
-        raise ValueError(
-            f"Unknown lock backend: {backend}. "
-            f"Available backends: {available}"
-        )
-    return factory(config)
+    return lock_backends.create(config=config)
+
+
+async def create_lock_async(config: dict[str, Any]) -> DistributedLock:
+    """Async-symmetric counterpart to :func:`create_lock`.
+
+    For backends whose construction is asynchronous (eager-connecting
+    asyncpg pools, etcd / ZooKeeper sessions, …). Today every built-in
+    backend constructs synchronously, so this function returns the same
+    instance type as :func:`create_lock`; the surface is shipped for API
+    symmetry and consumer-extensibility (an out-of-tree backend's
+    ``from_config_async`` is detected and awaited via
+    :meth:`PluginRegistry.create_async`).
+
+    Args:
+        config: Configuration dict with a ``backend`` key and
+            backend-specific options.
+
+    Returns:
+        A :class:`DistributedLock` instance.
+
+    Raises:
+        ValueError: If the backend is not registered. The message lists
+            all registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. Same behaviour as
+            the sync :func:`create_lock`.
+    """
+    return await lock_backends.create_async(config=config)

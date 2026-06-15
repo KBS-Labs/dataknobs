@@ -198,6 +198,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every built-in backend constructs synchronously, so the async shim
   returns the same instance type as the sync shim; the surface is
   shipped for API symmetry and consumer-extensibility.
+- `dataknobs_common.locks.create_lock_async(config)` — async
+  counterpart to `create_lock`. Dispatches through
+  `lock_backends.create_async(config=config)` so out-of-tree backends
+  exposing `from_config_async` are detected and awaited. Today every
+  built-in backend constructs synchronously, so the async shim returns
+  the same instance type as the sync shim; the surface is shipped for
+  API symmetry and consumer-extensibility.
 
 ### Changed
 - **Breaking:** Backend-factory construction errors raised by
@@ -244,6 +251,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_common` namespace (was only reachable via
   `dataknobs_common.events`) for symmetry with the existing top-level
   `create_event_bus` re-export.
+- **Breaking:** Backend-factory construction errors raised by
+  `create_lock()` / `create_lock_async()` are now wrapped in
+  `OperationError` (with the original exception preserved via
+  `__cause__`) — previously they propagated unwrapped as the
+  originating type. The only built-in path that surfaces this in
+  practice today is the `postgres` backend, whose construction routes
+  through `PostgresLockConfig.from_dict` →
+  `normalize_postgres_connection_config` and can raise
+  `ConfigurationError` when no connection config is resolvable; that
+  exception is now wrapped. The unknown-backend path is NOT affected
+  — it still raises `ValueError` with the same `"Unknown lock
+  backend: <key>. Available backends: …"` message text, and it is
+  raised *before* the `OperationError` wrapper engages, so it can
+  never surface as `OperationError`. Consumers catching the
+  originating type around `create_lock()` to catch *construction*
+  failures should switch to catching the common base `DataknobsError`
+  (which covers `OperationError` and `ConfigurationError`) — the
+  unknown-backend `ValueError` propagates separately and needs no
+  special-casing to distinguish.
+- `dataknobs_common.locks.lock_backends` is now a
+  `PluginRegistry[DistributedLock]` (was `Registry[LockFactory]`). The
+  registration surface (`lock_backends.register("name", factory)`),
+  the `create_lock({"backend": "name", ...})` resolution shape, the
+  unknown-backend error message text, and the `ValueError` exception
+  class (for the unknown-backend path) are unchanged. The
+  `LockFactory` typealias is preserved. Consumers checking "is this a
+  registry-like thing?" via `isinstance(lock_backends, Registry)`
+  should switch to `isinstance(lock_backends, BackendRegistry)` — the
+  shared runtime_checkable Protocol both `Registry` and
+  `PluginRegistry` structurally conform to. The
+  `lock_backends.unregister(name)` return value is now `None` (was
+  the previously-registered factory); existing in-tree usages discard
+  the return value.
+- `create_lock_async` is re-exported from the top-level
+  `dataknobs_common` namespace alongside the existing
+  `create_lock` re-export, matching the events-side symmetry.
 
 ### Fixed
 - `dataknobs_common.expressions._validate_ast` now blocks

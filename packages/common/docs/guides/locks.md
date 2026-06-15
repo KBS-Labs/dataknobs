@@ -354,18 +354,41 @@ def create_lock(config: dict) -> DistributedLock:
     Raises:
         ValueError: If the backend is not registered (message lists all
             registered backends).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.); the
+            originating exception is preserved on ``__cause__``.
+    """
+
+
+async def create_lock_async(config: dict) -> DistributedLock:
+    """Async-symmetric counterpart to :func:`create_lock`.
+
+    For backends whose construction is asynchronous (eager-connecting
+    asyncpg pools, etcd / ZooKeeper sessions, …). Today every built-in
+    backend constructs synchronously, so this function returns the same
+    instance type as :func:`create_lock`; the surface is shipped for
+    API symmetry and consumer-extensibility (an out-of-tree backend's
+    ``from_config_async`` is detected and awaited).
     """
 ```
 
 ### Plugin Registry
 
 ```python
-lock_backends: Registry[LockFactory]
+lock_backends: PluginRegistry[DistributedLock]
 # LockFactory = Callable[[dict[str, Any]], DistributedLock]
 
 lock_backends.register("name", factory)   # add a backend
 lock_backends.list_keys()                  # registered backend names
 ```
+
+The registry is a [`PluginRegistry`](plugin-registry.md) parametrized
+with `validate_type=DistributedLock`, `config_key="backend"`,
+`not_found_kind="lock backend"`, and `not_found_exception=ValueError`
+— the not-found error shape stays byte-identical to the pre-PR-C
+hand-rolled `create_lock` body. The registry also conforms to the
+[`BackendRegistry`](plugin-registry.md#backendregistry-protocol)
+Protocol for `isinstance` checks.
 
 See [Custom Backends](#custom-backends-plugin-registry) for usage.
 
@@ -405,6 +428,7 @@ from dataknobs_common.locks import (
     DistributedLock,
     # Factory
     create_lock,
+    create_lock_async,
     # Plugin registry
     lock_backends,
     LockFactory,
@@ -417,5 +441,10 @@ from dataknobs_common.locks import (
 )
 
 # Also re-exported from the top-level namespace:
-from dataknobs_common import DistributedLock, create_lock, InProcessLock
+from dataknobs_common import (
+    DistributedLock,
+    create_lock,
+    create_lock_async,
+    InProcessLock,
+)
 ```
