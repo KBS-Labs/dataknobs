@@ -8,6 +8,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- Declarative capability advertisement in `dataknobs_common.capabilities`
+  (also re-exported from `dataknobs_common`). The `Capability` enum
+  declares stable identifiers for cross-cutting optional features
+  organized into families: tenancy (`TENANT_SCOPED_LOCKS`,
+  `TENANT_SCOPED_STATE`, `PER_TENANT_RATE_LIMITS`), observability
+  (`EVENT_BUS_EMISSION`, `CALLBACK_REGISTRY`, `METRICS_EMISSION`),
+  consistency (`SNAPSHOT_ISOLATION`, `TRANSACTIONAL_METADATA`,
+  `STREAMING_READS`, `STREAMING_WRITES`), and composition
+  (`KEY_PATTERN_FILTERING`, `CHANGE_SUBSCRIPTION`). Members are
+  `str`-typed for stable serialization and JSON-friendly logging. The
+  `CAPABILITY_FAMILIES` mapping (also re-exported) gives consumers a
+  precomputed `family → frozenset[Capability]` lookup so "all tenancy
+  capabilities" is a one-liner rather than a hand-rolled set. Classes
+  advertise via the `CapabilityContract` protocol — `CapabilityMixin`
+  reads from a
+  `SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]]`
+  declaration (the `CapabilityLike = Capability | str` alias is also
+  re-exported, so consumer-defined raw-string capabilities require no
+  `# type: ignore`); `DynamicCapabilityMixin` computes the capability
+  set from `__init__` state via the `_compute_instance_capabilities()`
+  override hook with a cache invalidated through
+  `_invalidate_capability_cache()`. Subclasses of
+  `DynamicCapabilityMixin` are responsible for their own
+  `super().__init__(...)` chain and MUST call
+  `_init_capability_cache()` from their `__init__` — the mixin does
+  not forward `__init__` args through cooperative multiple inheritance,
+  avoiding the `*args, **kwargs` → `object.__init__` collision when an
+  adopter pairs the mixin with another base class. List the mixin
+  FIRST among bases. `require_capability(host, capability)` is a
+  pre-call guard raising `CapabilityNotSupportedError`;
+  `CapabilityNotSupportedError` extends `OperationError` (and thereby
+  `DataknobsError`), records the offending capability identifier and
+  host class name on `context` for structured logging, and exposes the
+  same data via the `.capability` / `.host` attribute pair.
+  Consumer-defined capabilities are supported via raw strings —
+  `supports()` and `require_capability()` accept either `Capability`
+  enum members or arbitrary strings.
+- Composing reference implementations in `dataknobs_common.discriminator`
+  (also re-exported from `dataknobs_common`): `CallableDiscriminator`
+  (wraps a `Callable[[InputT], KindT]` for ad-hoc classifier construction),
+  `MappingDiscriminator` (fast lookup against a static `Mapping` with a
+  `default` fallback; `frozen=True, eq=False` so identity hashing
+  applies — auto-generated value equality would make instances
+  unhashable because the typical `mapping` argument is a `dict`),
+  `MultiFieldDiscriminator` (classifies multiple fields of a
+  mapping-shaped payload via per-field discriminators — missing fields
+  surface as `None` in the result dict so consumers can distinguish
+  "absent" from "classified as None"; result key order matches
+  `field_discriminators` iteration order, which is insertion-ordered
+  when a `dict` literal is passed and unspecified for hand-rolled
+  `Mapping` impls without an ordered iteration contract), and
+  `ChainedDiscriminator` (tries each inner discriminator in order; the
+  first result that differs from `default` wins). Async siblings
+  `AsyncCallableDiscriminator` and `AsyncChainedDiscriminator` round
+  out the surface; the latter mixes sync and async inner
+  discriminators in a single chain. Useful for event-routing pipelines
+  that classify multiple aspects of a payload through one composable
+  Protocol surface, and for layered classification (cheap rule →
+  expensive fallback).
+- Generic resource-lookup-by-key Protocols
+  (`ResourceResolver[KeyT, ValueT]` and
+  `AsyncResourceResolver[KeyT, ValueT]`) in `dataknobs_common.resolver`,
+  also re-exported from `dataknobs_common`. Single `resolve(key)` method
+  returning the value or `None`; idempotent at the protocol level and
+  non-mutating on the input key. Reference implementations include
+  `MappingResolver` (wraps a `Mapping`), `CallableResolver`,
+  `DefaultingResolver` (substitutes a default for `None`; the
+  `resolve()` return type is tightened to `_ValueT` rather than the
+  Protocol's `_ValueT | None` since this wrapper's whole purpose is to
+  eliminate the `None` case for consumers),
+  `CachedResolver` (LRU; `None` returns are NOT cached so transient
+  misses don't persist), `CompositeResolver` (first non-`None` wins),
+  `NullResolver` (always returns `None`), and async siblings
+  `AsyncCallableResolver` and `AsyncCachedResolver` (asyncio-Lock-guarded
+  insertion). Five vector-store partition resolvers
+  (`NullPartitionResolver`, `MetadataKeyPartitionResolver`,
+  `TemporalPartitionResolver`, `CallablePartitionResolver`,
+  `JoiningPartitionResolver`) cover the common partition shapes:
+  per-tenant, per-content-type, temporal bucketing
+  (`year`/`quarter`/`month` — bucket validated at construction),
+  arbitrary callable, and composite combinations joined by a separator.
+  `JoiningPartitionResolver` is distinct from `CompositeResolver`:
+  it CONCATENATES every inner resolver's output, while
+  `CompositeResolver` ALTERNATES (first-non-`None` wins).
+  `MetadataKeyPartitionResolver` rejects non-scalar metadata values
+  (list, dict, set, custom objects) by returning `default` rather than
+  silently `str()`-coercing them into garbage partition names.
 - `Discriminator[InputT, KindT]` and `AsyncDiscriminator[InputT, KindT]`
   Protocols (`@runtime_checkable`, in `dataknobs_common.discriminator`,
   also re-exported from `dataknobs_common`). One generic shape for
