@@ -110,6 +110,8 @@ from dataknobs_common.ratelimit import (
     RateLimiterConfig,
     RateLimitStatus,
     create_rate_limiter,
+    create_rate_limiter_async,
+    rate_limiter_backends,
 )
 from dataknobs_common.retry import (
     BackoffStrategy,
@@ -144,6 +146,8 @@ from dataknobs_common.resolver import (
     NullResolver,
     ResourceResolver,
     TemporalPartitionResolver,
+    partition_resolver_backends,
+    resolver_backends,
 )
 from dataknobs_common.serialization import (
     Serializable,
@@ -255,6 +259,8 @@ __all__ = [
     # Rate Limiting
     "RateLimiter",
     "create_rate_limiter",
+    "create_rate_limiter_async",
+    "rate_limiter_backends",
     "RateLimit",
     "RateLimiterConfig",
     "RateLimitStatus",
@@ -289,6 +295,8 @@ __all__ = [
     "TemporalPartitionResolver",
     "CallablePartitionResolver",
     "JoiningPartitionResolver",
+    "partition_resolver_backends",
+    "resolver_backends",
     # Serialization
     "Serializable",
     "serialize",

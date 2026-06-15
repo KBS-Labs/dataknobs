@@ -205,6 +205,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built-in backend constructs synchronously, so the async shim returns
   the same instance type as the sync shim; the surface is shipped for
   API symmetry and consumer-extensibility.
+- `dataknobs_common.ratelimit.rate_limiter_backends` —
+  `PluginRegistry[RateLimiter]` exposing the consumer-extensibility
+  surface that previously did not exist for rate limiters. Previously,
+  the only way to add a backend was to fork
+  `dataknobs_common.ratelimit.limiter` and edit its `if/elif` chain.
+  Register a custom backend with
+  `rate_limiter_backends.register("name", factory)` and select it via
+  `create_rate_limiter({"backend": "name", ...})`. Factory signature is
+  `(config: dict, *, parsed: RateLimiterConfig) -> RateLimiter` — the
+  parsed `RateLimiterConfig` is forwarded from the shim so backends
+  don't re-parse the rate / category config. Conforms to
+  `BackendRegistry`. Also re-exported from the top-level
+  `dataknobs_common` namespace.
+- `dataknobs_common.ratelimit.create_rate_limiter_async(config)` —
+  async counterpart to `create_rate_limiter`. Performs the same
+  top-level rate / category normalization as the sync shim ahead of the
+  registry dispatch, then dispatches through
+  `rate_limiter_backends.create_async(config=config, parsed=parsed)` so
+  out-of-tree backends exposing `from_config_async` are detected and
+  awaited. Today every built-in backend constructs synchronously, so
+  the async shim returns the same instance type as the sync shim; the
+  surface is shipped for API symmetry and consumer-extensibility. Also
+  re-exported from the top-level `dataknobs_common` namespace.
+- `dataknobs_common.resolver.resolver_backends` —
+  `PluginRegistry[ResourceResolver[Any, Any]]` exposing a
+  consumer-extensibility surface for generic key→value resolvers.
+  Built-in factories: `"mapping"`, `"callable"`, `"composite"`,
+  `"defaulting"`, `"cached"`, `"null"` (one per in-tree reference
+  implementation). Factory signature is
+  `(config: dict[str, Any]) -> ResourceResolver[Any, Any]`. Register a
+  custom backend with `resolver_backends.register("name", factory)` and
+  select it via `resolver_backends.create({"backend": "name", ...})` —
+  or, when the discriminator field is unset, the default `"mapping"`
+  factory is selected (the `config_key_default` semantic), letting a
+  `{"mapping": {...}}` config skip the discriminator entirely.
+  `validate_type=ResourceResolver` pins the registered backends to the
+  `ResourceResolver` Protocol so a structurally non-conforming factory
+  return fails fast at `create()`-time rather than at use-time.
+  Conforms to `BackendRegistry`. Also re-exported from the top-level
+  `dataknobs_common` namespace.
+- `dataknobs_common.resolver.partition_resolver_backends` —
+  `PluginRegistry[Any]` exposing a consumer-extensibility surface for
+  vector-store partition resolvers (record→partition-name lookups).
+  Built-in factories: `"null"` (default), `"metadata_key"`,
+  `"temporal"`, `"callable"`, `"joining"`. Distinct namespace from
+  `resolver_backends` per the per-input-shape split convention
+  documented on `PluginRegistry` — partition resolvers key on a record
+  rather than a `KeyT`, and no declared partition Protocol exists, so
+  `validate_type=` is intentionally unset (a flat registry with
+  `validate_type=ResourceResolver` would silently accept either input
+  shape and only fail at use-time). Register a custom backend with
+  `partition_resolver_backends.register("name", factory)` and select it
+  via `partition_resolver_backends.create({"backend": "name", ...})`.
+  Conforms to `BackendRegistry`. Also re-exported from the top-level
+  `dataknobs_common` namespace. Neither resolver registry ships a
+  standalone `create_resolver()` / `create_partition_resolver()`
+  convenience shim (asymmetric with the `create_event_bus()` /
+  `create_lock()` / `create_rate_limiter()` shape from earlier in the
+  series) — the registries are surfaced directly. There is no top-level
+  rate / category parsing step to perform ahead of dispatch (which is
+  what justified the shim in the rate-limiter case), and a
+  `{"mapping": {...}}` config can already skip the discriminator via
+  `config_key_default="mapping"`, so a shim would add no value over
+  `resolver_backends.create({...})`.
 
 ### Changed
 - **Breaking:** Backend-factory construction errors raised by
@@ -293,6 +357,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `create_lock_async` is re-exported from the top-level
   `dataknobs_common` namespace alongside the existing
   `create_lock` re-export, matching the events-side symmetry.
+- **Breaking:** Backend-factory construction errors raised by
+  `create_rate_limiter()` / `create_rate_limiter_async()` are now
+  wrapped in `OperationError` (with the original exception preserved
+  via `__cause__`) — previously they propagated unwrapped as the
+  originating type. Each built-in backend raises its own exception type
+  from its construction path: `PyrateRateLimiter` raises `ImportError`
+  when `pyrate-limiter` is not installed, or `ValueError` from its
+  bucket-config validation. `InMemoryRateLimiter` has no
+  construction-time validation today (no `__post_init__`), so it
+  doesn't surface this change in practice — but if a future validation
+  is added or an out-of-tree backend's factory raises during
+  construction, the same wrapping applies. The top-level
+  rate / category normalization (`_parse_config`) runs *before* the
+  registry dispatch, so missing-`rates` and malformed-rate-dict errors
+  still propagate as `ValueError` unwrapped (they're caught before any
+  backend factory engages). The unknown-backend path is similarly NOT
+  affected — it still raises `ValueError` with the same `"Unknown rate
+  limiter backend: <key>. Available backends: …"` message text, and is
+  raised by the registry *before* the `OperationError` wrapper engages.
+  Consumers catching the originating type around `create_rate_limiter()`
+  to catch *construction* failures (e.g. missing optional pyrate
+  dependency) should switch to catching the common base `DataknobsError`
+  (which covers `OperationError`) — the normalization `ValueError` and
+  the unknown-backend `ValueError` continue to propagate separately and
+  need no special-casing to distinguish.
+- `dataknobs_common.ratelimit.create_rate_limiter` now dispatches the
+  `backend` key through the new `rate_limiter_backends` registry
+  instead of an inline `if/elif` chain. The shim continues to run the
+  top-level rate / category normalization (`_parse_config`) ahead of
+  the registry dispatch, so backend factories receive both the raw
+  `config` dict and the parsed `RateLimiterConfig` via the keyword
+  `parsed=`. The default backend (`"memory"`) and the public function
+  signature are unchanged. The unknown-backend error message text
+  (`"Unknown rate limiter backend: <key>. Available backends: …"`) and
+  the `ValueError` exception class are unchanged.
 
 ### Fixed
 - `dataknobs_common.expressions._validate_ast` now blocks

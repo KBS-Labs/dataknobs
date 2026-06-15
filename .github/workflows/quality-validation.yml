@@ -7,7 +7,10 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  statuses: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Check if quality-relevant files were changed
@@ -106,31 +109,6 @@ jobs:
             For more information, see [Quality Checks Guide](../blob/main/docs/development/quality-checks.md)`
             })
           }
-    
-    - name: Set PR status check
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
-      with:
-        script: |
-          const status = '${{ job.status }}' === 'success' ? 'success' : 'failure';
-          const description = status === 'success' 
-            ? 'Quality checks passed locally' 
-            : 'Quality checks need to be run locally';
-          
-          if (context.payload.pull_request && context.payload.pull_request.head) {
-            const [owner, repo] = context.payload.repository.full_name.split('/');
-            github.rest.repos.createCommitStatus({
-              owner: owner,
-              repo: repo,
-              sha: context.payload.pull_request.head.sha,
-              state: status,
-              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
-              description: description,
-              context: 'quality-checks/validation'
-            })
-          } else {
-            console.log('Skipping status check - not a pull request event or PR data not available');
-          }
 
   build-docs:
     runs-on: ubuntu-latest
@@ -143,17 +121,21 @@ jobs:
       with:
         fetch-depth: 0  # Full history for git revision date plugin
 
-    - name: Set up Python
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
       with:
-        python-version: '3.12'
+        enable-cache: true
+        version: "latest"
 
     - name: Check for quality-relevant changes
       id: hash-check
       run: |
-        RESULT=$(python3 bin/package-hashes.py validate --json 2>/dev/null) || true
-        VALID=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))" 2>/dev/null || echo "False")
-        DIRTY=$(echo "$RESULT" | python3 -c "import sys, json; print(','.join(json.load(sys.stdin).get('dirty_packages', [])))" 2>/dev/null || echo "")
+        # --no-project: package-hashes.py is stdlib-only, so we don't need
+        # to sync the workspace just to run the skip probe.
+        PY="uv run --no-project python"
+        RESULT=$($PY bin/package-hashes.py validate --json 2>/dev/null) || true
+        VALID=$(echo "$RESULT" | $PY -c "import sys, json; print(json.load(sys.stdin).get('valid', False))" 2>/dev/null || echo "False")
+        DIRTY=$(echo "$RESULT" | $PY -c "import sys, json; print(','.join(json.load(sys.stdin).get('dirty_packages', [])))" 2>/dev/null || echo "")
         if [ "$VALID" = "True" ] && [ -z "$DIRTY" ]; then
           echo "skip=true" >> "$GITHUB_OUTPUT"
           echo "ℹ️ No quality-relevant source changes — skipping docs build"
@@ -161,32 +143,13 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Install uv
-      if: steps.hash-check.outputs.skip != 'true'
-      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
-      with:
-        enable-cache: true
-        version: "latest"
-
     - name: Install dependencies
       if: steps.hash-check.outputs.skip != 'true'
-      run: |
-        uv pip install --system mkdocs mkdocs-material mkdocstrings[python] \
-          mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
-          mkdocs-git-revision-date-localized-plugin
-        uv pip install --system -e packages/common
-        uv pip install --system -e packages/config
-        uv pip install --system -e packages/data
-        uv pip install --system -e packages/fsm
-        uv pip install --system -e packages/llm
-        uv pip install --system -e packages/structures
-        uv pip install --system -e packages/utils
-        uv pip install --system -e packages/xization
-        uv pip install --system -e packages/bots
+      run: uv sync --all-packages
 
     - name: Build documentation
       if: steps.hash-check.outputs.skip != 'true'
-      run: mkdocs build --strict
+      run: uv run mkdocs build --strict
       env:
         NO_MKDOCS_2_WARNING: "1"
 
@@ -197,73 +160,6 @@ jobs:
         name: documentation-build
         path: ./site/
         retention-days: 7
-
-  quick-unit-tests:
-    runs-on: ubuntu-latest
-    name: Quick Unit Tests (Optional)
-    needs: check-changes
-    if: needs.check-changes.outputs.code-changed == 'true'
-    continue-on-error: true  # Don't block PR if this fails
-    
-    steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
-    
-    - name: Install uv
-      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
-      with:
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
-    
-    - name: Set up Python
-      run: uv python install 3.12
-
-    - name: Install dependencies
-      run: uv sync --all-packages
-
-    - name: Check for quality-relevant changes
-      id: hash-check
-      run: |
-        RESULT=$(uv run python bin/package-hashes.py validate --json 2>/dev/null) || true
-        VALID=$(echo "$RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))" 2>/dev/null || echo "False")
-        DIRTY=$(echo "$RESULT" | python3 -c "import sys, json; print(','.join(json.load(sys.stdin).get('dirty_packages', [])))" 2>/dev/null || echo "")
-        if [ "$VALID" = "True" ] && [ -z "$DIRTY" ]; then
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "ℹ️ No quality-relevant changes detected — skipping unit tests"
-        else
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "🔍 Dirty packages: $DIRTY"
-        fi
-
-    - name: Run quick unit tests
-      if: steps.hash-check.outputs.skip != 'true'
-      run: |
-        echo "🚀 Running quick unit tests (no external services)..."
-        bin/dk testquick
-    
-    - name: Add PR comment with test status
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
-      with:
-        script: |
-          const testResult = '${{ job.status }}' === 'success' ? '✅' : '⚠️';
-          const message = testResult === '✅' 
-            ? 'Quick unit tests passed in CI' 
-            : 'Quick unit tests had issues (non-blocking)';
-          
-          // Only comment if tests failed, to reduce noise
-          if (testResult === '⚠️' && context.issue && context.issue.number) {
-            const [owner, repo] = context.payload.repository.full_name.split('/');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: owner,
-              repo: repo,
-              body: `## ${testResult} CI Unit Tests (Optional)
-
-              ${message}
-
-              Note: This is an optional check. The required quality validation checks the locally-run test results.`
-            })
-          }
 
   # Summary job that always runs to provide a consistent PR check
   all-checks-complete:

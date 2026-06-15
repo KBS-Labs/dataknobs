@@ -1,18 +1,18 @@
 {
-  "timestamp": "2026-06-15T18:48:38Z",
+  "timestamp": "2026-06-15T20:15:58Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": ["bots", "common", "config", "data", "fsm", "legacy", "llm", "structures", "utils", "xization"],
+  "packages": "bots llm",
+  "tested_packages": ["bots", "llm"],
   "package_hashes": {
   "bots": "fc46ce0f9659358c1a29d36cffbd6641ff61dc90dcd0d059f07285ebae32f272",
-  "common": "7965ac947e08d775760ba7ad601f3abe79f25d6135f2d1aff772fcabe485b6b9",
+  "common": "5c19b0f979f7d5d51f561913aeee2ed4c386c39fad06744a7afb9e6af5860c7e",
   "config": "1cba16240d9dfae40bf8dfaf5d13844edb8f503b4761cac2b682fd5d3f4c5aa8",
   "data": "66b6ed5fcc54d69a277224b4ec52a8476b987c4bffa83aca4fecf942a298574e",
   "fsm": "a8dfacb9c6999a18b6af1925e6fd86af6c8537550f044657f64f97d73864dd97",
   "legacy": "ddc6bd0d83e9e40ea4107cd6db0f40f7fcdbe5f5814c0814aabeb050d1ed039c",
-  "llm": "66e9f395b439cabe97c6a79fb38a74e19339e8ae0ba08b28578f04d08ac97d4f",
+  "llm": "49185655878e024bfd2df476cbee25ddf2027e86469ce2b14674da6effaee2cf",
   "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
   "utils": "3244e0bd69237efdf3ed7dbccfa425a9efb3c1f6e3b51323aa4444e07a9b3987",
   "xization": "af30b9e312c2f458a66a81ee84c98b45d460ec0af677b7dee137fbf64c0aa292",
@@ -22,7 +22,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {

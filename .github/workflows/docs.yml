@@ -26,35 +26,17 @@ jobs:
         with:
           fetch-depth: 0  # Full history for git revision date plugin
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: '3.12'
-
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
-          enable-cache: false
+          enable-cache: true
           version: "latest"
 
       - name: Install dependencies
-        run: |
-          uv pip install --system mkdocs mkdocs-material mkdocstrings[python] \
-            mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
-            mkdocs-git-revision-date-localized-plugin ruff
-          uv pip install --system -e packages/common
-          uv pip install --system -e packages/config
-          uv pip install --system -e packages/data
-          uv pip install --system -e packages/structures
-          uv pip install --system -e packages/utils
-          uv pip install --system -e packages/xization
-          uv pip install --system -e packages/legacy
-          uv pip install --system -e packages/llm
-          uv pip install --system -e packages/fsm
-          uv pip install --system -e packages/bots
+        run: uv sync --all-packages
 
       - name: Build documentation
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict
         env:
           NO_MKDOCS_2_WARNING: "1"
 
