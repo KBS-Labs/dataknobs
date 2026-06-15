@@ -134,6 +134,11 @@ def create_event_bus(config: dict[str, Any]) -> EventBus:
     Raises:
         ValueError: If the backend is not registered. The message lists all
             registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. This includes the
+            ``ValueError`` raised by ``SqsEventBusConfig`` when ``queue_url``
+            is missing.
 
     Example:
         ```python
@@ -182,6 +187,10 @@ async def create_event_bus_async(config: dict[str, Any]) -> EventBus:
     Raises:
         ValueError: If the backend is not registered. The message lists
             all registered backends (including consumer-registered ones).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. Same behaviour as
+            the sync :func:`create_event_bus`.
     """
     from .registry import event_bus_backends
 

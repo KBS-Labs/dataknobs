@@ -572,6 +572,11 @@ def create_event_bus(config: dict) -> EventBus:
     Raises:
         ValueError: If the backend is not registered (message lists all
             registered backends).
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. This includes the
+            ``ValueError`` raised by ``SqsEventBusConfig`` when
+            ``queue_url`` is missing.
     """
 
 
@@ -582,6 +587,13 @@ async def create_event_bus_async(config: dict) -> EventBus:
     a custom backend's ``from_config_async`` is detected and awaited.
     Built-in backends construct synchronously; the async shim returns
     the same instance type as the sync shim.
+
+    Raises:
+        ValueError: If the backend is not registered.
+        OperationError: If the backend factory raises during construction
+            (invalid config, missing required fields, etc.). Wraps the
+            originating exception via ``__cause__``. Same behaviour as
+            the sync :func:`create_event_bus`.
     """
 ```
 

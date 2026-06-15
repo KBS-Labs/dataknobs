@@ -200,19 +200,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shipped for API symmetry and consumer-extensibility.
 
 ### Changed
+- **Breaking:** Backend-factory construction errors raised by
+  `create_event_bus()` / `create_event_bus_async()` are now wrapped in
+  `OperationError` (with the original exception preserved via
+  `__cause__`) — previously they propagated unwrapped as the originating
+  type. Each built-in backend raises its own exception type from its
+  construction path: `SqsEventBus` with a missing `queue_url` raises
+  `ValueError` from `SqsEventBusConfig.__post_init__`; `PostgresEventBus`
+  raises `ConfigurationError` from `normalize_postgres_connection_config`
+  when no connection config is resolvable, or `ValueError` from
+  `PostgresEventBusConfig.__post_init__` for an empty-after-sanitization
+  `channel_prefix`; `InMemoryEventBus` and `RedisEventBus` have no
+  construction-time validation today (defaulted fields, no
+  `__post_init__`), so they don't surface this change in practice — but
+  if a future validation is added or an out-of-tree backend's factory
+  raises during construction, the same wrapping applies. The
+  unknown-backend path is NOT affected — it still raises `ValueError`
+  with the same `"Unknown event bus backend: <key>. Available backends:
+  …"` message text, and it is raised *before* the `OperationError`
+  wrapper engages, so it can never surface as `OperationError`.
+  Consumers catching the originating type around `create_event_bus()`
+  to catch *construction* failures should switch to catching the
+  common base `DataknobsError` (which covers `OperationError` and
+  `ConfigurationError`) — the unknown-backend `ValueError` propagates
+  separately and needs no special-casing to distinguish. Tests
+  asserting on specific exception types around invalid construction
+  config need the same update.
 - `dataknobs_common.events.event_bus_backends` is now a
   `PluginRegistry[EventBus]` (was `Registry[EventBusFactory]`). The
   registration surface (`event_bus_backends.register("name", factory)`),
   the `create_event_bus({"backend": "name", ...})` resolution shape,
   the unknown-backend error message text, and the `ValueError`
-  exception class are unchanged. The `EventBusFactory` typealias is
-  preserved. Consumers checking "is this a registry-like thing?" via
+  exception class (for the unknown-backend path) are unchanged. The
+  `EventBusFactory` typealias is preserved. Consumers checking "is
+  this a registry-like thing?" via
   `isinstance(event_bus_backends, Registry)` should switch to
   `isinstance(event_bus_backends, BackendRegistry)` — the shared
   runtime_checkable Protocol both `Registry` and `PluginRegistry`
   structurally conform to. The `event_bus_backends.unregister(name)`
   return value is now `None` (was the previously-registered factory);
   existing in-tree usages discard the return value.
+- `create_event_bus_async` is now re-exported from the top-level
+  `dataknobs_common` namespace (was only reachable via
+  `dataknobs_common.events`) for symmetry with the existing top-level
+  `create_event_bus` re-export.
 
 ### Fixed
 - `dataknobs_common.expressions._validate_ast` now blocks

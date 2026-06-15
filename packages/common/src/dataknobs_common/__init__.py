@@ -46,6 +46,7 @@ from dataknobs_common.events import (
     InMemoryEventBus,
     Subscription,
     create_event_bus,
+    create_event_bus_async,
 )
 from dataknobs_common.capabilities import (
     CAPABILITY_FAMILIES,
@@ -199,6 +200,7 @@ __all__ = [
     "InMemoryEventBus",
     "Subscription",
     "create_event_bus",
+    "create_event_bus_async",
     # Exceptions
     "DataknobsError",
     "ValidationError",

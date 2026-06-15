@@ -94,8 +94,10 @@ def _create_sqs_bus(config: dict[str, Any]) -> EventBus:
     # Lazy: aioboto3 (optional [sqs] extra) is imported only here, so a
     # consumer that never selects "sqs" needs no AWS dependency. The
     # config dict flows through ``SqsEventBusConfig.from_dict``, so a
-    # missing ``queue_url`` surfaces as the dataclass's ``ValueError``
-    # — same error class as the legacy direct-kwarg path.
+    # missing ``queue_url`` raises ``ValueError`` in
+    # ``SqsEventBusConfig.__post_init__``; the ``PluginRegistry.create()``
+    # wrapper re-raises it as ``OperationError`` (with the original
+    # ``ValueError`` preserved on ``__cause__``).
     from .sqs import SqsEventBus
 
     return SqsEventBus.from_config(config)
