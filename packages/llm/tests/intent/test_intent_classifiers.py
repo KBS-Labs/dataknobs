@@ -455,7 +455,13 @@ class TestClassifierBackendRegistry:
             "fuzzy_match", _factory, allow_overwrite=True,
         )
         try:
-            clf = intent_classifier_backends.get("fuzzy_match")({})
+            # ``PluginRegistry.get_factory`` returns the stored factory
+            # callable; calling it with ``({})`` mirrors the pre-
+            # consolidation ``Registry.get(name)(config)`` shape and
+            # confirms the registration round-trips.
+            factory = intent_classifier_backends.get_factory("fuzzy_match")
+            assert factory is not None
+            clf = factory({})
             assert isinstance(clf, _FuzzyMatch)
         finally:
             intent_classifier_backends.unregister("fuzzy_match")

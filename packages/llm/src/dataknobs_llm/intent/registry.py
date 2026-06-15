@@ -1,18 +1,29 @@
 """Classifier-backend registry.
 
 Mirrors the shape of
-:data:`dataknobs_common.events.event_bus_backends` and
-:data:`dataknobs_common.locks.lock_backends`. Consumers register
-their own classifier backends (embedding-similarity, fuzzy-match,
-locale-specific keyword variants) under a name and resolve them via
+:data:`dataknobs_common.events.event_bus_backends`,
+:data:`dataknobs_common.locks.lock_backends`, and
+:data:`dataknobs_common.ratelimit.rate_limiter_backends` — all four are
+:class:`~dataknobs_common.registry.PluginRegistry` instances with
+domain-shaped not-found error text (``not_found_kind`` /
+``not_found_exception``) so the consolidating shims keep their
+historical error contracts. Consumers register their own classifier
+backends (embedding-similarity, fuzzy-match, locale-specific keyword
+variants) under a name and resolve them via
 :func:`create_intent_classifier`.
+
+Unlike the other three (which read the discriminator from a
+``config["backend"]`` field), this registry uses the explicit-key mode
+of :meth:`PluginRegistry.create` — :func:`create_intent_classifier`
+passes ``key=name`` directly. No ``config_key`` is configured.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_common.registry import Registry
+from dataknobs_common.exceptions import OperationError
+from dataknobs_common.registry import PluginRegistry
 from dataknobs_llm.intent.composite import CompositeIntentClassifier
 from dataknobs_llm.intent.keyword import KeywordIntentClassifier
 from dataknobs_llm.intent.llm import LLMIntentClassifier
@@ -21,9 +32,24 @@ from dataknobs_llm.intent.protocol import (
     IntentClassifierFactory,
 )
 
-intent_classifier_backends: Registry[IntentClassifierFactory] = Registry(
+# Discriminator is the explicit ``name`` first arg to
+# :func:`create_intent_classifier`; NOT a field in config. With no
+# ``config_key`` configured, :meth:`PluginRegistry.create` routes via
+# the explicit ``key=`` kwarg.
+intent_classifier_backends: PluginRegistry[IntentClassifier] = PluginRegistry(
     name="intent_classifier_backends",
+    validate_type=IntentClassifier,
+    not_found_kind="intent_classifier",
+    not_found_exception=ValueError,
 )
+"""Registry of named :data:`IntentClassifierFactory` callables.
+
+Register a custom backend with
+``intent_classifier_backends.register("name", factory)`` and select it
+via ``create_intent_classifier("name", {...})``. The registry conforms
+to :class:`~dataknobs_common.registry.BackendRegistry` for ``isinstance``
+checks.
+"""
 
 
 def create_intent_classifier(
@@ -45,17 +71,73 @@ def create_intent_classifier(
         The constructed :class:`IntentClassifier` instance.
 
     Raises:
-        ValueError: If ``name`` is not registered. The error message
-            lists every currently registered backend so the typo is
-            self-diagnosing.
+        ValueError: If ``name`` is not registered (the message lists
+            every currently registered backend so the typo is
+            self-diagnosing), or if the composite factory's child-spec
+            validation rejects a malformed entry (``classifier:``
+            discriminator missing, child spec not a mapping, child
+            ``classifier:`` name not registered). The classifier
+            factories raise ``ValueError`` as their construction-time
+            contract; ``PluginRegistry.create`` wraps any non-
+            ``OperationError`` factory exception in ``OperationError``,
+            but this shim re-raises the original ``ValueError`` to
+            preserve the historical consumer contract.
+        OperationError: If a non-``ValueError`` exception escapes the
+            backend factory. The originating exception is preserved
+            on ``__cause__``.
     """
-    factory = intent_classifier_backends.get_optional(name)
-    if factory is None:
-        raise ValueError(
-            f"Unknown intent_classifier '{name}' (registered: "
-            f"{sorted(intent_classifier_backends.list_keys())})",
+    try:
+        return intent_classifier_backends.create(
+            key=name,
+            config=dict(config) if config else {},
         )
-    return factory(dict(config) if config else {})
+    except OperationError as exc:
+        if isinstance(exc.__cause__, ValueError):
+            raise exc.__cause__ from None
+        raise
+
+
+async def create_intent_classifier_async(
+    name: str,
+    config: Mapping[str, Any] | None = None,
+) -> IntentClassifier:
+    """Async-symmetric counterpart to :func:`create_intent_classifier`.
+
+    For classifier backends whose construction is asynchronous
+    (embedding-model warm-up, network-bound vocabulary loading, …).
+    Every built-in classifier constructs synchronously, so this
+    function returns the same instance type as
+    :func:`create_intent_classifier`; the surface is shipped for API
+    symmetry and consumer-extensibility (an out-of-tree classifier's
+    ``from_config_async`` is detected and awaited via
+    :meth:`PluginRegistry.create_async`).
+
+    Args:
+        name: Registered backend name.
+        config: Backend-specific config dict forwarded to the factory.
+
+    Returns:
+        The constructed :class:`IntentClassifier` instance.
+
+    Raises:
+        ValueError: Same shape as the sync
+            :func:`create_intent_classifier` — unknown name OR
+            composite child-spec validation error. The
+            ``OperationError`` wrap from :meth:`PluginRegistry.create_async`
+            is unwrapped when ``__cause__`` is a ``ValueError`` so the
+            historical consumer contract is preserved.
+        OperationError: If a non-``ValueError`` exception escapes the
+            backend factory.
+    """
+    try:
+        return await intent_classifier_backends.create_async(
+            key=name,
+            config=dict(config) if config else {},
+        )
+    except OperationError as exc:
+        if isinstance(exc.__cause__, ValueError):
+            raise exc.__cause__ from None
+        raise
 
 
 # ── Built-in factories ───────────────────────────────────────────────
@@ -100,6 +182,8 @@ def _composite_factory(config: dict[str, Any]) -> IntentClassifier:
                 f"composite classifier child spec missing required "
                 f"'classifier' field (or legacy 'name'): {dict(spec)!r}",
             )
+        # Recursion preserved unchanged — uses the (now consolidated)
+        # :func:`create_intent_classifier` shim.
         children.append(create_intent_classifier(name, spec.get("config", {})))
     return CompositeIntentClassifier(
         classifiers=children,
@@ -110,3 +194,11 @@ def _composite_factory(config: dict[str, Any]) -> IntentClassifier:
 intent_classifier_backends.register("keyword", _keyword_factory)
 intent_classifier_backends.register("llm", _llm_factory)
 intent_classifier_backends.register("composite", _composite_factory)
+
+
+__all__ = [
+    "IntentClassifierFactory",
+    "create_intent_classifier",
+    "create_intent_classifier_async",
+    "intent_classifier_backends",
+]
