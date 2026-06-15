@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dataknobs_common.exceptions import OperationError
 from dataknobs_common.registry import BackendRegistry, PluginRegistry
 from dataknobs_common.resolver import (
     CachedResolver,
@@ -158,6 +159,22 @@ class TestResolverBackends:
         assert isinstance(resolver, MappingResolver)
         assert resolver.resolve("a") == 1
 
+    def test_resolver_backends_factory_error_wrapped_in_operation_error(
+        self,
+    ) -> None:
+        """Factory-construction exceptions surface as ``OperationError``
+        with the originating exception preserved on ``__cause__`` — the
+        documented contract shared with ``create_event_bus`` /
+        ``create_lock`` / ``create_rate_limiter`` (PR-B/C/D).
+
+        Selecting the ``"mapping"`` backend without supplying the
+        ``"mapping"`` key triggers a ``KeyError`` inside the factory
+        closure; ``PluginRegistry.create`` MUST wrap it so consumers
+        catch a single error type across the consolidation."""
+        with pytest.raises(OperationError) as excinfo:
+            resolver_backends.create(config={"backend": "mapping"})
+        assert isinstance(excinfo.value.__cause__, KeyError)
+
 
 class TestPartitionResolverBackends:
     """Partition resolver registry. Distinct namespace from
@@ -256,3 +273,62 @@ class TestPartitionResolverBackends:
             "temporal",
         ):
             assert name in msg
+
+    def test_partition_resolver_backends_consumer_register(self) -> None:
+        """An out-of-tree consumer registers a custom partition resolver
+        backend through the registry surface and dispatches it via
+        ``create(config={"backend": "..."})`` — sibling pin to
+        ``test_resolver_backends_consumer_register``. The partition
+        registry has no ``validate_type=`` (record→str shape has no
+        declared Protocol), so the conformance check is structural at
+        use-time only."""
+
+        class _TenantPartition:
+            def resolve(self, record: object) -> str | None:
+                return "tenant-test"
+
+        def _make_tenant_partition(config: dict) -> _TenantPartition:
+            return _TenantPartition()
+
+        partition_resolver_backends.register(
+            "tenant-test", _make_tenant_partition
+        )
+        try:
+            resolver = partition_resolver_backends.create(
+                config={"backend": "tenant-test"}
+            )
+            assert resolver.resolve(SimpleNamespace()) == "tenant-test"
+        finally:
+            partition_resolver_backends.unregister("tenant-test")
+
+    async def test_partition_resolver_backends_async_path(self) -> None:
+        """``create_async`` resolves a sync factory transparently — the
+        await is a no-op on the non-awaitable result. Sibling symmetry
+        guard to ``test_resolver_backends_async_path``; the async shim
+        is a distinct code path through ``PluginRegistry.create_async``."""
+        resolver = await partition_resolver_backends.create_async(
+            config={"backend": "null", "default": "global"}
+        )
+        assert isinstance(resolver, NullPartitionResolver)
+        assert resolver.resolve(SimpleNamespace()) == "global"
+
+    async def test_partition_resolver_backends_async_unknown_backend_message(
+        self,
+    ) -> None:
+        """Async shim surfaces the same unknown-backend ``ValueError``
+        shape as the sync path. Sibling pin to
+        ``test_partition_resolver_backends_unknown_backend_message`` —
+        the async dispatch is a separate code path that must surface
+        the registry's not-found message identically."""
+        with pytest.raises(ValueError) as excinfo:
+            await partition_resolver_backends.create_async(
+                config={"backend": "still-never-registered"}
+            )
+        msg = str(excinfo.value)
+        assert (
+            "Unknown partition resolver backend: still-never-registered" in msg
+        )
+        # Prefix-only check (defensive vs. exact enumeration) — a
+        # consumer-registered backend lingering from an upstream test
+        # run shouldn't flip this pin.
+        assert "Available backends:" in msg

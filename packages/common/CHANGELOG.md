@@ -259,7 +259,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `partition_resolver_backends.register("name", factory)` and select it
   via `partition_resolver_backends.create({"backend": "name", ...})`.
   Conforms to `BackendRegistry`. Also re-exported from the top-level
-  `dataknobs_common` namespace.
+  `dataknobs_common` namespace. Neither resolver registry ships a
+  standalone `create_resolver()` / `create_partition_resolver()`
+  convenience shim (asymmetric with the `create_event_bus()` /
+  `create_lock()` / `create_rate_limiter()` shape from earlier in the
+  series) — the registries are surfaced directly. There is no top-level
+  rate / category parsing step to perform ahead of dispatch (which is
+  what justified the shim in the rate-limiter case), and a
+  `{"mapping": {...}}` config can already skip the discriminator via
+  `config_key_default="mapping"`, so a shim would add no value over
+  `resolver_backends.create({...})`.
 
 ### Changed
 - **Breaking:** Backend-factory construction errors raised by
