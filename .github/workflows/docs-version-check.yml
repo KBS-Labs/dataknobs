@@ -9,6 +9,10 @@ on:
       - 'docs/index.md'
       - 'docs/installation.md'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check-versions:
     runs-on: ubuntu-latest
@@ -20,12 +24,10 @@ jobs:
       with:
         fetch-depth: 1
 
-    - name: Install jq
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y jq
-
     - name: Check documentation versions
+      # bin/docs-update-versions.sh uses jq; relying on jq being
+      # preinstalled on the ubuntu-latest runner image (it has been
+      # since the 22.04/24.04 images shipped).
       run: |
         echo "🔍 Checking if documentation versions match packages.json..."
         bin/docs-update-versions.sh --check

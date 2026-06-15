@@ -1,13 +1,23 @@
 name: CI
 
+# Post-merge sanity check that all packages build from a clean checkout.
+# PR validation runs in quality-validation.yml against locally-generated
+# .quality-artifacts/, which already proves the packages import + tests
+# pass — this workflow exists only to catch packaging-only regressions
+# (missing files in sdist, broken pyproject.toml metadata) on main.
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Don't cancel in-flight builds on main — if two PRs merge back-to-back,
+  # we still want each merge's sanity check to complete so a broken
+  # pyproject.toml can't slip through.
+  cancel-in-progress: false
 
 jobs:
   build:
