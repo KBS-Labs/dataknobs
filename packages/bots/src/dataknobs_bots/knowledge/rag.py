@@ -2,7 +2,7 @@
 
 import logging
 import types
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar
 
@@ -13,6 +13,11 @@ from dataknobs_bots.knowledge.retrieval import (
     ContextFormatter,
     FormatterConfig,
     MergerConfig,
+)
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
 )
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -39,7 +44,11 @@ logger = logging.getLogger(__name__)
 _R = TypeVar("_R")
 
 
-class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], KnowledgeBase):
+class RAGKnowledgeBase(
+    StructuredConfigConsumer[RAGKnowledgeBaseConfig],
+    CapabilityMixin,
+    KnowledgeBase,
+):
     """RAG knowledge base using dataknobs-xization for chunking and vector search.
 
     This implementation:
@@ -64,6 +73,51 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
     """
 
     CONFIG_CLS: ClassVar[type[RAGKnowledgeBaseConfig]] = RAGKnowledgeBaseConfig
+
+    # Capability advertisement (per the chunk-layer Tenancy capability).
+    # The class HAS the chunk-layer tenant-scoping code path
+    # (``tenant_id`` folds into ``_CHUNK_ID_PREFIX_KEYS``, the bound
+    # ``tenant_id`` stamps onto chunk metadata, and ``_resolve_read_filter``
+    # AND-composes the bound tenant onto every read). Advertisement is
+    # **structural**, not activation-state — an unbound instance still
+    # advertises the capability because the class has the code path;
+    # whether a specific instance is currently chunk-scoping is the
+    # natural binding check (``kb._tenant_id is not None``).
+    # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared
+    # here: backend-state writes are still per-domain, not per-tenant,
+    # at the :class:`KnowledgeResourceBackend` layer.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {Capability.TENANT_SCOPED_CHUNKS}
+    )
+
+    # Ordered metadata keys folded into the chunk-id prefix when present
+    # (the present-and-truthy values join into the prefix in declared
+    # order; ``source_stem`` is always last). Order is significant —
+    # most-scoping first — so the prefix reads
+    # ``<tenant>\x1f<domain>\x1f<gen>\x1f<stem>`` for a fully-tagged
+    # multi-tenant store. Subclasses rebind to add fold positions (e.g.
+    # ``("tenant_id", "domain_id", "region", "_generation")``) without
+    # forking the derivation. Single-tenant consumers see no change:
+    # ``tenant_id`` absent in metadata yields the historical
+    # ``[domain_id?, generation?, source_stem]`` shape.
+    _CHUNK_ID_PREFIX_KEYS: ClassVar[tuple[str, ...]] = (
+        "tenant_id",
+        "domain_id",
+        "_generation",
+    )
+
+    # Identity tags the KB owns: auto-derived from the bound ``tenant_id``
+    # / per-call ``domain_id`` / TOMBSTONE-generation token rather than
+    # accepted from consumer-supplied ``extra_metadata``. A caller
+    # passing these keys in ``extra_metadata`` is shadowed by the
+    # auto-derived value so identity cannot be silently re-tagged for
+    # another tenant. Non-identity keys (``region``, ``cohort``, any
+    # custom tag) are preserved unchanged through the merge. Documented
+    # in the multi-tenant USER_GUIDE under "Reserved vs. Consumer-
+    # Extensible Metadata Keys".
+    _RESERVED_METADATA_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"tenant_id", "domain_id", "_generation"}
+    )
 
     def _setup(self) -> None:
         """Build the chunker, merger, and formatter (synchronous).
@@ -105,6 +159,12 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
 
         self.vector_store: Any = None
         self.embedding_provider: Any = None
+
+        # Bound-tenant binding: when set, every write auto-stamps
+        # ``tenant_id`` into chunk metadata and every read AND-composes
+        # the bound tenant into the vector-store search filter. None
+        # (default) preserves the single-tenant byte-identical posture.
+        self._tenant_id: str | None = self.config.tenant_id
 
     @classmethod
     async def from_config(  # type: ignore[override]
@@ -193,16 +253,27 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         self.embedding_provider = embedding_provider
 
     async def load_markdown_document(
-        self, filepath: str | Path, metadata: dict[str, Any] | None = None
+        self,
+        filepath: str | Path,
+        metadata: dict[str, Any] | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> int:
         """Load and chunk a markdown document from a file.
 
         Reads the file and delegates to :meth:`load_markdown_text` for
-        parsing, chunking, embedding, and storage.
+        parsing, chunking, embedding, and storage. ``extra_metadata`` /
+        ``tenant_id`` are forwarded uniformly — see
+        :meth:`load_markdown_text` for the precedence rules.
 
         Args:
             filepath: Path to markdown file
-            metadata: Optional metadata to attach to all chunks
+            metadata: Optional per-document metadata
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`).
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` (see :meth:`load_markdown_text`).
 
         Returns:
             Number of chunks created
@@ -211,7 +282,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             ```python
             num_chunks = await kb.load_markdown_document(
                 "docs/api.md",
-                metadata={"category": "api", "version": "1.0"}
+                metadata={"category": "api", "version": "1.0"},
+                tenant_id="acme",
             )
             ```
         """
@@ -223,16 +295,27 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             markdown_text,
             source=str(filepath),
             metadata=metadata,
+            extra_metadata=extra_metadata,
+            tenant_id=tenant_id,
         )
 
     async def load_documents_from_directory(
-        self, directory: str | Path, pattern: str = "**/*.md"
+        self,
+        directory: str | Path,
+        pattern: str = "**/*.md",
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Load all markdown documents from a directory.
 
         Args:
             directory: Directory path containing documents
             pattern: Glob pattern for files to load (default: **/*.md)
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`).
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` (see :meth:`load_markdown_text`).
 
         Returns:
             Dictionary with loading statistics:
@@ -244,7 +327,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             ```python
             results = await kb.load_documents_from_directory(
                 "docs/",
-                pattern="**/*.md"
+                pattern="**/*.md",
+                tenant_id="acme",
             )
             print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")
             ```
@@ -258,7 +342,10 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
 
             try:
                 num_chunks = await self.load_markdown_document(
-                    filepath, metadata={"filename": filepath.name}
+                    filepath,
+                    metadata={"filename": filepath.name},
+                    extra_metadata=extra_metadata,
+                    tenant_id=tenant_id,
                 )
                 results["total_files"] += 1
                 results["total_chunks"] += num_chunks
@@ -274,11 +361,16 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         schema: str | None = None,
         transformer: ContentTransformer | None = None,
         title: str | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> int:
         """Load and chunk a JSON document by converting it to markdown.
 
         This method converts JSON data to markdown format using ContentTransformer,
-        then processes it like any other markdown document.
+        then processes it like any other markdown document. ``extra_metadata`` /
+        ``tenant_id`` are forwarded uniformly — see
+        :meth:`load_markdown_text` for the precedence rules.
 
         Args:
             filepath: Path to JSON file
@@ -286,6 +378,10 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             schema: Optional schema name (requires transformer with registered schema)
             transformer: Optional ContentTransformer instance with custom configuration
             title: Optional document title for the markdown
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`).
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` (see :meth:`load_markdown_text`).
 
         Returns:
             Number of chunks created
@@ -336,6 +432,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             markdown_text,
             source=str(filepath),
             metadata=metadata,
+            extra_metadata=extra_metadata,
+            tenant_id=tenant_id,
         )
 
     async def load_yaml_document(
@@ -345,6 +443,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         schema: str | None = None,
         transformer: ContentTransformer | None = None,
         title: str | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> int:
         """Load and chunk a YAML document by converting it to markdown.
 
@@ -354,6 +455,10 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             schema: Optional schema name (requires transformer with registered schema)
             transformer: Optional ContentTransformer instance with custom configuration
             title: Optional document title for the markdown
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`).
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` (see :meth:`load_markdown_text`).
 
         Returns:
             Number of chunks created
@@ -382,6 +487,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             markdown_text,
             source=str(filepath),
             metadata=metadata,
+            extra_metadata=extra_metadata,
+            tenant_id=tenant_id,
         )
 
     async def load_csv_document(
@@ -391,6 +498,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         title: str | None = None,
         title_field: str | None = None,
         transformer: ContentTransformer | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> int:
         """Load and chunk a CSV document by converting it to markdown.
 
@@ -402,6 +512,10 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             title: Optional document title for the markdown
             title_field: Column to use as section title (default: first column)
             transformer: Optional ContentTransformer instance with custom configuration
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`).
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` (see :meth:`load_markdown_text`).
 
         Returns:
             Number of chunks created
@@ -431,6 +545,8 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             markdown_text,
             source=str(filepath),
             metadata=metadata,
+            extra_metadata=extra_metadata,
+            tenant_id=tenant_id,
         )
 
     async def load_from_directory(
@@ -438,6 +554,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         directory: str | Path,
         config: KnowledgeBaseConfig | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Load documents from a directory using KnowledgeBaseConfig.
 
@@ -450,6 +569,12 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             config: Optional KnowledgeBaseConfig. If not provided, attempts to load
                    from knowledge_base.json/yaml in the directory, or uses defaults.
             progress_callback: Optional callback function(file_path, num_chunks) for progress
+            extra_metadata: Optional cross-document identity carrier
+                (see :meth:`load_markdown_text`). Composed through
+                :meth:`_compose_extra_metadata` so the bound tenant
+                wins over any caller-supplied ``tenant_id`` key.
+            tenant_id: Optional convenience kwarg folded into
+                ``extra_metadata`` as ``{"tenant_id": tenant_id}``.
 
         Returns:
             Dictionary with loading statistics:
@@ -483,9 +608,16 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         if config is None:
             config = KnowledgeBaseConfig.load(directory)
 
+        effective_extra: dict[str, Any] = dict(extra_metadata or {})
+        if tenant_id is not None:
+            effective_extra["tenant_id"] = tenant_id
+        composed = self._compose_extra_metadata(effective_extra)
+
         processor = DirectoryProcessor(config, directory, chunker=self._chunker)
         return await self._ingest_from_processor_async(
-            processor, progress_callback
+            processor,
+            progress_callback,
+            extra_metadata=composed or None,
         )
 
     async def ingest_from_backend(
@@ -494,8 +626,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         domain_id: str,
         config: KnowledgeBaseConfig | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
-        extra_metadata: dict[str, Any] | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
         *,
+        tenant_id: str | None = None,
         file_filter: Callable[["KnowledgeFile"], bool] | None = None,
         rate_limiter: "RateLimiter | None" = None,
     ) -> dict[str, Any]:
@@ -524,12 +657,20 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             progress_callback: Optional ``callback(file_path: str,
                 num_chunks: int) -> None`` invoked after each
                 successfully-ingested document.
-            extra_metadata: Optional metadata dict merged into every
-                chunk's metadata (caller-provided entries win over
-                pattern-config / per-chunk entries). Used by
-                :class:`KnowledgeIngestionManager` to thread the
-                ``domain_id`` onto each chunk so that multi-tenant
-                consumers can filter on it at query time.
+            extra_metadata: Optional cross-document identity carrier
+                merged into every chunk's metadata. Composed through
+                :meth:`_compose_extra_metadata` so a bound ``tenant_id``
+                on the KB wins over any caller-supplied ``tenant_id``
+                key — identity is sacred at the write boundary. Used by
+                :class:`KnowledgeIngestionManager` to thread
+                ``domain_id`` (and ``tenant_id`` when bound on the
+                manager) onto each chunk so multi-tenant consumers can
+                filter on either at query time.
+            tenant_id: Optional keyword-only convenience kwarg folded
+                into ``extra_metadata`` as ``{"tenant_id": tenant_id}``
+                (wins over an ``extra_metadata["tenant_id"]`` entry
+                from the same call — the kwarg is more specific). Same
+                bound-tenant precedence rule applies.
             file_filter: Optional keyword-only predicate evaluated
                 against each :class:`KnowledgeFile` *after* the
                 pattern match. Files for which it returns ``False``
@@ -560,6 +701,11 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
                 name=domain_id
             )
 
+        effective_extra: dict[str, Any] = dict(extra_metadata or {})
+        if tenant_id is not None:
+            effective_extra["tenant_id"] = tenant_id
+        composed = self._compose_extra_metadata(effective_extra)
+
         source = BackendDocumentSource(
             backend, domain_id, file_filter=file_filter
         )
@@ -567,7 +713,7 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         return await self._ingest_from_processor_async(
             processor,
             progress_callback,
-            extra_metadata=extra_metadata,
+            extra_metadata=composed or None,
             rate_limiter=rate_limiter,
         )
 
@@ -729,6 +875,46 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         results["files_skipped"] = processor.files_skipped
         return results
 
+    @classmethod
+    def _derive_chunk_prefix(
+        cls,
+        source_stem: str,
+        metadata: dict[str, Any] | None,
+    ) -> tuple[str, str]:
+        r"""Return ``(chunk_prefix, chunk_separator)`` for a chunk's id.
+
+        Walks :attr:`_CHUNK_ID_PREFIX_KEYS` against ``metadata`` and
+        folds every present, truthy value into the prefix in declared
+        order; ``source_stem`` is always last. When at least one fold
+        key is present the record-separator (``\x1f``) is used so
+        snake_case-tag collisions are impossible (``my`` + ``team_doc``
+        vs ``my_team`` + ``doc`` would both produce ``my_team_doc`` under
+        ``_``); when none are present the historical ``_`` separator is
+        preserved so existing populated stores keep matching on
+        re-ingest. Switching to ``\x1f`` unconditionally would silently
+        double up every old chunk on the next ingest (``stem_index`` and
+        ``stem\x1findex`` are different keys, so UPSERT inserts instead
+        of overwriting).
+
+        Single-tenant single-domain consumers (``metadata`` empty or
+        carrying none of the declared keys) see the historical
+        ``(source_stem, "_")`` shape. Multi-tenant shared stores that
+        thread ``tenant_id`` get the deepest fold position by default
+        so tenant identity participates in the primary key — fixing the
+        chunk-id UPSERT collision class at the derivation layer.
+        """
+        md = metadata or {}
+        parts: list[str] = []
+        for key in cls._CHUNK_ID_PREFIX_KEYS:
+            value = md.get(key)
+            if value:
+                parts.append(str(value))
+        if not parts:
+            # Legacy single-segment path — byte-identical to pre-fold.
+            return source_stem, "_"
+        parts.append(source_stem)
+        return "\x1f".join(parts), "\x1f"
+
     async def _embed_and_store_chunks(
         self,
         chunks: list[dict[str, Any]],
@@ -794,50 +980,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
                 metadata = None
 
         source_stem = Path(source_file).stem if source_file else "doc"
-        # In multi-tenant shared stores the same filename can appear
-        # under multiple ``domain_id`` namespaces (e.g.
-        # ``domain-a/doc.md`` and ``domain-b/doc.md``).  ``Path.stem``
-        # strips both the URI and the extension, so without a
-        # domain-aware prefix the chunk IDs collide and one tenant's
-        # ingest upserts over another's.  Prefer ``domain_id`` from
-        # the caller-supplied metadata (threaded by
-        # ``KnowledgeIngestionManager`` as ``extra_metadata``) when
-        # present.
-        #
-        # Separator selection:
-        # * Multi-domain (``domain_id`` set): use ``\x1f`` (record
-        #   separator) so snake_case-domain collisions are impossible
-        #   (``my`` + ``team_doc`` vs ``my_team`` + ``doc`` would both
-        #   produce ``my_team_doc`` under ``_``).
-        # * Single-domain (``domain_id`` absent): keep the historical
-        #   ``_`` separator so existing populated stores' chunk IDs
-        #   continue to match on re-ingest. Switching to ``\x1f``
-        #   unconditionally would silently double up every old chunk
-        #   on the next ingest (``stem_index`` and ``stem\x1findex``
-        #   are different keys, so upsert inserts instead of
-        #   overwriting). The CHANGELOG for this scope expansion
-        #   states "Single-domain consumers see no change" — that
-        #   contract is enforced here.
-        #
-        # Generation token (TOMBSTONE swaps only): when
-        # ``KnowledgeIngestionManager`` threads a ``_generation`` token
-        # via ``extra_metadata``, fold it into the prefix so the new
-        # generation gets *distinct* chunk ids instead of upserting
-        # (overwriting) the tombstoned old rows in place. Opt-in by
-        # presence — absent (APPEND / CLEAR_FIRST, single-domain), id
-        # derivation is byte-for-byte unchanged, so existing populated
-        # stores keep matching on re-ingest.
-        domain_id = (metadata or {}).get("domain_id")
-        generation = (metadata or {}).get("_generation")
-        if domain_id:
-            if generation:
-                chunk_prefix = f"{domain_id}\x1f{generation}\x1f{source_stem}"
-            else:
-                chunk_prefix = f"{domain_id}\x1f{source_stem}"
-            chunk_separator = "\x1f"
-        else:
-            chunk_prefix = source_stem
-            chunk_separator = "_"
+        chunk_prefix, chunk_separator = self._derive_chunk_prefix(
+            source_stem, metadata
+        )
 
         # Detect caller-attempted system-field overrides ONCE per
         # call rather than per chunk. The same ``metadata`` dict
@@ -919,6 +1064,9 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         markdown_text: str,
         source: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        extra_metadata: Mapping[str, Any] | None = None,
+        tenant_id: str | None = None,
     ) -> int:
         """Load markdown content from a string.
 
@@ -932,13 +1080,34 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         Args:
             markdown_text: Markdown content to load
             source: Source identifier for metadata
-            metadata: Optional metadata merged into every chunk
-                (caller-provided entries win)
+            metadata: Optional per-document metadata merged into every
+                chunk (cross-document identity carriers belong in
+                ``extra_metadata`` instead).
+            extra_metadata: Optional keyword-only cross-document
+                identity carrier (e.g. ``{"tenant_id": "acme"}``).
+                Merged OVER ``metadata`` so identity tags cannot be
+                shadowed by per-document fields. Composed through
+                :meth:`_compose_extra_metadata` so a bound tenant on
+                the KB wins over any caller-supplied ``tenant_id`` key
+                — identity is sacred at the write boundary.
+            tenant_id: Optional keyword-only convenience kwarg folded
+                into ``extra_metadata`` as ``{"tenant_id": tenant_id}``
+                (wins over an ``extra_metadata["tenant_id"]`` entry
+                from the same call — the kwarg is more specific). Same
+                bound-tenant precedence rule applies.
 
         Returns:
             Number of chunks created
         """
-        doc_info = DocumentInfo(source=source, metadata=metadata or {})
+        effective_extra: dict[str, Any] = dict(extra_metadata or {})
+        if tenant_id is not None:
+            effective_extra["tenant_id"] = tenant_id
+        composed = self._compose_extra_metadata(effective_extra)
+        merged_metadata: dict[str, Any] = dict(metadata or {})
+        if composed:
+            merged_metadata.update(composed)
+
+        doc_info = DocumentInfo(source=source, metadata=merged_metadata)
         chunks = self._chunker.chunk(markdown_text, doc_info)
 
         chunk_dicts: list[dict[str, Any]] = []
@@ -966,7 +1135,7 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
             chunks=chunk_dicts,
             source_file=source,
             document_type="markdown",
-            metadata=metadata,
+            metadata=merged_metadata or None,
         )
         return len(chunks)
 
@@ -978,6 +1147,28 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
     # them while keeping the post-filter store-agnostic.
     _STALE_OVERFETCH = 4
 
+    def _compose_extra_metadata(
+        self,
+        extra_metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Return the effective ``extra_metadata`` seen by the chunk pipeline.
+
+        Identity tags the KB owns (the bound ``tenant_id``; the per-call
+        ``domain_id`` is layered on later by the call site) win over
+        caller-supplied keys on collision — a caller cannot silently
+        re-tag chunks for another tenant by passing
+        ``extra_metadata={"tenant_id": ...}``. Non-identity keys are
+        preserved as-is so callers can still attach per-document
+        ``region``, ``cohort``, or any custom tag through the same
+        channel.
+
+        Returns a fresh dict so the caller's mapping is never mutated.
+        """
+        composed: dict[str, Any] = dict(extra_metadata or {})
+        if self._tenant_id is not None:
+            composed["tenant_id"] = self._tenant_id
+        return composed
+
     def _resolve_read_filter(
         self, filter_metadata: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -987,11 +1178,26 @@ class RAGKnowledgeBase(StructuredConfigConsumer[RAGKnowledgeBaseConfig], Knowled
         ``vector_store.search`` / ``hybrid_search`` call) route their
         ``filter_metadata`` through here, so any future read-filter
         shaping has exactly one home. The store filter is returned
-        unchanged: stale (tombstoned) exclusion is *not* expressible
-        as an equality filter (it needs ``_stale IS NULL OR = false``)
-        and is applied as a post-filter via :meth:`_is_stale`.
+        unchanged when no bound tenant is configured: stale
+        (tombstoned) exclusion is *not* expressible as an equality
+        filter (it needs ``_stale IS NULL OR = false``) and is applied
+        as a post-filter via :meth:`_is_stale`.
+
+        When the KB has a bound ``tenant_id`` the bound value is
+        AND-composed into the supplied filter with **explicit-filter-
+        wins on collision** — the inverse of the write-side precedence
+        (auto-derived wins) — because the two sides have different
+        threat models. On write, identity is sacred and a caller cannot
+        silently re-tag chunks for another tenant. On read, admin
+        tooling legitimately needs to read across tenants by passing
+        the explicit key; the asymmetry is therefore deliberate.
         """
-        return filter_metadata
+        if self._tenant_id is None:
+            return filter_metadata
+        effective: dict[str, Any] = {"tenant_id": self._tenant_id}
+        if filter_metadata:
+            effective.update(filter_metadata)  # explicit-filter-wins
+        return effective
 
     @staticmethod
     def _is_stale(metadata: dict[str, Any] | None) -> bool:

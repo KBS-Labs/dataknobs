@@ -9,11 +9,17 @@ from __future__ import annotations
 import logging
 import uuid
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+)
 
 from .storage import IngestionStatus, InvalidVersionError
 
@@ -152,7 +158,7 @@ class IngestionResult:
         }
 
 
-class KnowledgeIngestionManager:
+class KnowledgeIngestionManager(CapabilityMixin):
     """Coordinates loading files from storage backend into RAG knowledge base.
 
     This manager bridges :class:`KnowledgeResourceBackend` (file storage)
@@ -195,12 +201,26 @@ class KnowledgeIngestionManager:
         ```
     """
 
+    # Capability advertisement: the manager threads the bound
+    # ``tenant_id`` (when set) into every chunk's identity tags via
+    # :meth:`_compose_extra_metadata` AND into every destination write/
+    # delete filter via :meth:`_scope_for_tenant`, so two managers bound
+    # to distinct tenants but sharing a destination cannot collide.
+    # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared:
+    # ingestion-status writes through :class:`KnowledgeResourceBackend`
+    # remain per-domain at the contract layer.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {Capability.TENANT_SCOPED_CHUNKS}
+    )
+
     def __init__(
         self,
         source: KnowledgeResourceBackend,
         destination: RAGKnowledgeBase,
         event_bus: EventBus | None = None,
         rate_limiter: RateLimiter | None = None,
+        *,
+        tenant_id: str | None = None,
     ) -> None:
         """Initialize the ingestion manager.
 
@@ -216,11 +236,70 @@ class KnowledgeIngestionManager:
                 cannot fail the whole ingest under burst. ``None``
                 (default) is today's behaviour exactly — no pacing,
                 correct for a local Ollama embedder.
+            tenant_id: Optional keyword-only tenant identity. When set,
+                every chunk this manager writes auto-stamps
+                ``tenant_id`` into the chunk-metadata fold (and into
+                the chunk-id prefix via
+                :attr:`RAGKnowledgeBase._CHUNK_ID_PREFIX_KEYS`) so two
+                managers bound to distinct tenants but pointing at the
+                same shared :class:`RAGKnowledgeBase` produce disjoint
+                chunk-id namespaces. Auto-derived wins over any
+                ``extra_metadata={"tenant_id": ...}`` a caller supplies
+                — identity is sacred at the write boundary. ``None``
+                (default) is today's single-tenant byte-identical
+                posture.
         """
         self._source = source
         self._destination = destination
         self._event_bus = event_bus
         self._rate_limiter = rate_limiter
+        self._tenant_id = tenant_id
+
+    def _scope_for_tenant(self, base: Mapping[str, Any]) -> dict[str, Any]:
+        """AND-compose the bound ``tenant_id`` into a write/delete filter.
+
+        Every filter the manager uses to clear, tombstone, or
+        otherwise mutate rows on the destination passes through here
+        so a tenant-bound manager cannot accidentally delete another
+        tenant's rows under the same ``domain_id``. ``tenant_id``
+        absent (unbound manager) is a no-op pass-through — single-
+        tenant byte-identical posture preserved.
+
+        Returns a fresh dict so the caller's mapping is never mutated.
+        """
+        scoped = dict(base)
+        if self._tenant_id is not None:
+            scoped["tenant_id"] = self._tenant_id
+        return scoped
+
+    def _compose_extra_metadata(
+        self,
+        extra_metadata: Mapping[str, Any] | None,
+        *,
+        domain_id: str,
+        generation: str | None = None,
+    ) -> dict[str, Any]:
+        """Compose the ``extra_metadata`` dict handed to the destination.
+
+        Auto-derived identity tags (the bound ``tenant_id``, the per-
+        call ``domain_id``, the TOMBSTONE-swap ``_generation`` token)
+        win over caller-supplied keys on collision — identity is sacred
+        at the write boundary, so a malicious or mistaken caller cannot
+        re-tag chunks for another tenant or another domain via the
+        ``extra_metadata`` channel. Non-identity keys are preserved.
+        Returns a fresh dict so the caller's mapping is never mutated.
+
+        Mirrors :meth:`RAGKnowledgeBase._compose_extra_metadata` — same
+        precedence rule, same name, the two call sites share the
+        ``auto-derived wins`` invariant.
+        """
+        composed: dict[str, Any] = dict(extra_metadata or {})
+        composed["domain_id"] = domain_id
+        if self._tenant_id is not None:
+            composed["tenant_id"] = self._tenant_id
+        if generation is not None:
+            composed["_generation"] = generation
+        return composed
 
     @staticmethod
     def _resolve_swap_mode(
@@ -268,6 +347,7 @@ class KnowledgeIngestionManager:
         swap_mode: IngestSwapMode | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
         config: KnowledgeBaseConfig | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> IngestionResult:
         """Ingest all documents from a domain into the knowledge base.
 
@@ -291,6 +371,14 @@ class KnowledgeIngestionManager:
                 ``(file_path, num_chunks)`` after each ingested document
             config: Optional :class:`KnowledgeBaseConfig` overriding any
                 backend-hosted ``_metadata/knowledge_base.(yaml|yml|json)``
+            extra_metadata: Optional keyword-only mapping merged into
+                every chunk's metadata before identity auto-derivation.
+                Auto-derived identity tags (``domain_id``, the bound
+                ``tenant_id``, the TOMBSTONE-swap ``_generation`` token)
+                win on collision — a caller cannot silently re-tag
+                chunks for another tenant or domain via this channel.
+                Non-identity keys (``cohort``, ``region``, any custom
+                tag) are preserved as-is.
 
         Returns:
             :class:`IngestionResult` with aggregate statistics
@@ -317,6 +405,7 @@ class KnowledgeIngestionManager:
                 config=config,
                 progress_callback=progress_callback,
                 result=result,
+                extra_metadata=extra_metadata,
             )
             await self._finalize(domain_id, result)
 
@@ -342,6 +431,7 @@ class KnowledgeIngestionManager:
         config: KnowledgeBaseConfig | None,
         progress_callback: Callable[[str, int], None] | None,
         result: IngestionResult,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """The single place a re-ingest mutates the destination.
 
@@ -409,18 +499,23 @@ class KnowledgeIngestionManager:
                 config=config,
                 progress_callback=progress_callback,
                 result=result,
+                extra_metadata=extra_metadata,
             )
             return
 
         if swap_mode is IngestSwapMode.CLEAR_FIRST:
-            await self._destination.clear(filter={"domain_id": domain_id})
+            await self._destination.clear(
+                filter=self._scope_for_tenant({"domain_id": domain_id})
+            )
             logger.debug(
                 "Cleared existing vectors for domain: %s", domain_id
             )
 
         for path in delete_paths or ():
             await self._destination.clear(
-                filter={"domain_id": domain_id, "source_path": path}
+                filter=self._scope_for_tenant(
+                    {"domain_id": domain_id, "source_path": path}
+                )
             )
         if delete_paths:
             logger.debug(
@@ -435,6 +530,7 @@ class KnowledgeIngestionManager:
             config=config,
             progress_callback=progress_callback,
             result=result,
+            extra_metadata=extra_metadata,
         )
 
     async def _upsert(
@@ -446,6 +542,7 @@ class KnowledgeIngestionManager:
         progress_callback: Callable[[str, int], None] | None,
         result: IngestionResult,
         generation: str | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Re-embed the selected source files into the destination.
 
@@ -454,25 +551,32 @@ class KnowledgeIngestionManager:
         by every swap mode so the embed + stats handling never drifts
         between them.
 
-        ``generation`` (TOMBSTONE only) is threaded into
-        ``extra_metadata`` as ``_generation``. When set,
-        :meth:`RAGKnowledgeBase._embed_and_store_chunks` folds it into
-        the chunk-id prefix so the new generation gets *distinct* ids
-        instead of upserting (overwriting) the tombstoned old rows in
-        place, and stamps it on every new chunk's metadata so the
-        rollback can target exactly this swap's rows. When ``None``
-        (APPEND / CLEAR_FIRST) the id derivation is byte-for-byte
-        unchanged.
+        ``generation`` (TOMBSTONE only) and the bound ``tenant_id`` are
+        folded into the chunk metadata via
+        :meth:`_compose_extra_metadata`. Auto-derived identity tags
+        (``domain_id``, the bound ``tenant_id``, the ``_generation``
+        token) win over any caller-supplied ``extra_metadata`` entry —
+        identity is sacred at the write boundary.
+        :meth:`RAGKnowledgeBase._embed_and_store_chunks` then folds the
+        present identity keys into the chunk-id prefix per
+        :attr:`RAGKnowledgeBase._CHUNK_ID_PREFIX_KEYS`, so two tenants
+        ingesting the same ``domain_id`` produce disjoint chunk-id
+        namespaces and a generation swap produces distinct ids
+        (instead of UPSERTing the tombstoned old rows in place). With
+        no bound tenant and no ``generation`` (APPEND / CLEAR_FIRST,
+        single-tenant) the id derivation is byte-for-byte unchanged.
         """
-        extra_metadata: dict[str, Any] = {"domain_id": domain_id}
-        if generation is not None:
-            extra_metadata["_generation"] = generation
+        composed = self._compose_extra_metadata(
+            extra_metadata,
+            domain_id=domain_id,
+            generation=generation,
+        )
         stats = await self._destination.ingest_from_backend(
             self._source,
             domain_id,
             config=config,
             progress_callback=progress_callback,
-            extra_metadata=extra_metadata,
+            extra_metadata=composed,
             file_filter=upsert_filter,
             rate_limiter=self._rate_limiter,
         )
@@ -492,6 +596,7 @@ class KnowledgeIngestionManager:
         config: KnowledgeBaseConfig | None,
         progress_callback: Callable[[str, int], None] | None,
         result: IngestionResult,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Crash-safe, generation-distinct re-ingest for a scope.
 
@@ -556,7 +661,7 @@ class KnowledgeIngestionManager:
           source*; purged unconditionally, never resurrected.
         """
         generation = uuid.uuid4().hex
-        base: dict[str, Any] = {"domain_id": domain_id}
+        base: dict[str, Any] = self._scope_for_tenant({"domain_id": domain_id})
         deleted_set = set(purely_deleted_paths or ())
 
         # The swap scope must match the *upsert* scope, not whether any
@@ -629,6 +734,7 @@ class KnowledgeIngestionManager:
                 progress_callback=progress_callback,
                 result=result,
                 generation=generation,
+                extra_metadata=extra_metadata,
             )
         except Exception:
             await self._rollback_swap(
@@ -702,7 +808,9 @@ class KnowledgeIngestionManager:
            state.
         """
         await self._destination.clear(
-            filter={"domain_id": domain_id, "_generation": generation}
+            filter=self._scope_for_tenant(
+                {"domain_id": domain_id, "_generation": generation}
+            )
         )
         if modified_scope is not None:
             await self._destination.update_metadata_where(
@@ -753,11 +861,14 @@ class KnowledgeIngestionManager:
 
         token = info.generation
         await self._destination.update_metadata_where(
-            {"domain_id": domain_id, "_stale": True}, {"_stale": False}
+            self._scope_for_tenant({"domain_id": domain_id, "_stale": True}),
+            {"_stale": False},
         )
         if token:
             await self._destination.clear(
-                filter={"domain_id": domain_id, "_generation": token}
+                filter=self._scope_for_tenant(
+                    {"domain_id": domain_id, "_generation": token}
+                )
             )
         await self._source.set_ingestion_status(
             domain_id, IngestionStatus.READY
@@ -899,6 +1010,7 @@ class KnowledgeIngestionManager:
         swap_mode: IngestSwapMode = IngestSwapMode.APPEND,
         progress_callback: Callable[[str, int], None] | None = None,
         config: KnowledgeBaseConfig | None = None,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> IngestionResult:
         """Ingest only the files changed since ``since_version``.
 
@@ -932,6 +1044,12 @@ class KnowledgeIngestionManager:
                 callback, passed through to the re-embed
             config: Optional :class:`KnowledgeBaseConfig` overriding
                 any backend-hosted ``knowledge_base.*``
+            extra_metadata: Optional mapping merged into every chunk's
+                metadata before identity auto-derivation. Same
+                precedence rule as :meth:`ingest` — auto-derived
+                identity tags (``domain_id``, the bound ``tenant_id``,
+                the ``_generation`` token) win on collision; non-
+                identity keys are preserved.
 
         Returns:
             :class:`IngestionResult` where ``files_processed`` counts
@@ -1020,6 +1138,7 @@ class KnowledgeIngestionManager:
                 config=config,
                 progress_callback=progress_callback,
                 result=result,
+                extra_metadata=extra_metadata,
             )
             # Must precede _finalize: _finalize publishes files_deleted
             # in the completion event payload (it is owned by this

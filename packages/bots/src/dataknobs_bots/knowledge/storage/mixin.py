@@ -29,6 +29,8 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, ClassVar
 
+from dataknobs_common.capabilities import CapabilityLike, CapabilityMixin
+
 from .key_layout import KnowledgeKeyKind
 from .models import ChangeSet, InvalidVersionError
 
@@ -36,7 +38,7 @@ if TYPE_CHECKING:
     from .models import KnowledgeBaseInfo, KnowledgeFile
 
 
-class KnowledgeResourceBackendMixin:
+class KnowledgeResourceBackendMixin(CapabilityMixin):
     """Canonical change detection + key-layout classification.
 
     Mixed into every in-tree backend. Relies only on the backend's own
@@ -57,6 +59,25 @@ class KnowledgeResourceBackendMixin:
     METADATA_FILE: ClassVar[str] = "_metadata.json"
     CONTENT_DIR: ClassVar[str] = "content"
     SNAPSHOTS_DIR: ClassVar[str] = "_snapshots"
+
+    # --- Capability declaration (declaration-only today) ---
+    #
+    # Backends inherit :class:`CapabilityMixin` via this mixin so the
+    # capability-contract surface is present uniformly. The declared
+    # set is empty today: per-backend capability widening
+    # (``STREAMING_READS`` on backends that implement ``stream_file``;
+    # ``CHANGE_SUBSCRIPTION`` / ``EVENT_BUS_EMISSION`` /
+    # ``KEY_PATTERN_FILTERING`` once subscribe/emit surfaces ship;
+    # ``TENANT_SCOPED_STATE`` once ``set_ingestion_status`` /
+    # ``get_checksum`` / ``has_changes_since`` are tenant-scoped at
+    # the contract layer) lands incrementally as each capability's
+    # underlying behaviour is implemented, rather than being declared
+    # speculatively here. Adopters checking ``backend.supports(...)``
+    # for any specific capability get the honest "not advertised"
+    # answer today; this preserves the capability identifiers'
+    # meaning (advertised ⇒ the contract guarantees the behaviour,
+    # not just that the method exists).
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset()
 
     # --- Required of any backend (supplied by the concrete class) ---
 

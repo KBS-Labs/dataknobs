@@ -58,8 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Declarative capability advertisement in `dataknobs_common.capabilities`
   (also re-exported from `dataknobs_common`). The `Capability` enum
   declares stable identifiers for cross-cutting optional features
-  organized into families: tenancy (`TENANT_SCOPED_LOCKS`,
-  `TENANT_SCOPED_STATE`, `PER_TENANT_RATE_LIMITS`), observability
+  organized into families: tenancy (`TENANT_SCOPED_CHUNKS`,
+  `TENANT_SCOPED_LOCKS`, `TENANT_SCOPED_STATE`,
+  `PER_TENANT_RATE_LIMITS`), observability
   (`EVENT_BUS_EMISSION`, `CALLBACK_REGISTRY`, `METRICS_EMISSION`),
   consistency (`SNAPSHOT_ISOLATION`, `TRANSACTIONAL_METADATA`,
   `STREAMING_READS`, `STREAMING_WRITES`), and composition
