@@ -205,27 +205,35 @@ def test_from_config_with_unparseable_path_skips_silently(caplog) -> None:
     hooks = LifecycleHooks.from_config(
         {"on_turn_start": [{"function": "not_a_valid_path"}]},
     )
-    assert len(hooks._turn_start_hooks) == 0
+    assert hooks.turn_start_count == 0
 
 
-def test_from_config_with_stage_scoping_round_trips() -> None:
-    """Per-stage scoping carries through from_config."""
+@pytest.mark.asyncio
+async def test_from_config_with_stage_scoping_round_trips() -> None:
+    """Per-stage scoping carries through from_config — verified
+    behaviorally: the stage-scoped callback fires for the matching
+    stage and is filtered out for non-matching stages.
+    """
     LifecycleHooks, _ = _import_lifecycle()
+    fired: list[str] = []
+
+    async def _registered_hook_for_stage(event: dict[str, Any]) -> None:
+        fired.append(event["stage"])
+
+    import sys
+    sys.modules[__name__]._registered_hook_for_stage = _registered_hook_for_stage  # type: ignore[attr-defined]
+
     config = {
         "on_turn_start": [
             {"function": f"{__name__}:_registered_hook_for_stage", "stage": "alpha"},
         ],
     }
-
-    async def _registered_hook_for_stage(event: dict[str, Any]) -> None:
-        pass
-
-    import sys
-    sys.modules[__name__]._registered_hook_for_stage = _registered_hook_for_stage  # type: ignore[attr-defined]
-
     hooks = LifecycleHooks.from_config(config)
-    assert len(hooks._turn_start_hooks) == 1
-    assert hooks._turn_start_hooks[0].stage == "alpha"
+    assert hooks.turn_start_count == 1
+
+    await hooks.trigger_turn_start(_evt(stage="alpha"))
+    await hooks.trigger_turn_start(_evt(stage="beta"))
+    assert fired == ["alpha"]
 
 
 # ---------------------------------------------------------------------------

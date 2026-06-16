@@ -22,10 +22,10 @@ dotted-path callback resolution — same shape consumers already
 know from :class:`WizardHooks`.
 
 Per-strategy / per-stage scoping is the responsibility of each
-adopting strategy: the trigger reads ``event["stage"]`` to match
-stage-scoped registrations (the wizard passes the current FSM
-state name; a pipeline strategy could pass the active step or a
-constant ``"pipeline"``).
+adopting strategy: stage-scoped registrations wrap the callback
+with a filter on ``event["stage"]`` (the wizard passes the current
+FSM state name; a pipeline strategy could pass the active step or
+a constant ``"pipeline"``).
 
 Event payload
 -------------
@@ -59,38 +59,44 @@ on_response_generated, on_step_start, etc.) are captured as
 follow-up rather than speculated here — when the next adopter
 surfaces a concrete need, the right shape will be clear.
 
-**Lift trajectory (follow-up).** This class is one of several
-in-process named-callback registries currently inline in
-``dataknobs-bots`` (the wizard's ``on_enter`` / ``on_exit`` /
-``on_complete`` / ``on_restart`` / ``on_error`` + this class's
-``on_turn_start`` / ``on_turn_end`` + ``ToolRegistry``'s
-``ExecutionTracker``). A future consolidation can extract the
-shared registration-trigger-from_config pattern into a generic
-``CallbackRegistry[CallbackT]`` in ``dataknobs_common.callbacks``;
-each adopter becomes a thin typed wrapper. The same consolidation
-can layer an optional ``EventBus`` substrate so external pub-sub
-systems (observability, alerting, webhook delivery, cross-process
-audit) attach as event subscribers without writing a custom hook
-per system. The opaque event-dict shape this class already
-publishes feeds bus subscribers directly — no translation step
-when the substrate lands.
+Substrate
+---------
 
-**Proposed topic-naming convention** for the future bus layer:
-``<subsystem>:<operation>:<phase>`` — e.g. ``wizard:turn:start``,
-``pipeline:turn:end``, ``ingest:domain:start``. Seeded here so
-when the bus layer ships, the cross-strategy subscription
-convention is already set. Consumer adoption of the typed surface
-today is forward-compatible with both the in-process consolidation
-and the opt-in bus substrate.
+Dispatch is delegated to a
+:class:`~dataknobs_common.callbacks.CallbackRegistry` (one registry
+per :class:`LifecycleHooks` instance, two topics:
+``turn_start`` and ``turn_end``). Consumer-facing methods are
+unchanged from the pre-substrate implementation; the registry is
+exposed read-only via the :attr:`registry` property so consumers
+wanting pluggable ordering (e.g. :class:`PriorityOrdering`),
+priority-tagged callbacks, per-registry error policies, or
+:meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+EventBus fan-out can reach through without monkey-patching. The
+:class:`~dataknobs_common.capabilities.Capability.CALLBACK_REGISTRY`
+capability advertises this composition path.
+
+**Proposed topic-naming convention** for cross-strategy bus
+subscriptions: ``<subsystem>:<operation>:<phase>`` — e.g.
+``wizard:turn:start``, ``pipeline:turn:end``,
+``ingest:domain:start``. The wizard adopter wires this through
+``hooks.registry.also_publish_to(bus, topic_prefix="wizard:")``;
+the convention is forward-compatible across every adopting
+strategy without protocol-level coupling.
 """
 from __future__ import annotations
 
-import asyncio
 import importlib
+import inspect
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from typing import Any, Union
+from collections.abc import Callable, Coroutine
+from typing import Any, ClassVar, Union
+
+from dataknobs_common.callbacks import (
+    CallbackRegistry,
+    ErrorPolicy,
+    FIFOOrdering,
+)
+from dataknobs_common.capabilities import Capability, CapabilityMixin
 
 logger = logging.getLogger(__name__)
 
@@ -99,29 +105,56 @@ logger = logging.getLogger(__name__)
 # the opaque event dict described in the module docstring — adopters
 # add subsystem-specific keys without extending the trigger signature.
 #
-# Sync OR async return is accepted (the trigger awaits awaitable
-# returns and treats non-awaitable returns as already-complete).
-TurnHookCallback = Callable[[dict[str, Any]], Union[Awaitable[None], None]]
+# Sync OR async coroutine returns are accepted: ``async def`` callbacks
+# are detected via :func:`inspect.iscoroutinefunction` (so they get the
+# async-aware stage-scope wrapper) and the registry's ``fire_async``
+# awaits their result. The return type is narrowed to
+# ``Coroutine[Any, Any, None] | None`` rather than the broader
+# :class:`~collections.abc.Awaitable` — callables that are not coroutine
+# functions but return generic awaitables (e.g. a class with
+# ``__call__`` that returns a coroutine, or a ``functools.partial``
+# wrapping an ``async def`` that ``iscoroutinefunction`` does not
+# detect) get the sync wrapper, whose return value is dropped. See the
+# ``_stage_scoped`` docstring for the constraint.
+TurnHookCallback = Callable[
+    [dict[str, Any]],
+    Union[Coroutine[Any, Any, None], None],
+]
 
 
-@dataclass(frozen=True)
-class _HookRegistration:
-    """One registered hook + optional stage scope."""
-
-    callback: TurnHookCallback
-    stage: str | None = None  # None = global; non-None = stage-scoped
-
-
-class LifecycleHooks:
+class LifecycleHooks(CapabilityMixin):
     """Strategy-agnostic turn-lifecycle hook registry.
 
     Construct standalone or compose into a strategy-specific hook
     class (the wizard's :class:`WizardHooks` does the latter).
+
+    Dispatch is backed by a
+    :class:`~dataknobs_common.callbacks.CallbackRegistry`. The
+    consumer-facing surface (:meth:`on_turn_start` /
+    :meth:`on_turn_end` registration, :meth:`trigger_turn_start` /
+    :meth:`trigger_turn_end` triggers, :meth:`clear`,
+    :meth:`from_config`) is byte-identical to the pre-substrate
+    implementation; the :attr:`registry` accessor exposes the
+    underlying registry for consumers wanting pluggable ordering,
+    priority-tagged callbacks, or EventBus fan-out.
     """
 
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
+        Capability.CALLBACK_REGISTRY,
+    })
+
+    _TOPIC_TURN_START = "turn_start"
+    _TOPIC_TURN_END = "turn_end"
+
     def __init__(self) -> None:
-        self._turn_start_hooks: list[_HookRegistration] = []
-        self._turn_end_hooks: list[_HookRegistration] = []
+        # FIFO ordering + LOG_AND_CONTINUE policy match the
+        # pre-substrate behavior. Consumers wanting priority /
+        # staged dispatch reach through ``self.registry`` and call
+        # ``set_ordering(...)`` before any registration.
+        self._registry: CallbackRegistry[TurnHookCallback] = CallbackRegistry(
+            ordering=FIFOOrdering(),
+            error_policy=ErrorPolicy.LOG_AND_CONTINUE,
+        )
 
     # ── Registration ──────────────────────────────────────────────
 
@@ -145,7 +178,8 @@ class LifecycleHooks:
         Returns:
             Self, for chaining.
         """
-        self._turn_start_hooks.append(_HookRegistration(callback, stage))
+        wrapped = self._stage_scoped(callback, stage) if stage else callback
+        self._registry.register(self._TOPIC_TURN_START, wrapped)
         return self
 
     def on_turn_end(
@@ -155,7 +189,8 @@ class LifecycleHooks:
         stage: str | None = None,
     ) -> LifecycleHooks:
         """Register a turn-end callback. See :meth:`on_turn_start`."""
-        self._turn_end_hooks.append(_HookRegistration(callback, stage))
+        wrapped = self._stage_scoped(callback, stage) if stage else callback
+        self._registry.register(self._TOPIC_TURN_END, wrapped)
         return self
 
     # ── Triggering ────────────────────────────────────────────────
@@ -165,48 +200,130 @@ class LifecycleHooks:
 
         Stage-scoped registrations match when ``event["stage"]`` equals
         the registered stage; global registrations (``stage=None``)
-        always fire. Callbacks fire in registration order. Sync
-        callbacks return immediately; async callbacks are awaited
-        before the next runs.
+        always fire. Callbacks fire in registration order under the
+        default :class:`~dataknobs_common.callbacks.FIFOOrdering`; a
+        consumer can swap orderings via
+        ``hooks.registry.set_ordering(...)``. Sync callbacks return
+        immediately; async callbacks are awaited before the next runs.
         """
-        stage_name = event.get("stage")
-        for reg in self._turn_start_hooks:
-            if reg.stage is None or reg.stage == stage_name:
-                await self._invoke(reg.callback, event)
+        await self._registry.fire_async(self._TOPIC_TURN_START, event)
 
     async def trigger_turn_end(self, event: dict[str, Any]) -> None:
         """Fire all matching turn-end callbacks. See :meth:`trigger_turn_start`."""
-        stage_name = event.get("stage")
-        for reg in self._turn_end_hooks:
-            if reg.stage is None or reg.stage == stage_name:
-                await self._invoke(reg.callback, event)
-
-    @staticmethod
-    async def _invoke(
-        callback: TurnHookCallback, event: dict[str, Any],
-    ) -> None:
-        result = callback(event)
-        if asyncio.iscoroutine(result):
-            await result
+        await self._registry.fire_async(self._TOPIC_TURN_END, event)
 
     # ── Public introspection / reset ──────────────────────────────
 
     @property
+    def registry(self) -> CallbackRegistry[TurnHookCallback]:
+        """Read-only accessor exposing the underlying
+        :class:`~dataknobs_common.callbacks.CallbackRegistry`.
+
+        Use this when a consumer wants to plug in a custom ordering,
+        register a priority-tagged callback, or fan out lifecycle
+        events to an :class:`~dataknobs_common.events.EventBus`::
+
+            hooks = LifecycleHooks()
+            hooks.registry.set_ordering(PriorityOrdering())
+            hooks.registry.register(
+                "turn_start", emergency_guard, priority=-100,
+            )
+            hooks.registry.also_publish_to(bus, topic_prefix="wizard:")
+
+        The registry instance survives :meth:`clear` (which drains
+        in place), so a reference held here stays valid across resets.
+        """
+        return self._registry
+
+    @property
     def turn_start_count(self) -> int:
         """Number of registered ``on_turn_start`` callbacks."""
-        return len(self._turn_start_hooks)
+        return self._registry.callback_count(self._TOPIC_TURN_START)
 
     @property
     def turn_end_count(self) -> int:
         """Number of registered ``on_turn_end`` callbacks."""
-        return len(self._turn_end_hooks)
+        return self._registry.callback_count(self._TOPIC_TURN_END)
 
     def clear(self) -> None:
-        """Clear all registered turn-lifecycle callbacks."""
-        self._turn_start_hooks.clear()
-        self._turn_end_hooks.clear()
+        """Clear all registered turn-lifecycle callbacks.
+
+        Drains the underlying registry in place — the registry
+        instance identity is preserved, so consumers holding a
+        reference via :attr:`registry` (or via
+        :attr:`WizardHooks.lifecycle`) remain attached and can
+        re-register without rewiring.
+        """
+        self._registry.clear()
+
+    # ── Stage-scope wrapping ──────────────────────────────────────
+
+    @staticmethod
+    def _stage_scoped(
+        callback: TurnHookCallback,
+        stage: str,
+    ) -> TurnHookCallback:
+        """Wrap ``callback`` so it only fires when ``event['stage']``
+        equals the registered stage.
+
+        Async-shape-preserving: an async callback is wrapped in an
+        async wrapper (so the registry's
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.fire_async`
+        awaits the inner result correctly); a sync callback gets a
+        sync wrapper.
+
+        .. note::
+
+           Shape detection is by :func:`inspect.iscoroutinefunction`,
+           not by inspecting the return value. A callable that is NOT
+           a coroutine function but returns an awaitable (a class with
+           ``__call__`` returning a coroutine, or a
+           :class:`functools.partial` wrapping an ``async def`` whose
+           coroutine-function status ``iscoroutinefunction`` fails to
+           detect) gets the sync wrapper — and its awaitable return
+           value is silently dropped because the wrapper does not
+           propagate it. The :data:`TurnHookCallback` alias narrows the
+           contract to ``Coroutine[Any, Any, None] | None`` for this
+           reason; stick to plain ``async def`` coroutine functions for
+           async hook implementations.
+        """
+        if inspect.iscoroutinefunction(callback):
+            async def async_wrapped(event: dict[str, Any]) -> None:
+                if event.get("stage") == stage:
+                    await callback(event)  # type: ignore[misc]
+            return async_wrapped
+
+        def sync_wrapped(event: dict[str, Any]) -> None:
+            if event.get("stage") == stage:
+                callback(event)
+        return sync_wrapped
 
     # ── Config-driven loading ─────────────────────────────────────
+
+    def load_config(self, config: dict[str, Any]) -> LifecycleHooks:
+        """Register callbacks from ``config`` onto **this instance**.
+
+        Same dotted-path callback shape as :meth:`from_config`, but
+        registers against the existing registry rather than building
+        a fresh :class:`LifecycleHooks`. Use this when a composing
+        class (e.g. :class:`WizardHooks`) has already constructed a
+        :class:`LifecycleHooks` and wants the config-loaded callbacks
+        to land on the same registry instance — so consumers holding a
+        reference via :attr:`registry` (or via
+        :attr:`WizardHooks.lifecycle`) keep the same identity across
+        the config load.
+
+        Returns ``self`` for chaining.
+        """
+        for entry in config.get("on_turn_start", []):
+            callback, stage = self._resolve_entry(entry)
+            if callback is not None:
+                self.on_turn_start(callback, stage=stage)
+        for entry in config.get("on_turn_end", []):
+            callback, stage = self._resolve_entry(entry)
+            if callback is not None:
+                self.on_turn_end(callback, stage=stage)
+        return self
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> LifecycleHooks:
@@ -225,17 +342,14 @@ class LifecycleHooks:
 
         A list entry may also be a bare ``"module.path:name"`` string
         when no stage scoping is needed.
+
+        Composing classes that already hold a :class:`LifecycleHooks`
+        instance should call :meth:`load_config` on that instance
+        rather than calling :meth:`from_config` and replacing the
+        embedded one — replacing the instance breaks the registry-
+        identity invariant documented on :attr:`registry`.
         """
-        hooks = cls()
-        for entry in config.get("on_turn_start", []):
-            callback, stage = cls._resolve_entry(entry)
-            if callback is not None:
-                hooks.on_turn_start(callback, stage=stage)
-        for entry in config.get("on_turn_end", []):
-            callback, stage = cls._resolve_entry(entry)
-            if callback is not None:
-                hooks.on_turn_end(callback, stage=stage)
-        return hooks
+        return cls().load_config(config)
 
     @staticmethod
     def _resolve_entry(

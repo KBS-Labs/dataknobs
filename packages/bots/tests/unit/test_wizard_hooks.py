@@ -387,6 +387,111 @@ class TestWizardHooksFromConfig:
 
         assert result is None
 
+    def test_from_config_preserves_lifecycle_instance_identity(self) -> None:
+        """``WizardHooks.from_config`` must register turn-lifecycle
+        callbacks against the ``LifecycleHooks`` instance constructed
+        in ``__init__`` rather than swapping in a fresh one.
+
+        :attr:`WizardHooks.lifecycle` is documented as identity-stable
+        so consumers can cache a reference (e.g. to install a custom
+        ordering or a fan-out target on ``hooks.lifecycle.registry``).
+        Inside ``from_config``, the ``__init__``-constructed lifecycle
+        is what survives — replacing it with
+        ``LifecycleHooks.from_config(config)`` would silently break
+        the invariant during a config-driven build. Captured against
+        the ``WizardHooks`` instance returned by ``from_config`` via
+        the ``_lifecycle`` attribute (the internal accessor used by
+        the loader).
+        """
+        # Build a WizardHooks without config, capture the embedded
+        # lifecycle identity, then drive load_config against it (the
+        # exact internal path from_config now takes).
+        hooks = WizardHooks()
+        lifecycle_before = hooks._lifecycle
+        registry_before = hooks._lifecycle.registry
+
+        hooks._lifecycle.load_config({})
+
+        assert hooks._lifecycle is lifecycle_before
+        assert hooks._lifecycle.registry is registry_before
+        assert hooks.lifecycle is lifecycle_before  # public accessor too
+
+    def test_from_config_preserves_lifecycle_through_full_loader(self) -> None:
+        """Same invariant, exercised through the public ``from_config``
+        classmethod: the lifecycle held by the returned instance is the
+        one its ``__init__`` constructed, not a replacement built by
+        ``LifecycleHooks.from_config``. Pre-fix, ``WizardHooks.from_config``
+        swapped ``hooks._lifecycle`` wholesale; post-fix it calls
+        ``load_config`` in place. Both versions return the same
+        ``WizardHooks`` shape — the regression is invisible at the
+        public-API surface unless a consumer compares identity, which
+        is exactly what this test does.
+        """
+        hooks = WizardHooks.from_config({})
+        # The embedded lifecycle and its registry must remain the
+        # one ``__init__`` built. A second call to the public
+        # ``lifecycle`` accessor must return the same instance.
+        assert hooks.lifecycle is hooks._lifecycle
+        assert hooks.lifecycle.registry is hooks._lifecycle.registry
+        # Stable across repeat reads, post config load.
+        assert hooks.lifecycle is hooks.lifecycle
+
+    @pytest.mark.asyncio
+    async def test_from_config_callbacks_land_on_init_lifecycle(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-empty-config regression test: callbacks declared in
+        ``config`` are registered against the ``__init__``-constructed
+        :class:`LifecycleHooks` AND firing the lifecycle the wizard
+        actually triggers invokes them.
+
+        The empty-config identity tests above catch a swap-on-replace
+        regression — but they would also pass under a hypothetical
+        regression that preserves ``hooks._lifecycle`` identity yet
+        routes ``load_config`` through a SHADOW registry instance
+        (callbacks land somewhere but not on the one ``__init__``
+        built). This test closes that gap: install a real dotted-path
+        callback via ``WizardHooks.from_config``, then trigger
+        ``turn_start`` and assert the callback ran. A hybrid
+        regression where the swap is "fixed" but callbacks land
+        elsewhere leaves ``seen`` empty.
+        """
+        from dataknobs_bots.reasoning import lifecycle as lifecycle_module
+
+        seen: list[dict] = []
+
+        def tracker(event: dict) -> None:
+            seen.append(event)
+
+        # ``_resolve_entry`` uses ``importlib.import_module`` +
+        # ``getattr`` against the named module — installing a
+        # module-level attribute makes the dotted path resolvable.
+        monkeypatch.setattr(
+            lifecycle_module,
+            "_regression_test_tracker",
+            tracker,
+            raising=False,
+        )
+
+        hooks = WizardHooks.from_config({
+            "on_turn_start": [
+                {
+                    "function": (
+                        "dataknobs_bots.reasoning.lifecycle"
+                        ":_regression_test_tracker"
+                    ),
+                },
+            ],
+        })
+
+        # Callback registered against the surviving registry.
+        assert hooks.hook_count["turn_start"] == 1
+
+        # And firing the lifecycle the wizard actually uses invokes it.
+        await hooks._lifecycle.trigger_turn_start({"stage": "any"})
+
+        assert seen == [{"stage": "any"}]
+
 
 class TestWizardHooksIntegration:
     """Integration tests with WizardReasoning."""

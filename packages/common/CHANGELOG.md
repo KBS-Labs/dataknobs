@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `CallbackRegistry[CallbackT]` and the `CallbackOrdering` Protocol in
+  `dataknobs_common.callbacks` (also re-exported from the top-level
+  namespace). In-process named-callback dispatch with sync and async
+  fire, pluggable ordering, and per-registry error policy. Built-in
+  orderings: `FIFOOrdering` (default; insertion order),
+  `PriorityOrdering` (numeric priority, lower fires first, FIFO
+  tiebreaker), `StageOrdering` (named stages; unknown stages sort to
+  the end), and `CompositeOrdering` (first non-zero compare wins).
+  Error policies: `ErrorPolicy.RAISE` (re-raise the first failure,
+  abort the rest), `ErrorPolicy.LOG_AND_CONTINUE` (default — log and
+  continue), `ErrorPolicy.LOG_AND_RAISE_AT_END` (run every callback
+  then raise `BatchedCallbackError` carrying every failure). Testing
+  constructs `CapturingCallbackRegistry` (real dispatch plus
+  per-fire `(topic, payload)` capture) and `RecordingCallbackRegistry`
+  (records without dispatching to registered callbacks) ship in the
+  same module so consumer test suites import them like `EchoProvider`.
+  Calling `clear()` drains entries in place — the registry instance,
+  its ordering, and its error policy survive across clears so external
+  references stay valid.
+- Compose a `CallbackRegistry` with any
+  `dataknobs_common.events.EventBus` via
+  `registry.also_publish_to(bus, topic_prefix="…")`: every fired
+  payload is additionally published to the bus under
+  `topic_prefix + topic`, wrapped in an `Event` carrying
+  `EventType.CUSTOM`. Local callbacks still run; the bus is the
+  cross-replica observability substrate. Multiple fan-out targets
+  compose by calling `also_publish_to` once per target.
+  `registry.supports_event_bus_emission()` exposes whether at least
+  one fan-out target is configured without reaching into private
+  state. Calling `fire()` (sync) with fan-out configured from inside
+  a running event loop raises `TypeError`; consumers must use
+  `fire_async` to guarantee the bus publish completes before dispatch
+  returns and to surface any publish failure. The no-running-loop
+  branch of `fire()` drives fan-out to completion via `asyncio.run`
+  before returning. `RecordingCallbackRegistry` (testing double)
+  implements the full duck-typed surface — `register` / `unregister`
+  / `clear` / `set_ordering` / `callback_count` / `fire` /
+  `fire_async` — so injecting it where a real `CallbackRegistry` is
+  expected does not raise `AttributeError`.
 - `BackendRegistry[T_co]` runtime_checkable Protocol in
   `dataknobs_common.registry` (also re-exported from
   `dataknobs_common`). Stable `isinstance` target for "is this thing a
