@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `CallbackRegistry[CallbackT]` and the `CallbackOrdering` Protocol in
+  `dataknobs_common.callbacks` (also re-exported from the top-level
+  namespace). In-process named-callback dispatch with sync and async
+  fire, pluggable ordering, and per-registry error policy. Built-in
+  orderings: `FIFOOrdering` (default; insertion order),
+  `PriorityOrdering` (numeric priority, lower fires first, FIFO
+  tiebreaker), `StageOrdering` (named stages; unknown stages sort to
+  the end), and `CompositeOrdering` (first non-zero compare wins).
+  Error policies: `ErrorPolicy.RAISE` (re-raise the first failure,
+  abort the rest), `ErrorPolicy.LOG_AND_CONTINUE` (default — log and
+  continue), `ErrorPolicy.LOG_AND_RAISE_AT_END` (run every callback
+  then raise `BatchedCallbackError` carrying every failure). Testing
+  constructs `CapturingCallbackRegistry` (real dispatch plus
+  per-fire `(topic, payload)` capture) and `RecordingCallbackRegistry`
+  (records without dispatching to registered callbacks) ship in the
+  same module so consumer test suites import them like `EchoProvider`.
+  Calling `clear()` drains entries in place — the registry instance,
+  its ordering, and its error policy survive across clears so external
+  references stay valid.
 - `BackendRegistry[T_co]` runtime_checkable Protocol in
   `dataknobs_common.registry` (also re-exported from
   `dataknobs_common`). Stable `isinstance` target for "is this thing a
