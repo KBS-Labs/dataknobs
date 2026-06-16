@@ -58,6 +58,7 @@ class Capability(str, Enum):
     """
 
     # ---- Tenancy ----
+    TENANT_SCOPED_CHUNKS = "tenant_scoped_chunks"
     TENANT_SCOPED_LOCKS = "tenant_scoped_locks"
     TENANT_SCOPED_STATE = "tenant_scoped_state"
     PER_TENANT_RATE_LIMITS = "per_tenant_rate_limits"
@@ -80,6 +81,7 @@ class Capability(str, Enum):
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     "tenancy": frozenset({
+        Capability.TENANT_SCOPED_CHUNKS,
         Capability.TENANT_SCOPED_LOCKS,
         Capability.TENANT_SCOPED_STATE,
         Capability.PER_TENANT_RATE_LIMITS,

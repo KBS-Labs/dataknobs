@@ -85,6 +85,14 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     formatter: dict[str, Any] | None = None
     documents_path: str | None = None
     document_pattern: str = "**/*.md"
+    # When set, every write auto-stamps ``tenant_id`` into chunk metadata
+    # (auto-derived wins on collision so a caller cannot silently re-tag
+    # chunks for another tenant) and every read AND-composes
+    # ``{"tenant_id": tenant_id}`` into the vector-store search filter
+    # (explicit-filter-wins, so admin tooling can legitimately read
+    # across tenants by passing the explicit key). ``None`` (default) is
+    # the single-tenant byte-identical posture.
+    tenant_id: str | None = None
 
     # Redacted from ``repr`` by the StructuredConfig base. A secret nested
     # inside a raw mapping section (``embedding``'s ``api_key``,

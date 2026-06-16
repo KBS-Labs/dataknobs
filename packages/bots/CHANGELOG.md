@@ -260,6 +260,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strategies adopting the same mixin pattern get the same forwarding
   discipline (see USER_GUIDE.md "Building your own composing
   strategy").
+- `RAGKnowledgeBase(tenant_id=...)` (also accepted on
+  `RAGKnowledgeBaseConfig`) binds a tenant identity to the KB. When set,
+  every write auto-stamps `tenant_id` into chunk metadata AND folds it
+  into the chunk-id prefix; every read AND-composes
+  `{"tenant_id": tenant_id}` into the vector-store search filter.
+  Defaults to `None` (single-tenant byte-identical posture — no chunk-id
+  derivation change, no read-filter change). Write-side precedence:
+  auto-derived bound tenant wins on collision with caller-supplied
+  `extra_metadata={"tenant_id": …}` so identity cannot be silently
+  re-tagged; read-side precedence inverts (explicit-filter-wins) so
+  admin tooling can legitimately read across tenants by passing an
+  explicit `filter_metadata={"tenant_id": …}`. The asymmetry matches
+  the differing write/read threat models and is documented on
+  `_resolve_read_filter`.
+- `KnowledgeIngestionManager(tenant_id=…, keyword-only)` binds a
+  tenant identity to the manager. Threaded uniformly into every chunk
+  the manager writes (via the new `_compose_extra_metadata` helper —
+  auto-derived `domain_id` / bound `tenant_id` / TOMBSTONE-swap
+  `_generation` token all win over caller-supplied `extra_metadata`)
+  AND into every destination-side write/delete filter (via the new
+  `_scope_for_tenant` helper applied to the CLEAR_FIRST clear, per-file
+  purges, tombstone scope, rollback scope, and reconcile scope). Two
+  managers bound to distinct tenants but pointing at the same shared
+  `RAGKnowledgeBase` now produce disjoint chunk-id namespaces, do not
+  delete each other's rows on CLEAR_FIRST / per-file purges, and do not
+  tombstone/un-tombstone each other's rows during TOMBSTONE swaps.
+  `tenant_id=None` (default) is the single-tenant byte-identical
+  posture.
+- `extra_metadata=` keyword-only parameter on
+  `KnowledgeIngestionManager.ingest()` and
+  `KnowledgeIngestionManager.ingest_changes()`. Mapping merged into
+  every chunk's metadata before identity auto-derivation; auto-derived
+  identity tags (`domain_id`, the bound `tenant_id`, the `_generation`
+  token) win on collision; non-identity keys (`region`, `cohort`, any
+  custom tag) are preserved as-is. Symmetric with the
+  `extra_metadata` parameter on `RAGKnowledgeBase.ingest_from_backend`.
+- `extra_metadata=` and `tenant_id=` keyword-only parameters on every
+  direct `RAGKnowledgeBase` entry point — `load_markdown_text`,
+  `load_markdown_document`, `load_json_document`, `load_yaml_document`,
+  `load_csv_document`, `load_documents_from_directory`,
+  `load_from_directory`, and `ingest_from_backend` — so consumers
+  reaching for any of the seven entry points get the same shape rather
+  than being limited to a subset. The `tenant_id=` convenience kwarg
+  folds into `extra_metadata` as `{"tenant_id": tenant_id}`; the same
+  bound-tenant precedence applies (auto-derived wins on write boundary).
+- `RAGKnowledgeBase._CHUNK_ID_PREFIX_KEYS` — ordered tuple of metadata
+  keys (`tenant_id`, `domain_id`, `_generation` by default) folded into
+  the chunk-id prefix in declared order, with `source_stem` always last.
+  Subclasses rebind to add fold positions (e.g. `(... , "region", ...)`)
+  without forking `_derive_chunk_prefix`. Single-tenant single-domain
+  consumers (none of the declared keys present in metadata) see the
+  historical `(source_stem, "_")` prefix unchanged; multi-segment
+  prefixes use the `\x1f` record separator so snake_case-tag collisions
+  are impossible.
+- `RAGKnowledgeBase._RESERVED_METADATA_KEYS` — frozen set of identity
+  tag names (`tenant_id` / `domain_id` / `_generation`) the KB owns at
+  the write boundary. Caller-supplied `extra_metadata` entries with
+  these keys are shadowed by the auto-derived value; non-reserved keys
+  flow through unchanged. Documented in the multi-tenant USER_GUIDE
+  section "Reserved vs. Consumer-Extensible Metadata Keys".
+- `RAGKnowledgeBase` and `KnowledgeIngestionManager` advertise
+  `Capability.TENANT_SCOPED_CHUNKS` via the `CapabilityContract`
+  protocol (a chunk-layer Tenancy-family identifier added in the
+  `dataknobs-common` `Capability` enum — see common's CHANGELOG).
+  Consumers fail-fast at config-load time via
+  `kb.supports(Capability.TENANT_SCOPED_CHUNKS)` or
+  `mgr.supports("tenant_scoped_chunks")` rather than discovering
+  chunk-id UPSERT collisions at first write. Advertisement is
+  structural ("the class HAS the chunk-layer code path"), not
+  activation-state — whether a specific instance is currently
+  tenant-scoping is the natural binding check
+  (`kb._tenant_id is not None`). The backend-state-layer
+  (`TENANT_SCOPED_STATE`) and concurrency-layer
+  (`TENANT_SCOPED_LOCKS`) are deliberately NOT advertised at the chunk
+  layer; activation lives at the `KnowledgeResourceBackend` /
+  `DistributedLock` layers respectively.
+- `FileKnowledgeBackend`, `InMemoryKnowledgeBackend`, and
+  `S3KnowledgeBackend` inherit `CapabilityMixin` (via the shared
+  `KnowledgeResourceBackendMixin`) so the capability-contract surface
+  is uniformly present. Each declares an empty `SUPPORTED_CAPABILITIES`
+  set today — per-backend widening (e.g. `STREAMING_READS` on backends
+  that implement `stream_file`, `CHANGE_SUBSCRIPTION` /
+  `EVENT_BUS_EMISSION` / `KEY_PATTERN_FILTERING` once subscribe/emit
+  surfaces ship, `TENANT_SCOPED_STATE` once `set_ingestion_status` /
+  `get_checksum` / `has_changes_since` are tenant-scoped at the
+  contract layer) is captured in the roadmap rather than declared
+  speculatively. Adopters checking `backend.supports(...)` for any
+  specific capability get the honest "not advertised" answer.
+
+### Fixed
+
+- Cross-tenant `chunk_id` UPSERT collision in shared
+  `RAGKnowledgeBase` instances under the same `domain_id`: two tenants
+  ingesting the same `domain_id` through a shared KB previously
+  produced N rows (the second ingest UPSERTed the first's chunks in
+  place) instead of 2*N rows with disjoint chunk-id namespaces. The
+  chunk-id derivation in `_embed_and_store_chunks` now folds every
+  present, truthy key from `_CHUNK_ID_PREFIX_KEYS` into the chunk-id
+  prefix — `tenant_id` is the first fold position by default, so a
+  bound-tenant `KnowledgeIngestionManager` (or a caller threading
+  `extra_metadata={"tenant_id": ...}` through `ingest_from_backend`)
+  produces distinct chunk ids per tenant. Single-domain single-tenant
+  consumers see no change: with `tenant_id` absent the loop yields the
+  historical `[domain_id?, generation?, source_stem]` shape
+  byte-for-byte.
+- Cross-tenant filter-based deletion in `KnowledgeIngestionManager`
+  under a shared destination: tenant B's CLEAR_FIRST re-ingest
+  previously wiped tenant A's chunks under the same `domain_id`
+  (filter was `{"domain_id": domain_id}` only). All filter-based
+  mutations on the destination (CLEAR_FIRST, per-file purges,
+  TOMBSTONE swap scope, rollback scope, and reconcile scope) now
+  AND-compose the bound `tenant_id` via `_scope_for_tenant`, so a
+  tenant-bound manager cannot accidentally delete or un-tombstone
+  another tenant's rows. Unbound managers (single-tenant) are
+  unaffected.
 
 ### Security
 
