@@ -65,6 +65,12 @@ class _MockHttpServer:
     """
 
     def __init__(self) -> None:
+        # Single response per (method, path). Re-registering the same
+        # endpoint within a test silently overwrites — fine for the
+        # existing tests (each registers one stub and makes one call),
+        # but tests that need multi-response sequencing or per-call
+        # assertions should drive that off ``calls_for(method)``
+        # instead.
         self._responses: dict[tuple[str, str], _ResponseSpec] = {}
         self._calls: list[_CapturedCall] = []
         self._runner: aiohttp.web.AppRunner | None = None
@@ -80,7 +86,8 @@ class _MockHttpServer:
         # TOCTOU window between a pre-bind probe and the real bind.
         site = aiohttp.web.TCPSite(self._runner, self._host, 0)
         await site.start()
-        self._port = site.port or 0
+        assert site.port, "TCPSite failed to bind a port"
+        self._port = site.port
 
     async def stop(self) -> None:
         if self._runner is not None:
