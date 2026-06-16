@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Deferred bumping `aiohttp>=3.13.4` to `>=3.14.1` (extra: `http`).
+  The floor-resolve audit flags multiple advisories against
+  `aiohttp <3.14.x` (highest CVSS 6.6); fixes land across 3.14.0 and
+  3.14.1, so the target floor is `>=3.14.1` to sweep all of them.
+  The two highest-impact advisories were triaged for reachability:
+  GHSA-hg6j-4rv6-33pg (CVSS 6.6, cross-origin redirect cookie leakage
+  on the per-request `cookies=` kwarg) and GHSA-jg22-mg44-37j8 (CVSS
+  6.4, `CookieJar.load()` deserialization) are not reachable from
+  this codebase — outbound HTTP calls use header-based auth (the
+  advisory itself identifies this as the safe pattern), and
+  `CookieJar.load()` is never invoked. The remaining `<3.14.x`
+  advisories have not been individually triaged. The bump is blocked
+  by a workspace test-infrastructure constraint (`aioresponses 0.7.8`
+  requires `aiohttp<3.14` because it does not pass the new
+  `stream_writer` kwarg to `aiohttp.ClientResponse`) regardless of
+  reachability. The floor will be raised on a follow-up branch that
+  replaces the `aioresponses`-driven HTTP backend tests with an
+  in-process `aiohttp.web` test server.
+
 ## v0.2.1 - 2026-06-08
 
 ## v0.2.0 - 2026-05-26

@@ -20,8 +20,55 @@ def load_registry():
         return json.load(f)
 
 
+def _root_workspace_members(repo_root):
+    """Return the raw `members = [...]` list from the root `[tool.uv.workspace]`."""
+    pyproject_path = repo_root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+    in_workspace = False
+    for line in pyproject_path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[tool.uv.workspace]"):
+            in_workspace = True
+            continue
+        if in_workspace and stripped.startswith("["):
+            break
+        if in_workspace and stripped.startswith("members"):
+            return stripped
+    return None
+
+
+def _package_is_workspace_member(pkg_name, members_line):
+    """Return True if `packages/<pkg_name>` is covered by the workspace `members` glob."""
+    if members_line is None:
+        return False
+    # Cover the common cases: explicit `packages/<name>` entry or a `packages/*` glob.
+    return f'"packages/{pkg_name}"' in members_line or '"packages/*"' in members_line
+
+
+# Workspace-install commands that install every member declared in
+# `[tool.uv.workspace]` rather than naming packages individually. Any
+# workflow using one of these covers every workspace member without
+# enumerating it.
+WORKSPACE_INSTALL_PATTERNS = (
+    "uv sync --all-packages",
+    "uv sync --workspace",
+)
+
+
 def check_workflow_docs(registry, repo_root):
-    """Check if docs workflows install all required packages."""
+    """Check if docs workflows install all required packages.
+
+    Two install patterns are accepted:
+
+    1. **Workspace install** -- the workflow runs `uv sync --all-packages`
+       (or another workspace-install command). All workspace members are
+       installed, so each required package is covered iff it is a member
+       of `[tool.uv.workspace]` in the root `pyproject.toml`.
+    2. **Per-package install** -- the workflow names `packages/<name>`
+       directly (e.g. `uv pip install -e packages/llm`). Each required
+       package must appear explicitly.
+    """
     errors = []
 
     doc_packages = [p for p in registry["packages"] if p.get("requires_docs_build", False)]
@@ -31,6 +78,8 @@ def check_workflow_docs(registry, repo_root):
         ".github/workflows/quality-validation.yml"
     ]
 
+    members_line = _root_workspace_members(repo_root)
+
     for workflow_file in workflow_files:
         workflow_path = repo_root / workflow_file
         if not workflow_path.exists():
@@ -38,8 +87,19 @@ def check_workflow_docs(registry, repo_root):
             continue
 
         content = workflow_path.read_text()
+        uses_workspace_install = any(
+            pattern in content for pattern in WORKSPACE_INSTALL_PATTERNS
+        )
 
         for pkg in doc_packages:
+            if uses_workspace_install:
+                if not _package_is_workspace_member(pkg["name"], members_line):
+                    errors.append(
+                        f"❌ {workflow_file}: Package '{pkg['name']}' is not a "
+                        f"`[tool.uv.workspace]` member, so `uv sync --all-packages` "
+                        f"will not install it"
+                    )
+                continue
             expected = f"packages/{pkg['name']}"
             if expected not in content:
                 errors.append(

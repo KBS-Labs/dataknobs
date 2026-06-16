@@ -39,7 +39,7 @@ server = [
     # constraint (starlette>=0.40.0, no upper cap) permits the patched
     # starlette 1.x pinned below; fastapi <0.133.0 capped starlette<1.0.0.
     "fastapi>=0.133.0",
-    "starlette>=1.0.1",  # PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr (Host-header path poisoning → auth bypass) fixed in 1.0.1; also sweeps GHSA-7f5h-v6xp-fcq8 (CVSS 7.5), GHSA-2c2j-9gv5-cj73 (CVSS 5.3, 0.49.1)
+    "starlette>=1.3.1",  # GHSA-82w8-qh3p-5jfq (CVSS 7.5, request.form() ignores max_fields/max_part_size on URL-encoded payloads → DoS) fixed in 1.3.1; also sweeps GHSA-jp82-jpqv-5vv3 (CVSS 3.7, request.url userinfo poisoning on malformed paths, 1.3.0), GHSA-wqp7-x3pw-xc5r (CVSS 7.5, Windows StaticFiles NTLM credential leak via UNC paths, 1.1.0), GHSA-x746-7m8f-x49c (CVSS 5.3, HTTPEndpoint method dispatch without explicit methods= argument, 1.1.0), and the prior PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr / GHSA-7f5h-v6xp-fcq8 / GHSA-2c2j-9gv5-cj73 sweep (1.0.1, 0.49.1)
 ]
 
 [tool.uv.sources]
@@ -78,7 +78,7 @@ dev = [
     # fastapi pinned to match the [server] extra's starlette CVE
     # floor (see the comment there); fastapi <0.133.0 capped starlette<1.0.0.
     "fastapi>=0.133.0",
-    "starlette>=1.0.1",  # PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr (Host-header path poisoning → auth bypass) fixed in 1.0.1; also sweeps GHSA-7f5h-v6xp-fcq8 (CVSS 7.5), GHSA-2c2j-9gv5-cj73 (CVSS 5.3, 0.49.1)
+    "starlette>=1.3.1",  # GHSA-82w8-qh3p-5jfq (CVSS 7.5, request.form() ignores max_fields/max_part_size on URL-encoded payloads → DoS) fixed in 1.3.1; also sweeps GHSA-jp82-jpqv-5vv3 (CVSS 3.7, request.url userinfo poisoning on malformed paths, 1.3.0), GHSA-wqp7-x3pw-xc5r (CVSS 7.5, Windows StaticFiles NTLM credential leak via UNC paths, 1.1.0), GHSA-x746-7m8f-x49c (CVSS 5.3, HTTPEndpoint method dispatch without explicit methods= argument, 1.1.0), and the prior PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr / GHSA-7f5h-v6xp-fcq8 / GHSA-2c2j-9gv5-cj73 sweep (1.0.1, 0.49.1)
     "httpx>=0.27.0",
     # moto powers the S3 knowledge-backend region-fallback tests.
     # Declared in dataknobs-data's dev deps too, but the bots package
