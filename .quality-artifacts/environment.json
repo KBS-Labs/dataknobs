@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-15T23:47:07Z",
+  "timestamp": "2026-06-16T00:46:17Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.21 (Homebrew 2026-06-11 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "d732e817ba0dc72f9d07cbb32fd2204cdbc3c176",
+  "git_branch": "aiohttp-floor-bump",
+  "git_commit": "53649934def941d2825f92e1f79daeb288432eb9",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
