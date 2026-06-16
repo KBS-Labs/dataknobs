@@ -39,7 +39,7 @@ llm = [
 ]
 http = [
     "httpx>=0.27.0",  # GHSA-vqfr-h8mv-ghfj in transitive h11<0.16 (CVSS 9.1) swept by httpcore 1.x (required by httpx>=0.27)
-    "aiohttp>=3.13.4",  # multiple CVEs (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) fixed by 3.13.4
+    "aiohttp>=3.14.1",  # extends the prior <=3.13.3 sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf) through 3.14.x. Adds GHSA-hg6j-4rv6-33pg (CVSS 6.6, per-request cookies= cross-origin leak), GHSA-jg22-mg44-37j8 (CVSS 6.4, CookieJar.load() deserialization), and the rest of the <3.14.x sweep landing across 3.14.0 / 3.14.1. The two named highs were triaged unreachable from this codebase (outbound HTTP uses header-based auth; CookieJar.load() is not invoked) but bumping clears the floor-resolve audit regardless. Unblocked by the workspace move off aioresponses to an in-process aiohttp.web test server.
 ]
 vector = [
     "pgvector>=0.2.0",

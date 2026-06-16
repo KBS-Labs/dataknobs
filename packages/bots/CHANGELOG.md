@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replaced the `aioresponses`-driven HTTP fixture in
+  `tests/test_registry_http_backend.py` with an in-process
+  `aiohttp.web` test server (`_MockHttpServer`). Every request now
+  flows through the real aiohttp client/server stacks — wire-format
+  bugs (encoding, multi-valued query params, headers) surface in the
+  test instead of in production. Eliminates the temporary
+  `aiohttp<3.14` cap on dev deps and unblocks the
+  `aiohttp>=3.14.1` floor bumps in `dataknobs-llm` and
+  `dataknobs-fsm`. Test-side changes: the auth-header test now
+  asserts the actual `Authorization: Bearer ...` header reaches the
+  server (previously the assertion was implicit), and the
+  no-wire-protocol peek test now asserts an empty server-side query
+  mapping rather than scanning the URL string.
 - `LifecycleHooks` / `WizardHooks` turn-lifecycle triggers
   (`trigger_turn_start` / `trigger_turn_end`) take a single opaque
   `event: dict[str, Any]` argument; `TurnHookCallback` is
