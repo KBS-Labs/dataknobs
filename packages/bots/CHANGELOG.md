@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Re-platformed `LifecycleHooks` (and via composition,
+  `WizardHooks`) onto the new `dataknobs_common.callbacks`
+  `CallbackRegistry` substrate. The consumer-facing surface
+  (`on_turn_start` / `on_turn_end` registration with chaining and
+  per-stage scoping; `trigger_turn_start` / `trigger_turn_end`
+  triggers; `turn_start_count` / `turn_end_count` properties;
+  `clear()` with drain-in-place identity; `from_config` with
+  dotted-path callback resolution) is unchanged. New: a `registry`
+  property exposes the underlying `CallbackRegistry` as a
+  documented escape hatch — consumers can swap orderings
+  (`hooks.registry.set_ordering(PriorityOrdering())`), register
+  priority-tagged callbacks
+  (`hooks.registry.register("turn_start", cb, priority=-100)`), or
+  fan turn-lifecycle events out to an `EventBus`
+  (`hooks.registry.also_publish_to(bus, topic_prefix="wizard:")`)
+  without monkey-patching. `LifecycleHooks` declares
+  `Capability.CALLBACK_REGISTRY` via `CapabilityMixin` for
+  feature-probe-before-use composition. The `WizardHooks.clear()`
+  invariant ("lifecycle instance identity is preserved") now also
+  extends to the underlying registry — `hooks.registry is
+  hooks.registry` survives `clear()` so consumer customizations
+  (custom ordering, fan-out targets) persist across resets.
 - Replaced the `aioresponses`-driven HTTP fixture in
   `tests/test_registry_http_backend.py` with an in-process
   `aiohttp.web` test server (`_MockHttpServer`). Every request now

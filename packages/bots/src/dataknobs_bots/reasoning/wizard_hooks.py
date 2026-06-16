@@ -3,6 +3,15 @@
 This module provides WizardHooks for adding custom behavior at various
 points in the wizard lifecycle, including stage transitions and completion.
 
+WizardHooks composes :class:`~dataknobs_bots.reasoning.lifecycle.LifecycleHooks`,
+whose turn-lifecycle dispatch is backed by
+:class:`~dataknobs_common.callbacks.CallbackRegistry`. The WizardHooks
+public surface (``on_turn_start``, ``on_turn_end``, ``trigger_turn_start``,
+``trigger_turn_end``, ``lifecycle`` property) is unchanged by the
+substrate switch; consumers wanting pluggable ordering, priority-tagged
+callbacks, or EventBus fan-out reach through
+``wizard_hooks.lifecycle.registry``.
+
 Example:
     ```python
     from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
