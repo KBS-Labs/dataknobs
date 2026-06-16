@@ -88,7 +88,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Union
 
 from dataknobs_common.callbacks import (
@@ -105,9 +105,21 @@ logger = logging.getLogger(__name__)
 # the opaque event dict described in the module docstring — adopters
 # add subsystem-specific keys without extending the trigger signature.
 #
-# Sync OR async return is accepted (the registry awaits awaitable
-# returns and treats non-awaitable returns as already-complete).
-TurnHookCallback = Callable[[dict[str, Any]], Union[Awaitable[None], None]]
+# Sync OR async coroutine returns are accepted: ``async def`` callbacks
+# are detected via :func:`inspect.iscoroutinefunction` (so they get the
+# async-aware stage-scope wrapper) and the registry's ``fire_async``
+# awaits their result. The return type is narrowed to
+# ``Coroutine[Any, Any, None] | None`` rather than the broader
+# :class:`~collections.abc.Awaitable` — callables that are not coroutine
+# functions but return generic awaitables (e.g. a class with
+# ``__call__`` that returns a coroutine, or a ``functools.partial``
+# wrapping an ``async def`` that ``iscoroutinefunction`` does not
+# detect) get the sync wrapper, whose return value is dropped. See the
+# ``_stage_scoped`` docstring for the constraint.
+TurnHookCallback = Callable[
+    [dict[str, Any]],
+    Union[Coroutine[Any, Any, None], None],
+]
 
 
 class LifecycleHooks(CapabilityMixin):
@@ -259,6 +271,21 @@ class LifecycleHooks(CapabilityMixin):
         :meth:`~dataknobs_common.callbacks.CallbackRegistry.fire_async`
         awaits the inner result correctly); a sync callback gets a
         sync wrapper.
+
+        .. note::
+
+           Shape detection is by :func:`inspect.iscoroutinefunction`,
+           not by inspecting the return value. A callable that is NOT
+           a coroutine function but returns an awaitable (a class with
+           ``__call__`` returning a coroutine, or a
+           :class:`functools.partial` wrapping an ``async def`` whose
+           coroutine-function status ``iscoroutinefunction`` fails to
+           detect) gets the sync wrapper — and its awaitable return
+           value is silently dropped because the wrapper does not
+           propagate it. The :data:`TurnHookCallback` alias narrows the
+           contract to ``Coroutine[Any, Any, None] | None`` for this
+           reason; stick to plain ``async def`` coroutine functions for
+           async hook implementations.
         """
         if inspect.iscoroutinefunction(callback):
             async def async_wrapped(event: dict[str, Any]) -> None:
@@ -272,6 +299,31 @@ class LifecycleHooks(CapabilityMixin):
         return sync_wrapped
 
     # ── Config-driven loading ─────────────────────────────────────
+
+    def load_config(self, config: dict[str, Any]) -> LifecycleHooks:
+        """Register callbacks from ``config`` onto **this instance**.
+
+        Same dotted-path callback shape as :meth:`from_config`, but
+        registers against the existing registry rather than building
+        a fresh :class:`LifecycleHooks`. Use this when a composing
+        class (e.g. :class:`WizardHooks`) has already constructed a
+        :class:`LifecycleHooks` and wants the config-loaded callbacks
+        to land on the same registry instance — so consumers holding a
+        reference via :attr:`registry` (or via
+        :attr:`WizardHooks.lifecycle`) keep the same identity across
+        the config load.
+
+        Returns ``self`` for chaining.
+        """
+        for entry in config.get("on_turn_start", []):
+            callback, stage = self._resolve_entry(entry)
+            if callback is not None:
+                self.on_turn_start(callback, stage=stage)
+        for entry in config.get("on_turn_end", []):
+            callback, stage = self._resolve_entry(entry)
+            if callback is not None:
+                self.on_turn_end(callback, stage=stage)
+        return self
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> LifecycleHooks:
@@ -290,17 +342,14 @@ class LifecycleHooks(CapabilityMixin):
 
         A list entry may also be a bare ``"module.path:name"`` string
         when no stage scoping is needed.
+
+        Composing classes that already hold a :class:`LifecycleHooks`
+        instance should call :meth:`load_config` on that instance
+        rather than calling :meth:`from_config` and replacing the
+        embedded one — replacing the instance breaks the registry-
+        identity invariant documented on :attr:`registry`.
         """
-        hooks = cls()
-        for entry in config.get("on_turn_start", []):
-            callback, stage = cls._resolve_entry(entry)
-            if callback is not None:
-                hooks.on_turn_start(callback, stage=stage)
-        for entry in config.get("on_turn_end", []):
-            callback, stage = cls._resolve_entry(entry)
-            if callback is not None:
-                hooks.on_turn_end(callback, stage=stage)
-        return hooks
+        return cls().load_config(config)
 
     @staticmethod
     def _resolve_entry(

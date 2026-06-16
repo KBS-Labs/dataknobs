@@ -37,7 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compose by calling `also_publish_to` once per target.
   `registry.supports_event_bus_emission()` exposes whether at least
   one fan-out target is configured without reaching into private
-  state.
+  state. Calling `fire()` (sync) with fan-out configured from inside
+  a running event loop raises `TypeError`; consumers must use
+  `fire_async` to guarantee the bus publish completes before dispatch
+  returns and to surface any publish failure. The no-running-loop
+  branch of `fire()` drives fan-out to completion via `asyncio.run`
+  before returning. `RecordingCallbackRegistry` (testing double)
+  implements the full duck-typed surface — `register` / `unregister`
+  / `clear` / `set_ordering` / `callback_count` / `fire` /
+  `fire_async` — so injecting it where a real `CallbackRegistry` is
+  expected does not raise `AttributeError`.
 - `BackendRegistry[T_co]` runtime_checkable Protocol in
   `dataknobs_common.registry` (also re-exported from
   `dataknobs_common`). Stable `isinstance` target for "is this thing a

@@ -24,7 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`hooks.registry.register("turn_start", cb, priority=-100)`), or
   fan turn-lifecycle events out to an `EventBus`
   (`hooks.registry.also_publish_to(bus, topic_prefix="wizard:")`)
-  without monkey-patching. `LifecycleHooks` declares
+  without monkey-patching. A new `LifecycleHooks.load_config(config)`
+  instance method registers callbacks against the existing registry
+  in place — used internally by `WizardHooks.from_config` so the
+  embedded `LifecycleHooks` constructed in `WizardHooks.__init__`
+  survives the config load; consumers caching a
+  `hooks.lifecycle.registry` reference (e.g. to install a custom
+  ordering or fan-out target) keep that reference valid across
+  `WizardHooks.from_config`. `LifecycleHooks` declares
   `Capability.CALLBACK_REGISTRY` via `CapabilityMixin` for
   feature-probe-before-use composition. The `WizardHooks.clear()`
   invariant ("lifecycle instance identity is preserved") now also

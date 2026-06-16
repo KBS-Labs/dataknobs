@@ -231,9 +231,12 @@ class WizardHooks:
 
         # Delegate turn-lifecycle parsing to the generic LifecycleHooks
         # loader (same on_turn_start / on_turn_end keys + dotted-path
-        # callbacks). Replace the embedded instance with the loaded one
-        # rather than re-implementing parsing in two places.
-        hooks._lifecycle = LifecycleHooks.from_config(config)
+        # callbacks). Register against the embedded instance in place
+        # rather than swapping in a fresh one — the registry-identity
+        # invariant documented on ``LifecycleHooks.registry`` and on
+        # this class's ``lifecycle`` property requires the instance
+        # constructed in ``__init__`` to survive across ``from_config``.
+        hooks._lifecycle.load_config(config)
 
         return hooks
 

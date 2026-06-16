@@ -109,7 +109,16 @@ class CallbackEntry(Generic[CallbackT]):
 
 
 class ErrorPolicy(Enum):
-    """Per-registry policy for callback dispatch errors."""
+    """Per-registry policy for callback dispatch errors.
+
+    String values (``"raise"`` / ``"log"`` / ``"batch"``) are
+    intentionally short for compact serialization and config
+    declarations; they do not mirror the member names. Consumers
+    deserializing from config use the value form
+    (``ErrorPolicy("log")`` ⇒ :attr:`LOG_AND_CONTINUE`), not the
+    member name. Treat the values as a stable identifier surface —
+    renaming a value is a breaking config-format change.
+    """
 
     RAISE = "raise"
     LOG_AND_CONTINUE = "log"
@@ -406,7 +415,33 @@ class CallbackRegistry(Generic[CallbackT]):
         """Fire ``topic`` synchronously.
 
         Raises ``TypeError`` if any callback registered on ``topic``
-        is a coroutine function — use :meth:`fire_async` instead.
+        is a coroutine function, OR if EventBus fan-out is configured
+        via :meth:`also_publish_to` and ``fire`` is called from inside
+        a running event loop — both cases require :meth:`fire_async`.
+        The fan-out guard prevents fire-and-forget background tasks
+        whose exceptions would be silently swallowed and whose
+        completion is not guaranteed (the task could be garbage-
+        collected before delivery, raising ``Task was destroyed but
+        is pending`` in Python 3.12+).
+
+        When no event loop is running, fan-out is driven to completion
+        on a fresh loop via :func:`asyncio.run` before this method
+        returns.
+
+        .. note::
+
+           The "no running loop" guard reads
+           :func:`asyncio.get_running_loop` against the calling thread
+           only. If ``fire()`` is called from a thread that has its
+           own running event loop (Jupyter notebooks, an
+           :func:`asyncio.to_thread` target that itself drives an
+           asyncio loop, or a
+           :class:`~concurrent.futures.ThreadPoolExecutor` worker
+           that wraps :func:`asyncio.run`), the inner
+           :func:`asyncio.run` will raise
+           ``RuntimeError("asyncio.run() cannot be called from a
+           running event loop")``. Prefer :meth:`fire_async` for all
+           fan-out paths in async-heavy environments.
         """
         entries = self._sorted_entries(topic)
         async_entries = [
@@ -474,6 +509,12 @@ class CallbackRegistry(Generic[CallbackT]):
         Each fired payload is wrapped in an
         :class:`~dataknobs_common.events.Event` with
         :attr:`~dataknobs_common.events.EventType.CUSTOM` for transport.
+
+        Fan-out publishes happen BEFORE local callbacks run. A failing
+        local callback under :attr:`ErrorPolicy.LOG_AND_CONTINUE` (or
+        :attr:`ErrorPolicy.LOG_AND_RAISE_AT_END`) cannot suppress bus
+        delivery; under :attr:`ErrorPolicy.RAISE`, bus subscribers
+        still see the event before the raise unwinds.
         """
         self._fanout_buses.append((bus, topic_prefix))
 
@@ -538,18 +579,20 @@ class CallbackRegistry(Generic[CallbackT]):
         if not self._fanout_buses:
             return
         try:
-            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
-            loop = None
-        for bus, prefix in self._fanout_buses:
-            full_topic = prefix + topic
-            event = self._build_event(full_topic, payload)
-            coro = bus.publish(full_topic, event)
-            if loop is not None:
-                # Schedule as a background task; do not await in sync.
-                loop.create_task(coro)
-            else:
-                asyncio.run(coro)
+            # No running loop — drive the publishes to completion under
+            # a fresh loop. Reuses the same gather batch that
+            # ``fire_async`` runs, so semantics are identical.
+            asyncio.run(self._publish_to_buses_async(topic, payload))
+            return
+        raise TypeError(
+            f"Cannot fire() topic {topic!r} with EventBus fan-out "
+            f"configured from a running event loop: bus publishes "
+            f"would be scheduled as fire-and-forget tasks subject "
+            f"to garbage collection and silent exception loss. "
+            f"Use fire_async() instead.",
+        )
 
     async def _publish_to_buses_async(
         self,
@@ -614,6 +657,18 @@ class CapturingCallbackRegistry(CallbackRegistry[CallbackT]):
     Captured payloads are stored by reference. If the production code
     mutates the payload after :meth:`CallbackRegistry.fire`, the
     captured entry reflects the post-mutation state.
+
+    Capture order: the payload is appended to :attr:`captured`
+    **before** :class:`CallbackRegistry` dispatch runs. A payload
+    therefore appears in :attr:`captured` even when dispatch raises
+    (an async callback registered under :meth:`fire`, a callback
+    that raises under :attr:`ErrorPolicy.RAISE`, a
+    :class:`BatchedCallbackError` under
+    :attr:`ErrorPolicy.LOG_AND_RAISE_AT_END`, etc.). Tests asserting
+    "the production code attempted to fire" should read
+    :attr:`captured`; tests asserting "the callbacks ran without
+    error" should additionally check that ``fire`` / ``fire_async``
+    did not raise.
     """
 
     def __init__(
@@ -645,9 +700,23 @@ class RecordingCallbackRegistry:
     Use when the test wants to verify the production code calls
     :meth:`fire`, without running the registered callbacks at all (e.g.
     when callback side effects are expensive or irrelevant). Does NOT
-    extend :class:`CallbackRegistry` — it satisfies the duck-typed
-    surface (``register`` / ``fire`` / ``fire_async``) with no-op
-    semantics for the dispatch path.
+    extend :class:`CallbackRegistry`; instead it implements the full
+    duck-typed surface that downstream consumers (notably
+    :class:`~dataknobs_bots.reasoning.lifecycle.LifecycleHooks`) call:
+    ``register`` / ``unregister`` / ``clear`` / ``set_ordering`` /
+    ``callback_count`` / ``fire`` / ``fire_async``. The dispatch path
+    is a no-op (callbacks are recorded but never invoked) and
+    :meth:`set_ordering` is a no-op (ordering is irrelevant when
+    nothing dispatches), but the methods exist so a test injecting
+    this double does not blow up with ``AttributeError`` when the
+    production code calls them.
+
+    ``captured`` accumulates every ``(topic, payload)`` that flows
+    through :meth:`fire` / :meth:`fire_async`. :meth:`clear` drains
+    *registrations only* — the captured list is the test-observable
+    artifact and is preserved across clears, matching the analogous
+    behavior of :meth:`CallbackRegistry.clear` (which drains the
+    entry lists in place and leaves fan-out targets alone).
     """
 
     def __init__(self) -> None:
@@ -674,6 +743,34 @@ class RecordingCallbackRegistry:
                 del self._registered[i]
                 return True
         return False
+
+    def clear(self, topic: str | None = None) -> None:
+        """Drop recorded registrations.
+
+        Mirrors :meth:`CallbackRegistry.clear` — when ``topic`` is
+        ``None`` every registration is dropped; otherwise only
+        registrations on ``topic`` are dropped. The :attr:`captured`
+        list (test-observable fire history) is preserved across
+        clears.
+        """
+        if topic is None:
+            self._registered.clear()
+            return
+        self._registered = [
+            (t, c) for t, c in self._registered if t != topic
+        ]
+
+    def set_ordering(self, ordering: CallbackOrdering) -> None:
+        """No-op: ordering is irrelevant when dispatch is suppressed.
+
+        Provided so production code that customizes the registry
+        ordering (``hooks.registry.set_ordering(...)``) does not blow
+        up with ``AttributeError`` when a test injects this double.
+        """
+
+    def callback_count(self, topic: str) -> int:
+        """Return the number of registrations recorded on ``topic``."""
+        return sum(1 for t, _ in self._registered if t == topic)
 
     def fire(self, topic: str, payload: dict[str, Any]) -> None:
         self.captured.append((topic, payload))
