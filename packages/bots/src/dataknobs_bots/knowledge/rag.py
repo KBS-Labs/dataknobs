@@ -617,7 +617,7 @@ class RAGKnowledgeBase(
         return await self._ingest_from_processor_async(
             processor,
             progress_callback,
-            extra_metadata=composed or None,
+            extra_metadata=composed,
         )
 
     async def ingest_from_backend(
@@ -713,7 +713,7 @@ class RAGKnowledgeBase(
         return await self._ingest_from_processor_async(
             processor,
             progress_callback,
-            extra_metadata=composed or None,
+            extra_metadata=composed,
             rate_limiter=rate_limiter,
         )
 
@@ -1153,14 +1153,21 @@ class RAGKnowledgeBase(
     ) -> dict[str, Any]:
         """Return the effective ``extra_metadata`` seen by the chunk pipeline.
 
-        Identity tags the KB owns (the bound ``tenant_id``; the per-call
-        ``domain_id`` is layered on later by the call site) win over
-        caller-supplied keys on collision — a caller cannot silently
-        re-tag chunks for another tenant by passing
-        ``extra_metadata={"tenant_id": ...}``. Non-identity keys are
-        preserved as-is so callers can still attach per-document
-        ``region``, ``cohort``, or any custom tag through the same
-        channel.
+        Identity tags the KB owns at this layer (the bound
+        ``tenant_id``) win over caller-supplied keys on collision — a
+        caller cannot silently re-tag chunks for another tenant by
+        passing ``extra_metadata={"tenant_id": ...}``. Non-identity
+        keys are preserved as-is so callers can still attach
+        per-document ``region``, ``cohort``, or any custom tag through
+        the same channel.
+
+        ``domain_id`` is NOT stamped here: it lives one layer up at
+        :meth:`KnowledgeIngestionManager._compose_extra_metadata`,
+        which subclasses this method's contract and layers the
+        per-call ``domain_id`` over the same identity-wins rule before
+        forwarding into :meth:`ingest_from_backend`. Direct
+        :class:`RAGKnowledgeBase` consumers without a manager attach
+        ``domain_id`` themselves (or don't, for single-domain stores).
 
         Returns a fresh dict so the caller's mapping is never mutated.
         """

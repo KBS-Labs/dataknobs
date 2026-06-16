@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, ClassVar
 
-from dataknobs_common.capabilities import CapabilityLike, CapabilityMixin
+from dataknobs_common.capabilities import CapabilityMixin
 
 from .key_layout import KnowledgeKeyKind
 from .models import ChangeSet, InvalidVersionError
@@ -63,21 +63,23 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
     # --- Capability declaration (declaration-only today) ---
     #
     # Backends inherit :class:`CapabilityMixin` via this mixin so the
-    # capability-contract surface is present uniformly. The declared
-    # set is empty today: per-backend capability widening
-    # (``STREAMING_READS`` on backends that implement ``stream_file``;
-    # ``CHANGE_SUBSCRIPTION`` / ``EVENT_BUS_EMISSION`` /
-    # ``KEY_PATTERN_FILTERING`` once subscribe/emit surfaces ship;
-    # ``TENANT_SCOPED_STATE`` once ``set_ingestion_status`` /
-    # ``get_checksum`` / ``has_changes_since`` are tenant-scoped at
-    # the contract layer) lands incrementally as each capability's
-    # underlying behaviour is implemented, rather than being declared
-    # speculatively here. Adopters checking ``backend.supports(...)``
-    # for any specific capability get the honest "not advertised"
-    # answer today; this preserves the capability identifiers'
-    # meaning (advertised ⇒ the contract guarantees the behaviour,
-    # not just that the method exists).
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset()
+    # capability-contract surface is present uniformly. The inherited
+    # default (empty ``SUPPORTED_CAPABILITIES``) is correct today:
+    # per-backend capability widening (``STREAMING_READS`` on backends
+    # that implement ``stream_file``; ``CHANGE_SUBSCRIPTION`` /
+    # ``EVENT_BUS_EMISSION`` / ``KEY_PATTERN_FILTERING`` once
+    # subscribe/emit surfaces ship; ``TENANT_SCOPED_STATE`` once
+    # ``set_ingestion_status`` / ``get_checksum`` /
+    # ``has_changes_since`` are tenant-scoped at the contract layer)
+    # lands incrementally as each capability's underlying behaviour is
+    # implemented, rather than being declared speculatively here.
+    # Adopters checking ``backend.supports(...)`` for any specific
+    # capability get the honest "not advertised" answer today; this
+    # preserves the capability identifiers' meaning (advertised ⇒ the
+    # contract guarantees the behaviour, not just that the method
+    # exists). No ``SUPPORTED_CAPABILITIES = frozenset()`` override is
+    # written here because :class:`CapabilityMixin` already supplies
+    # the same default — the override would be noise.
 
     # --- Required of any backend (supplied by the concrete class) ---
 

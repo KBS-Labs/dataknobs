@@ -318,41 +318,40 @@ async def test_bound_tenant_stamps_chunk_metadata_and_id_prefix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bound_tenant_read_filter_explicit_override_wins() -> None:
+@pytest.mark.asyncio
+async def test_bound_tenant_read_filter_explicit_override_wins() -> None:
     """The read-side ``_resolve_read_filter`` AND-composes the bound
     tenant onto the supplied filter with **explicit-filter-wins** on
     collision — the deliberate write/read asymmetry (write: auto-
     derived wins; read: explicit wins for admin tooling that
     legitimately reads across tenants).
+
+    Built through the real :meth:`_make_shared_kb` async construction
+    (not ``object.__new__`` + private-attribute mutation) so the test
+    exercises ``_resolve_read_filter`` against a fully-initialized KB
+    — any future ``_setup`` / ``_ainit`` invariants the read filter
+    depends on are honoured.
     """
-
-    class _Probe(RAGKnowledgeBase):  # type: ignore[misc]
-        # Bypass async _ainit by constructing through __init__ directly
-        # — this test exercises the pure read-filter logic.
-        pass
-
-    kb = object.__new__(_Probe)
-    kb._tenant_id = "acme"  # type: ignore[attr-defined]
+    bound = await _make_shared_kb(tenant_id="acme")
 
     # No supplied filter → bound tenant is injected.
-    assert _Probe._resolve_read_filter(kb, None) == {"tenant_id": "acme"}
+    assert bound._resolve_read_filter(None) == {"tenant_id": "acme"}
 
     # Non-tenant supplied filter → bound tenant is added (no collision).
-    assert _Probe._resolve_read_filter(kb, {"category": "api"}) == {
+    assert bound._resolve_read_filter({"category": "api"}) == {
         "tenant_id": "acme",
         "category": "api",
     }
 
     # Explicit tenant_id supplied → explicit value wins (admin tooling).
-    assert _Probe._resolve_read_filter(kb, {"tenant_id": "other"}) == {
+    assert bound._resolve_read_filter({"tenant_id": "other"}) == {
         "tenant_id": "other",
     }
 
     # Unbound KB → supplied filter passes through verbatim.
-    unbound = object.__new__(_Probe)
-    unbound._tenant_id = None  # type: ignore[attr-defined]
-    assert _Probe._resolve_read_filter(unbound, None) is None
-    assert _Probe._resolve_read_filter(unbound, {"k": "v"}) == {"k": "v"}
+    unbound = await _make_shared_kb()
+    assert unbound._resolve_read_filter(None) is None
+    assert unbound._resolve_read_filter({"k": "v"}) == {"k": "v"}
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +679,106 @@ async def test_tombstone_swap_preserves_tenant_scoping() -> None:
     a_ids = {cid for cid, _ in a_rows}
     b_ids = {cid for cid, _ in b_rows}
     assert a_ids.isdisjoint(b_ids)
+
+
+# ---------------------------------------------------------------------------
+# T12 — ingest_changes threads extra_metadata onto stored chunks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_changes_threads_extra_metadata_onto_stored_chunks() -> None:
+    """The ``extra_metadata`` parameter on
+    :meth:`KnowledgeIngestionManager.ingest_changes` rides through the
+    same ``_apply_file_ops`` apply-core as :meth:`ingest`, so non-
+    identity tags land on the re-embedded chunks of modified files.
+
+    Mirrors T8's identity-vs-non-identity precedence pin but on the
+    incremental delta path: identity tags (``tenant_id`` /
+    ``domain_id``) are auto-derived and win on collision; consumer-
+    supplied non-identity keys (``cohort``) flow through unchanged.
+    Sibling pin to ``test_compose_preserves_non_identity_metadata_keys``
+    on the full-ingest path.
+    """
+    kb = await _make_shared_kb()
+    backend = InMemoryKnowledgeBackend()
+    await _populate(backend, "prompts")
+
+    mgr = KnowledgeIngestionManager(
+        source=backend, destination=kb, tenant_id="acme"
+    )
+
+    # Baseline full ingest — capture the canonical snapshot id and the
+    # baseline metadata for the file we're about to modify. APPEND mode
+    # is clear-then-reembed for the changed file: chunk_ids are stable
+    # across the cycle (same tenant + domain + stem + chunk_index), so
+    # identifying the re-embedded chunks by id-set difference would miss
+    # them — pin via the stable ``source_path`` instead.
+    await mgr.ingest(domain_id="prompts", swap_mode=IngestSwapMode.APPEND)
+    baseline = await mgr.get_current_version("prompts")
+    assert baseline is not None
+    baseline_guide_meta = {
+        cid: dict(meta)
+        for cid, meta in _stored_metadata(kb).items()
+        if meta.get("source_path") == "guide.md"
+    }
+    assert baseline_guide_meta, "baseline ingest produced no guide.md chunks"
+    # Baseline carries no consumer cohort tag — the pin is that the
+    # delta call *adds* it without leaking the hostile identity tags.
+    for meta in baseline_guide_meta.values():
+        assert "cohort" not in meta
+
+    # Modify one file to create a single-file delta.
+    await backend.put_file(
+        "prompts", "guide.md", b"# Guide v2\n\nUpdated body.\n"
+    )
+
+    # Incremental re-ingest with non-identity cohort tag + hostile
+    # tenant_id override (which must lose to the bound tenant).
+    await mgr.ingest_changes(
+        domain_id="prompts",
+        since_version=baseline,
+        swap_mode=IngestSwapMode.APPEND,
+        extra_metadata={
+            "tenant_id": "evil",   # auto-derived bound tenant wins
+            "domain_id": "fake",   # auto-derived domain wins
+            "cohort": "beta",       # preserved
+        },
+    )
+
+    stored = _stored_metadata(kb)
+    refreshed_guide_chunks = {
+        cid: meta
+        for cid, meta in stored.items()
+        if meta.get("source_path") == "guide.md"
+    }
+    assert refreshed_guide_chunks, (
+        "ingest_changes purged guide.md chunks without re-embedding them"
+    )
+    for chunk_id, meta in refreshed_guide_chunks.items():
+        assert meta.get("tenant_id") == "acme", (
+            f"chunk {chunk_id} hostile tenant_id leaked: meta={meta}"
+        )
+        assert meta.get("domain_id") == "prompts", (
+            f"chunk {chunk_id} hostile domain_id leaked: meta={meta}"
+        )
+        assert meta.get("cohort") == "beta", (
+            f"chunk {chunk_id} missing consumer cohort tag: meta={meta}"
+        )
+
+    # Other files' chunks must keep their original (cohort-free) metadata
+    # — the delta apply-core only touches the changed file's scope.
+    untouched = {
+        cid: meta
+        for cid, meta in stored.items()
+        if meta.get("source_path") in {"intro.md", "ref.md"}
+    }
+    assert untouched, "intro/ref chunks must survive the delta re-ingest"
+    for chunk_id, meta in untouched.items():
+        assert "cohort" not in meta, (
+            f"chunk {chunk_id} for non-modified file leaked cohort tag: "
+            f"meta={meta}"
+        )
 
 
 # ---------------------------------------------------------------------------
