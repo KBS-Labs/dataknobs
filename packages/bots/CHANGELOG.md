@@ -248,6 +248,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discipline (see USER_GUIDE.md "Building your own composing
   strategy").
 
+### Security
+
+- Bumped minimum `starlette` requirement (extra: `server`, and the
+  matching dev-dependency floor) from `>=1.0.1` to `>=1.3.1` to
+  exclude GHSA-82w8-qh3p-5jfq (CVSS 7.5, `request.form()` silently
+  ignores `max_fields` / `max_part_size` on
+  `application/x-www-form-urlencoded` payloads, enabling a sub-10MB
+  DoS), flagged at the floor resolve by the `dependency-update`
+  workflow. The bump also sweeps GHSA-jp82-jpqv-5vv3 (CVSS 3.7,
+  `request.url` userinfo poisoning on malformed paths missing a
+  leading slash, fixed in 1.3.0), GHSA-wqp7-x3pw-xc5r (CVSS 7.5,
+  Windows-only `StaticFiles` NTLM credential leak via UNC paths,
+  fixed in 1.1.0), and GHSA-x746-7m8f-x49c (CVSS 5.3, `HTTPEndpoint`
+  method dispatch using unvalidated client method names when a route
+  is registered without an explicit `methods=` argument, fixed in
+  1.1.0). The `fastapi>=0.133.0` floor (its `starlette>=0.40.0` no
+  upper-cap constraint) permits the bumped floor unchanged.
+
 ## v0.7.3 - 2026-06-08
 
 ### Added
