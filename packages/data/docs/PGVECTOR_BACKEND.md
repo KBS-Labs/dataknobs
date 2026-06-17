@@ -174,6 +174,50 @@ tenant_store = factory.create(
 )
 ```
 
+## Sharing a Connection Pool
+
+By default a `PgVectorStore` creates and owns its own asyncpg pool in
+`initialize()` and closes it in `close()`. To run several stores against
+one pool you manage yourself, build each store with `from_components`,
+passing the pool through the `pool=` collaborator:
+
+```python
+import asyncpg
+from dataknobs_data.vector.stores.pgvector import PgVectorStore
+
+# A pool the application owns and manages.
+pool = await asyncpg.create_pool(connection_string, min_size=2, max_size=10)
+
+store_a = PgVectorStore.from_components(
+    {"connection_string": connection_string, "dimensions": 768,
+     "table_name": "docs_a"},
+    pool=pool,
+)
+store_b = PgVectorStore.from_components(
+    {"connection_string": connection_string, "dimensions": 768,
+     "table_name": "docs_b"},
+    pool=pool,
+)
+await store_a.initialize()   # runs schema/table setup against `pool`
+await store_b.initialize()   # (neither creates a pool)
+
+...
+
+await store_a.close()        # leaves `pool` open — store_b still works
+await store_b.close()        # leaves `pool` open
+await pool.close()           # the application closes the pool it owns
+```
+
+When a pool is injected this way the store treats it as caller-owned:
+`initialize()` skips `asyncpg.create_pool` and runs only the
+schema/table setup against the supplied pool, and `close()` drops the
+store's reference and resets its initialized state but **does not** close
+the pool. This is the safe shape for "one backing pool, N stores" — see
+the `VectorStore.close()` ownership contract. The pool is injected
+directly through `from_components`, not through `VectorStoreFactory`
+(which has no live-collaborator channel); the factory / connection-string
+path keeps building and owning its own pool as before.
+
 ## API Reference
 
 ### Core Methods

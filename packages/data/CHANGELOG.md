@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`PgVectorStore` can run against an externally supplied connection
+  pool.** Build the store with
+  `PgVectorStore.from_components(config, pool=shared_pool)` to hand it an
+  asyncpg pool you manage. In that mode `initialize()` runs only the
+  schema/table setup against the pool (it does not create one), and
+  `close()` leaves the pool open for you to manage — so one pool can back
+  several stores that are opened and closed independently. The
+  config / connection-string / `VectorStoreFactory` path is unchanged: it
+  builds and owns its own pool and closes it on `close()`.
+
+### Changed
+
+- **`VectorStore.close()` now documents a backing-resource ownership
+  contract.** A store that built its own backing resource (connection
+  pool, client, session) closes it; a store handed an externally supplied
+  resource leaves it open and releases only per-store state. In-memory and
+  file-backed stores satisfy this trivially. `PgVectorStore` honors the
+  contract for its connection pool. No behavior change for stores that
+  build their own resources.
+
 ## v0.5.1 - 2026-06-08
 
 ## v0.5.0 - 2026-05-26

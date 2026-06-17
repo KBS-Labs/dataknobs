@@ -159,6 +159,14 @@ class RAGKnowledgeBase(
 
         self.vector_store: Any = None
         self.embedding_provider: Any = None
+        # Ownership of the cascade-closed collaborators. Bound by
+        # :meth:`_ainit` (config-driven build owns what it creates → True)
+        # or :meth:`_adopt_components` (pre-built injection → caller-owned,
+        # left False) — mirroring ``VectorMemory``. ``close()`` only tears
+        # down collaborators this instance owns, so an injected shared
+        # store/provider survives one holder's close.
+        self._owns_vector_store = False
+        self._owns_embedding_provider = False
 
         # Bound-tenant binding: when set, every write auto-stamps
         # ``tenant_id`` into chunk metadata and every read AND-composes
@@ -219,6 +227,7 @@ class RAGKnowledgeBase(
         factory = VectorStoreFactory()
         self.vector_store = factory.create(**self.config.vector_store)
         await self.vector_store.initialize()
+        self._owns_vector_store = True
 
         self.embedding_provider = await create_embedding_provider(
             build_embedding_config(
@@ -230,6 +239,7 @@ class RAGKnowledgeBase(
                 api_key=self.config.api_key,
             )
         )
+        self._owns_embedding_provider = True
 
         if self.config.documents_path is not None:
             await self.load_documents_from_directory(
@@ -251,6 +261,8 @@ class RAGKnowledgeBase(
             )
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
+        self._owns_vector_store = False
+        self._owns_embedding_provider = False
 
     async def load_markdown_document(
         self,
@@ -1811,6 +1823,13 @@ class RAGKnowledgeBase(
         - Closes the vector store connection
         - Closes the embedding provider (releases HTTP sessions)
 
+        Only collaborators this instance *owns* (built from config) are
+        closed. A vector store or embedding provider supplied externally
+        via :meth:`from_components` is caller-owned and left open, so a
+        consumer sharing one store/provider across several knowledge bases
+        can close each base independently without tearing down a resource
+        the others still depend on.
+
         Should be called when done using the knowledge base to prevent
         resource leaks (e.g., unclosed aiohttp sessions).
 
@@ -1824,12 +1843,22 @@ class RAGKnowledgeBase(
                 await kb.close()
             ```
         """
-        # Close vector store (will save if persist_path is set)
-        if hasattr(self.vector_store, "close"):
+        # Close vector store (will save if persist_path is set) — only
+        # when owned; an injected store is left open for the caller.
+        if (
+            self._owns_vector_store
+            and self.vector_store is not None
+            and hasattr(self.vector_store, "close")
+        ):
             await self.vector_store.close()
 
-        # Close embedding provider (releases HTTP client sessions)
-        if hasattr(self.embedding_provider, "close"):
+        # Close embedding provider (releases HTTP client sessions) — only
+        # when owned; an injected provider is left open for the caller.
+        if (
+            self._owns_embedding_provider
+            and self.embedding_provider is not None
+            and hasattr(self.embedding_provider, "close")
+        ):
             await self.embedding_provider.close()
 
     async def __aenter__(self) -> Self:

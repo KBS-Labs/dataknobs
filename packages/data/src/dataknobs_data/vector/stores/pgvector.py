@@ -180,6 +180,28 @@ class PgVectorStore(VectorStore):
         self.min_rows_for_index = cfg.min_rows_for_index
 
         self._pool: asyncpg.Pool | None = None
+        # Ownership of the connection pool. Default True: the config /
+        # connection-string / factory path builds its own pool in
+        # ``initialize()`` and owns it. An externally supplied pool
+        # injected via ``from_components(pool=...)`` flips this to False in
+        # ``_adopt_components`` so ``close()`` leaves the shared pool open.
+        self._owns_pool: bool = True
+
+    def _adopt_components(self, *, pool: Any = None, **_: Any) -> None:
+        """Adopt a caller-owned asyncpg pool for ``from_components``.
+
+        When a consumer manages one shared pool across several stores it
+        builds each store via ``PgVectorStore.from_components(pool=shared)``
+        (directly — the ``VectorStoreFactory`` has no live-collaborator
+        channel). The injected pool is bound here and marked
+        caller-owned, so ``initialize()`` skips ``asyncpg.create_pool`` and
+        ``close()`` leaves the pool open. Calling ``from_components`` with
+        no ``pool`` is permitted: the store then self-builds and owns its
+        pool exactly as the config path does.
+        """
+        if pool is not None:
+            self._pool = pool
+            self._owns_pool = False
 
     def _col(self, name: str) -> str:
         """Get the actual column name for a logical field name."""
@@ -531,13 +553,17 @@ class PgVectorStore(VectorStore):
             "Initializing pgvector store: %s.%s", self.schema, self.table_name
         )
 
-        # Create connection pool
-        self._pool = await asyncpg.create_pool(
-            self.connection_string,
-            min_size=self.pool_min_size,
-            max_size=self.pool_max_size,
-            command_timeout=30,
-        )
+        # Create connection pool only when one was not injected. An
+        # externally supplied pool (via ``from_components(pool=...)``) is
+        # already bound on ``self._pool`` with ``_owns_pool=False``; we run
+        # only the schema/table setup against it and never tear it down.
+        if self._pool is None:
+            self._pool = await asyncpg.create_pool(
+                self.connection_string,
+                min_size=self.pool_min_size,
+                max_size=self.pool_max_size,
+                command_timeout=30,
+            )
 
         # Verify pgvector extension and table exist
         async with self._pool.acquire() as conn:
@@ -712,10 +738,18 @@ class PgVectorStore(VectorStore):
         )
 
     async def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool:
+        """Close the connection pool.
+
+        Honors the :meth:`VectorStore.close` ownership contract: a pool
+        this store built (config / connection-string / factory path) is
+        closed; an externally supplied pool injected via
+        ``from_components(pool=...)`` is left open for the caller to
+        manage. Either way the store drops its pool reference and resets
+        ``_initialized`` so post-close use fails cleanly.
+        """
+        if self._owns_pool and self._pool:
             await self._pool.close()
-            self._pool = None
+        self._pool = None
         self._initialized = False
         logger.info("pgvector store closed")
 
