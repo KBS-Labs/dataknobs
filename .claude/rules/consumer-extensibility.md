@@ -68,6 +68,54 @@ Verdict:
 - Cost is large but consumer pain is real → **scope down, ship the
   smaller version + capture the larger follow-up**
 
+## The Deferral Bar — The Toolkit Standard
+
+DataKnobs is a toolkit consumers grab off the shelf and **run to
+production** — not grab off the shelf, then stop and ask us to
+supply the rest of what their use case needs. That standard sets a
+hard bar on what may be deferred.
+
+**"We shipped the Protocol; consumers can subclass / implement it"
+is NOT a sufficient reason to defer.** A reference implementation of
+a standard production behavior is part of the product, not an
+optional extra. If a reasonable production consumer would
+predictably need a behavior and we ship only the abstract seam,
+we've shipped a homework assignment, not a tool. The Protocol pins
+the *shape*; the reference impl delivers the *capability* — both
+ship together unless one of the categories below applies.
+
+An item may stay deferred **only** if it falls into one of these
+five categories. Name the category explicitly in the deferral
+rationale:
+
+1. **Blocked on unbuilt substrate** — depends on infrastructure
+   that does not exist yet (a later wave, an unbuilt framework).
+   Ships when the substrate lands.
+2. **Genuinely speculative shape, no consumer blocked** — the API
+   form is a real guess AND no production consumer is currently
+   forced into a workaround by its absence. (If a consumer *is*
+   blocked, the shape is no longer speculative — they've shown you
+   the use case.)
+3. **Premature optimization** — a performance/efficiency refinement
+   with no demonstrated need (e.g. per-field caching before any
+   profile shows the cost).
+4. **Internal / maintainer tooling** — adoption lints, scaffolding,
+   things consumers never touch.
+5. **New abstraction needing its own design pass** — not a missing
+   reference impl of an existing seam, but a genuinely new construct
+   whose design space warrants its own brief.
+
+If none of these fit, the honest disposition is **ship it** — even
+absent a specific request. "A consumer could write it themselves"
+disqualifies an item from deferral; that *is* the work we're
+supposed to have done for them.
+
+Note the interaction with the Maturity Caveat below: that section
+keeps a CAPABILITY in scope even without current demand; this bar
+says that once a capability *is* in scope, shipping its reference
+impl alongside the Protocol is the default, and withholding it
+needs one of the five categories — not just "the seam exists."
+
 ## Maturity Caveat — SHAPE vs CAPABILITY
 
 Consumer surveys cut cleanly along the SHAPE dimension. CAPABILITY
@@ -181,6 +229,8 @@ when prioritized.
 | Treat consumer migration cost as their problem | Treat it as our problem; design to minimize it |
 | Drop CAPABILITY scope on absence-of-demand grounds when adopters are at early project maturity | Apply the SHAPE-vs-CAPABILITY distinction — surveys inform SHAPE pinning; capability scope retains industry-pattern anchors per the maturity caveat |
 | Treat a consumer's subclass / monkey-patch / parallel reimplementation as "they solved it themselves" | Treat it as a flagged consumer request — the workaround IS the missing surface signal |
+| Defer a reference impl because "the Protocol ships and consumers can subclass it" | Ship the reference impl with the Protocol unless one of the five deferral-bar categories applies; the seam alone is a homework assignment, not a tool |
+| Defer on "no one asked + a consumer could write it themselves" | "Could write it themselves" is the work we owe them — name a deferral-bar category or ship it |
 
 ## Examples in Recent Work
 
