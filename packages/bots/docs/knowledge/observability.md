@@ -78,6 +78,15 @@ await bus.subscribe(INGEST_DOMAIN_END, on_ingest_end)
 await manager.ingest("my-domain")
 ```
 
+Fan-out is observability and never breaks the operation it observes: a
+failed bus `publish` (a transient broker/network hiccup on a real
+Postgres/SQS/Redis bus) is logged and swallowed, so the ingest completes
+normally and a genuine ingestion error is never masked by a publish
+error. A consumer that needs publish failures to be fatal — a durable
+audit trail, say — opts out per-target with
+`also_publish_to(bus, isolate_errors=False)`. `asyncio.CancelledError`
+always propagates regardless.
+
 ## Per-tenant filtering
 
 When several tenants publish to the same topic, wrap a callback in
@@ -143,8 +152,16 @@ fnmatch pattern cannot express multiple kinds.
 ## Tool-execution observability
 
 `ExecutionTracker` (in `dataknobs-llm`) exposes the same pattern: every
-`record(...)` fires the `execution:record` topic on its
-`execution_callbacks` registry with a
+`record(...)` / `record_async(...)` fires the `execution:record` topic
+on its `execution_callbacks` registry with a
 `{tool_name, success, duration_ms, error}` payload. A `priority=-100`
 guard callback under `ErrorPolicy.RAISE` can abort the recording path
 (e.g. on a cost ceiling).
+
+For EventBus fan-out, compose `execution_callbacks.also_publish_to(bus)`
+and drive recording through `record_async` — the async variant fires via
+`fire_async`, so bus delivery is awaited correctly from inside a running
+loop. The `ToolRegistry.execute_tool` path already uses `record_async`,
+so a tool registry with tracking enabled gets cross-replica fan-out for
+free. (Sync `record(...)` with fan-out composed inside a running loop is
+rejected — use `record_async` there.)

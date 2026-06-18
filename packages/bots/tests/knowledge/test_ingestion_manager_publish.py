@@ -41,6 +41,23 @@ async def _make_rag() -> RAGKnowledgeBase:
     )
 
 
+class _FailingBus:
+    """Duck-typed ``EventBus`` whose ``publish`` always raises.
+
+    Stands in for a real cross-replica bus (Postgres / SQS / Redis)
+    suffering a transient publish failure — the case
+    ``InMemoryEventBus`` never exercises. Used to prove the lifecycle
+    fan-out can neither abort nor mask the ingest it observes.
+    """
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def publish(self, topic: str, event) -> None:
+        self.attempts += 1
+        raise RuntimeError("bus publish failed")
+
+
 @pytest.mark.asyncio
 async def test_end_payload_carries_tenant_id_when_bound() -> None:
     source = await _make_source()
@@ -153,6 +170,64 @@ async def test_event_bus_auto_composes_fan_out() -> None:
     assert manager.lifecycle_callbacks.supports_event_bus_emission()
 
     await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_failing_event_bus_does_not_abort_ingest() -> None:
+    """A failing cross-replica bus must not break the ingest it observes.
+
+    Regression guard for the critical finding: the start event publishes
+    BEFORE the ingest body, so before isolation a transient bus failure
+    aborted the run before any work happened (and stranded the domain
+    status). With error-isolating fan-out the publish failure is logged
+    and swallowed; the ingest completes normally.
+    """
+    source = await _make_source()
+    rag = await _make_rag()
+    bus = _FailingBus()
+    manager = KnowledgeIngestionManager(
+        source=source, destination=rag, event_bus=bus
+    )
+
+    # Must NOT raise despite the bus failing on both start and end.
+    result = await manager.ingest("d1")
+
+    assert result.success
+    assert result.files_processed >= 1
+    # Both lifecycle fires attempted the bus (start + end).
+    assert bus.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_failing_event_bus_does_not_mask_ingest_error() -> None:
+    """When the ingest itself fails, the real error surfaces — not the
+    bus publish error fired from the ``finally`` end-event path.
+
+    Before isolation, an end-event publish raising in ``finally`` would
+    replace the genuine ingestion exception the operator needs to see.
+    """
+    source = await _make_source()
+    rag = await _make_rag()
+    bus = _FailingBus()
+
+    # Fault injection: simulate an ingest-time I/O failure on the
+    # destination (the echo embedder cannot be made to fail), so the
+    # real error competes with the failing end-event publish.
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("ingest exploded")
+
+    rag.ingest_from_backend = _boom  # type: ignore[method-assign]
+
+    manager = KnowledgeIngestionManager(
+        source=source, destination=rag, event_bus=bus
+    )
+
+    with pytest.raises(RuntimeError, match="ingest exploded"):
+        await manager.ingest("d1")
+
+    # The end event still attempted the bus (start + end), but its
+    # failure did not mask the genuine ingestion error.
+    assert bus.attempts == 2
 
 
 @pytest.mark.asyncio

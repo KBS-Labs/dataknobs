@@ -403,6 +403,12 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         resolved_kinds = kinds or frozenset({KnowledgeKeyKind.CONTENT})
         pattern = self._kind_to_topic_pattern(resolved_kinds, domain_id)
+        # The key pattern IS the subscription topic here: passed as the
+        # ``topic`` positional (what to match) AND as ``pattern=`` (which
+        # engages the bus's wildcard/fnmatch matching rather than an
+        # exact-topic match). The deliberate double-pass is required —
+        # without ``pattern=`` the bus would treat the wildcard string as
+        # a literal topic and never match a concrete published key.
         return await bus.subscribe(pattern, handler, pattern=pattern)
 
     @asynccontextmanager

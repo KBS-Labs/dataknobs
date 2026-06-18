@@ -19,7 +19,7 @@ from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
     Capability,
     CapabilityLike,
-    CapabilityMixin,
+    DynamicCapabilityMixin,
 )
 
 from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
@@ -160,7 +160,7 @@ class IngestionResult:
         }
 
 
-class KnowledgeIngestionManager(CapabilityMixin):
+class KnowledgeIngestionManager(DynamicCapabilityMixin):
     """Coordinates loading files from storage backend into RAG knowledge base.
 
     This manager bridges :class:`KnowledgeResourceBackend` (file storage)
@@ -211,11 +211,16 @@ class KnowledgeIngestionManager(CapabilityMixin):
     # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared:
     # ingestion-status writes through :class:`KnowledgeResourceBackend`
     # remain per-domain at the contract layer.
+    #
+    # The static set holds only the always-true capabilities.
+    # ``EVENT_BUS_EMISSION`` is config-dependent — a manager constructed
+    # without an ``event_bus`` never fans out to a bus — so it is added
+    # per-instance in :meth:`_compute_instance_capabilities`, honoring
+    # the "advertised ⇒ the contract guarantees the behaviour" rule.
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
         {
             Capability.TENANT_SCOPED_CHUNKS,
             Capability.CALLBACK_REGISTRY,
-            Capability.EVENT_BUS_EMISSION,
             Capability.INGEST_EVENT_PUBLICATION,
         }
     )
@@ -264,6 +269,26 @@ class KnowledgeIngestionManager(CapabilityMixin):
         # Lazily constructed in-process callback registry for ingest
         # lifecycle events (see :attr:`lifecycle_callbacks`).
         self._lifecycle_callbacks: CallbackRegistry | None = None
+        # DynamicCapabilityMixin: EVENT_BUS_EMISSION is computed from
+        # whether an event_bus was supplied (see
+        # :meth:`_compute_instance_capabilities`).
+        self._init_capability_cache()
+
+    def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
+        """Add ``EVENT_BUS_EMISSION`` only when an event bus is bound.
+
+        A busless manager fires only the in-process
+        :attr:`lifecycle_callbacks`; it never fans out to a bus, so it
+        must not advertise :attr:`Capability.EVENT_BUS_EMISSION` (a
+        consumer ``require_capability``-guarding on it would otherwise
+        get a false positive). The lifecycle registry auto-composes
+        ``also_publish_to(event_bus)`` exactly when ``self._event_bus``
+        is set, so that field is the authoritative signal.
+        """
+        caps = type(self).SUPPORTED_CAPABILITIES
+        if self._event_bus is not None:
+            caps = caps | {Capability.EVENT_BUS_EMISSION}
+        return caps
 
     @property
     def source(self) -> KnowledgeResourceBackend:

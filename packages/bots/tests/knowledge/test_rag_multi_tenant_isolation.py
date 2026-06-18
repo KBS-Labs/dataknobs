@@ -42,6 +42,7 @@ from dataknobs_common.capabilities import (
     CapabilityContract,
     CapabilityMixin,
 )
+from dataknobs_common.events import InMemoryEventBus
 
 
 async def _make_shared_kb(
@@ -846,6 +847,41 @@ async def test_ingestion_manager_advertises_tenant_scoped_chunks_only() -> None:
         )
         assert mgr.supports(Capability.TENANT_SCOPED_STATE) is False
         assert mgr.supports(Capability.TENANT_SCOPED_LOCKS) is False
+
+
+@pytest.mark.asyncio
+async def test_ingestion_manager_event_bus_emission_is_dynamic() -> None:
+    """``EVENT_BUS_EMISSION`` tracks whether an ``event_bus`` is bound.
+
+    A busless manager never fans out to a bus, so it must NOT advertise
+    the capability (a ``require_capability`` guard would otherwise get a
+    false positive); a bus-bound manager does. The class-level
+    ``supported_capabilities()`` omits it (it is instance-dependent),
+    while the always-true capabilities are advertised by both.
+    """
+    kb = await _make_shared_kb()
+    backend = InMemoryKnowledgeBackend()
+    await backend.initialize()
+    bus = InMemoryEventBus()
+
+    busless = KnowledgeIngestionManager(source=backend, destination=kb)
+    bus_bound = KnowledgeIngestionManager(
+        source=backend, destination=kb, event_bus=bus
+    )
+
+    assert busless.supports(Capability.EVENT_BUS_EMISSION) is False
+    assert bus_bound.supports(Capability.EVENT_BUS_EMISSION) is True
+
+    # Instance-dependent, so NOT in the class-level set.
+    assert (
+        Capability.EVENT_BUS_EMISSION
+        not in KnowledgeIngestionManager.supported_capabilities()
+    )
+
+    # Always-true capabilities are advertised regardless of the bus.
+    for mgr in (busless, bus_bound):
+        assert mgr.supports(Capability.CALLBACK_REGISTRY) is True
+        assert mgr.supports(Capability.INGEST_EVENT_PUBLICATION) is True
 
 
 # ---------------------------------------------------------------------------

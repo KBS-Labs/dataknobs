@@ -105,6 +105,48 @@ async def test_metadata_and_snapshot_keys_skip(
 
 
 @pytest.mark.asyncio
+async def test_content_key_with_resolver_resolves_manager_once() -> None:
+    """A content-key trigger under a ``manager_resolver`` resolves the
+    per-tenant manager exactly once.
+
+    Regression guard: the key-classification step and the dispatch step
+    must share one resolved manager. Before the fix the resolver ran
+    twice per content trigger (once unserialized, before the lock, to
+    classify; once inside the lock to dispatch) — doubling a
+    potentially expensive per-tenant resolution.
+    """
+    bus = await _make_bus()
+    backend = InMemoryKnowledgeBackend()
+    manager = _KeyStubManager(backend)
+    resolve_calls: list[tuple[str | None, str]] = []
+
+    async def resolver(*, tenant_id: str | None, domain_id: str) -> Any:
+        resolve_calls.append((tenant_id, domain_id))
+        return manager
+
+    orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
+    await orch.start()
+
+    await bus.publish(
+        TRIGGER_TOPIC,
+        _trigger(
+            {
+                "domain_id": "d1",
+                "tenant_id": "acme",
+                "key": "d1/content/foo.md",
+            }
+        ),
+    )
+    await _wait(lambda: manager.calls == ["d1"])
+    assert manager.calls == ["d1"]
+    # Exactly one resolution despite key-classification + dispatch.
+    assert resolve_calls == [("acme", "d1")]
+
+    await orch.stop()
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_absent_key_is_back_compat() -> None:
     bus = await _make_bus()
     backend = InMemoryKnowledgeBackend()

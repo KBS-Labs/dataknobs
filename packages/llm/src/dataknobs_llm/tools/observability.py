@@ -150,13 +150,16 @@ class ExecutionTracker(CapabilityMixin):
     Manages a bounded history of tool executions and provides
     methods for querying and aggregating execution data.
 
-    Composes an in-process callback registry: every :meth:`record`
-    fires the ``execution:record`` topic on :attr:`execution_callbacks`
-    so consumers can observe tool executions live (guard callbacks,
-    metrics, audit) without polling the history. The registry is opt-in
-    — it is constructed only on first access, so the existing
-    ``record / query / get_stats / clear / __len__`` surface is
-    byte-identical for consumers that never touch it.
+    Composes an in-process callback registry: every :meth:`record` /
+    :meth:`record_async` fires the ``execution:record`` topic on
+    :attr:`execution_callbacks` so consumers can observe tool executions
+    live (guard callbacks, metrics, audit) without polling the history.
+    :meth:`record_async` is the path for async callers and for EventBus
+    fan-out (it awaits ``fire_async``); the
+    :meth:`~dataknobs_llm.tools.ToolRegistry.execute_tool` loop uses it.
+    The registry is opt-in — it is constructed only on first access, so
+    the existing ``record / query / get_stats / clear / __len__`` surface
+    is byte-identical for consumers that never touch it.
 
     Attributes:
         max_history: Maximum number of records to retain
@@ -212,35 +215,85 @@ class ExecutionTracker(CapabilityMixin):
         Consumers register callbacks for in-process observability (a
         ``priority=-100`` guard that raises under
         :attr:`~dataknobs_common.callbacks.ErrorPolicy.RAISE` aborts the
-        recording path; metrics callbacks aggregate). Compose with
-        :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
-        for cross-replica fan-out when :meth:`record` is driven outside
-        a running event loop. Lazily constructed on first access, so the
-        recording path stays allocation-free for consumers that never
-        register.
+        recording path; metrics callbacks aggregate). Lazily constructed
+        on first access, so the recording path stays allocation-free for
+        consumers that never register.
+
+        EventBus fan-out:
+            Compose with
+            :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+            for cross-replica fan-out — but then drive recording through
+            :meth:`record_async`, **not** :meth:`record`. Sync
+            :meth:`record` calls
+            :meth:`~dataknobs_common.callbacks.CallbackRegistry.fire`,
+            which rejects fan-out from inside a running event loop (its
+            fire-and-forget guard); the normal tool-execution path
+            (:meth:`~dataknobs_llm.tools.ToolRegistry.execute_tool`)
+            runs in a loop and already uses :meth:`record_async`, so a
+            consumer that composes a bus there gets correct awaited
+            fan-out for free.
         """
         if self._execution_callbacks is None:
             self._execution_callbacks = CallbackRegistry()
         return self._execution_callbacks
 
+    def _store(self, execution: ToolExecutionRecord) -> None:
+        """Append to the bounded history (shared by sync/async record)."""
+        self._history.append(execution)
+        if len(self._history) > self._max_history:
+            self._history.pop(0)
+
+    @staticmethod
+    def _record_payload(execution: ToolExecutionRecord) -> dict[str, Any]:
+        """Build the ``execution:record`` event payload."""
+        return {
+            "tool_name": execution.tool_name,
+            "success": execution.success,
+            "duration_ms": execution.duration_ms,
+            "error": execution.error,
+        }
+
     def record(self, execution: ToolExecutionRecord) -> None:
-        """Record a tool execution.
+        """Record a tool execution (synchronous dispatch).
+
+        Fires ``execution:record`` via
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.fire`. Use
+        from a synchronous context, or an async context with no EventBus
+        fan-out composed on :attr:`execution_callbacks`. When fan-out IS
+        composed and recording happens inside a running event loop, use
+        :meth:`record_async` instead — sync ``fire`` rejects that case
+        to avoid fire-and-forget bus publishes.
 
         Args:
             execution: The execution record to store
         """
-        self._history.append(execution)
-        if len(self._history) > self._max_history:
-            self._history.pop(0)
+        self._store(execution)
         if self._execution_callbacks is not None:
             self._execution_callbacks.fire(
-                EXECUTION_RECORD_TOPIC,
-                {
-                    "tool_name": execution.tool_name,
-                    "success": execution.success,
-                    "duration_ms": execution.duration_ms,
-                    "error": execution.error,
-                },
+                EXECUTION_RECORD_TOPIC, self._record_payload(execution)
+            )
+
+    async def record_async(self, execution: ToolExecutionRecord) -> None:
+        """Record a tool execution (async dispatch).
+
+        Identical to :meth:`record` except it fires through
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.fire_async`,
+        which awaits async callbacks AND any composed EventBus fan-out
+        correctly from inside a running loop. This is the canonical path
+        from async callers (notably
+        :meth:`~dataknobs_llm.tools.ToolRegistry.execute_tool`) so that a
+        consumer composing
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+        on :attr:`execution_callbacks` gets cross-replica fan-out without
+        the sync-``fire``-in-a-running-loop rejection.
+
+        Args:
+            execution: The execution record to store
+        """
+        self._store(execution)
+        if self._execution_callbacks is not None:
+            await self._execution_callbacks.fire_async(
+                EXECUTION_RECORD_TOPIC, self._record_payload(execution)
             )
 
     def query(

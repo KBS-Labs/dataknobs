@@ -13,11 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ingest:domain:start` / `ingest:domain:end` topics (was a single
   `knowledge:ingestion` completion event). The end event fires on both
   success (`status="completed"`) and failure (`status="failed"`), and a
-  start event fires at the head of every run. Consumers subscribed to
-  the former `knowledge:ingestion` topic re-subscribe to one or both
-  new topics; an `EventBus` `pattern=` subscription can bridge a legacy
-  consumer if needed. The manager's `__init__` signature and the
-  `event_bus` cross-replica semantic are unchanged.
+  start event fires at the head of every run. The former
+  `knowledge:ingestion` topic is gone; consumers re-subscribe to one or
+  both new topics (a single `EventBus` `pattern="ingest:domain:*"`
+  subscription catches both with one handler). The manager's `__init__`
+  signature and the `event_bus` cross-replica semantic are unchanged.
 
 - **`RAGKnowledgeBase.close()` only closes collaborators it owns.** A
   vector store and embedding provider built from config are owned and
@@ -124,8 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `also_publish_to(event_bus)` so the lifecycle events fan out to the
   bus for cross-replica observability. Payloads carry `tenant_id` only
   when the manager is tenant-bound. Advertises
-  `Capability.INGEST_EVENT_PUBLICATION` / `CALLBACK_REGISTRY` /
-  `EVENT_BUS_EMISSION`.
+  `Capability.INGEST_EVENT_PUBLICATION` / `CALLBACK_REGISTRY` always,
+  and `EVENT_BUS_EMISSION` only when constructed with an `event_bus`
+  (config-dependent, via `DynamicCapabilityMixin`) — a busless manager
+  never fans out, so `require_capability(mgr, EVENT_BUS_EMISSION)`
+  reports the truth rather than a false positive.
 - `KnowledgeResourceBackend.subscribe_to_changes(bus, *, kinds=None,
   domain_id=None, handler)` and the `changes_subscription(...)` async
   context manager — compose a backend's `key_pattern()` with

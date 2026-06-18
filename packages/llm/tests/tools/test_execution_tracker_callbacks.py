@@ -7,7 +7,9 @@ constructed ``execution_callbacks`` registry; the pre-existing
 
 from __future__ import annotations
 
+import pytest
 from dataknobs_common.capabilities import Capability
+from dataknobs_common.events import Event, InMemoryEventBus
 from dataknobs_llm.tools.observability import (
     EXECUTION_RECORD_TOPIC,
     ExecutionHistoryQuery,
@@ -95,3 +97,71 @@ def test_capability_advertised() -> None:
     tracker = ExecutionTracker()
     assert tracker.supports(Capability.EXECUTION_TRACKING)
     assert tracker.supports(Capability.CALLBACK_REGISTRY)
+
+
+@pytest.mark.asyncio
+async def test_record_async_fires_execution_topic() -> None:
+    """``record_async`` records and fires, mirroring sync ``record``."""
+    tracker = ExecutionTracker(max_history=10)
+    fired: list[dict] = []
+    tracker.execution_callbacks.register(
+        EXECUTION_RECORD_TOPIC, fired.append
+    )
+
+    await tracker.record_async(_record())
+
+    assert len(tracker) == 1
+    assert fired == [
+        {
+            "tool_name": "search",
+            "success": True,
+            "duration_ms": 12.0,
+            "error": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_async_drives_event_bus_fanout_inside_loop() -> None:
+    """The composed-fan-out path works from inside a running loop.
+
+    Regression guard: ``record`` is always called from inside the
+    running ``execute_tool`` loop, and a consumer following the
+    documented ``also_publish_to`` composition would crash every tool
+    execution with a ``TypeError`` if recording went through sync
+    ``fire``. ``record_async`` fires through ``fire_async``, so the bus
+    receives the event and nothing raises.
+    """
+    tracker = ExecutionTracker()
+    bus = InMemoryEventBus()
+    await bus.connect()
+    received: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        received.append(event)
+
+    await bus.subscribe(EXECUTION_RECORD_TOPIC, handler)
+    tracker.execution_callbacks.also_publish_to(bus)
+
+    # Must NOT raise (this is the bug the guard protects against).
+    await tracker.record_async(_record())
+
+    assert len(received) == 1
+    assert received[0].topic == EXECUTION_RECORD_TOPIC
+    assert received[0].payload["tool_name"] == "search"
+
+
+@pytest.mark.asyncio
+async def test_sync_record_with_fanout_in_loop_rejects() -> None:
+    """Sync ``record`` with composed fan-out inside a running loop is
+    rejected by the substrate's fire-and-forget guard — the documented
+    reason ``execute_tool`` and consumers must use ``record_async`` for
+    the fan-out path.
+    """
+    tracker = ExecutionTracker()
+    bus = InMemoryEventBus()
+    await bus.connect()
+    tracker.execution_callbacks.also_publish_to(bus)
+
+    with pytest.raises(TypeError, match="fire_async"):
+        tracker.record(_record())

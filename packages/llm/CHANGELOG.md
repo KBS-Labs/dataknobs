@@ -10,14 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `ExecutionTracker` composes an in-process `CallbackRegistry`. Every
-  `record(...)` fires the `execution:record` topic
+  `record(...)` / `record_async(...)` fires the `execution:record` topic
   (`EXECUTION_RECORD_TOPIC`) on the lazily constructed
   `execution_callbacks` registry with a
-  `{tool_name, success, duration_ms, error}` payload; compose with
-  `CallbackRegistry.also_publish_to(...)` for cross-replica fan-out
-  (when `record` runs outside a running event loop). The existing
-  `record / query / get_stats / clear / __len__` surface is unchanged.
-  Advertises `Capability.EXECUTION_TRACKING` / `CALLBACK_REGISTRY`.
+  `{tool_name, success, duration_ms, error}` payload. For cross-replica
+  fan-out, compose `execution_callbacks.also_publish_to(...)` and drive
+  recording through `record_async` — it fires via `fire_async`, so bus
+  delivery is awaited correctly from inside a running event loop.
+  `ToolRegistry.execute_tool` records via `record_async`, so tracked
+  tool execution gets fan-out for free; sync `record(...)` with fan-out
+  composed inside a running loop is rejected (use `record_async`). The
+  existing `record / query / get_stats / clear / __len__` surface is
+  unchanged. Advertises `Capability.EXECUTION_TRACKING` /
+  `CALLBACK_REGISTRY`.
 - `dataknobs_llm.intent` module — pluggable intent-classification
   surface for any LLM-layer consumer that needs to route user input
   by intent (tool routers, reasoning strategies, RAG query
