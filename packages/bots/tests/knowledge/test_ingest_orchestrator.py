@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.knowledge import (
+    INGEST_DOMAIN_END,
     IngestionResult,
     IngestSwapMode,
     KnowledgeIngestionManager,
@@ -313,8 +314,9 @@ async def test_end_to_end_with_real_manager() -> None:
     """Full stack: orchestrator + real manager + real backend + RAG kb.
 
     Publishing a trigger event causes the manager to ingest content and
-    publish its own ``knowledge:ingestion`` completion event — the
-    existing manager contract must continue to hold under orchestration.
+    fire its own ``ingest:domain:end`` completion event (fanned out to
+    the bus) — the manager lifecycle contract must continue to hold
+    under orchestration.
     """
     bus = await _make_bus()
 
@@ -340,7 +342,7 @@ async def test_end_to_end_with_real_manager() -> None:
     async def completion_handler(event: Event) -> None:
         completion_events.append(event)
 
-    await bus.subscribe("knowledge:ingestion", completion_handler)
+    await bus.subscribe(INGEST_DOMAIN_END, completion_handler)
     await orch.start()
 
     await bus.publish(
@@ -352,7 +354,7 @@ async def test_end_to_end_with_real_manager() -> None:
     assert len(completion_events) == 1
     payload = completion_events[0].payload
     assert payload["domain_id"] == "d1"
-    assert payload["status"] == "ready"
+    assert payload["status"] == "completed"
     assert payload["files_processed"] >= 1
     assert payload["chunks_created"] >= 1
 
@@ -941,7 +943,7 @@ async def test_resolver_routes_each_tenant_to_its_own_manager() -> None:
     async def completion_handler(event: Event) -> None:
         completions.append(event)
 
-    await bus.subscribe("knowledge:ingestion", completion_handler)
+    await bus.subscribe(INGEST_DOMAIN_END, completion_handler)
 
     resolver = _RecordingResolver({"acme": acme_mgr, "umbrella": umb_mgr})
     orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
@@ -1296,7 +1298,7 @@ async def test_resolver_path_end_to_end_publishes_completion_event() -> None:
     async def completion_handler(event: Event) -> None:
         completion_events.append(event)
 
-    await bus.subscribe("knowledge:ingestion", completion_handler)
+    await bus.subscribe(INGEST_DOMAIN_END, completion_handler)
 
     resolver = _RecordingResolver({"acme": manager})
     orch = IngestOrchestrator(None, bus, manager_resolver=resolver)
@@ -1311,7 +1313,7 @@ async def test_resolver_path_end_to_end_publishes_completion_event() -> None:
     assert len(completion_events) == 1
     payload = completion_events[0].payload
     assert payload["domain_id"] == "d1"
-    assert payload["status"] == "ready"
+    assert payload["status"] == "completed"
     assert payload["files_processed"] >= 1
     assert payload["chunks_created"] >= 1
     assert resolver.calls == [("acme", "d1")]

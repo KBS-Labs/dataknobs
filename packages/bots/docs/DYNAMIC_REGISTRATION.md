@@ -911,10 +911,10 @@ async def main():
 
     # Subscribe to ingestion events
     async def on_ingestion(event: Event) -> None:
-        if event.type == EventType.UPDATED:
+        if event.type == EventType.CUSTOM:
             print(f"Ingestion complete: {event.payload}")
 
-    await event_bus.subscribe("knowledge:ingestion", on_ingestion)
+    await event_bus.subscribe("ingest:domain:end", on_ingestion)
 
     # Create knowledge base and upload files
     await kb_backend.create_kb("support", metadata={"description": "Support docs"})
