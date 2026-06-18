@@ -6,6 +6,7 @@ composition path runs through the real event-bus surface (no mocks).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -217,8 +218,6 @@ async def test_fanout_cancelled_error_always_reraised() -> None:
     it propagates even on an ``isolate_errors=True`` target so task
     cancellation is never silently swallowed.
     """
-    import asyncio
-
     registry: CallbackRegistry = CallbackRegistry()
     cancelling = _FailingBus(asyncio.CancelledError())
     registry.also_publish_to(cancelling)  # isolate_errors=True (default)
