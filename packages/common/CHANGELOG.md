@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- Three `Capability` identifiers in the observability family:
+  `INGEST_EVENT_PUBLICATION`, `BACKEND_STATE_OBSERVABILITY`, and
+  `EXECUTION_TRACKING`. Knowledge-ingestion, backend-state, and
+  tool-execution surfaces advertise these so consumers can query
+  support before composing observability callbacks.
 - `CallbackRegistry[CallbackT]` and the `CallbackOrdering` Protocol in
   `dataknobs_common.callbacks` (also re-exported from the top-level
   namespace). In-process named-callback dispatch with sync and async
