@@ -67,6 +67,9 @@ class Capability(str, Enum):
     EVENT_BUS_EMISSION = "event_bus_emission"
     CALLBACK_REGISTRY = "callback_registry"
     METRICS_EMISSION = "metrics_emission"
+    INGEST_EVENT_PUBLICATION = "ingest_event_publication"
+    BACKEND_STATE_OBSERVABILITY = "backend_state_observability"
+    EXECUTION_TRACKING = "execution_tracking"
 
     # ---- Consistency ----
     SNAPSHOT_ISOLATION = "snapshot_isolation"
@@ -90,6 +93,9 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
         Capability.EVENT_BUS_EMISSION,
         Capability.CALLBACK_REGISTRY,
         Capability.METRICS_EMISSION,
+        Capability.INGEST_EVENT_PUBLICATION,
+        Capability.BACKEND_STATE_OBSERVABILITY,
+        Capability.EXECUTION_TRACKING,
     }),
     "consistency": frozenset({
         Capability.SNAPSHOT_ISOLATION,

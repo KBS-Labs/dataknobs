@@ -401,7 +401,13 @@ class ToolRegistry(Registry[Tool]):
             result = await tool.execute(**call_kwargs)
             duration_ms = (time.time() - start_time) * 1000
 
-            self._execution_tracker.record(
+            # ``record_async`` (not sync ``record``) because we are
+            # inside a running event loop: it fires through
+            # ``fire_async`` so a consumer composing EventBus fan-out on
+            # ``execution_callbacks`` gets awaited cross-replica
+            # delivery instead of the sync-``fire``-in-a-running-loop
+            # rejection.
+            await self._execution_tracker.record_async(
                 ToolExecutionRecord(
                     tool_name=name,
                     timestamp=start_time,
@@ -416,7 +422,7 @@ class ToolRegistry(Registry[Tool]):
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            self._execution_tracker.record(
+            await self._execution_tracker.record_async(
                 ToolExecutionRecord(
                     tool_name=name,
                     timestamp=start_time,

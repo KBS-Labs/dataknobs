@@ -106,8 +106,8 @@ subsequent events. This is the expected behavior for subscriber loops
 — a poisoned event must not tear down the pipeline.
 
 Completion events published by the manager (topic
-`knowledge:ingestion`) are unaffected by this behavior — they still
-fire on successful ingests.
+`ingest:domain:start` / `ingest:domain:end`) are unaffected by this
+behavior — they still fire on every ingest run.
 
 ## Concurrency & Locking
 
@@ -281,7 +281,7 @@ async def main():
         ),
     )
 
-    # ... completion events fire on the "knowledge:ingestion" topic ...
+    # ... completion events fire on the "ingest:domain:end" topic ...
 
     await orch.stop()
     await bus.close()
@@ -369,7 +369,7 @@ await orch.start()
 completions = []
 async def capture(event):
     completions.append(event)
-await bus.subscribe("knowledge:ingestion", capture)
+await bus.subscribe("ingest:domain:end", capture)
 
 await bus.publish("knowledge:trigger", Event(
     type=EventType.UPDATED,

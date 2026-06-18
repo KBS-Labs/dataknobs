@@ -42,6 +42,7 @@ from dataknobs_common.capabilities import (
     CapabilityContract,
     CapabilityMixin,
 )
+from dataknobs_common.events import InMemoryEventBus
 
 
 async def _make_shared_kb(
@@ -848,22 +849,67 @@ async def test_ingestion_manager_advertises_tenant_scoped_chunks_only() -> None:
         assert mgr.supports(Capability.TENANT_SCOPED_LOCKS) is False
 
 
-# ---------------------------------------------------------------------------
-# T16 — Backend subclasses inherit CapabilityMixin but advertise no
-#       capabilities (plumbing-only at this wave; W3/W4 widen)
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ingestion_manager_event_bus_emission_is_dynamic() -> None:
+    """``EVENT_BUS_EMISSION`` tracks whether an ``event_bus`` is bound.
 
-
-def test_backend_subclasses_inherit_capability_mixin_but_advertise_nothing() -> None:
-    """In-tree backends inherit :class:`CapabilityMixin` via the shared
-    :class:`KnowledgeResourceBackendMixin` so the contract surface is
-    uniformly present. The declared set is empty today — wave-by-wave
-    widening (``STREAMING_READS`` / ``CHANGE_SUBSCRIPTION`` /
-    ``KEY_PATTERN_FILTERING`` / ``TENANT_SCOPED_STATE``) is captured in
-    the roadmap rather than declared speculatively. A consumer asking
-    ``backend.supports(...)`` for any specific capability gets the
-    honest "not advertised" answer.
+    A busless manager never fans out to a bus, so it must NOT advertise
+    the capability (a ``require_capability`` guard would otherwise get a
+    false positive); a bus-bound manager does. The class-level
+    ``supported_capabilities()`` omits it (it is instance-dependent),
+    while the always-true capabilities are advertised by both.
     """
+    kb = await _make_shared_kb()
+    backend = InMemoryKnowledgeBackend()
+    await backend.initialize()
+    bus = InMemoryEventBus()
+
+    busless = KnowledgeIngestionManager(source=backend, destination=kb)
+    bus_bound = KnowledgeIngestionManager(
+        source=backend, destination=kb, event_bus=bus
+    )
+
+    assert busless.supports(Capability.EVENT_BUS_EMISSION) is False
+    assert bus_bound.supports(Capability.EVENT_BUS_EMISSION) is True
+
+    # Instance-dependent, so NOT in the class-level set.
+    assert (
+        Capability.EVENT_BUS_EMISSION
+        not in KnowledgeIngestionManager.supported_capabilities()
+    )
+
+    # Always-true capabilities are advertised regardless of the bus.
+    for mgr in (busless, bus_bound):
+        assert mgr.supports(Capability.CALLBACK_REGISTRY) is True
+        assert mgr.supports(Capability.INGEST_EVENT_PUBLICATION) is True
+
+
+# ---------------------------------------------------------------------------
+# T16 — Backend subclasses inherit CapabilityMixin and advertise the
+#       state-observability / change-subscription surface they implement
+# ---------------------------------------------------------------------------
+
+
+def test_backend_subclasses_advertise_state_observability_surface() -> None:
+    """In-tree backends inherit :class:`CapabilityMixin` via the shared
+    :class:`KnowledgeResourceBackendMixin` and now advertise the four
+    capabilities the mixin genuinely implements: ``KEY_PATTERN_FILTERING``
+    and ``CHANGE_SUBSCRIPTION`` (every backend ships ``classify_key`` /
+    ``key_pattern`` / ``subscribe_to_changes``) plus
+    ``BACKEND_STATE_OBSERVABILITY`` / ``CALLBACK_REGISTRY`` (every backend
+    fires metadata / snapshot state-write events on
+    ``state_write_callbacks``). Capabilities whose behaviour has not
+    shipped (``STREAMING_READS``, ``TENANT_SCOPED_STATE``) stay
+    unadvertised; ``TENANT_SCOPED_CHUNKS`` lives at the chunk layer
+    (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
+    backend.
+    """
+    advertised = frozenset({
+        Capability.KEY_PATTERN_FILTERING,
+        Capability.CHANGE_SUBSCRIPTION,
+        Capability.BACKEND_STATE_OBSERVABILITY,
+        Capability.CALLBACK_REGISTRY,
+    })
     backend_classes: list[type[Any]] = [
         InMemoryKnowledgeBackend,
         FileKnowledgeBackend,
@@ -875,18 +921,15 @@ def test_backend_subclasses_inherit_capability_mixin_but_advertise_nothing() -> 
             f"{cls.__name__} must inherit CapabilityMixin via the "
             "KnowledgeResourceBackendMixin"
         )
-        # Empty declaration — no capability advertised.
-        assert cls.supported_capabilities() == frozenset(), (
-            f"{cls.__name__} must not advertise any capability today; "
-            f"got {cls.supported_capabilities()}"
+        assert cls.supported_capabilities() == advertised, (
+            f"{cls.__name__} must advertise the state-observability "
+            f"surface; got {cls.supported_capabilities()}"
         )
-        # Pin specific identifiers — back-compat guard for the four
-        # most-likely-to-be-asked capabilities at the backend layer.
+        # Capabilities whose behaviour has not shipped stay unadvertised.
         for cap in (
             Capability.TENANT_SCOPED_CHUNKS,  # chunk layer, not backend
-            Capability.TENANT_SCOPED_STATE,   # W4 deliverable
-            Capability.STREAMING_READS,        # W3 deliverable
-            Capability.CHANGE_SUBSCRIPTION,    # W3 deliverable
+            Capability.TENANT_SCOPED_STATE,   # not yet shipped
+            Capability.STREAMING_READS,        # not yet shipped
         ):
             assert cls.SUPPORTED_CAPABILITIES.isdisjoint({cap}), (
                 f"{cls.__name__} unexpectedly advertises {cap.value!r}"
@@ -901,4 +944,9 @@ def test_in_memory_backend_satisfies_capability_contract_protocol() -> None:
     """
     backend = InMemoryKnowledgeBackend()
     assert isinstance(backend, CapabilityContract)
-    assert backend.instance_capabilities() == frozenset()
+    assert backend.instance_capabilities() == frozenset({
+        Capability.KEY_PATTERN_FILTERING,
+        Capability.CHANGE_SUBSCRIPTION,
+        Capability.BACKEND_STATE_OBSERVABILITY,
+        Capability.CALLBACK_REGISTRY,
+    })

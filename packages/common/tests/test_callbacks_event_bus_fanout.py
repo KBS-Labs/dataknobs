@@ -6,6 +6,7 @@ composition path runs through the real event-bus surface (no mocks).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -33,6 +34,23 @@ class _CapturingBus:
 
     async def publish(self, topic: str, event: Event) -> None:
         self.published.append((topic, event))
+
+
+class _FailingBus:
+    """Duck-typed :class:`EventBus` whose ``publish`` always raises.
+
+    Stands in for a real bus (Postgres / SQS / Redis) suffering a
+    transient broker/network failure — the case ``InMemoryEventBus``
+    never exercises because its ``publish`` cannot fail.
+    """
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.attempts = 0
+        self._error = error or RuntimeError("bus publish failed")
+
+    async def publish(self, topic: str, event: Event) -> None:
+        self.attempts += 1
+        raise self._error
 
 
 @pytest.mark.asyncio
@@ -150,6 +168,62 @@ async def test_fanout_local_callback_error_does_not_block_bus_publish() -> None:
 
     assert len(received) == 1
     assert received[0].topic == "p:t"
+
+
+@pytest.mark.asyncio
+async def test_fanout_publish_error_isolated_by_default() -> None:
+    """A failed bus publish is logged and swallowed by default — the
+    fire (and the operation it observes) is unaffected, local callbacks
+    still run, and sibling fan-out targets still receive the payload.
+
+    Regression guard: an opt-in observability bus must never be able to
+    break the operation it observes. Before isolation, the failing
+    publish propagated out of ``fire_async`` and aborted the caller.
+    """
+    registry: CallbackRegistry = CallbackRegistry()
+    failing = _FailingBus()
+    healthy = _CapturingBus()
+    registry.also_publish_to(failing, topic_prefix="bad:")
+    registry.also_publish_to(healthy, topic_prefix="ok:")
+    seen_locally: list[dict] = []
+    registry.register("t", lambda payload: seen_locally.append(payload))
+
+    # Must NOT raise despite the failing bus.
+    await registry.fire_async("t", {"k": 1})
+
+    assert failing.attempts == 1
+    assert seen_locally == [{"k": 1}]  # local dispatch unaffected
+    # The healthy sibling still received the payload (one target's
+    # failure does not cancel the others under return_exceptions=True).
+    assert [t for t, _ in healthy.published] == ["ok:t"]
+
+
+@pytest.mark.asyncio
+async def test_fanout_publish_error_propagates_when_not_isolated() -> None:
+    """``isolate_errors=False`` restores fatal fan-out: the publish
+    failure re-raises out of ``fire_async`` for consumers who need a
+    durable delivery guarantee.
+    """
+    registry: CallbackRegistry = CallbackRegistry()
+    failing = _FailingBus(ValueError("durable delivery required"))
+    registry.also_publish_to(failing, isolate_errors=False)
+
+    with pytest.raises(ValueError, match="durable delivery required"):
+        await registry.fire_async("t", {"k": 1})
+
+
+@pytest.mark.asyncio
+async def test_fanout_cancelled_error_always_reraised() -> None:
+    """``asyncio.CancelledError`` is control-flow, not a publish failure:
+    it propagates even on an ``isolate_errors=True`` target so task
+    cancellation is never silently swallowed.
+    """
+    registry: CallbackRegistry = CallbackRegistry()
+    cancelling = _FailingBus(asyncio.CancelledError())
+    registry.also_publish_to(cancelling)  # isolate_errors=True (default)
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.fire_async("t", {"k": 1})
 
 
 def test_supports_event_bus_emission_advertises_configuration() -> None:

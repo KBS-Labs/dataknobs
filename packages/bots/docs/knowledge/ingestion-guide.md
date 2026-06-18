@@ -136,7 +136,7 @@ await bus.publish(
     ),
 )
 
-# Manager publishes a "knowledge:ingestion" completion event when done.
+# Manager fires an "ingest:domain:end" completion event when done.
 # ...
 
 await orchestrator.stop()
@@ -380,17 +380,19 @@ current status.
 ## Completion Events
 
 When an `event_bus` is wired into the manager, every successful ingest
-publishes a `knowledge:ingestion` event:
+fires an `ingest:domain:end` event (fanned out to the bus):
 
 ```python
 Event(
-    type=EventType.UPDATED,
-    topic="knowledge:ingestion",
+    type=EventType.CUSTOM,
+    topic="ingest:domain:end",
     payload={
         "domain_id": "my-domain",
         "files_processed": 12,
         "chunks_created": 47,
-        "status": "ready",
+        "files_deleted": 0,
+        "status": "completed",
+        "completed_at": "2026-06-17T12:00:00+00:00",
     },
 )
 ```

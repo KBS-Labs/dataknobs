@@ -13,11 +13,12 @@ receive side.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dataknobs_common.locks import InProcessLock, create_lock
 
 from .ingestion import IngestSwapMode
+from .storage import KnowledgeKeyKind
 
 if TYPE_CHECKING:
     from dataknobs_common.events import Event, EventBus, Subscription
@@ -320,11 +321,14 @@ class IngestOrchestrator:
         which path is taken; different domains (and different tenants
         sharing a domain) proceed in parallel. When a
         ``manager_resolver`` is configured the per-tenant manager is
-        resolved here, once per event, from the payload's ``tenant_id``;
-        otherwise the static ``ingestion_manager`` is used. Errors
-        (including a resolver raising) are logged but not re-raised —
-        the EventBus dispatcher continues serving subsequent events to
-        other handlers.
+        resolved **once per event** from the payload's ``tenant_id`` —
+        either at the pre-lock key-classification step (when the trigger
+        carries a ``key``) or inside the lock just before dispatch, and
+        the resolved manager is reused, never re-resolved. Otherwise the
+        static ``ingestion_manager`` is used. Errors (including a
+        resolver raising) are logged but not re-raised — the EventBus
+        dispatcher continues serving subsequent events to other
+        handlers.
         """
         payload: dict[str, Any] = event.payload or {}
         domain_id = payload.get("domain_id")
@@ -348,6 +352,40 @@ class IngestOrchestrator:
                 event.event_id,
             )
             return
+        # Resolve the manager at most once per event. The key-filtering
+        # step below needs the backend (hence the manager) to classify,
+        # and the dispatch inside the lock needs the same manager — so
+        # we resolve lazily on first need and reuse the instance,
+        # instead of invoking a (potentially expensive) resolver twice.
+        manager: KnowledgeIngestionManager | None = None
+        # Opt-in key filtering: an external source (S3 → EventBridge,
+        # filesystem inotify) MAY include the originating backend key.
+        # When present, classify it and skip non-CONTENT writes — the
+        # DK-managed ``_metadata.json`` / ``_snapshots/`` writes the
+        # ingest itself performs would otherwise re-trigger ingestion
+        # (a positive feedback loop). Absent ``key`` proceeds unchanged
+        # (back-compat for pure cron / manual triggers).
+        key = payload.get("key")
+        if key is not None:
+            manager = await self._resolve_manager(tenant_id, domain_id)
+            if manager is None:
+                logger.info(
+                    "Trigger key %r: no manager to classify; proceeding "
+                    "(event_id=%s)",
+                    key,
+                    event.event_id,
+                )
+            else:
+                kind = manager.source.classify_key(key)
+                if kind is not KnowledgeKeyKind.CONTENT:
+                    logger.info(
+                        "Trigger key %r classified %s (not content); "
+                        "skipping ingest (event_id=%s)",
+                        key,
+                        kind.value,
+                        event.event_id,
+                    )
+                    return
         since_version = payload.get("since_version")
         force_full = payload.get("force_full")
         last_version = payload.get("last_version")
@@ -372,19 +410,27 @@ class IngestOrchestrator:
                 )
                 return
             try:
-                if self._manager_resolver is not None:
-                    manager = await self._manager_resolver(
-                        tenant_id=tenant_id, domain_id=domain_id
+                # Reuse the manager resolved at the key-classification
+                # step when present; otherwise resolve it now (inside the
+                # lock, the common keyless path). Either way the resolver
+                # runs at most once per event.
+                if manager is None:
+                    manager = await self._resolve_manager(
+                        tenant_id, domain_id
                     )
-                else:
-                    # Static, single-tenant path — unchanged behaviour.
-                    # The exactly-one-of constructor invariant guarantees
-                    # ``self._manager`` is set whenever the resolver is
-                    # None (the constructor rejected the neither-supplied
-                    # case), so this cast documents that invariant for the
-                    # type checker without an ``assert`` that ``python -O``
-                    # would strip.
-                    manager = cast("KnowledgeIngestionManager", self._manager)
+                if manager is None:
+                    # Only reachable via a resolver returning None — the
+                    # exactly-one-of constructor invariant guarantees the
+                    # static ``self._manager`` is set whenever the
+                    # resolver is None, so the static path never lands
+                    # here. Nothing to dispatch to; log and move on.
+                    logger.warning(
+                        "IngestOrchestrator resolved no manager for "
+                        "domain=%s tenant=%s; skipping trigger",
+                        domain_id,
+                        tenant_id,
+                    )
+                    return
                 if since_version:
                     result = await manager.ingest_changes(
                         domain_id, since_version
@@ -419,6 +465,32 @@ class IngestOrchestrator:
                     domain_id,
                     tenant_id,
                 )
+
+    async def _resolve_manager(
+        self,
+        tenant_id: str | None,
+        domain_id: str,
+    ) -> KnowledgeIngestionManager | None:
+        """Resolve the ingestion manager for a single trigger event.
+
+        The per-tenant manager via ``manager_resolver`` when configured,
+        else the static ``ingestion_manager``. Returns ``None`` only
+        when a resolver yields none (the static path is guaranteed
+        non-``None`` by the exactly-one-of constructor invariant).
+
+        :meth:`_handle_trigger` calls this at most once per event and
+        reuses the result for both key classification and dispatch — the
+        resolver (which may build per-tenant resources) is never invoked
+        twice for one trigger. The resolver runs unserialized for the
+        key-classification step (before the per-domain lock); per the
+        :class:`IngestionManagerResolver` contract it is expected to be
+        idempotent and to cache, so resolving outside the lock is safe.
+        """
+        if self._manager_resolver is not None:
+            return await self._manager_resolver(
+                tenant_id=tenant_id, domain_id=domain_id
+            )
+        return self._manager
 
 
 __all__ = ["IngestOrchestrator", "IngestionManagerResolver"]

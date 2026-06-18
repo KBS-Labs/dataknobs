@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- Three `Capability` identifiers in the observability family:
+  `INGEST_EVENT_PUBLICATION`, `BACKEND_STATE_OBSERVABILITY`, and
+  `EXECUTION_TRACKING`. Knowledge-ingestion, backend-state, and
+  tool-execution surfaces advertise these so consumers can query
+  support before composing observability callbacks.
 - `CallbackRegistry[CallbackT]` and the `CallbackOrdering` Protocol in
   `dataknobs_common.callbacks` (also re-exported from the top-level
   namespace). In-process named-callback dispatch with sync and async
@@ -35,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EventType.CUSTOM`. Local callbacks still run; the bus is the
   cross-replica observability substrate. Multiple fan-out targets
   compose by calling `also_publish_to` once per target.
+  Fan-out is non-load-bearing observability: by default a failed bus
+  `publish` is logged and swallowed so it can neither abort nor mask
+  the operation being observed. A consumer needing publish failures to
+  be fatal opts out per-target with
+  `also_publish_to(bus, isolate_errors=False)`;
+  `asyncio.CancelledError` always propagates regardless.
   `registry.supports_event_bus_emission()` exposes whether at least
   one fan-out target is configured without reaching into private
   state. Calling `fire()` (sync) with fan-out configured from inside

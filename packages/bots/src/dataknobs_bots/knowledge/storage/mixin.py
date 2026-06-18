@@ -27,14 +27,24 @@ base default remains for out-of-tree backends.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, ClassVar
 
-from dataknobs_common.capabilities import CapabilityMixin
+from dataknobs_common.callbacks import CallbackRegistry
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+)
 
+from ..events import INGEST_METADATA_WRITE, INGEST_SNAPSHOT_WRITE
 from .key_layout import KnowledgeKeyKind
 from .models import ChangeSet, InvalidVersionError
 
 if TYPE_CHECKING:
+    from dataknobs_common.events import Event, EventBus, Subscription
+
     from .models import KnowledgeBaseInfo, KnowledgeFile
 
 
@@ -60,26 +70,29 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
     CONTENT_DIR: ClassVar[str] = "content"
     SNAPSHOTS_DIR: ClassVar[str] = "_snapshots"
 
-    # --- Capability declaration (declaration-only today) ---
+    # --- Capability declaration ---
     #
-    # Backends inherit :class:`CapabilityMixin` via this mixin so the
-    # capability-contract surface is present uniformly. The inherited
-    # default (empty ``SUPPORTED_CAPABILITIES``) is correct today:
-    # per-backend capability widening (``STREAMING_READS`` on backends
-    # that implement ``stream_file``; ``CHANGE_SUBSCRIPTION`` /
-    # ``EVENT_BUS_EMISSION`` / ``KEY_PATTERN_FILTERING`` once
-    # subscribe/emit surfaces ship; ``TENANT_SCOPED_STATE`` once
-    # ``set_ingestion_status`` / ``get_checksum`` /
-    # ``has_changes_since`` are tenant-scoped at the contract layer)
-    # lands incrementally as each capability's underlying behaviour is
-    # implemented, rather than being declared speculatively here.
-    # Adopters checking ``backend.supports(...)`` for any specific
-    # capability get the honest "not advertised" answer today; this
-    # preserves the capability identifiers' meaning (advertised ⇒ the
-    # contract guarantees the behaviour, not just that the method
-    # exists). No ``SUPPORTED_CAPABILITIES = frozenset()`` override is
-    # written here because :class:`CapabilityMixin` already supplies
-    # the same default — the override would be noise.
+    # These four are implemented by this mixin uniformly, so every
+    # in-tree backend inherits them honestly:
+    #   - KEY_PATTERN_FILTERING / CHANGE_SUBSCRIPTION — every backend
+    #     implements ``key_pattern`` + the mixin's ``classify_key`` /
+    #     ``subscribe_to_changes`` surfaces.
+    #   - BACKEND_STATE_OBSERVABILITY / CALLBACK_REGISTRY — every
+    #     backend fires metadata / snapshot state-write events through
+    #     the shared ``_fire_state_write`` helper on
+    #     ``state_write_callbacks``.
+    # Capabilities still landing incrementally as their behaviour ships
+    # (``STREAMING_READS`` on backends that implement ``stream_file``;
+    # ``TENANT_SCOPED_STATE`` once state methods are tenant-scoped at
+    # the contract layer) are deliberately NOT declared here — adopters
+    # get the honest "not advertised" answer until the behaviour
+    # exists. A backend widening its own set unions onto this base.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.KEY_PATTERN_FILTERING,
+        Capability.CHANGE_SUBSCRIPTION,
+        Capability.BACKEND_STATE_OBSERVABILITY,
+        Capability.CALLBACK_REGISTRY,
+    })
 
     # --- Required of any backend (supplied by the concrete class) ---
 
@@ -91,6 +104,14 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         self, domain_id: str, prefix: str | None = None
     ) -> list[KnowledgeFile]:
         """Return all files in the KB (used to compute the snapshot)."""
+        raise NotImplementedError  # pragma: no cover - overridden by backends
+
+    def key_pattern(
+        self,
+        kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
+        domain_id: str | None = None,
+    ) -> str:
+        """Backend-native pattern for keys of ``kind`` (see the protocol)."""
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
     # --- Canonical change-detection algorithm (shared) ---
@@ -254,3 +275,169 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         if self.SNAPSHOTS_DIR in segments:
             return KnowledgeKeyKind.SNAPSHOT
         return KnowledgeKeyKind.UNKNOWN
+
+    # --- State-write observability (shared) ---
+
+    @property
+    def state_write_callbacks(self) -> CallbackRegistry:
+        """In-process registry receiving backend state-write events.
+
+        Fires:
+            ``INGEST_METADATA_WRITE`` — after every metadata state write.
+            ``INGEST_SNAPSHOT_WRITE`` — after every snapshot state write.
+
+        Consumers register callbacks for in-process observability;
+        compose with
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+        for cross-replica fan-out. The event payload is a
+        ``dict[str, Any]`` with keys ``domain_id``, ``key``, ``kind``
+        (:class:`KnowledgeKeyKind`), ``byte_size``.
+
+        Lazily constructed (the mixin has no ``__init__`` of its own, so
+        the registry is created on first access and cached on the
+        instance). Backends fire through :meth:`_fire_state_write`.
+        """
+        reg: CallbackRegistry | None = getattr(
+            self, "_state_write_callbacks", None
+        )
+        if reg is None:
+            reg = CallbackRegistry()
+            self._state_write_callbacks = reg
+        return reg
+
+    async def _fire_state_write(
+        self,
+        *,
+        domain_id: str,
+        key: str,
+        kind: KnowledgeKeyKind,
+        byte_size: int,
+    ) -> None:
+        """Fire a state-write event on the per-backend registry.
+
+        Called from a backend's metadata / snapshot write paths on every
+        successful write. Zero-overhead when no callbacks were ever
+        registered (the registry is not constructed until first access
+        via :attr:`state_write_callbacks`). Async so EventBus fan-out
+        configured via ``also_publish_to`` is awaited correctly from the
+        backend's running event loop (a sync ``fire`` would be rejected
+        by the substrate's fan-out-in-running-loop guard).
+        """
+        reg: CallbackRegistry | None = getattr(
+            self, "_state_write_callbacks", None
+        )
+        if reg is None:
+            return  # No registry constructed — zero overhead.
+
+        if kind is KnowledgeKeyKind.METADATA:
+            topic = INGEST_METADATA_WRITE
+        elif kind is KnowledgeKeyKind.SNAPSHOT:
+            topic = INGEST_SNAPSHOT_WRITE
+        else:  # pragma: no cover - CONTENT / UNKNOWN never reach here
+            return
+
+        await reg.fire_async(
+            topic,
+            {
+                "domain_id": domain_id,
+                "key": key,
+                "kind": kind,
+                "byte_size": byte_size,
+            },
+        )
+
+    # --- Change subscription convenience (shared) ---
+
+    def _kind_to_topic_pattern(
+        self,
+        kinds: Iterable[KnowledgeKeyKind],
+        domain_id: str | None,
+    ) -> str:
+        """Derive an fnmatch pattern from the requested kinds.
+
+        Single-kind: returns the backend's :meth:`key_pattern` output
+        directly. Multi-kind is not expressible as a single fnmatch
+        pattern (the in-tree :class:`InMemoryEventBus` uses Python
+        ``fnmatch``, which has no ``{a,b}`` alternation), so it raises
+        with consumer guidance to subscribe once per kind. The
+        single-kind path is the load-bearing intent.
+        """
+        kinds_set = frozenset(kinds)
+        if len(kinds_set) == 1:
+            only_kind = next(iter(kinds_set))
+            return self.key_pattern(only_kind, domain_id)
+        raise ValueError(
+            "subscribe_to_changes does not support multi-kind "
+            "subscription via a single fnmatch pattern. Call "
+            "subscribe_to_changes(kinds={kind}, ...) once per kind."
+        )
+
+    async def subscribe_to_changes(
+        self,
+        bus: EventBus,
+        *,
+        kinds: Iterable[KnowledgeKeyKind] | None = None,
+        domain_id: str | None = None,
+        handler: Callable[[Event], Awaitable[None]],
+    ) -> Subscription:
+        """Subscribe ``handler`` to content-key change events on ``bus``.
+
+        Composition convenience: wraps this backend's :meth:`key_pattern`
+        with :meth:`EventBus.subscribe`.
+
+        Args:
+            bus: the event bus the external source publishes to.
+            kinds: which :class:`KnowledgeKeyKind` values to subscribe
+                to. Default ``None`` resolves to
+                ``frozenset({KnowledgeKeyKind.CONTENT})`` — the
+                load-bearing intent (observe consumer writes, skip
+                DK-managed state writes). Consumers auditing state
+                changes opt in by passing ``{METADATA}`` / ``{SNAPSHOT}``.
+            domain_id: scope to a single domain. Default ``None`` matches
+                every domain.
+            handler: async callback invoked on every matching event.
+
+        Returns the :class:`~dataknobs_common.events.Subscription`
+        handle; the consumer awaits ``sub.cancel()`` to tear down. See
+        :meth:`changes_subscription` for an async-context-manager variant.
+        """
+        resolved_kinds = kinds or frozenset({KnowledgeKeyKind.CONTENT})
+        pattern = self._kind_to_topic_pattern(resolved_kinds, domain_id)
+        # The key pattern IS the subscription topic here: passed as the
+        # ``topic`` positional (what to match) AND as ``pattern=`` (which
+        # engages the bus's wildcard/fnmatch matching rather than an
+        # exact-topic match). The deliberate double-pass is required —
+        # without ``pattern=`` the bus would treat the wildcard string as
+        # a literal topic and never match a concrete published key.
+        return await bus.subscribe(pattern, handler, pattern=pattern)
+
+    @asynccontextmanager
+    async def changes_subscription(
+        self,
+        bus: EventBus,
+        *,
+        kinds: Iterable[KnowledgeKeyKind] | None = None,
+        domain_id: str | None = None,
+        handler: Callable[[Event], Awaitable[None]],
+    ) -> AsyncIterator[Subscription]:
+        """Async context manager wrapping :meth:`subscribe_to_changes`.
+
+        Subscribes on entry and cancels on exit (even when the body
+        raises)::
+
+            async with backend.changes_subscription(
+                bus, kinds={KnowledgeKeyKind.CONTENT}, handler=my_handler,
+            ) as sub:
+                ...  # subscriber is live
+            # subscriber torn down
+        """
+        sub = await self.subscribe_to_changes(
+            bus,
+            kinds=kinds,
+            domain_id=domain_id,
+            handler=handler,
+        )
+        try:
+            yield sub
+        finally:
+            await sub.cancel()

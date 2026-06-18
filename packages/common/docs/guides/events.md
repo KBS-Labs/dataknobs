@@ -430,7 +430,8 @@ Use colon-separated hierarchical topics:
 "registry:bots"           # Bot registry events
 "registry:bots:config"    # Bot configuration changes
 "knowledge:my-domain"     # Knowledge base events
-"knowledge:ingestion"     # Ingestion status events
+"ingest:domain:start"     # Ingestion lifecycle (start)
+"ingest:domain:end"       # Ingestion lifecycle (end)
 ```
 
 ### Error Handling in Handlers

@@ -15,12 +15,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
     Capability,
     CapabilityLike,
-    CapabilityMixin,
+    DynamicCapabilityMixin,
 )
 
+from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
 from .storage import IngestionStatus, InvalidVersionError
 
 if TYPE_CHECKING:
@@ -158,7 +160,7 @@ class IngestionResult:
         }
 
 
-class KnowledgeIngestionManager(CapabilityMixin):
+class KnowledgeIngestionManager(DynamicCapabilityMixin):
     """Coordinates loading files from storage backend into RAG knowledge base.
 
     This manager bridges :class:`KnowledgeResourceBackend` (file storage)
@@ -209,8 +211,18 @@ class KnowledgeIngestionManager(CapabilityMixin):
     # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared:
     # ingestion-status writes through :class:`KnowledgeResourceBackend`
     # remain per-domain at the contract layer.
+    #
+    # The static set holds only the always-true capabilities.
+    # ``EVENT_BUS_EMISSION`` is config-dependent — a manager constructed
+    # without an ``event_bus`` never fans out to a bus — so it is added
+    # per-instance in :meth:`_compute_instance_capabilities`, honoring
+    # the "advertised ⇒ the contract guarantees the behaviour" rule.
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
-        {Capability.TENANT_SCOPED_CHUNKS}
+        {
+            Capability.TENANT_SCOPED_CHUNKS,
+            Capability.CALLBACK_REGISTRY,
+            Capability.INGEST_EVENT_PUBLICATION,
+        }
     )
 
     def __init__(
@@ -254,6 +266,67 @@ class KnowledgeIngestionManager(CapabilityMixin):
         self._event_bus = event_bus
         self._rate_limiter = rate_limiter
         self._tenant_id = tenant_id
+        # Lazily constructed in-process callback registry for ingest
+        # lifecycle events (see :attr:`lifecycle_callbacks`).
+        self._lifecycle_callbacks: CallbackRegistry | None = None
+        # DynamicCapabilityMixin: EVENT_BUS_EMISSION is computed from
+        # whether an event_bus was supplied (see
+        # :meth:`_compute_instance_capabilities`).
+        self._init_capability_cache()
+
+    def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
+        """Add ``EVENT_BUS_EMISSION`` only when an event bus is bound.
+
+        A busless manager fires only the in-process
+        :attr:`lifecycle_callbacks`; it never fans out to a bus, so it
+        must not advertise :attr:`Capability.EVENT_BUS_EMISSION` (a
+        consumer ``require_capability``-guarding on it would otherwise
+        get a false positive). The lifecycle registry auto-composes
+        ``also_publish_to(event_bus)`` exactly when ``self._event_bus``
+        is set, so that field is the authoritative signal.
+        """
+        caps = type(self).SUPPORTED_CAPABILITIES
+        if self._event_bus is not None:
+            caps = caps | {Capability.EVENT_BUS_EMISSION}
+        return caps
+
+    @property
+    def source(self) -> KnowledgeResourceBackend:
+        """The backend this manager ingests from.
+
+        Exposed read-only so callers (e.g. an
+        :class:`~dataknobs_bots.knowledge.orchestration.IngestOrchestrator`
+        resolving a per-tenant manager) can reach the backend to
+        classify a trigger key without coupling to the private field.
+        """
+        return self._source
+
+    @property
+    def lifecycle_callbacks(self) -> CallbackRegistry:
+        """In-process registry receiving ingest-lifecycle events.
+
+        Fires:
+            ``INGEST_DOMAIN_START`` — at the beginning of every
+                :meth:`ingest` and :meth:`ingest_changes` call.
+            ``INGEST_DOMAIN_END`` — at the end of every :meth:`ingest`
+                and :meth:`ingest_changes` call (success OR failure).
+
+        Consumers register callbacks for in-process observability;
+        compose with
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+        for cross-replica fan-out. When this manager was constructed
+        with an ``event_bus``, the registry auto-composes
+        ``also_publish_to(event_bus)`` on first access, so a consumer
+        passing an event bus gets cross-replica fan-out for free. The
+        event payload is a ``dict[str, Any]`` matching the canonical
+        shape documented on the topic constants in
+        :mod:`dataknobs_bots.knowledge.events`.
+        """
+        if self._lifecycle_callbacks is None:
+            self._lifecycle_callbacks = CallbackRegistry()
+            if self._event_bus is not None:
+                self._lifecycle_callbacks.also_publish_to(self._event_bus)
+        return self._lifecycle_callbacks
 
     def _scope_for_tenant(self, base: Mapping[str, Any]) -> dict[str, Any]:
         """AND-compose the bound ``tenant_id`` into a write/delete filter.
@@ -385,6 +458,8 @@ class KnowledgeIngestionManager(CapabilityMixin):
         """
         effective_mode = self._resolve_swap_mode(clear_existing, swap_mode)
         result = IngestionResult(domain_id=domain_id)
+        await self._publish_ingest_start(domain_id, result.started_at)
+        failed = False
 
         try:
             # Recover a domain stuck in SWAPPING from a crashed prior
@@ -410,6 +485,7 @@ class KnowledgeIngestionManager(CapabilityMixin):
             await self._finalize(domain_id, result)
 
         except Exception as e:
+            failed = True
             logger.error("Ingestion failed for %s: %s", domain_id, e)
             await self._source.set_ingestion_status(
                 domain_id, IngestionStatus.ERROR, str(e)
@@ -417,6 +493,9 @@ class KnowledgeIngestionManager(CapabilityMixin):
             raise
         finally:
             result.finish()
+            await self._publish_ingest_end(
+                domain_id, result, failed=failed
+            )
 
         return result
 
@@ -898,12 +977,15 @@ class KnowledgeIngestionManager(CapabilityMixin):
     async def _finalize(
         self, domain_id: str, result: IngestionResult
     ) -> str:
-        """Set the terminal ingestion status, log, and publish.
+        """Set the terminal ingestion status and log.
 
         Shared tail of :meth:`ingest` and :meth:`ingest_changes` — the
-        success/error decision, backend status write, completion log,
-        and event publish are one behavior, not duplicated per entry
-        point. Returns the resolved status string.
+        success/error decision, backend status write, and completion
+        log are one behavior, not duplicated per entry point. Returns
+        the resolved status string. The ``INGEST_DOMAIN_END`` lifecycle
+        event is fired by the entry methods themselves (in their
+        ``finally`` block) so it covers the failure path too, not just
+        this success tail.
         """
         status = "ready" if result.success else "error"
         error_msg = str(result.errors) if result.errors else None
@@ -924,37 +1006,64 @@ class KnowledgeIngestionManager(CapabilityMixin):
             result.files_deleted,
             len(result.errors),
         )
-
-        if self._event_bus:
-            await self._publish_ingestion_event(domain_id, result, status)
         return status
 
-    async def _publish_ingestion_event(
+    def _build_lifecycle_payload(
+        self,
+        domain_id: str,
+        **extras: Any,
+    ) -> dict[str, Any]:
+        """Compose a lifecycle-event payload.
+
+        Adds the bound ``tenant_id`` only when this manager is
+        tenant-bound, so single-tenant subscribers see byte-identical
+        payloads modulo the ``tenant_id`` key.
+        """
+        payload: dict[str, Any] = {"domain_id": domain_id, **extras}
+        if self._tenant_id is not None:
+            payload["tenant_id"] = self._tenant_id
+        return payload
+
+    async def _publish_ingest_start(
+        self,
+        domain_id: str,
+        started_at: datetime,
+    ) -> None:
+        """Fire ``INGEST_DOMAIN_START`` for an ingest run."""
+        payload = self._build_lifecycle_payload(
+            domain_id,
+            started_at=started_at.isoformat(),
+        )
+        await self.lifecycle_callbacks.fire_async(
+            INGEST_DOMAIN_START, payload
+        )
+
+    async def _publish_ingest_end(
         self,
         domain_id: str,
         result: IngestionResult,
-        status: str,
+        *,
+        failed: bool,
     ) -> None:
-        """Publish an ingestion completed event."""
-        if not self._event_bus:
-            return
+        """Fire ``INGEST_DOMAIN_END`` for an ingest run.
 
-        from dataknobs_common.events import Event, EventType
-
-        await self._event_bus.publish(
-            "knowledge:ingestion",
-            Event(
-                type=EventType.UPDATED,
-                topic="knowledge:ingestion",
-                payload={
-                    "domain_id": domain_id,
-                    "files_processed": result.files_processed,
-                    "chunks_created": result.chunks_created,
-                    "files_deleted": result.files_deleted,
-                    "status": status,
-                },
-                timestamp=result.completed_at or datetime.now(timezone.utc),
-            ),
+        ``failed`` is ``True`` when the run raised; otherwise the status
+        reflects ``result.success`` (recorded errors without an
+        exception still mark the run failed).
+        """
+        status = "completed" if (result.success and not failed) else "failed"
+        payload = self._build_lifecycle_payload(
+            domain_id,
+            files_processed=result.files_processed,
+            chunks_created=result.chunks_created,
+            files_deleted=result.files_deleted,
+            status=status,
+            completed_at=(
+                result.completed_at or datetime.now(timezone.utc)
+            ).isoformat(),
+        )
+        await self.lifecycle_callbacks.fire_async(
+            INGEST_DOMAIN_END, payload
         )
 
     async def ingest_if_changed(
@@ -1091,6 +1200,8 @@ class KnowledgeIngestionManager(CapabilityMixin):
             raise
 
         result = IngestionResult(domain_id=domain_id)
+        await self._publish_ingest_start(domain_id, result.started_at)
+        failed = False
         try:
             # Recover a domain stuck in SWAPPING from a crashed prior
             # swap *before* the INGESTING status write clears the
@@ -1140,13 +1251,14 @@ class KnowledgeIngestionManager(CapabilityMixin):
                 result=result,
                 extra_metadata=extra_metadata,
             )
-            # Must precede _finalize: _finalize publishes files_deleted
-            # in the completion event payload (it is owned by this
-            # caller, not by _apply_file_ops).
+            # Must precede the INGEST_DOMAIN_END fire: the lifecycle
+            # payload reports files_deleted (it is owned by this caller,
+            # not by _apply_file_ops).
             result.files_deleted = len(change.deleted)
             await self._finalize(domain_id, result)
 
         except Exception as e:
+            failed = True
             logger.error(
                 "Incremental ingestion failed for %s: %s", domain_id, e
             )
@@ -1156,6 +1268,9 @@ class KnowledgeIngestionManager(CapabilityMixin):
             raise
         finally:
             result.finish()
+            await self._publish_ingest_end(
+                domain_id, result, failed=failed
+            )
 
         return result
 

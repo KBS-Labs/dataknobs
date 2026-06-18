@@ -41,6 +41,15 @@ Every :meth:`CallbackRegistry.fire` / :meth:`CallbackRegistry.fire_async`
 additionally publishes the payload to ``bus`` under
 ``topic_prefix + topic``. Local callbacks still run; the bus is the
 cross-replica observability substrate.
+
+Fan-out is *observability*: a failed bus ``publish`` must never break
+or mask the operation being observed. By default
+(``isolate_errors=True``) a publish exception is logged and swallowed
+so the fire — and the caller driving it — proceeds unaffected. A
+consumer who needs publish failures to be fatal (a durable audit
+trail, say) opts out per-target via ``isolate_errors=False``.
+``asyncio.CancelledError`` is always re-raised regardless, since
+cancellation is control-flow, not a publish failure.
 """
 
 from __future__ import annotations
@@ -308,6 +317,21 @@ class CompositeOrdering:
 # --------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True)
+class _FanoutTarget:
+    """A configured EventBus fan-out target.
+
+    Internal to :class:`CallbackRegistry`. ``isolate_errors`` decides
+    whether a failed ``publish`` to this bus is logged and swallowed
+    (the default — fan-out is observability and must never break or
+    mask the observed operation) or re-raised out of the fire.
+    """
+
+    bus: EventBus
+    topic_prefix: str
+    isolate_errors: bool
+
+
 class CallbackRegistry(Generic[CallbackT]):
     """In-process named-callback dispatch with pluggable ordering.
 
@@ -342,7 +366,7 @@ class CallbackRegistry(Generic[CallbackT]):
         self._error_policy = error_policy
         self._entries: dict[str, list[CallbackEntry[CallbackT]]] = {}
         self._seq = 0
-        self._fanout_buses: list[tuple[EventBus, str]] = []
+        self._fanout_buses: list[_FanoutTarget] = []
 
     # ----- registration ----- #
 
@@ -500,6 +524,7 @@ class CallbackRegistry(Generic[CallbackT]):
         bus: EventBus,
         *,
         topic_prefix: str = "",
+        isolate_errors: bool = True,
     ) -> None:
         """Compose with an EventBus.
 
@@ -515,8 +540,25 @@ class CallbackRegistry(Generic[CallbackT]):
         :attr:`ErrorPolicy.LOG_AND_RAISE_AT_END`) cannot suppress bus
         delivery; under :attr:`ErrorPolicy.RAISE`, bus subscribers
         still see the event before the raise unwinds.
+
+        Args:
+            bus: the EventBus to forward fired payloads to.
+            topic_prefix: prepended to the fire topic to form the bus
+                topic.
+            isolate_errors: when ``True`` (default), a failed ``publish``
+                to *this* target is logged and swallowed so the fire —
+                and the operation it observes — proceeds unaffected.
+                Fan-out is observability and must never break or mask
+                the observed operation, so this is the safe default for
+                the realistic case (a transient broker / network hiccup
+                on a real bus). Pass ``False`` only when a publish
+                failure SHOULD abort the fire (e.g. a durable audit
+                trail). ``asyncio.CancelledError`` is always re-raised
+                regardless of this flag.
         """
-        self._fanout_buses.append((bus, topic_prefix))
+        self._fanout_buses.append(
+            _FanoutTarget(bus, topic_prefix, isolate_errors)
+        )
 
     # ----- introspection ----- #
 
@@ -601,13 +643,43 @@ class CallbackRegistry(Generic[CallbackT]):
     ) -> None:
         if not self._fanout_buses:
             return
-        await asyncio.gather(
+        # ``return_exceptions=True`` so one target's failure neither
+        # cancels the sibling publishes nor escapes by default — each
+        # result is then dispositioned per the target's
+        # ``isolate_errors`` flag. The default (isolate) keeps fan-out
+        # non-load-bearing for the observed operation; an opt-out target
+        # re-raises after every target has been attempted.
+        results = await asyncio.gather(
             *(
-                bus.publish(prefix + topic, self._build_event(prefix + topic, payload))
-                for bus, prefix in self._fanout_buses
+                t.bus.publish(
+                    t.topic_prefix + topic,
+                    self._build_event(t.topic_prefix + topic, payload),
+                )
+                for t in self._fanout_buses
             ),
-            return_exceptions=False,
+            return_exceptions=True,
         )
+        reraise: BaseException | None = None
+        for target, result in zip(self._fanout_buses, results):
+            if not isinstance(result, BaseException):
+                continue
+            if isinstance(result, asyncio.CancelledError):
+                # Cancellation is control-flow, not a publish failure —
+                # never swallow it, whatever the isolate_errors flag.
+                raise result
+            if target.isolate_errors:
+                full_topic = target.topic_prefix + topic
+                logger.warning(
+                    "EventBus fan-out to %s failed on topic %r; "
+                    "observed operation continues: %s",
+                    type(target.bus).__name__,
+                    full_topic,
+                    result,
+                )
+            elif reraise is None:
+                reraise = result
+        if reraise is not None:
+            raise reraise
 
     def _handle_failure(
         self,

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-18T00:05:05Z",
+  "timestamp": "2026-06-18T02:46:10Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.21 (Homebrew 2026-06-11 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/pgvector-close-pr-1",
-  "git_commit": "ce47f252e9f482769b2338d0fc6f21846c819780",
+  "git_branch": "sbk/knowledge-layer-adoption",
+  "git_commit": "7b5a23052a044538a94bcefd0c32236a39c225f4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

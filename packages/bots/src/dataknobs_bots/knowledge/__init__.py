@@ -19,6 +19,14 @@ from dataknobs_xization.ingestion import (
 
 from .base import KnowledgeBase
 from .config import RAGKnowledgeBaseConfig
+from .events import (
+    INGEST_DOMAIN_END,
+    INGEST_DOMAIN_START,
+    INGEST_METADATA_WRITE,
+    INGEST_SNAPSHOT_WRITE,
+    KnowledgeTriggerPayload,
+    TenantFilteredCallback,
+)
 from .ingestion import (
     IngestionResult,
     IngestSwapMode,
@@ -117,6 +125,13 @@ __all__ = [
     # Event-driven orchestration
     "IngestOrchestrator",
     "IngestionManagerResolver",
+    # Knowledge-layer event topics + payload + filter adapter
+    "INGEST_DOMAIN_START",
+    "INGEST_DOMAIN_END",
+    "INGEST_METADATA_WRITE",
+    "INGEST_SNAPSHOT_WRITE",
+    "KnowledgeTriggerPayload",
+    "TenantFilteredCallback",
     # High-level ingestion service
     "KnowledgeIngestionService",
     "EnsureIngestionResult",

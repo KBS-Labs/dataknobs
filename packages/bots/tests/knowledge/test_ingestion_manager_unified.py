@@ -117,7 +117,8 @@ async def test_ingestion_manager_preserves_status_tracking() -> None:
 
 @pytest.mark.asyncio
 async def test_ingestion_manager_preserves_event_bus() -> None:
-    """Manager publishes ``knowledge:ingestion`` event on completion."""
+    """Manager fan-out-publishes the lifecycle end event on completion."""
+    from dataknobs_bots.knowledge import INGEST_DOMAIN_END
     from dataknobs_common.events import EventType, InMemoryEventBus
 
     backend = InMemoryKnowledgeBackend()
@@ -132,7 +133,7 @@ async def test_ingestion_manager_preserves_event_bus() -> None:
     async def handler(event: Any) -> None:
         captured.append(event)
 
-    await bus.subscribe("knowledge:ingestion", handler)
+    await bus.subscribe(INGEST_DOMAIN_END, handler)
 
     manager = KnowledgeIngestionManager(
         source=backend, destination=rag, event_bus=bus
@@ -147,12 +148,12 @@ async def test_ingestion_manager_preserves_event_bus() -> None:
             break
         await asyncio.sleep(0.01)
 
-    assert len(captured) == 1, "Expected exactly one ingestion event"
+    assert len(captured) == 1, "Expected exactly one ingest-end event"
     event = captured[0]
-    assert event.type == EventType.UPDATED
-    assert event.topic == "knowledge:ingestion"
+    assert event.type == EventType.CUSTOM
+    assert event.topic == INGEST_DOMAIN_END
     assert event.payload["domain_id"] == "d1"
-    assert event.payload["status"] == "ready"
+    assert event.payload["status"] == "completed"
     assert event.payload["files_processed"] >= 1
     assert event.payload["chunks_created"] >= 1
 
@@ -271,7 +272,9 @@ async def test_ingest_from_backend_accepts_extra_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_ingestion_manager_publishes_failure_event() -> None:
-    """When ingest fails, manager marks status ``error`` and publishes failure."""
+    """When ingest fails, manager marks status ``error`` and fires a
+    ``status="failed"`` end event."""
+    from dataknobs_bots.knowledge import INGEST_DOMAIN_END
     from dataknobs_common.events import InMemoryEventBus
 
     backend = InMemoryKnowledgeBackend()
@@ -286,7 +289,7 @@ async def test_ingestion_manager_publishes_failure_event() -> None:
     async def handler(event: Any) -> None:
         captured.append(event)
 
-    await bus.subscribe("knowledge:ingestion", handler)
+    await bus.subscribe(INGEST_DOMAIN_END, handler)
 
     manager = KnowledgeIngestionManager(
         source=backend, destination=rag, event_bus=bus
@@ -304,5 +307,11 @@ async def test_ingestion_manager_publishes_failure_event() -> None:
     info = await backend.get_info("d1")
     assert info is not None
     assert info.ingestion_status.value == "error"
+
+    # The end event fires even on the failure path (in the entry
+    # method's ``finally``) with ``status="failed"``.
+    assert len(captured) == 1
+    assert captured[0].payload["status"] == "failed"
+    assert captured[0].payload["domain_id"] == "d1"
 
     await bus.close()
