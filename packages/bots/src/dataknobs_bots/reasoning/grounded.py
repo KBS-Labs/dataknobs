@@ -290,13 +290,17 @@ class GroundedReasoning(
         self._sources: list[GroundedSource] = (
             list(injected_sources) if injected_sources else []
         )
-        # Per-source lifetime ownership, keyed by ``id(source)``. Sources
+        # Per-source lifetime ownership, keyed by source object identity
+        # (``GroundedSource`` is a plain ABC — identity-hashable, no value
+        # ``__eq__``). The set holds strong references to the owned sources,
+        # so membership tracks live objects directly rather than ``id()``
+        # ints (which CPython can recycle after an object is GC'd). Sources
         # injected via the ``sources`` component are caller-owned and are
         # NOT recorded here, so ``close()`` leaves them open (a shared
         # source survives one strategy's close). Sources added through
         # :meth:`add_source` are owned by default (the config-driven build
         # path). See :meth:`close`.
-        self._owns_sources: set[int] = set()
+        self._owns_sources: set[GroundedSource] = set()
         self._source_weights: dict[str, int] = {
             sc.name: sc.weight for sc in config.sources
         }
@@ -401,9 +405,9 @@ class GroundedReasoning(
         """
         self._sources.append(source)
         if owns:
-            self._owns_sources.add(id(source))
+            self._owns_sources.add(source)
         else:
-            self._owns_sources.discard(id(source))
+            self._owns_sources.discard(source)
 
     def set_knowledge_base(self, kb: Any) -> None:
         """Wrap a KnowledgeBase in VectorKnowledgeSource and add it.
@@ -430,7 +434,7 @@ class GroundedReasoning(
         # any wrapper this strategy previously built.
         removed = [s for s in self._sources if s.source_type == "vector_kb"]
         for s in removed:
-            self._owns_sources.discard(id(s))
+            self._owns_sources.discard(s)
         self._sources = [
             s for s in self._sources
             if s.source_type != "vector_kb"
@@ -460,7 +464,7 @@ class GroundedReasoning(
             kb, name=source_name, topic_index=topic_index,
         )
         self._sources.insert(0, wrapper)
-        self._owns_sources.add(id(wrapper))
+        self._owns_sources.add(wrapper)
 
     def _find_topic_index_config(self) -> dict[str, Any] | None:
         """Find topic_index config from source declarations."""
@@ -550,7 +554,7 @@ class GroundedReasoning(
         ):
             await self._extractor.close()
         for source in self._sources:
-            if id(source) in self._owns_sources and hasattr(source, "close"):
+            if source in self._owns_sources and hasattr(source, "close"):
                 await source.close()
 
     # ------------------------------------------------------------------

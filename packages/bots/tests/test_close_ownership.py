@@ -25,6 +25,7 @@ from dataknobs_data.backends.memory import (
     AsyncMemoryDatabase,
     SyncMemoryDatabase,
 )
+from dataknobs_data.sources.base import GroundedSource
 from dataknobs_llm.conversations import DataknobsConversationStorage
 
 
@@ -153,6 +154,32 @@ class TestMemoryBankDbOwnership:
         assert bank._owns_db is False
         assert shared.close_count == 0
 
+    def test_from_dict_built_db_owned_despite_explicit_owns_false(self) -> None:
+        """An internally-built db is owned even if owns_db=False is passed.
+
+        The bank built the db itself, so the caller holds no reference to
+        close it; honoring an explicit owns_db=False would leak it. The
+        contradictory input warns and is forced to ownership rather than
+        leaked.
+        """
+        import warnings
+
+        from dataknobs_bots.memory.bank import MemoryBank
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            bank = MemoryBank.from_dict(
+                {"name": "b", "schema": {}}, owns_db=False
+            )
+
+        assert isinstance(bank._db, SyncMemoryDatabase)
+        assert bank._owns_db is True
+        assert any(
+            issubclass(w.category, UserWarning)
+            and "owns_db=False is ignored" in str(w.message)
+            for w in caught
+        ), "contradictory owns_db=False with db=None should warn"
+
 
 # =====================================================================
 # VectorKnowledgeSource — injected KB is never owned
@@ -271,8 +298,14 @@ class TestCompositeMemoryClosesChildren:
 # =====================================================================
 
 
-class CountingSource:
-    """Real ``GroundedSource``-shaped stub recording ``close()`` calls."""
+class CountingSource(GroundedSource):
+    """Real ``GroundedSource`` implementation recording ``close()`` calls.
+
+    Subclasses the genuine ABC and implements its abstract surface
+    (``name`` / ``source_type`` / ``query``); ``close()`` counts and then
+    chains to the base no-op. Not a mock — a config-built owned source is
+    structurally identical to this.
+    """
 
     def __init__(self, name: str = "stub") -> None:
         self._name = name
@@ -293,6 +326,7 @@ class CountingSource:
 
     async def close(self) -> None:
         self.close_count += 1
+        await super().close()
 
 
 class CountingExtractor:

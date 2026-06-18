@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -904,14 +905,33 @@ class MemoryBank:
                 while a caller-supplied db is left to the caller.  Pass
                 ``True`` explicitly when a db built for this bank's
                 exclusive use is supplied directly (e.g. a per-bank backend
-                created by a wizard factory).
+                created by a wizard factory).  An internally-built db
+                (``db is None``) is always owned: an explicit
+                ``owns_db=False`` is ignored in that case, since the caller
+                holds no reference to close it (passing both would otherwise
+                leak the db).
         """
-        if owns_db is None:
-            owns_db = db is None
         if db is None:
             from dataknobs_data.backends.memory import SyncMemoryDatabase
 
+            if owns_db is False:
+                # Contradictory: the bank builds the db itself, so the caller
+                # holds no reference to close it. Surface it rather than
+                # silently leaking, then force ownership.
+                warnings.warn(
+                    "owns_db=False is ignored when db is None; the "
+                    "internally-built db is always owned (the caller holds "
+                    "no reference to close it).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # The bank built this db itself; nobody else can close it, so it
+            # must own it regardless of an explicit owns_db=False.
             db = SyncMemoryDatabase()
+            owns_db = True
+        elif owns_db is None:
+            # Caller-supplied db defaults to caller-owned.
+            owns_db = False
         config = _BankCore.extract_config(d)
         bank = cls(db=db, owns_db=owns_db, **config)
         for rec_dict in d.get("records", []):

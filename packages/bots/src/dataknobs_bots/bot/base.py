@@ -2876,10 +2876,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     async def close(self) -> None:
         """Close the bot and clean up resources.
 
-        This method closes the LLM provider, conversation storage backend,
-        reasoning strategy, and releases associated resources like HTTP
-        connections and database connections. Should be called when the bot
-        is no longer needed, especially in testing or when creating temporary
+        Teardown is gated on ownership: this method closes only the
+        collaborators the bot built itself (from config) — the main LLM
+        provider, conversation storage backend, reasoning strategy,
+        knowledge base, and memory store — releasing their associated
+        resources like HTTP and database connections. A collaborator
+        injected via ``from_components`` / the pre-built constructor (or
+        ``from_config(llm=...)``) is caller-owned and left open, so a
+        provider, KB, storage, memory, or strategy shared across bots
+        survives one bot's close. Should be called when the bot is no
+        longer needed, especially in testing or when creating temporary
         bot instances.
 
         Example:

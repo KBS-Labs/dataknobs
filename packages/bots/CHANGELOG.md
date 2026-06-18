@@ -63,6 +63,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was handed — so they continue to close their children unconditionally.
   Consumers that build everything from config see no behavior change.
 
+  **Migration — default `close()` semantics flipped for direct
+  construction.** The new default for a directly-constructed holder is
+  *leave the injected collaborator open*, the inverse of the prior
+  *close-it* default. If you relied on the old behavior — building a
+  resource specifically for one holder and using the holder's `close()`
+  to release it — you must now opt back into ownership explicitly, or the
+  resource stays open (a leak):
+  - `MemoryBank(db=db).close()` no longer closes `db`. Pass
+    `MemoryBank(db=db, owns_db=True)` (or `from_dict(..., owns_db=True)`)
+    for a db built for that bank's exclusive use. `from_dict(db=None)`
+    still builds and owns its db. (Passing `owns_db=False` alongside
+    `db=None` is contradictory — the bank holds the only reference — so it
+    is ignored with a `UserWarning` and the internally-built db is owned.)
+  - `VectorKnowledgeSource(kb).close()` no longer closes `kb`. Pass
+    `VectorKnowledgeSource(kb, owns_kb=True)` for a KB dedicated to that
+    source.
+  - `DynaBot(knowledge_base=kb, memory=…, …).close()` no longer closes the
+    pre-built collaborators it was handed. Build the bot from config (which
+    owns what it builds), or close the shared collaborators yourself.
+
+  Consumers that build everything from config are unaffected — ownership is
+  inferred correctly on the config path.
+
 - Re-platformed `LifecycleHooks` (and via composition,
   `WizardHooks`) onto the new `dataknobs_common.callbacks`
   `CallbackRegistry` substrate. The consumer-facing surface
