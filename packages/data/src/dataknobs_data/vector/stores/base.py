@@ -42,9 +42,17 @@ class VectorStore(ABC, VectorStoreBase):
         stores) does **not** own that resource and must leave it open,
         releasing only per-store state. This lets a consumer share one
         pool across many stores and close each store independently without
-        tearing down a resource the others still depend on. Backends that
-        hold no external resource (in-memory, file-backed) satisfy this
-        trivially.
+        tearing down a resource the others still depend on.
+
+        Backends with no *injectable* external resource satisfy this
+        trivially: the in-memory, FAISS, and Chroma stores build their
+        backing index/client internally, so they own whatever they hold and
+        there is nothing a caller could share. Only a store that accepts an
+        injected resource — today ``PgVectorStore`` with a caller-supplied
+        asyncpg pool — needs an explicit ownership gate. A new backend that
+        adds an injectable resource must follow the same pattern: track
+        ownership at construction and skip teardown of caller-owned
+        resources here.
         """
         pass
 

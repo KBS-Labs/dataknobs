@@ -56,7 +56,13 @@ async def test_close_leaves_injected_collaborators_open() -> None:
 
     await kb.close()
 
-    # The injected collaborators were NOT closed.
+    # The injected collaborators were NOT closed. ``close_count == 0`` is the
+    # load-bearing signal that the provider's close() was never invoked —
+    # ``EchoProvider.embed()`` auto-reinitializes, so a post-close embed call
+    # alone would mask an erroneous cascade; close_count is the public,
+    # protocol-stable proof. The store side uses ``_initialized`` because the
+    # store's post-close contract is to raise on use and that flag is the
+    # mechanism.
     assert store._initialized is True
     assert provider.close_count == 0
 
@@ -85,10 +91,12 @@ async def test_close_leaves_shared_store_usable_for_second_kb() -> None:
 
     await kb_a.close()
 
-    # kb_b's shared store + provider are still live.
+    # kb_b's shared store + provider are still live and fully usable.
     assert store._initialized is True
     assert provider.close_count == 0
     assert await kb_b.vector_store.count() == 0
+    embedding = await kb_b.embedding_provider.embed("still works")
+    assert embedding is not None
 
 
 @pytest.mark.asyncio

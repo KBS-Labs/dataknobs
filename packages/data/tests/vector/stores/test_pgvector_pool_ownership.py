@@ -4,15 +4,18 @@ A consumer that manages one asyncpg pool and shares it across several
 stores builds each via ``PgVectorStore.from_components(pool=shared)``. The
 store must treat that pool as caller-owned: ``initialize()`` runs the
 schema/table setup against it but does not create a new pool, and
-``close()`` leaves it open. The config / connection-string path is
-unchanged — it builds its own pool and owns it.
+``close()`` leaves it open **and retains the reference** so the store can
+be re-initialized (reopened) against the shared pool. The config /
+connection-string path is unchanged — it builds its own pool, owns it, and
+closes + drops it on ``close()``.
 
 Reproduce-first: inject an external pool, close the store, and assert the
 pool is still open and directly usable. Before the ownership gate,
 ``close()`` tore down the injected pool (``is_closing()`` → ``True``) and a
 sibling store sharing it lost its connection — so these assertions fail.
 The self-owned regression test pins that a config-built store still closes
-its own pool.
+its own pool; the retain/reopen tests pin that an injected store keeps its
+pool across ``close()`` and reuses it on the next ``initialize()``.
 """
 
 from __future__ import annotations
@@ -25,27 +28,16 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from dataknobs_common.testing import (
+    requires_real_postgres,
+    safe_sql_ident,
+)
 
-from dataknobs_common.testing import requires_postgres, safe_sql_ident
+pytest.importorskip("asyncpg")
 
-try:
-    import asyncpg
+import asyncpg
 
-    from dataknobs_data.vector.stores.pgvector import PgVectorStore
-
-    ASYNCPG_AVAILABLE = True
-except ImportError:
-    ASYNCPG_AVAILABLE = False
-
-
-_pgvector_marks = [
-    requires_postgres,
-    pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
-        reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
-    ),
-]
+from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
 
 def _get_test_connection_string() -> str:
@@ -59,9 +51,8 @@ def _get_test_connection_string() -> str:
 
 @pytest.fixture(scope="session")
 def _ensure_pgvector_extension() -> None:
-    if not ASYNCPG_AVAILABLE:
-        return
-
+    # asyncpg availability is guaranteed by the module-level importorskip;
+    # this fixture only runs for the @requires_real_postgres tests.
     async def _setup() -> None:
         conn = await asyncpg.connect(_get_test_connection_string())
         try:
@@ -69,6 +60,12 @@ def _ensure_pgvector_extension() -> None:
         finally:
             await conn.close()
 
+    # Best-effort: this is a sync session-scoped fixture (no event loop is
+    # running at session-setup time, so asyncio.run is safe here). A
+    # connect/extension failure is swallowed deliberately — the dependent
+    # tests are gated by @requires_real_postgres and a per-test
+    # asyncpg.connect would surface a clearer error than an errored
+    # session-scoped fixture, which would error (not skip) every test.
     try:
         asyncio.run(_setup())
     except (OSError, asyncpg.PostgresError):
@@ -110,10 +107,10 @@ def _store_config(table: str, dimensions: int = 384) -> dict[str, Any]:
     }
 
 
-@pytest.mark.parametrize("_m", [pytest.param(None, marks=_pgvector_marks)])
+@requires_real_postgres
 @pytest.mark.asyncio
 async def test_injected_pool_survives_store_close(
-    _m: None, pg_table_name: str
+    pg_table_name: str,
 ) -> None:
     """An injected pool is left open by ``close()`` and stays usable.
 
@@ -133,10 +130,12 @@ async def test_injected_pool_survives_store_close(
 
         await store.close()
 
-        # The store dropped its handle and reset init state...
-        assert store._pool is None
+        # The store is logically closed (init state reset) but RETAINS its
+        # injected pool reference so it can be reopened — the pool is
+        # caller-owned and still live.
+        assert store._pool is external
         assert store._initialized is False
-        # ...but the externally owned pool is untouched and usable.
+        # ...and the externally owned pool is untouched and usable.
         assert external.is_closing() is False
         async with external.acquire() as conn:
             assert await conn.fetchval("SELECT 1") == 1
@@ -144,10 +143,10 @@ async def test_injected_pool_survives_store_close(
         await external.close()
 
 
-@pytest.mark.parametrize("_m", [pytest.param(None, marks=_pgvector_marks)])
+@requires_real_postgres
 @pytest.mark.asyncio
 async def test_self_owned_pool_is_closed(
-    _m: None, pg_table_name: str
+    pg_table_name: str,
 ) -> None:
     """A config-built store owns its pool and closes it (regression)."""
     store = PgVectorStore(_store_config(pg_table_name))
@@ -163,10 +162,10 @@ async def test_self_owned_pool_is_closed(
     assert pool.is_closing() is True
 
 
-@pytest.mark.parametrize("_m", [pytest.param(None, marks=_pgvector_marks)])
+@requires_real_postgres
 @pytest.mark.asyncio
 async def test_two_stores_share_one_pool(
-    _m: None, pg_table_name: str
+    pg_table_name: str,
 ) -> None:
     """Closing one store over a shared pool leaves the second working.
 
@@ -192,5 +191,64 @@ async def test_two_stores_share_one_pool(
         # store_b's shared pool is still live and queryable.
         assert external.is_closing() is False
         assert await store_b.count() == 0
+    finally:
+        await external.close()
+
+
+@pytest.mark.asyncio
+async def test_injected_pool_reference_retained_across_close() -> None:
+    """``close()`` on an injected store retains the pool and never closes it.
+
+    Pins the ownership contract at the unit level, no live server needed: a
+    plain sentinel stands in for the injected pool. ``close()`` must not
+    call ``.close()`` on it (the sentinel has no such method — an erroneous
+    cascade would raise ``AttributeError``) and must keep the reference so
+    the store can later reopen against the still-live, caller-owned pool.
+    ``_owns_pool`` is immutable; only ``_initialized`` flips.
+    """
+    sentinel_pool = object()
+    store = PgVectorStore.from_components(
+        _store_config("noserver_retain", dimensions=8), pool=sentinel_pool
+    )
+    assert store._owns_pool is False
+    assert store._pool is sentinel_pool
+
+    await store.close()
+
+    # The injected pool was neither closed nor dropped; only the logical
+    # init state was reset. Ownership is unchanged.
+    assert store._pool is sentinel_pool
+    assert store._owns_pool is False
+    assert store._initialized is False
+
+
+@requires_real_postgres
+@pytest.mark.asyncio
+async def test_injected_store_reopens_after_close(
+    pg_table_name: str,
+) -> None:
+    """An injected store can be re-initialized to reopen against its pool.
+
+    Design contract: ``close()`` leaves an injected pool live and retains
+    the reference, so ``initialize()`` after ``close()`` reuses the same
+    pool (it never fabricates one) and the store is fully usable again.
+    """
+    external = await asyncpg.create_pool(
+        _get_test_connection_string(), min_size=1, max_size=2
+    )
+    try:
+        store = PgVectorStore.from_components(
+            _store_config(pg_table_name), pool=external
+        )
+        await store.initialize()
+        assert await store.count() == 0
+
+        await store.close()
+        # Reopen: same pool, no new pool created, store usable again.
+        await store.initialize()
+        assert store._pool is external
+        assert store._owns_pool is False
+        assert external.is_closing() is False
+        assert await store.count() == 0
     finally:
         await external.close()

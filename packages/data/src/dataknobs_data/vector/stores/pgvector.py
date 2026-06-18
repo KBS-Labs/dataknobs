@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ResourceError
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..types import DistanceMetric
@@ -202,6 +202,16 @@ class PgVectorStore(VectorStore):
         if pool is not None:
             self._pool = pool
             self._owns_pool = False
+        else:
+            # No pool injected: the store self-builds and owns its pool in
+            # ``initialize()`` (the config-path default). Logged at DEBUG so
+            # a consumer who intended to inject a shared pool but mistyped
+            # the keyword — silently absorbed by the ``**_`` catch-all the
+            # signature-aware delivery protocol requires — has a trail.
+            logger.debug(
+                "PgVectorStore.from_components called without a pool; "
+                "store will build and own its own connection pool."
+            )
 
     def _col(self, name: str) -> str:
         """Get the actual column name for a logical field name."""
@@ -553,11 +563,32 @@ class PgVectorStore(VectorStore):
             "Initializing pgvector store: %s.%s", self.schema, self.table_name
         )
 
-        # Create connection pool only when one was not injected. An
-        # externally supplied pool (via ``from_components(pool=...)``) is
-        # already bound on ``self._pool`` with ``_owns_pool=False``; we run
-        # only the schema/table setup against it and never tear it down.
+        # Create a connection pool only when this store owns its pool
+        # lifecycle and does not currently hold one. ``_owns_pool`` is set
+        # once at construction and is immutable, so gate on it rather than
+        # merely on ``self._pool is None``:
+        #
+        # * Self-owned store, first init OR reopen after ``close()``:
+        #   ``_pool is None`` and ``_owns_pool`` is True — build a pool.
+        # * Injected store: the pool was bound in ``_adopt_components`` and
+        #   is *retained* across ``close()`` (it is caller-owned and still
+        #   live), so ``_pool is not None`` here — skip creation and run
+        #   only the schema/table setup against it, on first init and on
+        #   every reopen alike.
+        #
+        # The ``not _owns_pool`` branch is a defensive invariant: an injected
+        # store always retains its pool, so reaching it means the reference
+        # was lost out of band. Fail loud rather than fabricate a pool the
+        # store would not own (and so would never tear down) — that would
+        # both leak and silently swap out the resource the caller injected.
         if self._pool is None:
+            if not self._owns_pool:
+                raise ResourceError(
+                    "PgVectorStore has no connection pool: an injected "
+                    "(caller-owned) pool reference was lost. The store will "
+                    "not fabricate a pool it does not own. Rebuild the store "
+                    "via PgVectorStore.from_components(pool=...)."
+                )
             self._pool = await asyncpg.create_pool(
                 self.connection_string,
                 min_size=self.pool_min_size,
@@ -738,18 +769,29 @@ class PgVectorStore(VectorStore):
         )
 
     async def close(self) -> None:
-        """Close the connection pool.
+        """Close the store, honoring pool ownership.
 
-        Honors the :meth:`VectorStore.close` ownership contract: a pool
-        this store built (config / connection-string / factory path) is
-        closed; an externally supplied pool injected via
-        ``from_components(pool=...)`` is left open for the caller to
-        manage. Either way the store drops its pool reference and resets
-        ``_initialized`` so post-close use fails cleanly.
+        Honors the :meth:`VectorStore.close` ownership contract:
+
+        * A pool this store *built* (config / connection-string / factory
+          path, ``_owns_pool=True``) is closed and its reference dropped —
+          the pool is dead, so a later ``initialize()`` rebuilds one.
+        * An *injected* pool (``from_components(pool=...)``,
+          ``_owns_pool=False``) is left open for the caller to manage **and
+          its reference is retained**. The store is only logically closed
+          (``_initialized=False``); it can be re-initialized to reopen
+          against the same shared pool. Dropping the reference here would
+          throw away a still-live, caller-owned resource and force the
+          caller to rebuild the store just to reuse the pool.
+
+        Either way ``_initialized`` is reset, so post-close use fails
+        cleanly (every method guards on it) until the store is
+        re-initialized.
         """
-        if self._owns_pool and self._pool:
-            await self._pool.close()
-        self._pool = None
+        if self._owns_pool:
+            if self._pool is not None:
+                await self._pool.close()
+            self._pool = None
         self._initialized = False
         logger.info("pgvector store closed")
 

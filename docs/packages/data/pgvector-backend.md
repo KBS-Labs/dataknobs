@@ -323,13 +323,16 @@ await pool.close()           # the application closes the pool it owns
 
 When a pool is injected this way the store treats it as caller-owned:
 `initialize()` skips `asyncpg.create_pool` and runs only the
-schema/table setup against the supplied pool, and `close()` drops the
-store's reference and resets its initialized state but **does not** close
-the pool. This is the safe shape for "one backing pool, N stores" — see
+schema/table setup against the supplied pool, and `close()` resets the
+store's initialized state but **does not** close the pool and **retains**
+its reference — so the store can be re-initialized to reopen against the
+same pool (`close()` then `initialize()` reuses it; it never fabricates a
+new one). This is the safe shape for "one backing pool, N stores" — see
 the `VectorStore.close()` ownership contract. The pool is injected
 directly through `from_components`, not through `VectorStoreFactory`
 (which has no live-collaborator channel); the factory / connection-string
-path keeps building and owning its own pool as before.
+path keeps building and owning its own pool, closing and dropping it on
+`close()`, as before.
 
 ## Usage Examples
 
