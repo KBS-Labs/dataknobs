@@ -753,6 +753,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 duplicate_strategy=dup_strategy,
                 match_fields=match_fields,
                 storage_mode=storage_mode,
+                # The db was created by this wizard for the bank's exclusive
+                # use, so the bank owns it and closes it on close().
+                owns_db=True,
             )
         logger.debug("Initialised %d memory banks: %s",
                       len(self._banks), list(self._banks))
@@ -774,7 +777,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             backend = cfg.get("backend", "memory")
             if backend != "memory":
                 db, _mode = self._create_bank_db(name, cfg)
-                self._banks[name] = MemoryBank.from_dict(bank_dict, db=db)
+                # The db is built by this wizard for the bank — owned.
+                self._banks[name] = MemoryBank.from_dict(
+                    bank_dict, db=db, owns_db=True
+                )
             else:
                 self._banks[name] = MemoryBank.from_dict(bank_dict)
         # Ensure any newly-configured banks that weren't persisted yet
@@ -1252,7 +1258,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
 
-        # Close memory bank database connections
+        # Close memory bank database connections. The banks are always
+        # built by this wizard (``_init_banks`` / ``_restore_banks`` /
+        # artifact sections — there is no bank-injection path), so the
+        # wizard owns them and closes each. Each bank in turn closes its db
+        # only when it owns it (``owns_db``): wizard-built banks own the
+        # per-bank db this wizard created for them, while a db a bank was
+        # handed by a caller is left open — so a backing store shared
+        # across banks survives one bank's close.
         for _name, bank in self._banks.items():
             bank.close()
         if self._banks:

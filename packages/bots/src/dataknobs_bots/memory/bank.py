@@ -521,6 +521,7 @@ class MemoryBank:
         duplicate_strategy: str = "allow",
         match_fields: list[str] | None = None,
         storage_mode: str = "inline",
+        owns_db: bool = False,
     ) -> None:
         self._core = _BankCore(
             name=name,
@@ -531,6 +532,11 @@ class MemoryBank:
             storage_mode=storage_mode,
         )
         self._db = db
+        # A caller-supplied db is left to the caller by default — closing
+        # this bank must not tear down a db shared with another holder.
+        # Pass ``owns_db=True`` (or build via ``from_dict(db=None)``) when
+        # the db was created for this bank's exclusive use.
+        self._owns_db = owns_db
         self._on_add_hooks: list[BankHook] = []
         self._on_update_hooks: list[BankHook] = []
         self._on_remove_hooks: list[BankHook] = []
@@ -855,8 +861,16 @@ class MemoryBank:
     # -----------------------------------------------------------------
 
     def close(self) -> None:
-        """Close the underlying database connection."""
-        self._db.close()
+        """Close the underlying database connection if this bank owns it.
+
+        A db supplied by the caller (``owns_db=False``, the default for
+        direct construction) is left open so a db shared across banks
+        survives one bank's close. A db this bank built for its own use
+        (``from_dict(db=None)``, or an explicit ``owns_db=True``) is torn
+        down here.
+        """
+        if self._owns_db and hasattr(self._db, "close"):
+            self._db.close()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the bank to a plain dict.
@@ -871,7 +885,11 @@ class MemoryBank:
 
     @classmethod
     def from_dict(
-        cls, d: dict[str, Any], db: SyncDatabase | None = None
+        cls,
+        d: dict[str, Any],
+        db: SyncDatabase | None = None,
+        *,
+        owns_db: bool | None = None,
     ) -> MemoryBank:
         """Deserialize a bank from a plain dict.
 
@@ -880,13 +898,22 @@ class MemoryBank:
             db: Optional pre-configured database backend.  When ``None``
                 a fresh ``SyncMemoryDatabase`` is created and any
                 serialized records are re-inserted (inline mode).
+            owns_db: Whether the bank owns the db's lifecycle (closes it on
+                ``close()``).  When ``None`` (default) ownership is inferred
+                — a bank that builds its own db (``db is None``) owns it,
+                while a caller-supplied db is left to the caller.  Pass
+                ``True`` explicitly when a db built for this bank's
+                exclusive use is supplied directly (e.g. a per-bank backend
+                created by a wizard factory).
         """
+        if owns_db is None:
+            owns_db = db is None
         if db is None:
             from dataknobs_data.backends.memory import SyncMemoryDatabase
 
             db = SyncMemoryDatabase()
         config = _BankCore.extract_config(d)
-        bank = cls(db=db, **config)
+        bank = cls(db=db, owns_db=owns_db, **config)
         for rec_dict in d.get("records", []):
             bank_record = BankRecord.from_dict(rec_dict)
             db.create(_BankCore.bank_record_to_db_record(bank_record))

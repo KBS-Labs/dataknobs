@@ -741,11 +741,27 @@ class TestMemoryBankClose:
 
         db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
         db.connect()
-        bank = MemoryBank(name="items", schema={}, db=db)
+        # owns_db=True: the bank is the sole owner of this db, so close()
+        # tears it down. A caller-shared db (owns_db=False, the default)
+        # would be left open — see test_close_ownership.py.
+        bank = MemoryBank(name="items", schema={}, db=db, owns_db=True)
         bank.add({"name": "flour"})
 
         bank.close()
         assert not db._connected
+
+    def test_close_leaves_injected_db_open(self) -> None:
+        """A caller-supplied db (the default) survives the bank's close()."""
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
+        db.connect()
+        bank = MemoryBank(name="items", schema={}, db=db)
+        bank.add({"name": "flour"})
+
+        bank.close()
+        assert db._connected, "injected db must be left open for the caller"
+        db.close()
 
     @pytest.mark.asyncio
     async def test_wizard_close_closes_bank_dbs(self) -> None:
@@ -762,11 +778,15 @@ class TestMemoryBankClose:
             {"path": ":memory:", "table": "ingredients"}
         )
         sqlite_db.connect()
+        # owns_db=True mirrors what _init_banks does for wizard-built banks:
+        # the wizard creates the db for the bank, so the bank owns it and
+        # wizard.close() -> bank.close() tears the db down.
         reasoning._banks["ingredients"] = MemoryBank(
             name="ingredients",
             schema={"required": ["name"]},
             db=sqlite_db,
             storage_mode="external",
+            owns_db=True,
         )
         reasoning._banks["ingredients"].add({"name": "flour"})
         assert sqlite_db._connected

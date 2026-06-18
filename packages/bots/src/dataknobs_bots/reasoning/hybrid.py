@@ -189,7 +189,15 @@ class HybridReasoning(
         return grounded_accepted or react_accepted
 
     async def close(self) -> None:
-        """Release resources held by both child strategies."""
+        """Release resources held by both child strategies.
+
+        The grounded + ReAct children are always built internally by
+        :meth:`_setup` (there is no injection path for them), so this
+        strategy owns them and closes both. Each child in turn gates its
+        own collaborators — the grounded child closes only the sources /
+        extractor it owns and never the shared query provider or KB — so
+        a KB shared with the owning bot is never torn down here.
+        """
         await self._grounded.close()
         await self._react.close()
 

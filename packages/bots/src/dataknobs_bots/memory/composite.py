@@ -267,7 +267,17 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
         return await self.primary.pop_messages(count)
 
     async def close(self) -> None:
-        """Close all strategies. Log and continue on individual failures."""
+        """Close all sub-strategies. Log and continue on individual failures.
+
+        A ``CompositeMemory`` owns its sub-strategies on both construction
+        paths — config-built children and children handed in via
+        :meth:`from_components` are dedicated to this composite, not shared
+        across composites — so every one is closed here. A genuinely shared
+        *backing* resource inside a child (e.g. a vector store / connection
+        pool wrapped by a :class:`~dataknobs_bots.memory.vector.VectorMemory`)
+        is protected one layer down by that child's own ownership gate, so
+        the composite can close its children unconditionally.
+        """
         for i, strategy in enumerate(self._strategies):
             try:
                 await strategy.close()

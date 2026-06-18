@@ -28,6 +28,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tearing down a resource the others still depend on. Consumers that build
   the knowledge base from config see no change.
 
+- **`close()` across the bot stack now tears down only collaborators the
+  holder owns.** A holder that builds a collaborator from config owns its
+  lifecycle and closes it; a holder handed a pre-built collaborator leaves
+  it open for its real owner. This makes sharing one backing resource
+  across several holders safe — closing one holder no longer tears down a
+  collaborator the others still depend on. Applies to:
+
+  - **`DynaBot`** — the knowledge base, memory, reasoning strategy, and
+    conversation storage are closed only when built from the bot's config.
+    Collaborators injected via `DynaBot.from_components(...)` (or the
+    pre-built `DynaBot(llm=...)` constructor) are caller-owned and left
+    open, so several bots can share one knowledge base or storage backend
+    and each can be closed independently. (The main LLM keeps its existing
+    behavior: a provider passed to `from_config(config, llm=...)` is
+    caller-owned; one the bot builds itself is closed.)
+  - **`MemoryBank`** — a caller-supplied `db` is left open by default;
+    `MemoryBank.from_dict(db=None)` builds a db the bank owns and closes.
+    A new `owns_db` parameter overrides the inference when a db is built
+    elsewhere for a bank's exclusive use.
+  - **`VectorKnowledgeSource`** — never closes the knowledge base it
+    wraps (the KB is supplied by the caller and typically shared with the
+    owning bot and other sources). A new `owns_kb` parameter opts into
+    closing a dedicated KB.
+  - **`GroundedReasoning`** — closes only the extractor and sources it
+    built from config. An extractor or source injected by the caller, and
+    the query provider (always the bot's LLM or an injected override), are
+    left open. `add_source` gained an `owns` keyword to add a shared
+    source without transferring ownership.
+
+  `CompositeMemory` and `HybridReasoning` own the children they compose on
+  every construction path (the children are dedicated to the parent, not
+  shared), and each child independently protects any backing resource it
+  was handed — so they continue to close their children unconditionally.
+  Consumers that build everything from config see no behavior change.
+
 - Re-platformed `LifecycleHooks` (and via composition,
   `WizardHooks`) onto the new `dataknobs_common.callbacks`
   `CallbackRegistry` substrate. The consumer-facing surface

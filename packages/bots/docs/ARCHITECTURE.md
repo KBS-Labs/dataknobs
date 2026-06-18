@@ -377,9 +377,17 @@ for role, provider in bot.all_providers.items():
 are automatically discovered and registered.  No manual registration is needed for
 standard configurations.
 
-**Comprehensive Shutdown**: `bot.close()` iterates `all_providers` to close every
-registered provider, fixing resource leaks for memory and knowledge base embedding
-providers that were previously missed.
+**Ownership-gated Shutdown**: `bot.close()` closes the subsystems the bot
+*owns* — the knowledge base, memory, reasoning strategy, and conversation
+storage built from the bot's config, plus the main LLM provider when the
+bot built it. Each subsystem in turn closes the providers and backing
+resources it owns (the provider registry is a catalog for observability,
+not a lifecycle owner). Collaborators handed to the bot pre-built — via
+`DynaBot.from_components(...)`, the `DynaBot(llm=...)` constructor, or a
+provider passed to `from_config(config, llm=...)` — are caller-owned and
+left open. This lets several bots share one knowledge base or storage
+backend: closing one bot never tears down a collaborator the others still
+depend on.
 
 **Testing**: `inject_providers()` accepts `**role_providers` kwargs for injecting
 providers by role:

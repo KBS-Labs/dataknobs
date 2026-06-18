@@ -216,8 +216,14 @@ class VectorKnowledgeSource(GroundedSource):
         dedup_key: Callable[[dict[str, Any]], Hashable] | None = None,
         source_id_fn: Callable[[dict[str, Any]], str] | None = None,
         metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        owns_kb: bool = False,
     ) -> None:
         self._kb = kb
+        # The wrapped KB is supplied by the caller (typically a KB shared
+        # with the owning bot and other sources), so by default this source
+        # does not own its lifecycle and close() leaves it open. Pass
+        # ``owns_kb=True`` only when this source is the sole owner.
+        self._owns_kb = owns_kb
         self._name = name
         self.topic_index = topic_index
         self._dedup_key = dedup_key or default_dedup_key
@@ -312,8 +318,15 @@ class VectorKnowledgeSource(GroundedSource):
         return all_results
 
     async def close(self) -> None:
-        """Close the underlying knowledge base."""
-        await self._kb.close()
+        """Close the underlying knowledge base if this source owns it.
+
+        A KB supplied by the caller (``owns_kb=False``, the default) is
+        shared — typically with the owning bot and other sources — so it
+        is left open. Closing it here would tear down a resource (e.g. a
+        vector-store connection pool) the other holders still depend on.
+        """
+        if self._owns_kb and hasattr(self._kb, "close"):
+            await self._kb.close()
 
     def providers(self) -> dict[str, Any]:
         """Delegate to the KB's provider registry."""
