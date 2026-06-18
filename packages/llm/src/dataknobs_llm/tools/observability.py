@@ -6,7 +6,21 @@ enabling observability, debugging, and auditing of tool usage.
 
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, ClassVar
+
+from dataknobs_common.callbacks import CallbackRegistry
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+)
+
+EXECUTION_RECORD_TOPIC = "execution:record"
+"""Topic fired on :meth:`ExecutionTracker.record`.
+
+Payload keys: ``tool_name``, ``success`` (bool), ``duration_ms``
+(float), ``error`` (the error message string, or ``None`` on success).
+"""
 
 
 @dataclass
@@ -130,11 +144,19 @@ class ExecutionStats:
         return (self.successful_executions / self.total_executions) * 100.0
 
 
-class ExecutionTracker:
+class ExecutionTracker(CapabilityMixin):
     """Tracks tool execution history with query capabilities.
 
     Manages a bounded history of tool executions and provides
     methods for querying and aggregating execution data.
+
+    Composes an in-process callback registry: every :meth:`record`
+    fires the ``execution:record`` topic on :attr:`execution_callbacks`
+    so consumers can observe tool executions live (guard callbacks,
+    metrics, audit) without polling the history. The registry is opt-in
+    — it is constructed only on first access, so the existing
+    ``record / query / get_stats / clear / __len__`` surface is
+    byte-identical for consumers that never touch it.
 
     Attributes:
         max_history: Maximum number of records to retain
@@ -164,6 +186,11 @@ class ExecutionTracker:
         ```
     """
 
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.CALLBACK_REGISTRY,
+        Capability.EXECUTION_TRACKING,
+    })
+
     def __init__(self, max_history: int = 100):
         """Initialize tracker.
 
@@ -172,6 +199,29 @@ class ExecutionTracker:
         """
         self._history: list[ToolExecutionRecord] = []
         self._max_history = max_history
+        self._execution_callbacks: CallbackRegistry | None = None
+
+    @property
+    def execution_callbacks(self) -> CallbackRegistry:
+        """In-process registry receiving tool-execution events.
+
+        Fires the ``execution:record`` topic
+        (:data:`EXECUTION_RECORD_TOPIC`) after every :meth:`record`
+        call. Payload: ``{tool_name, success, duration_ms, error}``.
+
+        Consumers register callbacks for in-process observability (a
+        ``priority=-100`` guard that raises under
+        :attr:`~dataknobs_common.callbacks.ErrorPolicy.RAISE` aborts the
+        recording path; metrics callbacks aggregate). Compose with
+        :meth:`~dataknobs_common.callbacks.CallbackRegistry.also_publish_to`
+        for cross-replica fan-out when :meth:`record` is driven outside
+        a running event loop. Lazily constructed on first access, so the
+        recording path stays allocation-free for consumers that never
+        register.
+        """
+        if self._execution_callbacks is None:
+            self._execution_callbacks = CallbackRegistry()
+        return self._execution_callbacks
 
     def record(self, execution: ToolExecutionRecord) -> None:
         """Record a tool execution.
@@ -182,6 +232,16 @@ class ExecutionTracker:
         self._history.append(execution)
         if len(self._history) > self._max_history:
             self._history.pop(0)
+        if self._execution_callbacks is not None:
+            self._execution_callbacks.fire(
+                EXECUTION_RECORD_TOPIC,
+                {
+                    "tool_name": execution.tool_name,
+                    "success": execution.success,
+                    "duration_ms": execution.duration_ms,
+                    "error": execution.error,
+                },
+            )
 
     def query(
         self, query: ExecutionHistoryQuery | None = None

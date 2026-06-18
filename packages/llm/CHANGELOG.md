@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ExecutionTracker` composes an in-process `CallbackRegistry`. Every
+  `record(...)` fires the `execution:record` topic
+  (`EXECUTION_RECORD_TOPIC`) on the lazily constructed
+  `execution_callbacks` registry with a
+  `{tool_name, success, duration_ms, error}` payload; compose with
+  `CallbackRegistry.also_publish_to(...)` for cross-replica fan-out
+  (when `record` runs outside a running event loop). The existing
+  `record / query / get_stats / clear / __len__` surface is unchanged.
+  Advertises `Capability.EXECUTION_TRACKING` / `CALLBACK_REGISTRY`.
 - `dataknobs_llm.intent` module — pluggable intent-classification
   surface for any LLM-layer consumer that needs to route user input
   by intent (tool routers, reasoning strategies, RAG query
