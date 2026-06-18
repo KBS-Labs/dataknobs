@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new topics; an `EventBus` `pattern=` subscription can bridge a legacy
   consumer if needed. The manager's `__init__` signature and the
   `event_bus` cross-replica semantic are unchanged.
+
+- **`RAGKnowledgeBase.close()` only closes collaborators it owns.** A
+  vector store and embedding provider built from config are owned and
+  closed on `close()` as before. A store or provider injected via
+  `RAGKnowledgeBase.from_components(vector_store=…, embedding_provider=…)`
+  is caller-owned and left open, so a consumer sharing one store/provider
+  across several knowledge bases can close each base independently without
+  tearing down a resource the others still depend on. Consumers that build
+  the knowledge base from config see no change.
+
 - Re-platformed `LifecycleHooks` (and via composition,
   `WizardHooks`) onto the new `dataknobs_common.callbacks`
   `CallbackRegistry` substrate. The consumer-facing surface
