@@ -163,15 +163,16 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
 
-    def _save_metadata(self, domain_id: str, metadata: dict) -> None:
-        """Save metadata to disk atomically."""
+    async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
+        """Save metadata to disk atomically, then fire a state-write event."""
         meta_path = self._metadata_path(domain_id)
+        body = json.dumps(metadata, indent=2, default=str)
 
         # Write to temp file first, then rename for atomicity
         fd, tmp_path = tempfile.mkstemp(dir=meta_path.parent, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, default=str)
+                f.write(body)
             os.replace(tmp_path, meta_path)
         except Exception:
             # Clean up temp file on error
@@ -179,6 +180,13 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             if tmp.exists():
                 tmp.unlink()
             raise
+
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=str(meta_path),
+            kind=KnowledgeKeyKind.METADATA,
+            byte_size=len(body.encode("utf-8")),
+        )
 
     # --- File Operations ---
 
@@ -250,8 +258,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
         kb_metadata["info"] = kb_info.to_dict()
 
-        self._save_metadata(domain_id, kb_metadata)
-        self._record_snapshot(domain_id, files)
+        await self._save_metadata(domain_id, kb_metadata)
+        await self._record_snapshot(domain_id, files)
 
         logger.debug(
             "%s file: %s/%s (%d bytes)",
@@ -312,8 +320,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
         kb_metadata["info"] = kb_info.to_dict()
 
-        self._save_metadata(domain_id, kb_metadata)
-        self._record_snapshot(domain_id, files)
+        await self._save_metadata(domain_id, kb_metadata)
+        await self._record_snapshot(domain_id, files)
 
         # Clean up empty parent directories
         self._cleanup_empty_dirs(file_path.parent, self._content_path(domain_id))
@@ -380,7 +388,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             "info": kb_info.to_dict(),
             "files": {},
         }
-        self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata)
 
         logger.info("Created knowledge base: %s", domain_id)
         return kb_info
@@ -447,7 +455,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata)
 
     # --- Change Detection ---
     #
@@ -460,7 +468,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     # moment the KB had that canonical identity; it is written after
     # every mutation, mirroring InMemoryKnowledgeBackend.
 
-    def _record_snapshot(
+    async def _record_snapshot(
         self, domain_id: str, files: dict[str, dict]
     ) -> None:
         """Persist the post-mutation ``{path: checksum}`` map.
@@ -487,16 +495,24 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         snap_path = self._snapshot_file(domain_id, version)
         if snap_path.exists():
             return  # identical content state already captured
+        body = json.dumps(snapshot)
         fd, tmp_path = tempfile.mkstemp(dir=snap_dir, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f)
+                f.write(body)
             os.replace(tmp_path, snap_path)
         except Exception:
             tmp = Path(tmp_path)
             if tmp.exists():
                 tmp.unlink()
             raise
+
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=str(snap_path),
+            kind=KnowledgeKeyKind.SNAPSHOT,
+            byte_size=len(body.encode("utf-8")),
+        )
 
     async def _load_snapshot(
         self, domain_id: str, version: str

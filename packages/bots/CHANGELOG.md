@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The knowledge ingestion manager now publishes lifecycle events on the
+  `ingest:domain:start` / `ingest:domain:end` topics (was a single
+  `knowledge:ingestion` completion event). The end event fires on both
+  success (`status="completed"`) and failure (`status="failed"`), and a
+  start event fires at the head of every run. Consumers subscribed to
+  the former `knowledge:ingestion` topic re-subscribe to one or both
+  new topics; an `EventBus` `pattern=` subscription can bridge a legacy
+  consumer if needed. The manager's `__init__` signature and the
+  `event_bus` cross-replica semantic are unchanged.
 - Re-platformed `LifecycleHooks` (and via composition,
   `WizardHooks`) onto the new `dataknobs_common.callbacks`
   `CallbackRegistry` substrate. The consumer-facing surface
@@ -89,6 +98,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `dataknobs_bots.knowledge.events` module — the canonical
+  knowledge-layer event topic constants (`INGEST_DOMAIN_START`,
+  `INGEST_DOMAIN_END`, `INGEST_METADATA_WRITE`,
+  `INGEST_SNAPSHOT_WRITE`, all `Final[str]`), the
+  `KnowledgeTriggerPayload` `TypedDict` documenting the ingest-trigger
+  payload shape, and the `TenantFilteredCallback` adapter that
+  short-circuits an event callback on tenant mismatch. All re-exported
+  from `dataknobs_bots.knowledge`.
+- `KnowledgeIngestionManager.lifecycle_callbacks` — an in-process
+  `CallbackRegistry` that fires `INGEST_DOMAIN_START` at the head of
+  every `ingest()` / `ingest_changes()` and `INGEST_DOMAIN_END` at the
+  tail (on success **and** failure). When the manager is constructed
+  with an `event_bus`, the registry auto-composes
+  `also_publish_to(event_bus)` so the lifecycle events fan out to the
+  bus for cross-replica observability. Payloads carry `tenant_id` only
+  when the manager is tenant-bound. Advertises
+  `Capability.INGEST_EVENT_PUBLICATION` / `CALLBACK_REGISTRY` /
+  `EVENT_BUS_EMISSION`.
+- `KnowledgeResourceBackend.subscribe_to_changes(bus, *, kinds=None,
+  domain_id=None, handler)` and the `changes_subscription(...)` async
+  context manager — compose a backend's `key_pattern()` with
+  `EventBus.subscribe()` in one call; `kinds` defaults to
+  `{KnowledgeKeyKind.CONTENT}` (observe consumer writes, skip
+  DK-managed state writes). Default implementations ship on
+  `KnowledgeResourceBackendMixin`.
+- Backend state-write observability — every backend fires
+  `INGEST_METADATA_WRITE` / `INGEST_SNAPSHOT_WRITE` on its
+  `state_write_callbacks` `CallbackRegistry` after each metadata /
+  snapshot write, via the shared `_fire_state_write` helper on
+  `KnowledgeResourceBackendMixin`. Zero-overhead when no callbacks are
+  registered. Backends advertise
+  `Capability.BACKEND_STATE_OBSERVABILITY` /
+  `KEY_PATTERN_FILTERING` / `CHANGE_SUBSCRIPTION` / `CALLBACK_REGISTRY`.
+- `IngestOrchestrator` honors an optional `payload["key"]` on trigger
+  events: when present it classifies the key via the resolved
+  backend's `classify_key(...)` and skips non-`CONTENT` keys (so the
+  DK-managed state writes the ingest performs do not re-trigger
+  ingestion). Absent `key` proceeds unchanged.
 - `BackendKeyDiscriminator(backend)` adapter (frozen dataclass) —
   wraps any `KnowledgeResourceBackend`'s `classify_key` method
   through the generic `Discriminator[str, KnowledgeKeyKind]`

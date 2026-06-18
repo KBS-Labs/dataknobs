@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, BinaryIO, Protocol, runtime_checkable
 from .key_layout import KnowledgeKeyKind
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+    from contextlib import AbstractAsyncContextManager
+
+    from dataknobs_common.events import Event, EventBus, Subscription
 
     from .models import (
         ChangeSet,
@@ -431,5 +434,48 @@ class KnowledgeResourceBackend(Protocol):
           for protocol symmetry.
 
         See :class:`KnowledgeKeyKind`.
+        """
+        ...
+
+    # --- Change Subscription ---
+
+    async def subscribe_to_changes(
+        self,
+        bus: EventBus,
+        *,
+        kinds: Iterable[KnowledgeKeyKind] | None = None,
+        domain_id: str | None = None,
+        handler: Callable[[Event], Awaitable[None]],
+    ) -> Subscription:
+        """Subscribe ``handler`` to change events of the given kinds.
+
+        Composition convenience that wraps :meth:`key_pattern` with
+        :meth:`~dataknobs_common.events.EventBus.subscribe`. ``kinds``
+        defaults to ``{KnowledgeKeyKind.CONTENT}`` — the appropriate
+        filter for external event triggers (skip DK-managed state
+        writes). ``domain_id=None`` matches every domain. Returns the
+        :class:`~dataknobs_common.events.Subscription` handle; the
+        consumer awaits ``sub.cancel()`` to tear down.
+
+        See :meth:`changes_subscription` for an async-context-manager
+        teardown variant. The default mixin implementation supports a
+        single kind per call; pass one kind at a time to subscribe to
+        more than one.
+        """
+        ...
+
+    def changes_subscription(
+        self,
+        bus: EventBus,
+        *,
+        kinds: Iterable[KnowledgeKeyKind] | None = None,
+        domain_id: str | None = None,
+        handler: Callable[[Event], Awaitable[None]],
+    ) -> AbstractAsyncContextManager[Subscription]:
+        """Async context manager wrapping :meth:`subscribe_to_changes`.
+
+        Subscribes on entry, cancels on exit (even when the body
+        raises). See :meth:`subscribe_to_changes` for argument
+        semantics.
         """
         ...

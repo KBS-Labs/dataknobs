@@ -285,8 +285,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 return {}
             raise
 
-    def _save_metadata(self, domain_id: str, metadata: dict) -> None:
-        """Save metadata to S3."""
+    async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
+        """Save metadata to S3, then fire a state-write event."""
         if not self._client:
             raise RuntimeError("Backend not initialized")
 
@@ -297,6 +297,12 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             Key=key,
             Body=body,
             ContentType="application/json",
+        )
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=key,
+            kind=KnowledgeKeyKind.METADATA,
+            byte_size=len(body),
         )
 
     def _kb_exists(self, domain_id: str) -> bool:
@@ -379,8 +385,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
         kb_metadata["info"] = kb_info.to_dict()
 
-        self._save_metadata(domain_id, kb_metadata)
-        self._record_snapshot(domain_id, files)
+        await self._save_metadata(domain_id, kb_metadata)
+        await self._record_snapshot(domain_id, files)
 
         logger.debug(
             "%s file: s3://%s/%s (%d bytes)",
@@ -465,8 +471,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
         kb_metadata["info"] = kb_info.to_dict()
 
-        self._save_metadata(domain_id, kb_metadata)
-        self._record_snapshot(domain_id, files)
+        await self._save_metadata(domain_id, kb_metadata)
+        await self._record_snapshot(domain_id, files)
 
         logger.debug("Deleted file: s3://%s/%s", self._bucket, key)
         return True
@@ -528,7 +534,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             "info": kb_info.to_dict(),
             "files": {},
         }
-        self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata)
 
         logger.info("Created knowledge base: s3://%s/%s%s/", self._bucket, self._prefix, domain_id)
         return kb_info
@@ -621,7 +627,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata)
 
     # --- Change Detection ---
     #
@@ -644,7 +650,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             for path, info in files.items()
         }
 
-    def _record_snapshot(
+    async def _record_snapshot(
         self, domain_id: str, files: dict[str, dict]
     ) -> None:
         """Persist the post-mutation ``{path: checksum}`` map.
@@ -668,11 +674,19 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
+        key = self._snapshot_key(domain_id, version)
+        body = json.dumps(snapshot).encode("utf-8")
         self._client.put_object(
             Bucket=self._bucket,
-            Key=self._snapshot_key(domain_id, version),
-            Body=json.dumps(snapshot).encode("utf-8"),
+            Key=key,
+            Body=body,
             ContentType="application/json",
+        )
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=key,
+            kind=KnowledgeKeyKind.SNAPSHOT,
+            byte_size=len(body),
         )
 
     async def _load_snapshot(

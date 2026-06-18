@@ -7,6 +7,7 @@ and development scenarios where persistence is not needed.
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -290,6 +291,26 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # default None and so clears any stale in-flight swap token.
         kb_info.generation = generation
 
+        # In-process backend: no serialized metadata file is written,
+        # but the state-write event fires for surface parity with the
+        # file / S3 backends (so consumers compose one observability
+        # path across every backend). ``byte_size`` reflects the
+        # would-be serialized status payload.
+        body = json.dumps(
+            {
+                "ingestion_status": kb_info.ingestion_status,
+                "ingestion_error": kb_info.ingestion_error,
+                "generation": kb_info.generation,
+            },
+            default=str,
+        )
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=f"{domain_id}/{self.METADATA_FILE}",
+            kind=KnowledgeKeyKind.METADATA,
+            byte_size=len(body.encode("utf-8")),
+        )
+
     # --- Key Layout ---
     #
     # classify_key comes from KnowledgeResourceBackendMixin against the
@@ -332,9 +353,19 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         version = await self.get_checksum(domain_id)
         meta = self._file_metadata.get(domain_id, {})
-        self._snapshots.setdefault(domain_id, {})[version] = {
-            path: f.checksum for path, f in meta.items()
-        }
+        snapshot = {path: f.checksum for path, f in meta.items()}
+        self._snapshots.setdefault(domain_id, {})[version] = snapshot
+        # The empty-KB baseline (version "") writes no real snapshot in
+        # the file / S3 backends, so skip the event there too for parity.
+        if not version:
+            return
+        body = json.dumps(snapshot)
+        await self._fire_state_write(
+            domain_id=domain_id,
+            key=f"{domain_id}/{self.SNAPSHOTS_DIR}/{version}.json",
+            kind=KnowledgeKeyKind.SNAPSHOT,
+            byte_size=len(body.encode("utf-8")),
+        )
 
     async def _load_snapshot(
         self, domain_id: str, version: str
