@@ -314,7 +314,10 @@ class ArtifactBank:
             cfg = section_configs.get(name, {})
             if db_factory and cfg.get("backend", "memory") != "memory":
                 db, _mode = db_factory(name, cfg)
-                sections[name] = MemoryBank.from_dict(bank_dict, db=db)
+                # The db is built per-section for the bank's exclusive use.
+                sections[name] = MemoryBank.from_dict(
+                    bank_dict, db=db, owns_db=True
+                )
             else:
                 sections[name] = MemoryBank.from_dict(bank_dict)
 
@@ -388,6 +391,8 @@ class ArtifactBank:
                 duplicate_strategy=dup_strategy,
                 match_fields=match_fields,
                 storage_mode=storage_mode,
+                # The db is built per-section for the bank's exclusive use.
+                owns_db=True,
             )
 
         return cls(

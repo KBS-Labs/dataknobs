@@ -290,11 +290,26 @@ class GroundedReasoning(
         self._sources: list[GroundedSource] = (
             list(injected_sources) if injected_sources else []
         )
+        # Per-source lifetime ownership, keyed by source object identity
+        # (``GroundedSource`` is a plain ABC — identity-hashable, no value
+        # ``__eq__``). The set holds strong references to the owned sources,
+        # so membership tracks live objects directly rather than ``id()``
+        # ints (which CPython can recycle after an object is GC'd). Sources
+        # injected via the ``sources`` component are caller-owned and are
+        # NOT recorded here, so ``close()`` leaves them open (a shared
+        # source survives one strategy's close). Sources added through
+        # :meth:`add_source` are owned by default (the config-driven build
+        # path). See :meth:`close`.
+        self._owns_sources: set[GroundedSource] = set()
         self._source_weights: dict[str, int] = {
             sc.name: sc.weight for sc in config.sources
         }
         query_provider: Any | None = self.components.get("query_provider")
         self._query_provider = query_provider
+        # The query provider is only ever injected (component / set_provider)
+        # or falls back to the bot's main LLM — this strategy never builds
+        # one, so it never owns its lifecycle and close() leaves it open.
+        self._owns_query_provider = False
         self._merger = (
             ChunkMerger(MergerConfig())
             if config.retrieval.merge_adjacent
@@ -311,12 +326,17 @@ class GroundedReasoning(
         # is present) or QueryTransformer (legacy fallback).
         self._transformer: QueryTransformer | None = None
         self._extractor: Any | None = None
+        # True only when this strategy builds the extractor from config
+        # below; an extractor injected via :meth:`set_extractor` is
+        # caller-owned and left open by close().
+        self._owns_extractor = False
         self._expander: ContextualExpander | None = None
         if config.intent.mode == "extract":
             if config.intent.extraction_config:
                 self._extractor = self._create_intent_extractor(
                     config.intent.extraction_config,
                 )
+                self._owns_extractor = True
             else:
                 self._transformer = QueryTransformer(
                     TransformerConfig(
@@ -372,9 +392,22 @@ class GroundedReasoning(
     # Source management
     # ------------------------------------------------------------------
 
-    def add_source(self, source: GroundedSource) -> None:
-        """Add a source to query during retrieval."""
+    def add_source(self, source: GroundedSource, *, owns: bool = True) -> None:
+        """Add a source to query during retrieval.
+
+        Args:
+            source: The source to add.
+            owns: Whether this strategy owns the source's lifecycle and
+                closes it on :meth:`close`. Defaults to ``True`` — the
+                config-driven build path adds sources it constructed. Pass
+                ``owns=False`` to add a source shared with another holder
+                (e.g. a pre-built source the caller closes itself).
+        """
         self._sources.append(source)
+        if owns:
+            self._owns_sources.add(source)
+        else:
+            self._owns_sources.discard(source)
 
     def set_knowledge_base(self, kb: Any) -> None:
         """Wrap a KnowledgeBase in VectorKnowledgeSource and add it.
@@ -397,7 +430,11 @@ class GroundedReasoning(
         """
         from dataknobs_bots.knowledge.sources.vector import VectorKnowledgeSource
 
-        # Replace any existing vector KB source
+        # Replace any existing vector KB source, releasing ownership of
+        # any wrapper this strategy previously built.
+        removed = [s for s in self._sources if s.source_type == "vector_kb"]
+        for s in removed:
+            self._owns_sources.discard(s)
         self._sources = [
             s for s in self._sources
             if s.source_type != "vector_kb"
@@ -419,11 +456,15 @@ class GroundedReasoning(
             topic_index_config, kb, source_name=source_name,
         )
 
-        self._sources.insert(
-            0, VectorKnowledgeSource(
-                kb, name=source_name, topic_index=topic_index,
-            ),
+        # The wrapper is built here (owned); the inner KB it wraps is the
+        # caller-supplied one and is protected by VectorKnowledgeSource's
+        # own ``owns_kb`` gate (default False), so closing this wrapper
+        # never tears down the shared KB.
+        wrapper = VectorKnowledgeSource(
+            kb, name=source_name, topic_index=topic_index,
         )
+        self._sources.insert(0, wrapper)
+        self._owns_sources.add(wrapper)
 
     def _find_topic_index_config(self) -> dict[str, Any] | None:
         """Find topic_index config from source declarations."""
@@ -474,6 +515,8 @@ class GroundedReasoning(
                 (or compatible duck-typed object with an ``extract()`` method).
         """
         self._extractor = extractor
+        # Injected — the caller owns its lifecycle, so close() leaves it open.
+        self._owns_extractor = False
 
     def set_provider(self, role: str, provider: Any) -> bool:
         """Replace a managed provider (test injection)."""
@@ -488,13 +531,31 @@ class GroundedReasoning(
         return False
 
     async def close(self) -> None:
-        """Release resources held by the query provider and sources."""
-        if self._query_provider is not None and hasattr(self._query_provider, "close"):
+        """Release resources held by collaborators this strategy owns.
+
+        Only owned collaborators are torn down: the query provider is
+        never owned (it is injected or the bot's main LLM); the extractor
+        is owned only when built from config (not when injected via
+        :meth:`set_extractor`); and a source is closed only when it was
+        added as owned (config-built sources), never when injected via the
+        ``sources`` component. This leaves collaborators shared with the
+        owning bot or other strategies open for their real owner to close.
+        """
+        if (
+            self._owns_query_provider
+            and self._query_provider is not None
+            and hasattr(self._query_provider, "close")
+        ):
             await self._query_provider.close()
-        if self._extractor is not None and hasattr(self._extractor, "close"):
+        if (
+            self._owns_extractor
+            and self._extractor is not None
+            and hasattr(self._extractor, "close")
+        ):
             await self._extractor.close()
         for source in self._sources:
-            await source.close()
+            if source in self._owns_sources and hasattr(source, "close"):
+                await source.close()
 
     # ------------------------------------------------------------------
     # Core pipeline — generate()

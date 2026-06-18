@@ -390,6 +390,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[tuple[str, int]]] = {}
         self._providers: dict[str, AsyncLLMProvider] = {}
+        # Lifetime ownership of the cascade-closed subsystems. Set True by
+        # :meth:`_build_collaborators` (config-driven build → the bot
+        # created them) and left False on the pre-built / from_components
+        # path (collaborators handed in by the caller → caller-owned).
+        # ``close()`` only tears down subsystems this bot owns, so a KB /
+        # storage / memory / strategy shared across several bots survives
+        # one bot's close. (The main ``llm`` keeps its own ``_owns_llm``
+        # gate, set by the construction path.)
+        self._owns_knowledge_base = False
+        self._owns_memory = False
+        self._owns_reasoning_strategy = False
+        self._owns_conversation_storage = False
 
     def _assign_collaborators(
         self,
@@ -1145,6 +1157,13 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         self.reasoning_strategy = reasoning_strategy
         self.middleware = middleware
         self._conversation_middleware = conversation_middleware
+        # Config-driven build: the bot constructed these subsystems, so it
+        # owns and closes them. (The pre-built / from_components path leaves
+        # the _setup defaults False — those collaborators are caller-owned.)
+        self._owns_conversation_storage = True
+        self._owns_memory = True
+        self._owns_knowledge_base = True
+        self._owns_reasoning_strategy = True
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
         self.system_prompt_rag_configs = system_prompt_rag_configs
@@ -2857,10 +2876,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     async def close(self) -> None:
         """Close the bot and clean up resources.
 
-        This method closes the LLM provider, conversation storage backend,
-        reasoning strategy, and releases associated resources like HTTP
-        connections and database connections. Should be called when the bot
-        is no longer needed, especially in testing or when creating temporary
+        Teardown is gated on ownership: this method closes only the
+        collaborators the bot built itself (from config) — the main LLM
+        provider, conversation storage backend, reasoning strategy,
+        knowledge base, and memory store — releasing their associated
+        resources like HTTP and database connections. A collaborator
+        injected via ``from_components`` / the pre-built constructor (or
+        ``from_config(llm=...)``) is caller-owned and left open, so a
+        provider, KB, storage, memory, or strategy shared across bots
+        survives one bot's close. Should be called when the bot is no
+        longer needed, especially in testing or when creating temporary
         bot instances.
 
         Example:
@@ -2882,26 +2907,30 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # provider it created).
 
         # Close subsystems — each closes its own providers and resources.
-        if self.knowledge_base:
+        # Only subsystems this bot owns (built from config) are torn down;
+        # a collaborator injected via from_components / the pre-built
+        # constructor is caller-owned and left open, so a KB / storage /
+        # memory / strategy shared across bots survives one bot's close.
+        if self._owns_knowledge_base and self.knowledge_base:
             try:
                 await self.knowledge_base.close()
             except Exception:
                 logger.exception("Error closing knowledge base")
 
-        if self.reasoning_strategy:
+        if self._owns_reasoning_strategy and self.reasoning_strategy:
             try:
                 await self.reasoning_strategy.close()
             except Exception:
                 logger.exception("Error closing reasoning strategy")
 
-        if self.memory:
+        if self._owns_memory and self.memory:
             try:
                 await self.memory.close()
             except Exception:
                 logger.exception("Error closing memory store")
 
         # Close conversation storage
-        if self.conversation_storage:
+        if self._owns_conversation_storage and self.conversation_storage:
             try:
                 await self.conversation_storage.close()
             except Exception:
