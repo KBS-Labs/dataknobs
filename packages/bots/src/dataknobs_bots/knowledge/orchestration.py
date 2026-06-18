@@ -18,12 +18,14 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from dataknobs_common.locks import InProcessLock, create_lock
 
 from .ingestion import IngestSwapMode
+from .storage import KnowledgeKeyKind
 
 if TYPE_CHECKING:
     from dataknobs_common.events import Event, EventBus, Subscription
     from dataknobs_common.locks import DistributedLock
 
     from .ingestion import KnowledgeIngestionManager
+    from .storage import KnowledgeResourceBackend
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +350,34 @@ class IngestOrchestrator:
                 event.event_id,
             )
             return
+        # Opt-in key filtering: an external source (S3 → EventBridge,
+        # filesystem inotify) MAY include the originating backend key.
+        # When present, classify it and skip non-CONTENT writes — the
+        # DK-managed ``_metadata.json`` / ``_snapshots/`` writes the
+        # ingest itself performs would otherwise re-trigger ingestion
+        # (a positive feedback loop). Absent ``key`` proceeds unchanged
+        # (back-compat for pure cron / manual triggers).
+        key = payload.get("key")
+        if key is not None:
+            backend = await self._resolve_backend(tenant_id, domain_id)
+            if backend is None:
+                logger.info(
+                    "Trigger key %r: no backend to classify; proceeding "
+                    "(event_id=%s)",
+                    key,
+                    event.event_id,
+                )
+            else:
+                kind = backend.classify_key(key)
+                if kind is not KnowledgeKeyKind.CONTENT:
+                    logger.info(
+                        "Trigger key %r classified %s (not content); "
+                        "skipping ingest (event_id=%s)",
+                        key,
+                        kind.value,
+                        event.event_id,
+                    )
+                    return
         since_version = payload.get("since_version")
         force_full = payload.get("force_full")
         last_version = payload.get("last_version")
@@ -419,6 +449,32 @@ class IngestOrchestrator:
                     domain_id,
                     tenant_id,
                 )
+
+    async def _resolve_backend(
+        self,
+        tenant_id: str | None,
+        domain_id: str,
+    ) -> KnowledgeResourceBackend | None:
+        """Resolve the backend for a trigger so its key can be classified.
+
+        Mirrors the manager resolution in :meth:`_handle_trigger`: the
+        per-tenant manager via ``manager_resolver`` when configured,
+        else the static manager. Returns the manager's
+        :attr:`~dataknobs_bots.knowledge.ingestion.KnowledgeIngestionManager.source`
+        backend, or ``None`` when no manager can be resolved (the
+        trigger then proceeds unfiltered). Only called when a trigger
+        carries a ``key``, so the resolver is not invoked on the common
+        keyless path.
+        """
+        if self._manager_resolver is not None:
+            manager = await self._manager_resolver(
+                tenant_id=tenant_id, domain_id=domain_id
+            )
+        else:
+            manager = self._manager
+        if manager is None:
+            return None
+        return manager.source
 
 
 __all__ = ["IngestOrchestrator", "IngestionManagerResolver"]
