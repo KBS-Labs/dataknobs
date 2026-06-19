@@ -13,6 +13,7 @@ from uuid import uuid4
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
+from dataknobs_data.database_utils import process_search_results
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
@@ -353,8 +354,12 @@ class SyncS3Database(  # type: ignore[misc]
         """
         self._check_connection()
 
-        # List all objects with the prefix
-        records = []
+        # List all objects with the prefix. Collect (id, record) tuples and
+        # let the shared ``process_search_results`` helper apply sorting /
+        # offset / limit / projection — the single canonical implementation
+        # both S3 backends share (it correctly orders falsy sort values such
+        # as a numeric ``0``).
+        results: list[tuple[str, Record]] = []
         paginator = self.s3_client.get_paginator('list_objects_v2')
         pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
@@ -373,37 +378,11 @@ class SyncS3Database(  # type: ignore[misc]
                 for future in as_completed(futures):
                     record = future.result()
                     if record:
-                        records.append(record)
+                        results.append((record.id or "", record))
 
-        # Apply sorting if specified
-        if query.sort_specs:
-            for sort_spec in reversed(query.sort_specs):
-                reverse = sort_spec.order.value == "desc"
-                # Special handling for 'id' field
-                if sort_spec.field == 'id':
-                    records.sort(
-                        key=lambda r: r.id or "",
-                        reverse=reverse
-                    )
-                else:
-                    records.sort(
-                        key=lambda r: r.get_value(sort_spec.field, ""),
-                        reverse=reverse
-                    )
-
-        # Apply offset and limit.  ``is not None`` so ``limit=0`` is
-        # honored as Python-slice semantics (empty result) and not
-        # silently dropped.
-        if query.offset_value is not None:
-            records = records[query.offset_value:]
-        if query.limit_value is not None:
-            records = records[:query.limit_value]
-
-        # Apply field projection
-        if query.fields:
-            records = [r.project(query.fields) for r in records]
-
-        return records
+        # Records are freshly deserialized from S3 (no shared aliasing), so
+        # ``ensure_record_id`` inside the helper is the only copy needed.
+        return process_search_results(results, query, deep_copy=False)
 
     def _fetch_and_filter(self, key: str, query: Query) -> Record | None:
         """Fetch an object and apply query filters."""

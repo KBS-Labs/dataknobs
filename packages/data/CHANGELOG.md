@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SyncS3Database` and `AsyncS3Database` now sort search results
+  correctly when a sort field holds a falsy value such as a numeric `0`.**
+  The async backend's inline sort key coerced any falsy value (`0`,
+  `False`, `""`) to an empty string, so sorting a numeric field whose
+  values included `0` raised
+  `TypeError: '<' not supported between instances of 'str' and 'int'`.
+  Both S3 backends now apply sorting, `offset`/`limit` (including
+  `limit=0`), and field projection through the shared
+  `process_search_results` helper, so result ordering is consistent with
+  every other backend and the duplicated per-backend logic is gone.
+
 - **The async file database, Chroma and FAISS vector stores, and the
   shared aioboto3 session factory perform their I/O without blocking the
   event loop.** Each held a synchronous, blocking transport behind an
