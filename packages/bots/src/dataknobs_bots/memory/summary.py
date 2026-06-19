@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from dataknobs_bots.prompts.resolver import PromptResolver
 
 from dataknobs_bots.prompts.memory import DEFAULT_SUMMARY_PROMPT
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .base import Memory, apply_history_redactions, compile_history_redactions
@@ -255,11 +256,13 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         ``llm`` config key), this instance owns its lifecycle. When the
         bot's main LLM was passed in as a fallback, the bot owns it.
         """
-        if self._owns_llm_provider and self.llm_provider and hasattr(self.llm_provider, "close"):
-            try:
-                await self.llm_provider.close()
-            except Exception:
-                logger.exception("Error closing summary LLM provider")
+        await close_if_owned(
+            self.llm_provider,
+            self._owns_llm_provider,
+            on_error=lambda _exc: logger.exception(
+                "Error closing summary LLM provider"
+            ),
+        )
 
     async def clear(self) -> None:
         """Clear both the running summary and the message buffer."""

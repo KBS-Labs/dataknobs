@@ -13,6 +13,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from dataknobs_common.exceptions import ConfigurationError, NotFoundError
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import (
@@ -2911,38 +2912,40 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         # a collaborator injected via from_components / the pre-built
         # constructor is caller-owned and left open, so a KB / storage /
         # memory / strategy shared across bots survives one bot's close.
-        if self._owns_knowledge_base and self.knowledge_base:
-            try:
-                await self.knowledge_base.close()
-            except Exception:
-                logger.exception("Error closing knowledge base")
-
-        if self._owns_reasoning_strategy and self.reasoning_strategy:
-            try:
-                await self.reasoning_strategy.close()
-            except Exception:
-                logger.exception("Error closing reasoning strategy")
-
-        if self._owns_memory and self.memory:
-            try:
-                await self.memory.close()
-            except Exception:
-                logger.exception("Error closing memory store")
-
+        await close_if_owned(
+            self.knowledge_base,
+            self._owns_knowledge_base,
+            on_error=lambda _exc: logger.exception("Error closing knowledge base"),
+        )
+        await close_if_owned(
+            self.reasoning_strategy,
+            self._owns_reasoning_strategy,
+            on_error=lambda _exc: logger.exception(
+                "Error closing reasoning strategy"
+            ),
+        )
+        await close_if_owned(
+            self.memory,
+            self._owns_memory,
+            on_error=lambda _exc: logger.exception("Error closing memory store"),
+        )
         # Close conversation storage
-        if self._owns_conversation_storage and self.conversation_storage:
-            try:
-                await self.conversation_storage.close()
-            except Exception:
-                logger.exception("Error closing conversation storage")
-
+        await close_if_owned(
+            self.conversation_storage,
+            self._owns_conversation_storage,
+            on_error=lambda _exc: logger.exception(
+                "Error closing conversation storage"
+            ),
+        )
         # Close main LLM provider only if DynaBot created it.
         # When from_config(llm=...) was used, the caller owns the lifecycle.
-        if self._owns_llm and self.llm and hasattr(self.llm, "close"):
-            try:
-                await self.llm.close()
-            except Exception:
-                logger.exception("Error closing main LLM provider")
+        await close_if_owned(
+            self.llm,
+            self._owns_llm,
+            on_error=lambda _exc: logger.exception(
+                "Error closing main LLM provider"
+            ),
+        )
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.

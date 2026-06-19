@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -299,25 +300,18 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         ``from_config``). Externally-injected resources are left open
         for the caller to manage.
         """
-        if (
-            self._owns_embedding_provider
-            and self.embedding_provider
-            and hasattr(self.embedding_provider, "close")
-        ):
-            try:
-                await self.embedding_provider.close()
-            except Exception:
-                logger.exception("Error closing embedding provider")
-
-        if (
-            self._owns_vector_store
-            and self.vector_store
-            and hasattr(self.vector_store, "close")
-        ):
-            try:
-                await self.vector_store.close()
-            except Exception:
-                logger.exception("Error closing vector store")
+        await close_if_owned(
+            self.embedding_provider,
+            self._owns_embedding_provider,
+            on_error=lambda _exc: logger.exception(
+                "Error closing embedding provider"
+            ),
+        )
+        await close_if_owned(
+            self.vector_store,
+            self._owns_vector_store,
+            on_error=lambda _exc: logger.exception("Error closing vector store"),
+        )
 
     async def clear(
         self, filter_metadata: dict[str, Any] | None = None

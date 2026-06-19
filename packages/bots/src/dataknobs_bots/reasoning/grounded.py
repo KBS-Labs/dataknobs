@@ -32,6 +32,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_bots.utils.template_env import create_template_env
@@ -541,21 +542,10 @@ class GroundedReasoning(
         ``sources`` component. This leaves collaborators shared with the
         owning bot or other strategies open for their real owner to close.
         """
-        if (
-            self._owns_query_provider
-            and self._query_provider is not None
-            and hasattr(self._query_provider, "close")
-        ):
-            await self._query_provider.close()
-        if (
-            self._owns_extractor
-            and self._extractor is not None
-            and hasattr(self._extractor, "close")
-        ):
-            await self._extractor.close()
+        await close_if_owned(self._query_provider, self._owns_query_provider)
+        await close_if_owned(self._extractor, self._owns_extractor)
         for source in self._sources:
-            if source in self._owns_sources and hasattr(source, "close"):
-                await source.close()
+            await close_if_owned(source, source in self._owns_sources)
 
     # ------------------------------------------------------------------
     # Core pipeline — generate()

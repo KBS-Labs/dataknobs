@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_data import (
     AsyncDatabase,
     AsyncKeyedRecordStore,
@@ -214,8 +215,8 @@ class DataKnobsRegistryAdapter:
 
         Only closes the database if we created it (not if it was passed in).
         """
-        if self._db and self._owns_database:
-            await self._db.close()
+        await close_if_owned(self._db, self._owns_database)
+        if self._owns_database and self._db is not None:
             logger.debug("Registry adapter closed")
         self._initialized = False
         self._store = None

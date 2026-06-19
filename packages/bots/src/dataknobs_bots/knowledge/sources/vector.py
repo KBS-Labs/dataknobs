@@ -10,6 +10,7 @@ import logging
 from collections.abc import Callable, Hashable
 from typing import Any
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_data.sources.base import (
     GroundedSource,
     RetrievalIntent,
@@ -325,8 +326,7 @@ class VectorKnowledgeSource(GroundedSource):
         is left open. Closing it here would tear down a resource (e.g. a
         vector-store connection pool) the other holders still depend on.
         """
-        if self._owns_kb and hasattr(self._kb, "close"):
-            await self._kb.close()
+        await close_if_owned(self._kb, self._owns_kb)
 
     def providers(self) -> dict[str, Any]:
         """Delegate to the KB's provider registry."""

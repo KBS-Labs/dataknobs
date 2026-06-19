@@ -19,6 +19,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_xization import (
@@ -1845,21 +1846,13 @@ class RAGKnowledgeBase(
         """
         # Close vector store (will save if persist_path is set) — only
         # when owned; an injected store is left open for the caller.
-        if (
-            self._owns_vector_store
-            and self.vector_store is not None
-            and hasattr(self.vector_store, "close")
-        ):
-            await self.vector_store.close()
+        await close_if_owned(self.vector_store, self._owns_vector_store)
 
         # Close embedding provider (releases HTTP client sessions) — only
         # when owned; an injected provider is left open for the caller.
-        if (
-            self._owns_embedding_provider
-            and self.embedding_provider is not None
-            and hasattr(self.embedding_provider, "close")
-        ):
-            await self.embedding_provider.close()
+        await close_if_owned(
+            self.embedding_provider, self._owns_embedding_provider
+        )
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.
