@@ -162,6 +162,7 @@ select = [
     "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
     "RUF",  # Ruff-specific rules
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [
@@ -184,6 +185,12 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104", "F401"]
 "tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+# One-shot knowledge-source directory validation in a wizard tool; a cheap
+# stat during setup, not awaited on a conversational hot loop.
+"src/dataknobs_bots/tools/kb_tools.py" = ["ASYNC240"]
+# documents_path existence check during one-time ingest setup; cheap stat,
+# not a hot-loop blocking call.
+"src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]
 
 [tool.ruff.lint.isort]
 known-first-party = [

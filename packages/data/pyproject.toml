@@ -187,6 +187,7 @@ select = [
     "SIM",  # flake8-simplify
     "TCH",  # flake8-type-checking
     "RUF",  # Ruff-specific rules
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [
@@ -199,6 +200,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104", "F401"]
 "tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+# Cheap multi-producer queue-drain poll on a 5 s interval; asyncio.Event does
+# not fit a multi-worker drain and the qsize() check does not block the loop.
+"src/dataknobs_data/vector/migration.py" = ["ASYNC110"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["dataknobs_data", "dataknobs_utils"]

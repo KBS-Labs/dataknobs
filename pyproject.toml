@@ -179,6 +179,7 @@ select = [
     "ANN",  # flake8-annotations
     "ARG",  # flake8-unused-arguments
     "PYI",  # flake8-pyi
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [
@@ -298,6 +299,13 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "tests/*" = ["D100", "D101", "D102", "D103", "S101"]  # Docstrings not required in tests, assert allowed
 "packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
 "*.ipynb" = ["E402", "F811", "F401"]  # Allow imports not at top, redefinition, unused imports in notebooks
+# ASYNC false positives — verified cheap one-shot stats / poll loops, not hot-loop
+# blocking I/O. Mirrors the per-package per-file-ignores (validate.sh lints with
+# --config <root>, so the suppressions must also live here). See .claude/rules/async-transport.md.
+"packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # cheap 5s queue-drain poll; asyncio.Event does not fit a multi-worker drain
+"packages/bots/src/dataknobs_bots/tools/kb_tools.py" = ["ASYNC240"]  # one-shot KB-source dir validation; cheap setup stat
+"packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # documents_path existence check during one-time ingest setup
+"packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]  # validate() also runs from sync contexts; cheap path stat
 
 [tool.ruff.lint.isort]
 # Configure import sorting
