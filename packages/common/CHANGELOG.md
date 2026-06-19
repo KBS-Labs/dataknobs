@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `aiter_sync_in_thread(make_iter, *, max_buffer=32)` in
+  `dataknobs_common.async_iter` (exported from the package root). Drives a
+  *lazy, blocking* synchronous iterator on a worker thread and pumps its
+  items to an async consumer across a bounded queue, so an `async def`
+  can iterate a sync generator it cannot rewrite as async — a streaming
+  file/format parser, a sync DB cursor, a paginated SDK iterator —
+  without stalling the event loop. Unlike `asyncio.to_thread(list, it)`
+  it does not buffer the whole iterator: the producer blocks once
+  `max_buffer` items are unconsumed (backpressure), so streaming is
+  preserved. Abandoned iteration (`break` / exception / cancellation)
+  signals the producer to stop, `close()`s the source iterator (releasing
+  its file handle / cursor), and joins the worker thread — no leaked
+  thread, no dangling handle; the worker is a daemon so it can never
+  block process exit. Exceptions from the factory or during iteration
+  propagate to the consumer. The waiting consumer parks on an
+  `asyncio.Event` (no executor polling), so many concurrent streams do
+  not consume the default thread-pool, and the teardown thread-join is
+  cancellation-shielded. `max_buffer` must be `>= 1` (a `0`/unbounded
+  queue would defeat backpressure) and defaults to `32`.
 - `assert_no_blocking()` context manager and the `no_blocking` pytest
   fixture in `dataknobs_common.testing` (auto-discovered via the
   `dataknobs_common_blocking` pytest11 plugin). A runtime detector that
