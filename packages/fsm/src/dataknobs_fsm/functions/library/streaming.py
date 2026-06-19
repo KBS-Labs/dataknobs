@@ -4,6 +4,7 @@ This module provides streaming-related functions that can be referenced
 in FSM configurations for processing large data sets efficiently.
 """
 
+import asyncio
 import csv
 import json
 from pathlib import Path
@@ -48,7 +49,8 @@ class ChunkReader(ITransformFunction):
         if isinstance(self.source, str):
             # File source
             file_path = Path(self.source)
-            if not file_path.exists():
+            # Offload the existence stat — it is blocking disk I/O.
+            if not await asyncio.to_thread(file_path.exists):
                 raise TransformError(f"File not found: {self.source}")
             
             # Determine format
@@ -95,13 +97,24 @@ class ChunkReader(ITransformFunction):
     async def _read_json_chunk(
         self, file_path: Path, state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Read chunk from JSON file."""
+        """Read chunk from JSON file.
+
+        The whole bounded read runs on a worker thread via
+        :func:`asyncio.to_thread` so the blocking ``open`` / ``json.load``
+        never stalls the event loop.
+        """
+        return await asyncio.to_thread(self._read_json_chunk_sync, file_path, state)
+
+    def _read_json_chunk_sync(
+        self, file_path: Path, state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Synchronous JSON chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
-        
+
         # For JSON, we need to load the entire file (or use streaming JSON parser)
         with open(file_path) as f:
             data = json.load(f)
-        
+
         if isinstance(data, list):
             chunk = data[offset:offset + self.chunk_size]
             has_more = offset + self.chunk_size < len(data)
@@ -126,10 +139,21 @@ class ChunkReader(ITransformFunction):
     async def _read_csv_chunk(
         self, file_path: Path, state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Read chunk from CSV file."""
+        """Read chunk from CSV file.
+
+        The bounded read runs on a worker thread via
+        :func:`asyncio.to_thread` so the blocking ``open`` + row iteration
+        never stalls the event loop.
+        """
+        return await asyncio.to_thread(self._read_csv_chunk_sync, file_path, state)
+
+    def _read_csv_chunk_sync(
+        self, file_path: Path, state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Synchronous CSV chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
         records = []
-        
+
         with open(file_path) as f:
             reader = csv.DictReader(f)
             
@@ -159,10 +183,21 @@ class ChunkReader(ITransformFunction):
     async def _read_lines_chunk(
         self, file_path: Path, state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Read chunk of lines from file."""
+        """Read chunk of lines from file.
+
+        The bounded read runs on a worker thread via
+        :func:`asyncio.to_thread` so the blocking ``open`` + line iteration
+        never stalls the event loop.
+        """
+        return await asyncio.to_thread(self._read_lines_chunk_sync, file_path, state)
+
+    def _read_lines_chunk_sync(
+        self, file_path: Path, state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Synchronous line chunk read — run via ``to_thread``."""
         offset = state.get("offset", 0)
         records = []
-        
+
         with open(file_path) as f:
             # Skip to offset
             for _ in range(offset):
@@ -378,17 +413,28 @@ class FileAppender(ITransformFunction):
         }
 
     async def _write_buffer(self) -> int:
-        """Write buffer to file."""
+        """Write buffer to file.
+
+        The whole write (existence/size stats, read-existing for JSON
+        append, and the file write) runs on a worker thread via
+        :func:`asyncio.to_thread` so none of the blocking disk I/O stalls
+        the event loop.
+        """
         if not self._buffer:
             return 0
-        
+
+        count = len(self._buffer)
+        await asyncio.to_thread(self._write_buffer_to_disk)
+        self._buffer.clear()
+        return count
+
+    def _write_buffer_to_disk(self) -> None:
+        """Synchronous buffer write — run via ``to_thread``."""
         # Create file if needed
         if self.create_if_missing and not self.file_path.exists():
             self.file_path.parent.mkdir(parents=True, exist_ok=True)
             self.file_path.touch()
-        
-        count = len(self._buffer)
-        
+
         if self.format == "json":
             # Append to JSON array
             existing = []
@@ -428,9 +474,6 @@ class FileAppender(ITransformFunction):
         
         else:
             raise TransformError(f"Unsupported format: {self.format}")
-        
-        self._buffer.clear()
-        return count
 
     async def flush(self) -> int:
         """Flush any remaining buffered data."""

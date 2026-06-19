@@ -4,10 +4,13 @@ This module provides utilities for reading and writing various file formats
 in the context of FSM stream processing.
 """
 
+import asyncio
 import csv
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Union
+
+from dataknobs_common import aiter_sync_in_thread
 
 
 def detect_format(file_path: Union[str, Path], for_output: bool = False) -> str:
@@ -104,12 +107,22 @@ async def create_file_reader(
 async def read_jsonl_file(file_path: Path) -> AsyncIterator[Dict[str, Any]]:
     """Read a JSONL (JSON Lines) file.
 
+    The blocking ``open`` + line iteration runs on a worker thread via
+    :func:`~dataknobs_common.aiter_sync_in_thread`, so the file read never
+    stalls the event loop while streaming stays lazy (bounded look-ahead).
+
     Args:
         file_path: Path to the JSONL file
 
     Yields:
         Dictionaries from each valid JSON line
     """
+    async for record in aiter_sync_in_thread(lambda: _read_jsonl_sync(file_path)):
+        yield record
+
+
+def _read_jsonl_sync(file_path: Path) -> Iterator[Dict[str, Any]]:
+    """Synchronous JSONL line reader — driven on a worker thread."""
     with open(file_path) as f:
         for line in f:
             if line.strip():
@@ -123,19 +136,27 @@ async def read_jsonl_file(file_path: Path) -> AsyncIterator[Dict[str, Any]]:
 async def read_json_file(file_path: Path) -> AsyncIterator[Dict[str, Any]]:
     """Read a JSON file (single object or array).
 
+    The whole-file read + parse is offloaded with :func:`asyncio.to_thread`
+    so the blocking ``open`` / ``json.load`` never runs on the event loop.
+
     Args:
         file_path: Path to the JSON file
 
     Yields:
         Dictionary or dictionaries from the JSON file
     """
+    data = await asyncio.to_thread(_load_json, file_path)
+    if isinstance(data, list):
+        for item in data:
+            yield item
+    else:
+        yield data
+
+
+def _load_json(file_path: Path) -> Any:
+    """Synchronous whole-file JSON load — run via ``to_thread``."""
     with open(file_path) as f:
-        data = json.load(f)
-        if isinstance(data, list):
-            for item in data:
-                yield item
-        else:
-            yield data
+        return json.load(f)
 
 
 async def read_csv_file(
@@ -145,6 +166,10 @@ async def read_csv_file(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Read a CSV file.
 
+    The blocking ``open`` + row iteration runs on a worker thread via
+    :func:`~dataknobs_common.aiter_sync_in_thread`, keeping the read off
+    the event loop while streaming stays lazy.
+
     Args:
         file_path: Path to the CSV file
         delimiter: CSV delimiter character
@@ -153,11 +178,22 @@ async def read_csv_file(
     Yields:
         Dictionaries representing each row
     """
+    async for row in aiter_sync_in_thread(
+        lambda: _read_csv_sync(file_path, delimiter, has_header)
+    ):
+        yield row
+
+
+def _read_csv_sync(
+    file_path: Path,
+    delimiter: str,
+    has_header: bool,
+) -> Iterator[Dict[str, Any]]:
+    """Synchronous CSV row reader — driven on a worker thread."""
     with open(file_path, newline='') as f:
         if has_header:
             dict_reader = csv.DictReader(f, delimiter=delimiter)
-            for row in dict_reader:
-                yield row
+            yield from dict_reader
         else:
             list_reader = csv.reader(f, delimiter=delimiter)
             for row_list in list_reader:
@@ -171,6 +207,10 @@ async def read_text_file(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Read a plain text file line by line.
 
+    The blocking ``open`` + line iteration runs on a worker thread via
+    :func:`~dataknobs_common.aiter_sync_in_thread`, keeping the read off
+    the event loop while streaming stays lazy.
+
     Args:
         file_path: Path to the text file
         field_name: Field name to use for each line
@@ -179,6 +219,18 @@ async def read_text_file(
     Yields:
         Dictionaries with each line as a field
     """
+    async for record in aiter_sync_in_thread(
+        lambda: _read_text_sync(file_path, field_name, skip_empty)
+    ):
+        yield record
+
+
+def _read_text_sync(
+    file_path: Path,
+    field_name: str,
+    skip_empty: bool,
+) -> Iterator[Dict[str, Any]]:
+    """Synchronous text line reader — driven on a worker thread."""
     with open(file_path) as f:
         for line in f:
             sline = line.rstrip('\n\r')

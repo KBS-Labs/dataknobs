@@ -665,8 +665,8 @@ class AsyncSimpleFSM:
 
     async def process_stream(
         self,
-        source: str | AsyncIterator[dict[str, Any]],
-        sink: str | None = None,
+        source: str | Path | AsyncIterator[dict[str, Any]],
+        sink: str | Path | None = None,
         chunk_size: int = 100,
         on_progress: Callable | None = None,
         input_format: str = 'auto',
@@ -679,8 +679,8 @@ class AsyncSimpleFSM:
         """Process a stream of data through the FSM asynchronously.
 
         Args:
-            source: Data source (file path or async iterator)
-            sink: Optional output destination
+            source: Data source (file path ``str``/``Path``, or async iterator)
+            sink: Optional output destination (file path ``str``/``Path``)
             chunk_size: Size of processing chunks
             on_progress: Optional progress callback
             input_format: Input file format ('auto', 'jsonl', 'json', 'csv', 'text')
@@ -708,7 +708,7 @@ class AsyncSimpleFSM:
         )
 
         # Choose between streaming and regular mode
-        if use_streaming and isinstance(source, str):
+        if use_streaming and isinstance(source, (str, Path)):
             # Use memory-efficient streaming for large files
             from ..utils.streaming_file_utils import (
                 create_streaming_file_reader,
@@ -738,7 +738,7 @@ class AsyncSimpleFSM:
             from ..utils.file_utils import create_file_reader, create_file_writer
 
             # Handle file source
-            if isinstance(source, str):
+            if isinstance(source, (str, Path)):
                 stream_source = create_file_reader(
                     file_path=source,
                     input_format=input_format,
@@ -773,12 +773,15 @@ class AsyncSimpleFSM:
                 'throughput': result.throughput
             }
         finally:
-            # Clean up any resources (e.g., close files)
+            # Clean up any resources (e.g., close files). A sync cleanup
+            # (e.g. the JSON sink's whole-file flush) is offloaded so the
+            # blocking write never runs on the event loop — symmetric with
+            # how the per-chunk sync sink is run via the executor.
             if cleanup_func:
                 if asyncio.iscoroutinefunction(cleanup_func):
                     await cleanup_func()
                 else:
-                    cleanup_func()
+                    await asyncio.to_thread(cleanup_func)
 
     async def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
         """Validate data against FSM's start state schema asynchronously.

@@ -4,12 +4,14 @@ This module provides pre-configured FSM patterns for processing files,
 including CSV, JSON, XML, and other formats with streaming support.
 """
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List
+from typing import Any, AsyncIterator, Callable, ClassVar, Dict, Iterator, List
 
+from dataknobs_common import aiter_sync_in_thread
 from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
@@ -18,9 +20,8 @@ from dataknobs_common.structured_config import (
 from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
-from ..api.simple import SimpleFSM
+from ..api.async_simple import AsyncSimpleFSM
 from ..functions.library.validators import SchemaValidator
-from ..streaming.file_stream import FileStreamSink, FileStreamSource
 
 
 class FileFormat(Enum):
@@ -143,7 +144,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         """
         return self._output_format
 
-    def _build_fsm(self) -> SimpleFSM:
+    def _build_fsm(self) -> AsyncSimpleFSM:
         """Build FSM for file processing."""
         # Determine data mode based on processing mode
         if self.config.mode == ProcessingMode.STREAM:
@@ -193,7 +194,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
             'functions': self._build_functions()
         }
         
-        return SimpleFSM(fsm_config, data_mode=data_mode)
+        return AsyncSimpleFSM(fsm_config, data_mode=data_mode)
         
     def _build_arcs(self) -> List[Dict[str, Any]]:
         """Build FSM arcs based on configuration."""
@@ -473,10 +474,25 @@ data
         
     async def process(self) -> Dict[str, Any]:
         """Process the file.
-        
+
         Returns:
             Processing metrics
+
+        Raises:
+            NotImplementedError: If ``compression`` is configured. No
+                execution path currently writes compressed output (the former
+                stream-mode ``FileStreamSink`` path was removed when the
+                pattern moved onto the async engine), so the option is
+                rejected loudly rather than silently emitting uncompressed
+                output the caller believes is compressed.
         """
+        if self.config.compression:
+            raise NotImplementedError(
+                "FileProcessor does not support compressed output "
+                f"(compression={self.config.compression!r}). Write uncompressed "
+                "output and compress it separately, or omit the 'compression' "
+                "config field."
+            )
         if self.config.mode == ProcessingMode.STREAM:
             return await self._process_stream()
         elif self.config.mode == ProcessingMode.BATCH:
@@ -485,31 +501,20 @@ data
             return await self._process_whole()
             
     async def _process_stream(self) -> Dict[str, Any]:
-        """Process file as stream."""
-        # Create stream source
-        source = FileStreamSource(
-            self.config.input_path,
+        """Process file as stream.
+
+        Awaits the async FSM's streaming executor directly (no sync-bridge
+        loop blocking). The executor opens the input/output paths itself and
+        auto-detects the format from the extension, so the input/output
+        paths are passed as strings rather than wrapped stream objects.
+        """
+        result = await self._fsm.process_stream(
+            source=self.config.input_path,
+            sink=self.config.output_path,
             chunk_size=self.config.chunk_size,
-            encoding=self.config.encoding
+            input_format='auto',
         )
-        
-        # Create stream sink if output specified
-        sink = None
-        if self.config.output_path:
-            sink = FileStreamSink(
-                self.config.output_path,
-                encoding=self.config.encoding,
-                compression=self.config.compression
-            )
-            
-        # Process stream
-        result = self._fsm.process_stream(
-            source=source,
-            sink=sink,
-            chunk_size=self.config.chunk_size,
-            on_progress=self._update_progress
-        )
-        
+
         self._metrics.update(result)
         return self._metrics
         
@@ -522,7 +527,7 @@ data
             
         # Process batches
         for batch in batches:
-            results = self._fsm.process_batch(
+            results = await self._fsm.process_batch(
                 data=batch,  # type: ignore
                 batch_size=self.config.chunk_size,
                 max_workers=self.config.parallel_chunks
@@ -541,10 +546,9 @@ data
         
     async def _process_whole(self) -> Dict[str, Any]:
         """Process entire file at once."""
-        # Read entire file
-        with open(self.config.input_path, encoding=self.config.encoding) as f:
-            content = f.read()
-            
+        # Read entire file off the event loop (blocking whole-file read).
+        content = await asyncio.to_thread(self._read_whole)
+
         # Parse content
         if self._format == FileFormat.JSON:
             import json
@@ -559,9 +563,9 @@ data
             
         # Process data
         if isinstance(data, list):
-            results = self._fsm.process_batch(data)
+            results = await self._fsm.process_batch(data)
         else:
-            results = [self._fsm.process(data)]
+            results = [await self._fsm.process(data)]
             
         # Write output if specified
         if self.config.output_path and results:
@@ -571,16 +575,32 @@ data
         self._metrics['records_written'] = sum(
             1 for r in results if r['success']
         )
-        
+
         return self._metrics
-        
+
+    def _read_whole(self) -> str:
+        """Synchronous whole-file read — run via ``to_thread``."""
+        with open(self.config.input_path, encoding=self.config.encoding) as f:
+            return f.read()
+
     async def _read_batches(self) -> AsyncIterator[List[Dict[str, Any]]]:
-        """Read file in batches."""
-        batch = []
+        """Read file in batches.
+
+        The blocking ``open`` + line iteration and batch assembly run on a
+        worker thread via :func:`~dataknobs_common.aiter_sync_in_thread`;
+        batches cross a bounded queue so streaming stays lazy and the loop
+        is never stalled.
+        """
+        async for batch in aiter_sync_in_thread(self._read_batches_sync):
+            yield batch
+
+    def _read_batches_sync(self) -> Iterator[List[Dict[str, Any]]]:
+        """Synchronous batch reader — driven on a worker thread."""
+        batch: List[Dict[str, Any]] = []
         with open(self.config.input_path, encoding=self.config.encoding) as f:
             for line in f:
                 self._metrics['lines_read'] += 1
-                
+
                 # Parse line based on format
                 if self._format == FileFormat.JSON:
                     import json
@@ -592,18 +612,26 @@ data
                         continue
                 else:
                     batch.append({'line': line.strip()})
-                    
+
                 if len(batch) >= self.config.chunk_size:
                     yield batch
                     batch = []
-                    
+
         if batch:
             yield batch
-            
+
     async def _write_output(self, results: List[Dict[str, Any]]) -> None:
-        """Write processed results to output file."""
+        """Write processed results to output file.
+
+        The whole write runs on a worker thread via
+        :func:`asyncio.to_thread` so the blocking ``open`` + write never
+        stalls the event loop.
+        """
         output_data = [r['data'] for r in results if r['success']]
-        
+        await asyncio.to_thread(self._write_output_sync, output_data)
+
+    def _write_output_sync(self, output_data: List[Dict[str, Any]]) -> None:
+        """Synchronous output write — run via ``to_thread``."""
         with open(self.config.output_path, 'w', encoding=self.config.encoding) as f:  # type: ignore
             if self._output_format == FileFormat.JSON:
                 import json
@@ -617,10 +645,6 @@ data
             else:
                 for item in output_data:
                     f.write(str(item) + '\n')
-                    
-    def _update_progress(self, progress: Dict[str, Any]) -> None:
-        """Update progress metrics."""
-        self._metrics.update(progress)
 
 
 # Factory functions for common file processing patterns

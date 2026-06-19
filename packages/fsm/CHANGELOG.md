@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `FileProcessor` and `DatabaseETL` now run their FSM pipelines on the
+  active event loop's async engine instead of driving a synchronous FSM
+  wrapper from their `async` methods, so awaiting `FileProcessor.process()`
+  and `DatabaseETL.run()` no longer stalls the loop on the wrapper's
+  blocking sync-to-async bridge. `DatabaseETL.run()` additionally builds
+  its source database through the async database factory (it previously
+  raised on every call and could not execute), and `FileProcessor`'s
+  streaming mode passes the input/output paths to the streaming executor;
+  both now run end-to-end.
+- The FSM file-processing and streaming utilities now perform their
+  file reads and writes off the event loop, so awaiting them from an
+  async context no longer stalls the loop. The lazy chunk/line readers
+  (`StreamingFileReader`, the `read_*_file` helpers in
+  `utils/file_utils`, and `FileProcessor._read_batches`) stream their
+  blocking `open()` + iteration on a worker thread via
+  `aiter_sync_in_thread`, preserving bounded-memory streaming; the
+  whole-file readers/writers (`read_json_file`,
+  `FileProcessor._process_whole`/`_write_output`, the `ChunkReader`
+  format readers, `FileAppender`'s buffered writes, `StreamingFileWriter`'s
+  buffered open/flush/close, and the `AsyncSimpleFSM.process_stream`
+  JSON-sink whole-file cleanup) offload their one-shot disk I/O via
+  `asyncio.to_thread`. Public async surfaces are unchanged.
+- `AsyncSimpleFSM.process_stream` now accepts a `Path` source/sink in
+  addition to `str` (a `Path` previously fell through to the async-iterator
+  branch and failed), and `FileProcessor.process()` now raises
+  `NotImplementedError` when `compression` is configured rather than
+  silently emitting uncompressed output — no execution path writes
+  compressed output, so the option was being silently dropped.
+
 ### Security
 
 - Bumped minimum `aiohttp` requirement (extra: `http`) from
