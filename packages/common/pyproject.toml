@@ -35,6 +35,7 @@ sqs = ["aioboto3>=12.0.0"]
 dataknobs_common_postgres = "dataknobs_common.testing.postgres_fixtures"
 dataknobs_common_elasticsearch = "dataknobs_common.testing.elasticsearch_fixtures"
 dataknobs_common_localstack = "dataknobs_common.testing.localstack_fixtures"
+dataknobs_common_blocking = "dataknobs_common.testing.blocking"
 
 [build-system]
 requires = ["hatchling"]
@@ -52,6 +53,10 @@ dev = [
     "asyncpg>=0.29.0",
     "redis>=5.0.0",
     "aioboto3>=12.0.0",
+    # Runtime blocking-call detector for async-correctness tests
+    # (dataknobs_common.testing.assert_no_blocking). Dev/test-only —
+    # never imported by shipped runtime code.
+    "blockbuster>=1.5.26,<2.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -9,6 +9,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
 - [Factory Parity Helpers](#factory-parity-helpers)
+- [Async Blocking Detection](#async-blocking-detection)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
 
@@ -538,6 +539,63 @@ first two — together they pin both the dataclass↔ctor parity and the
 factory↔ctor parity, so drift in either direction fails the test. For a
 `StructuredConfigConsumer` adopter, `assert_structured_config_consumer`
 bundles them into a single call.
+
+---
+
+## Async Blocking Detection
+
+An `async def` method promises to keep the event loop free while it awaits.
+A synchronous, blocking transport invoked from inside it — a sync `boto3`
+client, `open()`, `time.sleep`, a blocking socket read — breaks that
+promise: the loop stalls for the duration of the call and every other task
+on it is starved. The defect is *non-functional* (the method still returns
+the right value), so ordinary outcome assertions never catch it.
+
+`assert_no_blocking()` turns that invisible defect into a deterministic,
+reproduce-first test failure. It activates a runtime detector
+([`blockbuster`](https://pypi.org/project/blockbuster/)) that patches the
+common blocking syscalls to raise when they run on a live event loop. Wrap
+the awaited operation under test:
+
+```python
+from dataknobs_common.testing import assert_no_blocking
+
+async def test_put_does_not_block(backend):
+    with assert_no_blocking():
+        await backend.put_file("kb", "doc.md", b"...")
+```
+
+The block **fails** against a backend that blocks the loop and **passes**
+once it uses an async transport (`aioboto3`, `asyncpg`, `aiohttp`) or
+offloads the blocking call via `asyncio.to_thread`. Scope the block tightly
+around the `await` under test — not synchronous setup (building a temp
+directory, constructing fixtures) which may legitimately block.
+
+Detection only fires while an event loop is running, so `assert_no_blocking`
+is meaningful inside an `async` test (or any frame with a running loop); in
+a synchronous frame it is a no-op.
+
+`blockbuster` is a **dev/test-only** dependency — never imported by shipped
+runtime code. The imports are lazy, so importing `dataknobs_common.testing`
+never requires it. Consumers guarding their own async backends add
+`blockbuster` to their dev dependencies and get the construct for free.
+
+| Helper | Role |
+|---|---|
+| `assert_no_blocking()` | Context manager; raises the detector's `BlockingError` if a blocking syscall runs on the loop in the block. Raises `RuntimeError` if `blockbuster` is not installed (fails loud, never silently passes). |
+| `no_blocking` (fixture) | Wraps the whole test in `assert_no_blocking()`. Auto-discovered via the `dataknobs_common_blocking` pytest11 plugin; skips when `blockbuster` is absent. Prefer the context manager for precise scoping. |
+| `is_blockbuster_available()` | `bool` — gate tests that rely on the detector so they skip cleanly without the dev dependency. |
+| `blocking_error_type()` | Returns `blockbuster`'s `BlockingError` type (lazily), so a self-test can `pytest.raises(blocking_error_type())` without importing `blockbuster` directly. |
+
+```python
+import pytest
+from dataknobs_common.testing import is_blockbuster_available
+
+requires_blockbuster = pytest.mark.skipif(
+    not is_blockbuster_available(),
+    reason="blockbuster not installed",
+)
+```
 
 ---
 

@@ -27,6 +27,7 @@ base default remains for out-of-tree backends.
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, ClassVar
@@ -115,6 +116,18 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
     # --- Canonical change-detection algorithm (shared) ---
+
+    @staticmethod
+    def _guess_content_type(path: str) -> str:
+        """Best-effort MIME type for ``path`` (default octet-stream).
+
+        The first ``mimetypes`` lookup in a process lazily reads the
+        system MIME database from disk, a blocking call — invoke this via
+        ``asyncio.to_thread`` from an async method so the event loop stays
+        free. Shared by the file and S3 backends.
+        """
+        guessed_type, _ = mimetypes.guess_type(path)
+        return guessed_type or "application/octet-stream"
 
     @staticmethod
     def _identity_of_snapshot(snapshot: dict[str, str]) -> str:

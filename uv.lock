@@ -607,6 +607,18 @@ wheels = [
 ]
 
 [[package]]
+name = "blockbuster"
+version = "1.5.26"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "forbiddenfruit", marker = "implementation_name == 'cpython'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/e0/dcbab602790a576b0b94108c07e2c048e5897df7cc83722a89582d733987/blockbuster-1.5.26.tar.gz", hash = "sha256:cc3ce8c70fa852a97ee3411155f31e4ad2665cd1c6c7d2f8bb1851dab61dc629", size = 36085, upload-time = "2025-12-05T10:43:47.735Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/c1/84fc6811122f54b20de2e5afb312ee07a3a47a328755587d1e505475239b/blockbuster-1.5.26-py3-none-any.whl", hash = "sha256:f8e53fb2dd4b6c6ec2f04907ddbd063ca7cd1ef587d24448ef4e50e81e3a79bb", size = 13226, upload-time = "2025-12-05T10:43:48.778Z" },
+]
+
+[[package]]
 name = "boto3"
 version = "1.40.61"
 source = { registry = "https://pypi.org/simple" }
@@ -1184,6 +1196,7 @@ dependencies = [
 
 [package.optional-dependencies]
 s3 = [
+    { name = "aioboto3" },
     { name = "boto3" },
 ]
 server = [
@@ -1193,9 +1206,10 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aioboto3" },
+    { name = "blockbuster" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "moto" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1207,6 +1221,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aioboto3", marker = "extra == 's3'", specifier = ">=12.0.0" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
@@ -1226,9 +1241,10 @@ provides-extras = ["s3", "server"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aioboto3", specifier = ">=12.0.0" },
+    { name = "blockbuster", specifier = ">=1.5.26,<2.0.0" },
     { name = "fastapi", specifier = ">=0.133.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "moto", specifier = ">=5.1.10" },
     { name = "mypy", specifier = ">=1.0.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
@@ -1261,6 +1277,7 @@ sqs = [
 dev = [
     { name = "aioboto3" },
     { name = "asyncpg" },
+    { name = "blockbuster" },
     { name = "mypy" },
     { name = "pyrate-limiter" },
     { name = "pytest" },
@@ -1284,6 +1301,7 @@ provides-extras = ["dotenv", "postgres", "redis", "sqs"]
 dev = [
     { name = "aioboto3", specifier = ">=12.0.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
+    { name = "blockbuster", specifier = ">=1.5.26,<2.0.0" },
     { name = "mypy", specifier = ">=1.0.0" },
     { name = "pyrate-limiter", specifier = ">=3.0.0" },
     { name = "pytest", specifier = ">=8.0.0" },
@@ -2133,6 +2151,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/1e/3ff1a9b523058c2eeb6a9d50f5574e2a738200d0d94107d5bc4105e8da3f/fonttools-4.63.0-cp314-cp314t-win_amd64.whl", hash = "sha256:6d4741eb179121cab9eea4cb2393d24492373a260d7945006358c08cfbf45419", size = 2425829, upload-time = "2026-05-14T12:04:26.829Z" },
     { url = "https://files.pythonhosted.org/packages/2c/47/c99d5268f354002ce80f8d029cd9d7d872969da1de8b93d32de4dc56d6f4/fonttools-4.63.0-py3-none-any.whl", hash = "sha256:445af2eab030a16b9171ea8bdda7ebf7d96bda2df88ee182a464252f6e05e20d", size = 1164562, upload-time = "2026-05-14T12:04:29.092Z" },
 ]
+
+[[package]]
+name = "forbiddenfruit"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/79/d4f20e91327c98096d605646bdc6a5ffedae820f38d378d3515c42ec5e60/forbiddenfruit-0.1.4.tar.gz", hash = "sha256:e3f7e66561a29ae129aac139a85d610dbf3dd896128187ed5454b6421f624253", size = 43756, upload-time = "2021-01-16T21:03:35.401Z" }
 
 [[package]]
 name = "fqdn"

@@ -6,17 +6,21 @@ backend so a future drift in the layout constants or key-derivation
 methods is caught by the conformance suite before it silently breaks a
 consumer's external-event-source filter.
 
-The S3 leg uses ``moto`` (``mock_aws()``) — the package precedent for
-S3-backend tests; no LocalStack process is required.
+``key_pattern`` and ``classify_key`` are pure string operations — they
+inspect the configured prefix and the key's path segments and never
+touch S3 — so the S3 leg of those conformance checks builds an
+*uninitialized* backend with no AWS service at all. The single
+end-to-end leg that actually writes objects
+(:func:`test_feedback_loop_reproduction_s3`) runs against real
+LocalStack (``bin/dk up``) and skips when it is unavailable; moto's
+``mock_aws`` is incompatible with the aioboto3 transport.
 """
 from __future__ import annotations
 
 import tempfile
 from pathlib import Path
 
-import boto3
 import pytest
-from moto import mock_aws
 
 from dataknobs_bots.knowledge.storage import (
     FileKnowledgeBackend,
@@ -25,35 +29,10 @@ from dataknobs_bots.knowledge.storage import (
     KnowledgeResourceBackendMixin,
 )
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
+from dataknobs_common.testing import requires_localstack
 
 BUCKET = "kb-key-layout-bucket"
 PREFIX = "rag/"
-
-
-# ---------------------------------------------------------------------------
-# Environment isolation (mirrors test_s3_snapshot_diff.py / test_s3_region_fallback.py)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear ambient AWS env so moto (not a running LocalStack) serves."""
-    for key in (
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_PROFILE",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_ENDPOINT_URL",
-        "AWS_ENDPOINT_URL_S3",
-        "LOCALSTACK_ENDPOINT",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +49,12 @@ def _make_file_backend(tmp: Path) -> FileKnowledgeBackend:
 
 
 def _make_s3_backend() -> S3KnowledgeBackend:
-    """Caller is responsible for the surrounding ``mock_aws()`` context."""
-    client = boto3.client("s3", region_name="us-east-1")
-    client.create_bucket(Bucket=BUCKET)
+    """An uninitialized S3 backend — key_pattern/classify_key are pure.
+
+    No bucket, no client, no AWS service: the layout methods under test
+    derive their answers from the configured prefix and the key's path
+    segments alone.
+    """
     return S3KnowledgeBackend(bucket=BUCKET, prefix=PREFIX)
 
 
@@ -117,9 +99,8 @@ def test_classify_key_file(
 def test_classify_key_s3(
     raw_key: str, expected: KnowledgeKeyKind
 ) -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        assert backend.classify_key(raw_key) == expected
+    backend = _make_s3_backend()
+    assert backend.classify_key(raw_key) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -128,23 +109,21 @@ def test_classify_key_s3(
 
 
 def test_key_pattern_s3_content_all_domains() -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        assert backend.key_pattern() == f"{PREFIX}*/content/*"
-        # default kind is CONTENT, default domain_id is None — same answer
-        assert (
-            backend.key_pattern(KnowledgeKeyKind.CONTENT)
-            == f"{PREFIX}*/content/*"
-        )
+    backend = _make_s3_backend()
+    assert backend.key_pattern() == f"{PREFIX}*/content/*"
+    # default kind is CONTENT, default domain_id is None — same answer
+    assert (
+        backend.key_pattern(KnowledgeKeyKind.CONTENT)
+        == f"{PREFIX}*/content/*"
+    )
 
 
 def test_key_pattern_s3_content_single_domain() -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        assert (
-            backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
-            == f"{PREFIX}acme/content/*"
-        )
+    backend = _make_s3_backend()
+    assert (
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="acme")
+        == f"{PREFIX}acme/content/*"
+    )
 
 
 def test_key_pattern_file_content_all_domains(tmp_path: Path) -> None:
@@ -184,37 +163,35 @@ def test_key_pattern_memory_returns_empty_sentinel() -> None:
 
 
 def test_key_pattern_s3_metadata_matches_metadata_key() -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        # The all-domains pattern must equal the single-domain pattern
-        # with the wildcard substituted for the domain segment, and that
-        # equals what _metadata_key produces for that domain.
-        pattern_acme = backend.key_pattern(
-            KnowledgeKeyKind.METADATA, domain_id="acme"
-        )
-        assert pattern_acme == backend._metadata_key("acme")
-        # Wildcard pattern is the same shape with * for the domain.
-        assert backend.key_pattern(KnowledgeKeyKind.METADATA) == (
-            f"{PREFIX}*/_metadata.json"
-        )
+    backend = _make_s3_backend()
+    # The all-domains pattern must equal the single-domain pattern
+    # with the wildcard substituted for the domain segment, and that
+    # equals what _metadata_key produces for that domain.
+    pattern_acme = backend.key_pattern(
+        KnowledgeKeyKind.METADATA, domain_id="acme"
+    )
+    assert pattern_acme == backend._metadata_key("acme")
+    # Wildcard pattern is the same shape with * for the domain.
+    assert backend.key_pattern(KnowledgeKeyKind.METADATA) == (
+        f"{PREFIX}*/_metadata.json"
+    )
 
 
 def test_key_pattern_s3_snapshot_matches_snapshot_key() -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        # The snapshot pattern matches the prefix every snapshot key
-        # lives under.
-        snap_key = backend._snapshot_key("acme", "deadbeef")
-        prefix = (
-            f"{PREFIX}acme/_snapshots/"
-        )  # what the * in the pattern stands in for
-        assert snap_key.startswith(prefix)
-        assert backend.key_pattern(
-            KnowledgeKeyKind.SNAPSHOT, domain_id="acme"
-        ) == f"{prefix}*"
-        assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT) == (
-            f"{PREFIX}*/_snapshots/*"
-        )
+    backend = _make_s3_backend()
+    # The snapshot pattern matches the prefix every snapshot key
+    # lives under.
+    snap_key = backend._snapshot_key("acme", "deadbeef")
+    prefix = (
+        f"{PREFIX}acme/_snapshots/"
+    )  # what the * in the pattern stands in for
+    assert snap_key.startswith(prefix)
+    assert backend.key_pattern(
+        KnowledgeKeyKind.SNAPSHOT, domain_id="acme"
+    ) == f"{prefix}*"
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT) == (
+        f"{PREFIX}*/_snapshots/*"
+    )
 
 
 def test_key_pattern_file_metadata_matches_metadata_path(
@@ -270,59 +247,64 @@ def _glob_match(pattern: str, key: str) -> bool:
     return fnmatch.fnmatchcase(key, pattern.replace("**", "*"))
 
 
-@pytest.mark.asyncio
-async def test_feedback_loop_reproduction_s3() -> None:
+@pytest.mark.integration
+@pytest.mark.s3
+@requires_localstack
+async def test_feedback_loop_reproduction_s3(s3_kb_config) -> None:
     """A single put_file produces one CONTENT key and at least one
     state key on S3 — confirm the CONTENT pattern matches only the
     consumer key.
     """
-    with mock_aws():
-        backend = _make_s3_backend()
-        await backend.initialize()
-        try:
-            await backend.create_kb("acme")
-            await backend.put_file("acme", "intro.md", b"# Hello")
+    backend = S3KnowledgeBackend.from_config(s3_kb_config)
+    await backend.initialize()
+    try:
+        await backend.create_kb("acme")
+        await backend.put_file("acme", "intro.md", b"# Hello")
 
-            # Enumerate every object under the domain prefix.
-            client = boto3.client("s3", region_name="us-east-1")
-            response = client.list_objects_v2(
-                Bucket=BUCKET, Prefix=f"{PREFIX}acme/"
+        # Enumerate every object under the domain prefix using the
+        # backend's own (aioboto3) session.
+        domain_prefix = f"{backend._prefix}acme/"
+        async with backend._session.client(
+            "s3", **backend._client_kwargs
+        ) as s3:
+            response = await s3.list_objects_v2(
+                Bucket=backend._bucket, Prefix=domain_prefix
             )
-            keys = [obj["Key"] for obj in response.get("Contents", [])]
-            assert keys, "expected at least one key after put_file"
+        keys = [obj["Key"] for obj in response.get("Contents", [])]
+        assert keys, "expected at least one key after put_file"
 
-            pattern = backend.key_pattern(
-                KnowledgeKeyKind.CONTENT, domain_id="acme"
-            )
+        pattern = backend.key_pattern(
+            KnowledgeKeyKind.CONTENT, domain_id="acme"
+        )
 
-            content_keys = [
-                k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT
-            ]
-            metadata_keys = [
-                k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA
-            ]
-            snapshot_keys = [
-                k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT
-            ]
+        content_keys = [
+            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.CONTENT
+        ]
+        metadata_keys = [
+            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.METADATA
+        ]
+        snapshot_keys = [
+            k for k in keys if backend.classify_key(k) is KnowledgeKeyKind.SNAPSHOT
+        ]
 
-            assert len(content_keys) == 1, (
-                f"expected exactly one CONTENT key; got {content_keys}"
+        assert len(content_keys) == 1, (
+            f"expected exactly one CONTENT key; got {content_keys}"
+        )
+        assert _glob_match(pattern, content_keys[0]), (
+            f"CONTENT pattern {pattern!r} must match the content key "
+            f"{content_keys[0]!r}"
+        )
+        assert metadata_keys, (
+            "expected at least one METADATA write during put_file "
+            "(the feedback-loop trigger that broke production)"
+        )
+        for state_key in metadata_keys + snapshot_keys:
+            assert not _glob_match(pattern, state_key), (
+                f"CONTENT pattern {pattern!r} must NOT match state "
+                f"key {state_key!r} — that's the feedback-loop bug"
             )
-            assert _glob_match(pattern, content_keys[0]), (
-                f"CONTENT pattern {pattern!r} must match the content key "
-                f"{content_keys[0]!r}"
-            )
-            assert metadata_keys, (
-                "expected at least one METADATA write during put_file "
-                "(the feedback-loop trigger that broke production)"
-            )
-            for state_key in metadata_keys + snapshot_keys:
-                assert not _glob_match(pattern, state_key), (
-                    f"CONTENT pattern {pattern!r} must NOT match state "
-                    f"key {state_key!r} — that's the feedback-loop bug"
-                )
-        finally:
-            await backend.close()
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
@@ -427,22 +409,21 @@ def test_each_backend_inherits_mixin_constants(tmp_path: Path) -> None:
     backends = [
         _make_memory_backend(),
         _make_file_backend(tmp_path),
+        _make_s3_backend(),
     ]
-    with mock_aws():
-        backends.append(_make_s3_backend())
-        for backend in backends:
-            assert (
-                backend.METADATA_FILE
-                == KnowledgeResourceBackendMixin.METADATA_FILE
-            )
-            assert (
-                backend.CONTENT_DIR
-                == KnowledgeResourceBackendMixin.CONTENT_DIR
-            )
-            assert (
-                backend.SNAPSHOTS_DIR
-                == KnowledgeResourceBackendMixin.SNAPSHOTS_DIR
-            )
+    for backend in backends:
+        assert (
+            backend.METADATA_FILE
+            == KnowledgeResourceBackendMixin.METADATA_FILE
+        )
+        assert (
+            backend.CONTENT_DIR
+            == KnowledgeResourceBackendMixin.CONTENT_DIR
+        )
+        assert (
+            backend.SNAPSHOTS_DIR
+            == KnowledgeResourceBackendMixin.SNAPSHOTS_DIR
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -473,10 +454,9 @@ def test_out_of_tree_backend_inherits_classify_key(
 
 
 def test_key_pattern_s3_raises_on_unknown_kind() -> None:
-    with mock_aws():
-        backend = _make_s3_backend()
-        with pytest.raises(ValueError, match="UNKNOWN"):
-            backend.key_pattern(kind=KnowledgeKeyKind.UNKNOWN)
+    backend = _make_s3_backend()
+    with pytest.raises(ValueError, match="UNKNOWN"):
+        backend.key_pattern(kind=KnowledgeKeyKind.UNKNOWN)
 
 
 def test_key_pattern_file_raises_on_unknown_kind(tmp_path: Path) -> None:
