@@ -29,12 +29,31 @@ no network — it just loads data, and with the warm done it is a cache hit.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
-from dataknobs_data.pooling.s3 import S3SessionConfig, create_aioboto3_session
+from dataknobs_data.pooling.s3 import (
+    S3SessionConfig,
+    clear_aioboto3_session_cache,
+    create_aioboto3_session,
+)
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _clear_session_cache() -> Iterator[None]:
+    """Reset the process-wide session cache around each test.
+
+    ``create_aioboto3_session`` caches warmed sessions process-wide, so
+    without this a session warmed by one test would leak into the next
+    and mask per-test build/warm behavior.
+    """
+    clear_aioboto3_session_cache()
+    yield
+    clear_aioboto3_session_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -101,3 +120,35 @@ async def test_create_aioboto3_session_returns_usable_session() -> None:
     session = await create_aioboto3_session(_CREDS)
     async with session.client("s3") as s3:
         assert s3 is not None
+
+
+async def test_repeated_calls_reuse_one_warmed_session() -> None:
+    """Same config → same cached session object (warm runs once).
+
+    Guards the cross-call caching that keeps a multi-config consumer
+    (e.g. several backends sharing one bucket) from re-warming a session
+    per instance.
+    """
+    first = await create_aioboto3_session(_CREDS)
+    second = await create_aioboto3_session(_CREDS)
+    assert first is second
+
+
+async def test_distinct_configs_get_distinct_sessions() -> None:
+    """Different session kwargs key to different cached sessions."""
+    other = S3SessionConfig(
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        region_name="us-west-2",
+    )
+    session_a = await create_aioboto3_session(_CREDS)
+    session_b = await create_aioboto3_session(other)
+    assert session_a is not session_b
+
+
+async def test_clear_cache_forces_rebuild() -> None:
+    """After a clear, the same config yields a fresh session object."""
+    first = await create_aioboto3_session(_CREDS)
+    clear_aioboto3_session_cache()
+    second = await create_aioboto3_session(_CREDS)
+    assert first is not second

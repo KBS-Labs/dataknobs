@@ -562,10 +562,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
             record = id_or_record
             id = record.id
             if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
+                id = str(uuid.uuid4())  # type: ignore[unreachable]
                 record.storage_id = id
-        
+
         async with self._lock:
             data = await self._load_data()
             data[id] = record.copy(deep=True)
@@ -894,10 +893,9 @@ class SyncFileDatabase(  # type: ignore[misc]
             record = id_or_record
             id = record.id
             if id is None:
-                import uuid  # type: ignore[unreachable]
-                id = str(uuid.uuid4())
+                id = str(uuid.uuid4())  # type: ignore[unreachable]
                 record.storage_id = id
-        
+
         with self._lock:
             data = self._load_data()
             data[id] = record.copy(deep=True)

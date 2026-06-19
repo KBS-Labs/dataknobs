@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 try:
     import chromadb
     from chromadb.config import Settings
+    from chromadb.errors import NotFoundError as ChromaNotFoundError
     CHROMA_AVAILABLE = True
 except ImportError:
     CHROMA_AVAILABLE = False
@@ -216,8 +217,11 @@ class ChromaVectorStore(VectorStore):
                 name=self.collection_name,
                 embedding_function=self.embedding_function,
             )
-        except Exception:
-            # Collection doesn't exist, create it
+        except ChromaNotFoundError:
+            # Collection doesn't exist yet — create it. Only a genuine
+            # "not found" triggers creation; transport / auth / internal
+            # errors propagate rather than being misread as absence (which
+            # would surface the real error obscurely on create_collection).
             self.collection = await asyncio.to_thread(
                 self.client.create_collection,
                 name=self.collection_name,

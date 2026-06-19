@@ -39,8 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aioboto3 factory additionally warms the session's botocore caches
   off-loop so the first client creation by any consumer
   (`AsyncS3Database`, the SQS event bus, S3-backed knowledge storage) is a
-  cache hit. The async and sync file backends now share a single
-  synchronous load/save implementation. FAISS in-memory `add`/`search`
+  cache hit. Warmed sessions are cached process-wide by config, so
+  consumers that build a session per instance rather than once at startup
+  (e.g. a multi-tenant registry loading several runtime configs against
+  the same bucket) warm once instead of once per instance. The async and
+  sync file backends now share a single synchronous load/save
+  implementation. FAISS in-memory `add`/`search`
   remain on the loop — they are CPU-bound and release the GIL internally,
   so offloading them buys nothing. No public signatures changed and no new
   runtime dependency was added (`asyncio.to_thread` is stdlib).
