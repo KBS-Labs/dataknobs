@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-19T15:41:15Z",
+  "timestamp": "2026-06-19T16:04:52Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.21 (Homebrew 2026-06-11 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/s3-blocking-io-PR2",
-  "git_commit": "0fee72bec03df212f25e6d1992c6d9a31244986c",
+  "git_commit": "25eb69726310f688c4455bf194ddb6ae9782aac8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
