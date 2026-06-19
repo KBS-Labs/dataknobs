@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `close_if_owned(resource, owns, *, on_error=None)` and its synchronous
+  counterpart `close_if_owned_sync(...)` in `dataknobs_common.lifecycle`
+  (also re-exported from the top-level namespace). The canonical
+  owned-vs-injected teardown guard: a collaborator is closed only when
+  the holder owns it (`owns` is True), it is not None, and it exposes a
+  `close()` method — an injected collaborator is left open for its owner.
+  Pass `on_error` to error-isolate the close (catch the exception and
+  hand it to a callback, e.g. a logger) so one failing subsystem in a
+  teardown cascade does not abort the rest; `asyncio.CancelledError`
+  always propagates. Used across the data, bots, llm, and fsm packages
+  to keep the ownership-gated close idiom consistent.
 - Three `Capability` identifiers in the observability family:
   `INGEST_EVENT_PUBLICATION`, `BACKEND_STATE_OBSERVABILITY`, and
   `EXECUTION_TRACKING`. Knowledge-ingestion, backend-state, and

@@ -61,6 +61,10 @@ from dataknobs_common.callbacks import (
     RecordingCallbackRegistry,
     StageOrdering,
 )
+from dataknobs_common.lifecycle import (
+    close_if_owned,
+    close_if_owned_sync,
+)
 from dataknobs_common.capabilities import (
     CAPABILITY_FAMILIES,
     Capability,
@@ -242,6 +246,9 @@ __all__ = [
     "PriorityOrdering",
     "RecordingCallbackRegistry",
     "StageOrdering",
+    # Lifecycle
+    "close_if_owned",
+    "close_if_owned_sync",
     # Capabilities
     "CAPABILITY_FAMILIES",
     "Capability",

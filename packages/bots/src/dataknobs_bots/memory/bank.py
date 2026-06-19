@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_data import Record, SyncDatabase
 
 logger = logging.getLogger(__name__)
@@ -870,8 +871,7 @@ class MemoryBank:
         (``from_dict(db=None)``, or an explicit ``owns_db=True``) is torn
         down here.
         """
-        if self._owns_db and hasattr(self._db, "close"):
-            self._db.close()
+        close_if_owned_sync(self._db, self._owns_db)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the bank to a plain dict.

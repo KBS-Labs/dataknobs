@@ -17,6 +17,7 @@ The `dataknobs-common` package provides these core modules:
 - **`dataknobs_common.serialization`** - Serialization protocols and utilities
 - **`dataknobs_common.metadata`** - Layered-merge primitive with immutable-key enforcement
 - **`dataknobs_common.retry`** - Configurable retry execution with backoff strategies
+- **`dataknobs_common.lifecycle`** - Owned-vs-injected collaborator teardown guard
 - **`dataknobs_common.transitions`** - Stateless transition validation for status graphs
 - **`dataknobs_common.events`** - Event bus for pub/sub messaging
 - **`dataknobs_common.testing`** - Test utilities, markers, and configuration factories
@@ -1338,6 +1339,76 @@ reachable = ORDER.get_reachable("draft")
 
 reachable = ORDER.get_reachable("delivered")
 # set() — terminal status
+```
+
+---
+
+## Lifecycle Module
+
+Helpers for owned-vs-injected collaborator teardown. A class that holds a
+collaborator (a database connection, an LLM provider, a connection pool)
+must close it *only if it owns it*: a collaborator the holder built is
+owned and torn down; a collaborator injected by a caller is left open for
+its owner, so a resource shared across several holders survives one
+holder's close.
+
+### `close_if_owned`
+
+```python
+async def close_if_owned(
+    resource: Any,
+    owns: bool,
+    *,
+    on_error: Callable[[BaseException], None] | None = None,
+) -> None
+```
+
+Closes `resource` only when `owns` is True, `resource` is not None, and it
+exposes a `close()` method. Pass `on_error` to error-isolate the close —
+the exception is caught and handed to the callback (e.g. a logger) instead
+of propagating, so one failing subsystem in a teardown cascade does not
+abort the rest. `asyncio.CancelledError` always propagates.
+
+```python
+from dataknobs_common import close_if_owned
+
+class KnowledgeBase:
+    async def close(self) -> None:
+        # Built-from-config store is owned and closed; an injected,
+        # shared store (owns=False) is left open for its owner.
+        await close_if_owned(self.vector_store, self._owns_vector_store)
+
+        # Error-isolated cascade: a failing close is logged, not raised.
+        await close_if_owned(
+            self.embedding_provider,
+            self._owns_embedding_provider,
+            on_error=lambda exc: logger.exception("Error closing provider"),
+        )
+```
+
+### `close_if_owned_sync`
+
+```python
+def close_if_owned_sync(
+    resource: Any,
+    owns: bool,
+    *,
+    on_error: Callable[[BaseException], None] | None = None,
+) -> None
+```
+
+Synchronous counterpart for collaborators whose `close()` is synchronous
+(e.g. a sync database connection). Same ownership guard and optional error
+isolation.
+
+```python
+from dataknobs_common import close_if_owned_sync
+
+class MemoryBank:
+    def close(self) -> None:
+        # A db this bank built (owns_db=True) is closed; a caller-supplied
+        # db shared across banks is left open.
+        close_if_owned_sync(self._db, self._owns_db)
 ```
 
 ---

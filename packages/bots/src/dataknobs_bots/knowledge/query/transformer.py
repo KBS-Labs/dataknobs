@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from dataknobs_common.lifecycle import close_if_owned
+
 logger = logging.getLogger(__name__)
 
 
@@ -169,8 +171,7 @@ class QueryTransformer:
         Only closes the provider if it was created by ``initialize()``
         (self-managed).  Externally-injected providers are not closed.
         """
-        if self._owns_provider and self._llm and hasattr(self._llm, "close"):
-            await self._llm.close()
+        await close_if_owned(self._llm, self._owns_provider)
         self._initialized = False
 
     async def transform(

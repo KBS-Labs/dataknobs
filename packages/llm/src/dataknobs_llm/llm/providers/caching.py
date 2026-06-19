@@ -17,6 +17,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from dataknobs_common.lifecycle import close_if_owned
+
 from ..base import (
     AsyncLLMProvider,
     LLMConfig,
@@ -400,11 +402,11 @@ class CachingEmbedProvider(AsyncLLMProvider):
         if self._is_closing:
             return
         self._is_closing = True
-        if self._owns_inner:
-            try:
-                await self._inner.close()
-            except Exception:
-                logger.exception("Error closing inner provider")
+        await close_if_owned(
+            self._inner,
+            self._owns_inner,
+            on_error=lambda _exc: logger.exception("Error closing inner provider"),
+        )
         try:
             await self._cache.close()
         except Exception:

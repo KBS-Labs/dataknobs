@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_data import AsyncKeyedRecordStore, SortSpec
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
@@ -812,11 +813,11 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         factory.  Injected databases are externally owned — closing
         them would break sibling components sharing the same pool.
         """
-        if self._owns_steps_db and self._steps_db is not self._db:
-            if hasattr(self._steps_db, "close"):
-                await self._steps_db.close()
-        if self._owns_db and hasattr(self._db, "close"):
-            await self._db.close()
+        await close_if_owned(
+            self._steps_db,
+            self._owns_steps_db and self._steps_db is not self._db,
+        )
+        await close_if_owned(self._db, self._owns_db)
 
 
 # Register all backends with the same implementation

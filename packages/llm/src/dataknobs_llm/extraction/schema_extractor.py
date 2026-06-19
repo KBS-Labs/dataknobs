@@ -40,6 +40,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_utils.json_extractor import JSONExtractor
 
 from dataknobs_llm.extraction.prompts import (
@@ -809,5 +810,4 @@ class SchemaExtractor:
                 await extractor.close()
             ```
         """
-        if self._owns_provider and self._provider and hasattr(self._provider, "close"):
-            await self._provider.close()
+        await close_if_owned(self._provider, self._owns_provider)
