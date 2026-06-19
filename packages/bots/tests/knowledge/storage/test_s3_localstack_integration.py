@@ -31,16 +31,11 @@ import pytest
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
 from dataknobs_common.testing import (
     assert_no_blocking,
-    is_blockbuster_available,
+    requires_blockbuster,
     requires_localstack,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.s3, requires_localstack]
-
-requires_blockbuster = pytest.mark.skipif(
-    not is_blockbuster_available(),
-    reason="blockbuster not installed",
-)
 
 
 async def _backend(cfg: dict[str, Any]) -> S3KnowledgeBackend:

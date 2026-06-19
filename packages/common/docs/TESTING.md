@@ -584,17 +584,17 @@ never requires it. Consumers guarding their own async backends add
 |---|---|
 | `assert_no_blocking()` | Context manager; raises the detector's `BlockingError` if a blocking syscall runs on the loop in the block. Raises `RuntimeError` if `blockbuster` is not installed (fails loud, never silently passes). |
 | `no_blocking` (fixture) | Wraps the whole test in `assert_no_blocking()`. Auto-discovered via the `dataknobs_common_blocking` pytest11 plugin; skips when `blockbuster` is absent. Prefer the context manager for precise scoping. |
-| `is_blockbuster_available()` | `bool` — gate tests that rely on the detector so they skip cleanly without the dev dependency. |
+| `requires_blockbuster` | Ready-made `pytest.mark.skipif` marker — decorate a test that calls `assert_no_blocking()` so it skips cleanly when `blockbuster` is absent. Prefer this over hand-rolling the skipif. |
+| `is_blockbuster_available()` | `bool` — underlies `requires_blockbuster`; call directly only for a custom skip condition. |
 | `blocking_error_type()` | Returns `blockbuster`'s `BlockingError` type (lazily), so a self-test can `pytest.raises(blocking_error_type())` without importing `blockbuster` directly. |
 
 ```python
-import pytest
-from dataknobs_common.testing import is_blockbuster_available
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
-requires_blockbuster = pytest.mark.skipif(
-    not is_blockbuster_available(),
-    reason="blockbuster not installed",
-)
+@requires_blockbuster
+async def test_put_does_not_block(backend):
+    with assert_no_blocking():
+        await backend.put_file("kb", "doc.md", b"...")
 ```
 
 ---

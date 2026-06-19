@@ -17,15 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
-from dataknobs_common.testing import assert_no_blocking, is_blockbuster_available
-
-requires_blockbuster = pytest.mark.skipif(
-    not is_blockbuster_available(),
-    reason="blockbuster not installed",
-)
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 
 async def _make_backend(tmp_path: Path) -> FileKnowledgeBackend:

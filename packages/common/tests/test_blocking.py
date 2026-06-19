@@ -20,13 +20,9 @@ from dataknobs_common.testing import (
     assert_no_blocking,
     blocking_error_type,
     is_blockbuster_available,
+    requires_blockbuster,
 )
 from dataknobs_common.testing import blocking as blocking_module
-
-requires_blockbuster = pytest.mark.skipif(
-    not is_blockbuster_available(),
-    reason="blockbuster not installed",
-)
 
 
 def test_blockbuster_is_available_in_dev_env() -> None:

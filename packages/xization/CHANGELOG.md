@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`LocalDocumentSource.iter_files` no longer blocks the event loop.**
+  The `Path.glob` walk and per-path `stat` are blocking filesystem
+  calls; they are now collected in a single worker-thread hop via
+  `asyncio.to_thread`, matching the already-offloaded `read_bytes` /
+  `read_streaming`. Only the lightweight `DocumentFileRef` list is
+  materialized — file contents are still read lazily per file.
+  Behavior and ordering are unchanged.
+- **`DirectoryProcessor.process_async` no longer blocks the loop when
+  ingesting YAML/CSV files.** The YAML/CSV → markdown conversion is
+  offloaded via `asyncio.to_thread`: `ContentTransformer` decides
+  path-vs-inline-content with `Path(content).exists()` (a blocking
+  `stat`), which previously ran on the event loop even though the
+  content was already read into memory through the offloaded source.
+  Markdown and (non-streaming) JSON paths were already loop-safe. Output
+  is unchanged.
+
+Together these make the local-filesystem async directory-ingest path
+(`process_async`, and `RAGKnowledgeBase.load_from_directory` above it)
+loop-friendly for markdown, YAML, CSV, and small JSON corpora. The
+streaming-JSON local path (large JSON/JSONL handed to a synchronous
+chunker by on-disk path) remains a known blocking site pending a
+dedicated fix.
+
 ## v1.3.8 - 2026-06-02
 
 ## v1.3.7 - 2026-05-20

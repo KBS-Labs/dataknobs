@@ -71,6 +71,7 @@ from dataknobs_common.testing.blocking import (
     blocking_error_type,
     is_blockbuster_available,
     no_blocking,
+    requires_blockbuster,
 )
 from dataknobs_common.testing.elasticsearch_fixtures import (
     elasticsearch_connection_params,
@@ -132,6 +133,7 @@ __all__ = [
     "make_postgres_test_db",
     "no_blocking",
     "postgres_connection_params",
+    "requires_blockbuster",
     "requires_chromadb",
     "requires_faiss",
     "requires_localstack",

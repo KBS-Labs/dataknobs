@@ -23,6 +23,17 @@ dataknobs-common = { workspace = true }
 dataknobs-structures = { workspace = true }
 dataknobs-utils = { workspace = true }
 
+[dependency-groups]
+dev = [
+    # blockbuster powers the reproduce-first async-blocking assertions
+    # (assert_no_blocking / requires_blockbuster from dataknobs-common)
+    # used by the LocalDocumentSource async-offload tests. Without it
+    # installed here those assertions would skip instead of proving the
+    # ingest enumeration keeps the loop unblocked. Dev/test-only — never
+    # imported by shipped runtime code.
+    "blockbuster>=1.5.26,<2.0.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

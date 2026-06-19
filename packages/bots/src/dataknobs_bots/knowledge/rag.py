@@ -625,7 +625,9 @@ class RAGKnowledgeBase(
         directory = Path(directory)
 
         if config is None:
-            config = KnowledgeBaseConfig.load(directory)
+            # KnowledgeBaseConfig.load probes the filesystem and reads/parses
+            # the config file, so offload it to avoid blocking the event loop.
+            config = await asyncio.to_thread(KnowledgeBaseConfig.load, directory)
 
         effective_extra: dict[str, Any] = dict(extra_metadata or {})
         if tenant_id is not None:

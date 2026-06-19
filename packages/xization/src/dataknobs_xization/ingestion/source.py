@@ -146,21 +146,38 @@ class LocalDocumentSource:
         skipped. The same file may be yielded more than once if it
         matches multiple patterns; callers that need deduplication
         should track seen paths.
+
+        The glob walk and per-path ``stat`` are blocking filesystem
+        calls, so the full reference list is collected in a single
+        worker-thread hop via :func:`asyncio.to_thread` (keeping the
+        event loop free, like :meth:`read_bytes` / :meth:`read_streaming`).
+        Only the lightweight :class:`DocumentFileRef` list is
+        materialized — file *contents* are still read lazily per file.
         """
-        for pattern in patterns:
-            for path in self._root.glob(pattern):
-                if not path.is_file():
-                    continue
-                rel = path.relative_to(self._root).as_posix()
-                try:
-                    size = path.stat().st_size
-                except OSError:
-                    size = -1
-                yield DocumentFileRef(
-                    path=rel,
-                    size_bytes=size,
-                    source_uri=path.resolve().as_uri(),
-                )
+        patterns_list = list(patterns)
+
+        def _collect() -> list[DocumentFileRef]:
+            refs: list[DocumentFileRef] = []
+            for pattern in patterns_list:
+                for path in self._root.glob(pattern):
+                    if not path.is_file():
+                        continue
+                    rel = path.relative_to(self._root).as_posix()
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        size = -1
+                    refs.append(
+                        DocumentFileRef(
+                            path=rel,
+                            size_bytes=size,
+                            source_uri=path.resolve().as_uri(),
+                        )
+                    )
+            return refs
+
+        for ref in await asyncio.to_thread(_collect):
+            yield ref
 
     async def read_bytes(self, ref: DocumentFileRef) -> bytes:
         """Read the full contents of ``ref``."""

@@ -109,11 +109,8 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        # Get content as bytes
-        if isinstance(content, bytes):
-            data = content
-        else:
-            data = content.read()
+        # Get content as bytes (file-like reads are offloaded off-loop).
+        data = await self._read_content_bytes(content)
 
         # Auto-detect content type. The first mimetypes lookup lazily
         # reads the system mime database from disk, so offload it.

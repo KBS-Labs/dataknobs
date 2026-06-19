@@ -26,11 +26,12 @@ base default remains for out-of-tree backends.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
@@ -128,6 +129,20 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         guessed_type, _ = mimetypes.guess_type(path)
         return guessed_type or "application/octet-stream"
+
+    @staticmethod
+    async def _read_content_bytes(content: bytes | BinaryIO) -> bytes:
+        """Normalize :meth:`put_file` content to bytes.
+
+        ``bytes`` pass straight through. A file-like object is read via
+        ``asyncio.to_thread`` so a real OS file handle's blocking
+        ``read()`` does not stall the event loop. Shared by every
+        backend's :meth:`put_file` so the read happens off-loop in one
+        reviewed place rather than three inline copies.
+        """
+        if isinstance(content, bytes):
+            return content
+        return await asyncio.to_thread(content.read)
 
     @staticmethod
     def _identity_of_snapshot(snapshot: dict[str, str]) -> str:

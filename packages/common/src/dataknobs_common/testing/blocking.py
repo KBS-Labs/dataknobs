@@ -45,23 +45,21 @@ __all__ = [
     "blocking_error_type",
     "is_blockbuster_available",
     "no_blocking",
+    "requires_blockbuster",
 ]
 
 
 def is_blockbuster_available() -> bool:
     """Return whether the ``blockbuster`` detector can be imported.
 
-    Use to gate tests that rely on :func:`assert_no_blocking` so they skip
-    cleanly in environments without the dev dependency (e.g. a consumer who
-    has not added ``blockbuster``)::
+    Underlies the :data:`requires_blockbuster` skip marker; call it
+    directly only when a custom skip condition is needed. To gate a test on
+    the detector, prefer the ready-made marker::
 
-        import pytest
-        from dataknobs_common.testing import is_blockbuster_available
+        from dataknobs_common.testing import requires_blockbuster
 
-        requires_blockbuster = pytest.mark.skipif(
-            not is_blockbuster_available(),
-            reason="blockbuster not installed",
-        )
+        @requires_blockbuster
+        async def test_put_does_not_block(backend): ...
     """
     import importlib.util
 
@@ -130,6 +128,11 @@ def assert_no_blocking() -> Iterator[None]:
 try:
     import pytest
 
+    requires_blockbuster = pytest.mark.skipif(
+        not is_blockbuster_available(),
+        reason="blockbuster not installed",
+    )
+
     @pytest.fixture
     def no_blocking() -> Iterator[None]:
         """Pytest fixture wrapping the whole test in :func:`assert_no_blocking`.
@@ -147,3 +150,4 @@ try:
 
 except ImportError:  # pragma: no cover - pytest is always present in test envs
     no_blocking = None  # type: ignore[assignment]
+    requires_blockbuster = None  # type: ignore[assignment]

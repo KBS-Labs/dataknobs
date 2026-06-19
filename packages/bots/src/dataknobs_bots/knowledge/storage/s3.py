@@ -204,7 +204,18 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         return self._prefix
 
     async def initialize(self) -> None:
-        """Initialize the aioboto3 session and verify bucket access."""
+        """Initialize the aioboto3 session and verify bucket access.
+
+        Note: creating the first aioboto3 client lazily loads botocore's
+        service data from disk, a one-time synchronous read that briefly
+        blocks the loop during this startup call. Steady-state operations
+        (``put_file`` / ``get_file`` / ``list_files`` / ...) are fully
+        non-blocking. Eliminating the startup read depends on an
+        async-aware client-data path in the underlying data layer and is
+        tracked for a follow-up there; it is deliberately out of scope
+        here so this backend's per-operation guarantees aren't held up by
+        a one-time init cost.
+        """
         self._session = await create_aioboto3_session(self._session_config)
         # endpoint_url / use_ssl / credentials / region in one shape —
         # to_client_kwargs() handles the LocalStack/MinIO http use_ssl=False
@@ -353,11 +364,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         if not await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        # Get content as bytes
-        if isinstance(content, bytes):
-            data = content
-        else:
-            data = content.read()
+        # Get content as bytes (file-like reads are offloaded off-loop).
+        data = await self._read_content_bytes(content)
 
         # Auto-detect content type. The first mimetypes lookup lazily
         # reads the system mime database from disk, so offload it.
