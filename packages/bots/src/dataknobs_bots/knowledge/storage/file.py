@@ -6,10 +6,10 @@ local development and single-instance deployments.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
-import mimetypes
 import os
 import shutil
 import tempfile
@@ -97,7 +97,9 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def initialize(self) -> None:
         """Initialize the backend. Creates base directory if needed."""
-        self._base_path.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            self._base_path.mkdir, parents=True, exist_ok=True
+        )
         self._initialized = True
 
     async def close(self) -> None:
@@ -155,31 +157,59 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             f"(only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    def _load_metadata(self, domain_id: str) -> dict:
-        """Load metadata from disk."""
+    def _load_metadata_sync(self, domain_id: str) -> dict:
+        """Load metadata from disk (blocking; call via :meth:`_load_metadata`)."""
         meta_path = self._metadata_path(domain_id)
         if not meta_path.exists():
             return {}
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
 
+    async def _load_metadata(self, domain_id: str) -> dict:
+        """Load metadata from disk, off the event loop."""
+        return await asyncio.to_thread(self._load_metadata_sync, domain_id)
+
+    @staticmethod
+    def _atomic_write_text(target: Path, body: str) -> None:
+        """Write ``body`` to ``target`` atomically (temp file + rename).
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        fd, tmp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(body)
+            os.replace(tmp_path, target)
+        except Exception:
+            tmp = Path(tmp_path)
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
+    @staticmethod
+    def _write_content_file(target: Path, data: bytes) -> None:
+        """Create ``target``'s parent and write ``data`` atomically.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp_path, target)
+        except Exception:
+            tmp = Path(tmp_path)
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
     async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
         """Save metadata to disk atomically, then fire a state-write event."""
         meta_path = self._metadata_path(domain_id)
         body = json.dumps(metadata, indent=2, default=str)
 
-        # Write to temp file first, then rename for atomicity
-        fd, tmp_path = tempfile.mkstemp(dir=meta_path.parent, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(body)
-            os.replace(tmp_path, meta_path)
-        except Exception:
-            # Clean up temp file on error
-            tmp = Path(tmp_path)
-            if tmp.exists():
-                tmp.unlink()
-            raise
+        await asyncio.to_thread(self._atomic_write_text, meta_path, body)
 
         await self._fire_state_write(
             domain_id=domain_id,
@@ -199,39 +229,26 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         metadata: dict | None = None,
     ) -> KnowledgeFile:
         """Upload or update a file."""
-        kb_path = self._kb_path(domain_id)
-        if not kb_path.exists():
+        if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        # Get content as bytes
-        if isinstance(content, bytes):
-            data = content
-        else:
-            data = content.read()
+        # Get content as bytes (file-like reads are offloaded off-loop).
+        data = await self._read_content_bytes(content)
 
-        # Auto-detect content type
+        # Auto-detect content type. The first mimetypes lookup lazily
+        # reads the system mime database from disk, so offload it.
         if content_type is None:
-            guessed_type, _ = mimetypes.guess_type(path)
-            content_type = guessed_type or "application/octet-stream"
+            content_type = await asyncio.to_thread(
+                self._guess_content_type, path
+            )
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()
 
-        # Ensure parent directory exists
+        # Ensure parent directory exists, then write file atomically —
+        # both off the event loop.
         file_path = self._file_path(domain_id, path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write file atomically
-        fd, tmp_path = tempfile.mkstemp(dir=file_path.parent, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            os.replace(tmp_path, file_path)
-        except Exception:
-            tmp = Path(tmp_path)
-            if tmp.exists():
-                tmp.unlink()
-            raise
+        await asyncio.to_thread(self._write_content_file, file_path, data)
 
         # Create file metadata
         file_info = KnowledgeFile(
@@ -244,7 +261,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         )
 
         # Update KB metadata
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files = kb_metadata.get("files", {})
         is_new = path not in files
         files[path] = file_info.to_dict()
@@ -274,6 +291,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     async def get_file(self, domain_id: str, path: str) -> bytes | None:
         """Get file content."""
         file_path = self._file_path(domain_id, path)
+        return await asyncio.to_thread(self._read_bytes_or_none, file_path)
+
+    @staticmethod
+    def _read_bytes_or_none(file_path: Path) -> bytes | None:
+        """Read ``file_path`` or return ``None`` if it does not exist.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
         if not file_path.exists():
             return None
         return file_path.read_bytes()
@@ -281,32 +306,32 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     async def stream_file(
         self, domain_id: str, path: str, chunk_size: int = 8192
     ) -> AsyncIterator[bytes] | None:
-        """Stream file content."""
+        """Stream file content, reading each chunk off the event loop."""
         file_path = self._file_path(domain_id, path)
-        if not file_path.exists():
+        if not await asyncio.to_thread(file_path.exists):
             return None
 
         async def _generator() -> AsyncIterator[bytes]:
-            with open(file_path, "rb") as f:
+            handle = await asyncio.to_thread(open, file_path, "rb")
+            try:
                 while True:
-                    chunk = f.read(chunk_size)
+                    chunk = await asyncio.to_thread(handle.read, chunk_size)
                     if not chunk:
                         break
                     yield chunk
+            finally:
+                await asyncio.to_thread(handle.close)
 
         return _generator()
 
     async def delete_file(self, domain_id: str, path: str) -> bool:
         """Delete a file."""
         file_path = self._file_path(domain_id, path)
-        if not file_path.exists():
+        if not await asyncio.to_thread(self._unlink_if_exists, file_path):
             return False
 
-        # Remove file
-        file_path.unlink()
-
         # Update metadata
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files = kb_metadata.get("files", {})
         if path in files:
             del files[path]
@@ -324,9 +349,24 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         await self._record_snapshot(domain_id, files)
 
         # Clean up empty parent directories
-        self._cleanup_empty_dirs(file_path.parent, self._content_path(domain_id))
+        await asyncio.to_thread(
+            self._cleanup_empty_dirs,
+            file_path.parent,
+            self._content_path(domain_id),
+        )
 
         logger.debug("Deleted file: %s/%s", domain_id, path)
+        return True
+
+    @staticmethod
+    def _unlink_if_exists(file_path: Path) -> bool:
+        """Unlink ``file_path`` if present; return whether it existed.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        if not file_path.exists():
+            return False
+        file_path.unlink()
         return True
 
     def _cleanup_empty_dirs(self, start: Path, stop: Path) -> None:
@@ -343,7 +383,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         self, domain_id: str, prefix: str | None = None
     ) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files_dict = kb_metadata.get("files", {})
 
         files = [KnowledgeFile.from_dict(f) for f in files_dict.values()]
@@ -357,7 +397,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def file_exists(self, domain_id: str, path: str) -> bool:
         """Check if a file exists."""
-        return self._file_path(domain_id, path).exists()
+        return await asyncio.to_thread(self._file_path(domain_id, path).exists)
 
     # --- Knowledge Base Operations ---
 
@@ -365,13 +405,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         self, domain_id: str, metadata: dict | None = None
     ) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
-        kb_path = self._kb_path(domain_id)
-        if kb_path.exists():
+        if not await asyncio.to_thread(self._create_kb_dirs, domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' already exists")
-
-        # Create directories
-        kb_path.mkdir(parents=True)
-        self._content_path(domain_id).mkdir()
 
         # Create initial metadata
         kb_info = KnowledgeBaseInfo(
@@ -393,39 +428,69 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         logger.info("Created knowledge base: %s", domain_id)
         return kb_info
 
+    def _create_kb_dirs(self, domain_id: str) -> bool:
+        """Create the KB + content directories; return whether created.
+
+        Returns ``False`` if the KB already exists (no directories made).
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        kb_path = self._kb_path(domain_id)
+        if kb_path.exists():
+            return False
+        kb_path.mkdir(parents=True)
+        self._content_path(domain_id).mkdir()
+        return True
+
     async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
         """Get knowledge base metadata."""
-        kb_path = self._kb_path(domain_id)
-        if not kb_path.exists():
+        if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             return None
 
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         return KnowledgeBaseInfo.from_dict(info_dict)
 
     async def delete_kb(self, domain_id: str) -> bool:
         """Delete entire knowledge base and all files."""
+        deleted = await asyncio.to_thread(self._rmtree_if_exists, domain_id)
+        if deleted:
+            logger.info("Deleted knowledge base: %s", domain_id)
+        return deleted
+
+    def _rmtree_if_exists(self, domain_id: str) -> bool:
+        """Remove the KB tree if present; return whether it existed.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
         kb_path = self._kb_path(domain_id)
         if not kb_path.exists():
             return False
-
         shutil.rmtree(kb_path)
-        logger.info("Deleted knowledge base: %s", domain_id)
         return True
 
     async def list_kbs(self) -> list[KnowledgeBaseInfo]:
         """List all knowledge bases."""
+        domain_ids = await asyncio.to_thread(self._list_kb_domain_ids)
         kbs = []
-        if not self._base_path.exists():
-            return kbs
-
-        for path in self._base_path.iterdir():
-            if path.is_dir() and (path / self.METADATA_FILE).exists():
-                info = await self.get_info(path.name)
-                if info:
-                    kbs.append(info)
+        for domain_id in domain_ids:
+            info = await self.get_info(domain_id)
+            if info:
+                kbs.append(info)
 
         return sorted(kbs, key=lambda kb: kb.domain_id)
+
+    def _list_kb_domain_ids(self) -> list[str]:
+        """Scan the base directory for KB domain ids (those with metadata).
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        if not self._base_path.exists():
+            return []
+        return [
+            path.name
+            for path in self._base_path.iterdir()
+            if path.is_dir() and (path / self.METADATA_FILE).exists()
+        ]
 
     # --- Ingestion Status ---
 
@@ -438,11 +503,10 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base."""
-        kb_path = self._kb_path(domain_id)
-        if not kb_path.exists():
+        if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
@@ -490,22 +554,13 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
-        snap_dir = self._snapshots_path(domain_id)
-        snap_dir.mkdir(parents=True, exist_ok=True)
         snap_path = self._snapshot_file(domain_id, version)
-        if snap_path.exists():
-            return  # identical content state already captured
         body = json.dumps(snapshot)
-        fd, tmp_path = tempfile.mkstemp(dir=snap_dir, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(body)
-            os.replace(tmp_path, snap_path)
-        except Exception:
-            tmp = Path(tmp_path)
-            if tmp.exists():
-                tmp.unlink()
-            raise
+        wrote = await asyncio.to_thread(
+            self._write_snapshot_file, snap_path, body
+        )
+        if not wrote:
+            return  # identical content state already captured
 
         await self._fire_state_write(
             domain_id=domain_id,
@@ -513,6 +568,18 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             kind=KnowledgeKeyKind.SNAPSHOT,
             byte_size=len(body.encode("utf-8")),
         )
+
+    def _write_snapshot_file(self, snap_path: Path, body: str) -> bool:
+        """Create the snapshot dir and write ``body`` atomically.
+
+        Returns ``False`` (no write) if the snapshot already exists.
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        if snap_path.exists():
+            return False
+        self._atomic_write_text(snap_path, body)
+        return True
 
     async def _load_snapshot(
         self, domain_id: str, version: str
@@ -528,11 +595,22 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         if not version:
             return {}
         snap_path = self._snapshot_file(domain_id, version)
-        if not snap_path.exists():
+        data = await asyncio.to_thread(self._read_snapshot_file, snap_path)
+        if data is None:
             raise InvalidVersionError(
                 f"Version {version!r} is not retained for domain "
                 f"{domain_id!r}"
             )
+        return data
+
+    @staticmethod
+    def _read_snapshot_file(snap_path: Path) -> dict[str, str] | None:
+        """Read a snapshot ``{path: checksum}`` map, or ``None`` if absent.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        if not snap_path.exists():
+            return None
         with open(snap_path, encoding="utf-8") as f:
             data: dict[str, str] = json.load(f)
         return data

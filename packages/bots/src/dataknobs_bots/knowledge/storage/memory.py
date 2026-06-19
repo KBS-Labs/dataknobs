@@ -6,9 +6,9 @@ and development scenarios where persistence is not needed.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-import mimetypes
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from io import BytesIO
@@ -109,16 +109,15 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        # Get content as bytes
-        if isinstance(content, bytes):
-            data = content
-        else:
-            data = content.read()
+        # Get content as bytes (file-like reads are offloaded off-loop).
+        data = await self._read_content_bytes(content)
 
-        # Auto-detect content type
+        # Auto-detect content type. The first mimetypes lookup lazily
+        # reads the system mime database from disk, so offload it.
         if content_type is None:
-            guessed_type, _ = mimetypes.guess_type(path)
-            content_type = guessed_type or "application/octet-stream"
+            content_type = await asyncio.to_thread(
+                self._guess_content_type, path
+            )
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()

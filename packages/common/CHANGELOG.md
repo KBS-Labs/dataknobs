@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `assert_no_blocking()` context manager and the `no_blocking` pytest
+  fixture in `dataknobs_common.testing` (auto-discovered via the
+  `dataknobs_common_blocking` pytest11 plugin). A runtime detector that
+  fails a test if a blocking syscall (`time.sleep`, `open`, blocking
+  socket/os reads and writes, the sync `sqlite3` driver, …) runs on the
+  event loop inside the block — turning an otherwise-invisible
+  loop-blocking defect into a deterministic, reproduce-first test
+  failure. Wrap the awaited operation under test: the block fails against
+  a backend that blocks the loop and passes once it uses an async
+  transport or offloads via `asyncio.to_thread`. Backed by the
+  `blockbuster` dev/test-only dependency (never imported by runtime
+  code); `is_blockbuster_available()` and `blocking_error_type()` gate
+  and assert against it, and the ready-made `requires_blockbuster`
+  skip marker decorates such tests so they skip cleanly when the
+  dependency is absent (preferred over a hand-rolled `skipif`).
+  Consumers guarding their own async backends add `blockbuster` to
+  their dev dependencies and get the construct for free.
 - `close_if_owned(resource, owns, *, on_error=None)` and its synchronous
   counterpart `close_if_owned_sync(...)` in `dataknobs_common.lifecycle`
   (also re-exported from the top-level namespace). The canonical

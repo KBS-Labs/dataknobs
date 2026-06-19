@@ -386,7 +386,11 @@ class DirectoryProcessor:
         try:
             content = (await self._source.read_bytes(ref)).decode("utf-8")
             transformer = ContentTransformer()
-            markdown = transformer.transform_yaml(
+            # transform_yaml disambiguates path-vs-content via
+            # Path(content).exists(), a blocking stat — offload it so the
+            # loop stays free even though content is already in memory.
+            markdown = await asyncio.to_thread(
+                transformer.transform_yaml,
                 content,
                 title=Path(ref.path).stem.replace("_", " ").title(),
             )
@@ -423,7 +427,11 @@ class DirectoryProcessor:
         try:
             content = (await self._source.read_bytes(ref)).decode("utf-8")
             transformer = ContentTransformer()
-            markdown = transformer.transform_csv(
+            # transform_csv disambiguates path-vs-content via
+            # Path(content).exists(), a blocking stat — offload it so the
+            # loop stays free even though content is already in memory.
+            markdown = await asyncio.to_thread(
+                transformer.transform_csv,
                 content,
                 title=Path(ref.path).stem.replace("_", " ").title(),
             )

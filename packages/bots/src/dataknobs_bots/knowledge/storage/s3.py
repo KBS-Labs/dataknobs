@@ -6,17 +6,17 @@ LocalStack), making it ideal for production deployments.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
-import mimetypes
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, BinaryIO
+from typing import Any, BinaryIO
 
 from botocore.exceptions import ClientError
 
-from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
+from dataknobs_data.pooling.s3 import S3SessionConfig, create_aioboto3_session
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -29,9 +29,9 @@ from .models import (
 )
 
 _CHANGE_DETECTION_MODES = ("snapshot", "s3_versioning")
-
-if TYPE_CHECKING:
-    import boto3
+# head_object surfaces a missing key as HTTP "404"; get_object as
+# "NoSuchKey". Accept both wherever we translate absence into a return.
+_MISSING_KEY_CODES = ("404", "NoSuchKey")
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,11 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 aws_session_token=aws_session_token,
             )
         self._session_config = session_config
-        self._client: boto3.client | None = None
+        # aioboto3 Session (created in initialize). Clients are short-lived
+        # per-operation context managers opened off this session — the
+        # async-native counterpart to a single long-lived boto3 client.
+        self._session: Any | None = None
+        self._client_kwargs: dict[str, Any] = {}
         self._initialized = False
 
     @classmethod
@@ -200,12 +204,28 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         return self._prefix
 
     async def initialize(self) -> None:
-        """Initialize the S3 client and verify bucket access."""
-        self._client = create_boto3_s3_client(self._session_config)
+        """Initialize the aioboto3 session and verify bucket access.
+
+        Note: creating the first aioboto3 client lazily loads botocore's
+        service data from disk, a one-time synchronous read that briefly
+        blocks the loop during this startup call. Steady-state operations
+        (``put_file`` / ``get_file`` / ``list_files`` / ...) are fully
+        non-blocking. Eliminating the startup read depends on an
+        async-aware client-data path in the underlying data layer and is
+        tracked for a follow-up there; it is deliberately out of scope
+        here so this backend's per-operation guarantees aren't held up by
+        a one-time init cost.
+        """
+        self._session = await create_aioboto3_session(self._session_config)
+        # endpoint_url / use_ssl / credentials / region in one shape —
+        # to_client_kwargs() handles the LocalStack/MinIO http use_ssl=False
+        # case that a session-only setup misses.
+        self._client_kwargs = self._session_config.to_client_kwargs()
 
         # Verify bucket exists
         try:
-            self._client.head_bucket(Bucket=self._bucket)
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                await s3.head_bucket(Bucket=self._bucket)
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
             if error_code == "404":
@@ -216,9 +236,13 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         logger.info("Initialized S3 backend: s3://%s/%s", self._bucket, self._prefix)
 
     async def close(self) -> None:
-        """Close the S3 client."""
-        if self._client:
-            self._client.close()
+        """Release the aioboto3 session.
+
+        Clients are per-operation context managers that close themselves;
+        the session holds no open transport between calls, so dropping the
+        reference is the full teardown.
+        """
+        self._session = None
         self._initialized = False
 
     def _s3_key(self, domain_id: str, path: str = "") -> str:
@@ -271,33 +295,36 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             f"(only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    def _load_metadata(self, domain_id: str) -> dict:
+    async def _load_metadata(self, domain_id: str) -> dict:
         """Load metadata from S3."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._metadata_key(domain_id)
         try:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
-            return json.loads(response["Body"].read().decode("utf-8"))
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                response = await s3.get_object(Bucket=self._bucket, Key=key)
+                raw = await response["Body"].read()
+            return json.loads(raw.decode("utf-8"))
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return {}
             raise
 
     async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
         """Save metadata to S3, then fire a state-write event."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._metadata_key(domain_id)
         body = json.dumps(metadata, indent=2, default=str).encode("utf-8")
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=body,
-            ContentType="application/json",
-        )
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            await s3.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+            )
         await self._fire_state_write(
             domain_id=domain_id,
             key=key,
@@ -305,17 +332,18 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             byte_size=len(body),
         )
 
-    def _kb_exists(self, domain_id: str) -> bool:
+    async def _kb_exists(self, domain_id: str) -> bool:
         """Check if a knowledge base exists."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._metadata_key(domain_id)
         try:
-            self._client.head_object(Bucket=self._bucket, Key=key)
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                await s3.head_object(Bucket=self._bucket, Key=key)
             return True
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "404":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return False
             raise
 
@@ -330,35 +358,40 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         metadata: dict | None = None,
     ) -> KnowledgeFile:
         """Upload or update a file."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
-        if not self._kb_exists(domain_id):
+        if not await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        # Get content as bytes
-        if isinstance(content, bytes):
-            data = content
-        else:
-            data = content.read()
+        # Get content as bytes (file-like reads are offloaded off-loop).
+        data = await self._read_content_bytes(content)
 
-        # Auto-detect content type
+        # Auto-detect content type. The first mimetypes lookup lazily
+        # reads the system mime database from disk, so offload it.
         if content_type is None:
-            guessed_type, _ = mimetypes.guess_type(path)
-            content_type = guessed_type or "application/octet-stream"
+            content_type = await asyncio.to_thread(
+                self._guess_content_type, path
+            )
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()
 
         # Upload file
         key = self._s3_key(domain_id, path)
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=data,
-            ContentType=content_type,
-            Metadata={"checksum": checksum} if not metadata else {**metadata, "checksum": checksum},
+        object_metadata = (
+            {"checksum": checksum}
+            if not metadata
+            else {**metadata, "checksum": checksum}
         )
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            await s3.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type,
+                Metadata=object_metadata,
+            )
 
         # Create file metadata
         file_info = KnowledgeFile(
@@ -371,7 +404,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         )
 
         # Update KB metadata
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files = kb_metadata.get("files", {})
         is_new = path not in files
         files[path] = file_info.to_dict()
@@ -400,64 +433,74 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def get_file(self, domain_id: str, path: str) -> bytes | None:
         """Get file content."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._s3_key(domain_id, path)
         try:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
-            return response["Body"].read()
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                response = await s3.get_object(Bucket=self._bucket, Key=key)
+                return await response["Body"].read()
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return None
             raise
 
     async def stream_file(
         self, domain_id: str, path: str, chunk_size: int = 8192
     ) -> AsyncIterator[bytes] | None:
-        """Stream file content."""
-        if not self._client:
+        """Stream file content.
+
+        Returns ``None`` (not an empty stream) for a missing object, so a
+        cheap ``head_object`` probe runs first in its own client context.
+        The returned generator opens its own client context and keeps it
+        alive for the lifetime of the stream — the aioboto3 ``Body`` is
+        only readable while its client is open, so the ``async with`` must
+        wrap the whole read loop rather than just the ``get_object`` call.
+        """
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._s3_key(domain_id, path)
         try:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                await s3.head_object(Bucket=self._bucket, Key=key)
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return None
             raise
 
         async def _generator() -> AsyncIterator[bytes]:
-            body = response["Body"]
-            while True:
-                chunk = body.read(chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-            body.close()
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                response = await s3.get_object(Bucket=self._bucket, Key=key)
+                body = response["Body"]
+                while True:
+                    chunk = await body.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
 
         return _generator()
 
     async def delete_file(self, domain_id: str, path: str) -> bool:
         """Delete a file."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._s3_key(domain_id, path)
 
-        # Check if file exists
-        try:
-            self._client.head_object(Bucket=self._bucket, Key=key)
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "404":
-                return False
-            raise
-
-        # Delete file
-        self._client.delete_object(Bucket=self._bucket, Key=key)
+        # Check if file exists, then delete — within one client context.
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            try:
+                await s3.head_object(Bucket=self._bucket, Key=key)
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
+                    return False
+                raise
+            await s3.delete_object(Bucket=self._bucket, Key=key)
 
         # Update metadata
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files = kb_metadata.get("files", {})
         if path in files:
             del files[path]
@@ -481,7 +524,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         self, domain_id: str, prefix: str | None = None
     ) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         files_dict = kb_metadata.get("files", {})
 
         files = [KnowledgeFile.from_dict(f) for f in files_dict.values()]
@@ -495,15 +538,16 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def file_exists(self, domain_id: str, path: str) -> bool:
         """Check if a file exists."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._s3_key(domain_id, path)
         try:
-            self._client.head_object(Bucket=self._bucket, Key=key)
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                await s3.head_object(Bucket=self._bucket, Key=key)
             return True
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "404":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return False
             raise
 
@@ -513,10 +557,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         self, domain_id: str, metadata: dict | None = None
     ) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
-        if self._kb_exists(domain_id):
+        if await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' already exists")
 
         # Create initial metadata
@@ -541,62 +585,69 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
         """Get knowledge base metadata."""
-        if not self._kb_exists(domain_id):
+        if not await self._kb_exists(domain_id):
             return None
 
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         return KnowledgeBaseInfo.from_dict(info_dict)
 
     async def delete_kb(self, domain_id: str) -> bool:
         """Delete entire knowledge base and all files."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
-        if not self._kb_exists(domain_id):
+        if not await self._kb_exists(domain_id):
             return False
 
         # Delete all objects with the domain prefix
         prefix = f"{self._prefix}{domain_id}/"
-        paginator = self._client.get_paginator("list_objects_v2")
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(
+                Bucket=self._bucket, Prefix=prefix
+            ):
+                contents = page.get("Contents", [])
+                if not contents:
+                    continue
 
-        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
-            contents = page.get("Contents", [])
-            if not contents:
-                continue
-
-            objects = [{"Key": obj["Key"]} for obj in contents]
-            self._client.delete_objects(
-                Bucket=self._bucket,
-                Delete={"Objects": objects},
-            )
+                objects = [{"Key": obj["Key"]} for obj in contents]
+                await s3.delete_objects(
+                    Bucket=self._bucket,
+                    Delete={"Objects": objects},
+                )
 
         logger.info("Deleted knowledge base: s3://%s/%s", self._bucket, prefix)
         return True
 
     async def list_kbs(self) -> list[KnowledgeBaseInfo]:
         """List all knowledge bases."""
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
 
+        # List all "directories" under the prefix, collecting domain ids
+        # inside the client context, then resolve each KB's info after
+        # (get_info opens its own client context).
+        domain_ids: list[str] = []
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(
+                Bucket=self._bucket,
+                Prefix=self._prefix,
+                Delimiter="/",
+            ):
+                for prefix_obj in page.get("CommonPrefixes", []):
+                    # Extract domain_id from prefix
+                    prefix_path = prefix_obj["Prefix"]
+                    domain_id = prefix_path[len(self._prefix) :].rstrip("/")
+                    if domain_id:
+                        domain_ids.append(domain_id)
+
         kbs = []
-
-        # List all "directories" under the prefix
-        paginator = self._client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(
-            Bucket=self._bucket,
-            Prefix=self._prefix,
-            Delimiter="/",
-        ):
-            for prefix_obj in page.get("CommonPrefixes", []):
-                # Extract domain_id from prefix
-                prefix_path = prefix_obj["Prefix"]
-                domain_id = prefix_path[len(self._prefix) :].rstrip("/")
-
-                if domain_id:
-                    info = await self.get_info(domain_id)
-                    if info:
-                        kbs.append(info)
+        for domain_id in domain_ids:
+            info = await self.get_info(domain_id)
+            if info:
+                kbs.append(info)
 
         return sorted(kbs, key=lambda kb: kb.domain_id)
 
@@ -611,10 +662,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         generation: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base."""
-        if not self._kb_exists(domain_id):
+        if not await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        kb_metadata = self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
@@ -666,7 +717,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         if self._change_detection_mode != "snapshot":
             return
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
         snapshot = {
             path: info.get("checksum", "") for path, info in files.items()
@@ -676,12 +727,13 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             return
         key = self._snapshot_key(domain_id, version)
         body = json.dumps(snapshot).encode("utf-8")
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=body,
-            ContentType="application/json",
-        )
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            await s3.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+            )
         await self._fire_state_write(
             domain_id=domain_id,
             key=key,
@@ -702,29 +754,29 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         if not version:
             return {}
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
         if self._change_detection_mode == "s3_versioning":
-            return self._load_snapshot_from_versions(domain_id, version)
+            return await self._load_snapshot_from_versions(domain_id, version)
         # snapshot mode
         try:
-            response = self._client.get_object(
-                Bucket=self._bucket,
-                Key=self._snapshot_key(domain_id, version),
-            )
+            async with self._session.client("s3", **self._client_kwargs) as s3:
+                response = await s3.get_object(
+                    Bucket=self._bucket,
+                    Key=self._snapshot_key(domain_id, version),
+                )
+                raw = await response["Body"].read()
         except ClientError as e:
-            if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 raise InvalidVersionError(
                     f"Version {version!r} is not retained for domain "
                     f"{domain_id!r}"
                 ) from e
             raise
-        data: dict[str, str] = json.loads(
-            response["Body"].read().decode("utf-8")
-        )
+        data: dict[str, str] = json.loads(raw.decode("utf-8"))
         return data
 
-    def _load_snapshot_from_versions(
+    async def _load_snapshot_from_versions(
         self, domain_id: str, version: str
     ) -> dict[str, str]:
         """Walk the metadata object's S3 version history for ``version``.
@@ -736,30 +788,30 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         ``version`` raises :class:`InvalidVersionError` (a correct,
         non-minimal full re-ingest — never a wrong diff).
         """
-        if not self._client:
+        if not self._session:
             raise RuntimeError("Backend not initialized")
         metadata_key = self._metadata_key(domain_id)
-        paginator = self._client.get_paginator("list_object_versions")
-        for page in paginator.paginate(
-            Bucket=self._bucket, Prefix=metadata_key
-        ):
-            # DeleteMarkers are returned under "DeleteMarkers", not
-            # "Versions", so iterating "Versions" already excludes them
-            # (the metadata object is overwritten, never deleted, anyway).
-            for entry in page.get("Versions", []):
-                if entry["Key"] != metadata_key:
-                    continue  # Prefix is a prefix-match; require exact key
-                obj = self._client.get_object(
-                    Bucket=self._bucket,
-                    Key=metadata_key,
-                    VersionId=entry["VersionId"],
-                )
-                metadata = json.loads(
-                    obj["Body"].read().decode("utf-8")
-                )
-                snapshot = self._snapshot_from_metadata(metadata)
-                if self._identity_of_snapshot(snapshot) == version:
-                    return snapshot
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            paginator = s3.get_paginator("list_object_versions")
+            async for page in paginator.paginate(
+                Bucket=self._bucket, Prefix=metadata_key
+            ):
+                # DeleteMarkers are returned under "DeleteMarkers", not
+                # "Versions", so iterating "Versions" already excludes them
+                # (the metadata object is overwritten, never deleted, anyway).
+                for entry in page.get("Versions", []):
+                    if entry["Key"] != metadata_key:
+                        continue  # Prefix is a prefix-match; require exact key
+                    obj = await s3.get_object(
+                        Bucket=self._bucket,
+                        Key=metadata_key,
+                        VersionId=entry["VersionId"],
+                    )
+                    raw = await obj["Body"].read()
+                    metadata = json.loads(raw.decode("utf-8"))
+                    snapshot = self._snapshot_from_metadata(metadata)
+                    if self._identity_of_snapshot(snapshot) == version:
+                        return snapshot
         raise InvalidVersionError(
             f"Version {version!r} is not resolvable from the S3 "
             f"version history of domain {domain_id!r} (bucket "

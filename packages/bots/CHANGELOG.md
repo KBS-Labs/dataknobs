@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Knowledge backends no longer block the event loop on storage I/O.**
+  The `S3KnowledgeBackend` performs all S3 operations through an async
+  (`aioboto3`) client instead of a synchronous `boto3` client, so reads,
+  writes, listings, streaming, and change detection run without stalling
+  the running event loop. The `dataknobs-bots[s3]` extra now installs
+  `aioboto3` alongside `boto3`. The `FileKnowledgeBackend` offloads its
+  filesystem reads/writes to a worker thread. Passing a file-like
+  `content` argument to any backend's `put_file` no longer blocks the
+  event loop on the read. `RAGKnowledgeBase` document ingest offloads its
+  file reads, including the `knowledge_base.{yaml,yml,json}` config probe
+  and parse that `load_from_directory` performs when no explicit config is
+  supplied. The public method signatures and behavior are unchanged — only
+  the threading/transport underneath. (One-time botocore data loading on
+  the first S3 client creation per session is an `aioboto3`/`botocore`
+  characteristic in the shared session factory and is unchanged.)
+
 - The knowledge ingestion manager now publishes lifecycle events on the
   `ingest:domain:start` / `ingest:domain:end` topics (was a single
   `knowledge:ingestion` completion event). The end event fires on both

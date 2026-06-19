@@ -66,6 +66,13 @@ from dataknobs_common.testing._core import (
     requires_redis,
     safe_sql_ident,
 )
+from dataknobs_common.testing.blocking import (
+    assert_no_blocking,
+    blocking_error_type,
+    is_blockbuster_available,
+    no_blocking,
+    requires_blockbuster,
+)
 from dataknobs_common.testing.elasticsearch_fixtures import (
     elasticsearch_connection_params,
     ensure_elasticsearch_ready,
@@ -97,9 +104,11 @@ __all__ = [
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",
     "assert_factory_kwargs_match_ctor",
+    "assert_no_blocking",
     "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",
     "assert_structured_config_roundtrip",
+    "blocking_error_type",
     "create_test_json_files",
     "create_test_markdown_files",
     "elasticsearch_connection_params",
@@ -109,6 +118,7 @@ __all__ = [
     "get_localstack_endpoint",
     "get_test_bot_config",
     "get_test_rag_config",
+    "is_blockbuster_available",
     "is_chromadb_available",
     "is_faiss_available",
     "is_localstack_available",
@@ -121,7 +131,9 @@ __all__ = [
     "make_elasticsearch_test_index",
     "make_localstack_s3_bucket",
     "make_postgres_test_db",
+    "no_blocking",
     "postgres_connection_params",
+    "requires_blockbuster",
     "requires_chromadb",
     "requires_faiss",
     "requires_localstack",

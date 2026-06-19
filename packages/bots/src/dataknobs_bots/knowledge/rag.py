@@ -1,5 +1,6 @@
 """RAG (Retrieval-Augmented Generation) knowledge base implementation."""
 
+import asyncio
 import logging
 import types
 from collections.abc import Awaitable, Callable, Mapping
@@ -301,8 +302,9 @@ class RAGKnowledgeBase(
             ```
         """
         filepath = Path(filepath)
-        with open(filepath, encoding="utf-8") as f:
-            markdown_text = f.read()
+        markdown_text = await asyncio.to_thread(
+            filepath.read_text, encoding="utf-8"
+        )
 
         return await self.load_markdown_text(
             markdown_text,
@@ -349,10 +351,10 @@ class RAGKnowledgeBase(
         directory = Path(directory)
         results = {"total_files": 0, "total_chunks": 0, "errors": []}
 
-        for filepath in directory.glob(pattern):
-            if not filepath.is_file():
-                continue
-
+        entries = await asyncio.to_thread(
+            lambda: [p for p in directory.glob(pattern) if p.is_file()]
+        )
+        for filepath in entries:
             try:
                 num_chunks = await self.load_markdown_document(
                     filepath,
@@ -427,9 +429,9 @@ class RAGKnowledgeBase(
 
         filepath = Path(filepath)
 
-        # Read JSON
-        with open(filepath, encoding="utf-8") as f:
-            data = json.load(f)
+        # Read JSON off the event loop; json.loads itself is pure CPU.
+        raw = await asyncio.to_thread(filepath.read_text, encoding="utf-8")
+        data = json.loads(raw)
 
         # Convert to markdown
         if transformer is None:
@@ -490,7 +492,9 @@ class RAGKnowledgeBase(
         if transformer is None:
             transformer = ContentTransformer()
 
-        markdown_text = transformer.transform_yaml(
+        # transform_yaml reads the file from disk, so offload the call.
+        markdown_text = await asyncio.to_thread(
+            transformer.transform_yaml,
             filepath,
             schema=schema,
             title=title or filepath.stem.replace("_", " ").title(),
@@ -548,7 +552,9 @@ class RAGKnowledgeBase(
         if transformer is None:
             transformer = ContentTransformer()
 
-        markdown_text = transformer.transform_csv(
+        # transform_csv reads the file from disk, so offload the call.
+        markdown_text = await asyncio.to_thread(
+            transformer.transform_csv,
             filepath,
             title=title or filepath.stem.replace("_", " ").title(),
             title_field=title_field,
@@ -619,7 +625,9 @@ class RAGKnowledgeBase(
         directory = Path(directory)
 
         if config is None:
-            config = KnowledgeBaseConfig.load(directory)
+            # KnowledgeBaseConfig.load probes the filesystem and reads/parses
+            # the config file, so offload it to avoid blocking the event loop.
+            config = await asyncio.to_thread(KnowledgeBaseConfig.load, directory)
 
         effective_extra: dict[str, Any] = dict(extra_metadata or {})
         if tenant_id is not None:
