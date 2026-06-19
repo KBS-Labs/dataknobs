@@ -22,10 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+from dataknobs_common import aiter_sync_in_thread
 from dataknobs_xization.chunking import create_chunker
 from dataknobs_xization.chunking.base import Chunker, DocumentInfo
-from dataknobs_common import aiter_sync_in_thread
-
 from dataknobs_xization.content_transformer import ContentTransformer
 from dataknobs_xization.ingestion.config import (
     FilePatternConfig,
@@ -552,9 +551,13 @@ class DirectoryProcessor:
           byte iterator directly, without buffering the whole file.
         * Remote source + single JSON tree: buffer bytes into
           :class:`io.BytesIO` then parse — whole-tree parsing cannot
-          be incremental. This path holds one file-sized buffer in
-          memory; callers with multi-hundred-MB single-object JSON
-          should prefer JSONL for that reason.
+          be incremental. The parse is CPU-bound rather than I/O-bound
+          (the bytes are already in memory), but a large tree still
+          stalls the loop, so it is driven on a worker thread via
+          :func:`dataknobs_common.aiter_sync_in_thread` like the local
+          path. This path holds one file-sized buffer in memory;
+          callers with multi-hundred-MB single-object JSON should prefer
+          JSONL for that reason.
         """
         if isinstance(self._source, LocalDocumentSource):
             path = self._source.root / ref.path
@@ -578,14 +581,23 @@ class DirectoryProcessor:
             buf.write(piece)
         buf.seek(0)
         text_stream = io.TextIOWrapper(buf, encoding="utf-8")
-        try:
-            for chunk in chunker.stream_chunks(
-                text_stream,
-                source_file=source_display,
-            ):
-                yield chunk
-        finally:
-            text_stream.detach()
+
+        def _tree_chunks() -> Iterator[JSONChunk]:
+            # ``detach()`` lives in the source iterator's ``finally`` so it
+            # runs on the worker thread after the last read, when
+            # ``aiter_sync_in_thread`` ``close()``s this generator on teardown
+            # (normal, abandoned, or error). Detaching from the loop side
+            # instead would race the in-flight worker read if a second
+            # cancellation let teardown return before the join completed.
+            try:
+                yield from chunker.stream_chunks(
+                    text_stream, source_file=source_display
+                )
+            finally:
+                text_stream.detach()
+
+        async for chunk in aiter_sync_in_thread(_tree_chunks):
+            yield chunk
 
     async def _stream_jsonl_from_remote(
         self,

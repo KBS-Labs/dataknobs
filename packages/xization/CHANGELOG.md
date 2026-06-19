@@ -34,7 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read happen off the loop. Streaming is preserved (chunks are not
   buffered whole-file), backpressure keeps memory bounded, and abandoned
   iteration tears the worker thread down and releases the file handle.
-  gzip handling and path/format dispatch are unchanged.
+  gzip handling and path/format dispatch are unchanged. The remote
+  single-JSON-tree branch (whole-tree parse of an in-memory buffer) is
+  driven through the same worker-thread primitive — that parse is
+  CPU-bound rather than blocking I/O, but a large tree would still stall
+  the loop, so it is offloaded too.
 
 Together these make the local-filesystem async directory-ingest path
 (`process_async`, and `RAGKnowledgeBase.load_from_directory` above it)

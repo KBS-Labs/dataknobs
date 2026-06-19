@@ -99,6 +99,38 @@ async def test_error_during_setup_propagates() -> None:
     assert _pump_threads_alive() == []
 
 
+@pytest.mark.parametrize("bad_buffer", [0, -1])
+async def test_zero_or_negative_max_buffer_rejected(bad_buffer: int) -> None:
+    # ``queue.Queue(maxsize=0)`` is unbounded and would silently defeat the
+    # backpressure the primitive exists to provide; guard it up front.
+    with pytest.raises(ValueError, match="max_buffer must be >= 1"):
+        async for _ in aiter_sync_in_thread(lambda: iter(range(3)), max_buffer=bad_buffer):
+            pass
+
+
+async def test_many_concurrent_streams_do_not_starve_each_other() -> None:
+    # A waiting consumer parks on an ``asyncio.Event`` (no executor polling),
+    # so far more concurrent streams than the default thread-pool size can run
+    # without deadlock. A polling design would wedge once the pool saturated.
+    stream_count = 64
+    per_stream = 20
+
+    def make_iter() -> Iterator[int]:
+        def gen() -> Iterator[int]:
+            yield from range(per_stream)
+
+        return gen()
+
+    async def drain() -> list[int]:
+        return [item async for item in aiter_sync_in_thread(make_iter, max_buffer=2)]
+
+    results = await asyncio.gather(*(drain() for _ in range(stream_count)))
+
+    assert all(r == list(range(per_stream)) for r in results)
+    await asyncio.sleep(0)
+    assert _pump_threads_alive() == []
+
+
 async def test_backpressure_bounds_producer_lookahead() -> None:
     total = 50
     max_buffer = 2

@@ -48,10 +48,12 @@ _ITEM = 0
 _DONE = 1
 _ERR = 2
 
-# Poll interval for the bounded ``put`` / ``get`` waits. Both sides re-check
-# their stop/liveness condition this often so neither a full queue (producer)
-# nor a stalled producer (consumer) can wedge teardown or cancellation past a
-# bounded delay. Small enough to be imperceptible, large enough to avoid spin.
+# Poll interval for the producer's bounded ``put``. When the queue is full the
+# producer re-checks ``stop`` this often, so an abandoned consumer can never
+# wedge the producer past a bounded delay. Small enough to be imperceptible,
+# large enough to avoid spin. The consumer side does not poll: it parks on an
+# ``asyncio.Event`` woken by the producer via ``call_soon_threadsafe``, so a
+# waiting stream occupies no executor thread.
 _POLL_SECONDS = 0.05
 
 # Name applied to the producer thread so tests (and debuggers) can assert no
@@ -80,7 +82,16 @@ async def aiter_sync_in_thread(
     The worker thread is a ``daemon`` so it can never block process exit;
     the in-flight blocking step of an abandoned iterator cannot be
     interrupted, so teardown waits for that one step to return (bounded
-    and acceptable) before the thread winds down.
+    and acceptable) before the thread winds down. The teardown join is
+    shielded from cancellation, so a second cancellation arriving
+    mid-teardown cannot abandon it; the daemon flag is the final backstop
+    if even the shielded join is interrupted.
+
+    The waiting consumer parks on an :class:`asyncio.Event` woken by the
+    producer through :meth:`~asyncio.loop.call_soon_threadsafe` — it does
+    **not** poll an executor thread, so running many concurrent streams
+    does not consume the default thread-pool (only the one-time teardown
+    join briefly does).
 
     Args:
         make_iter: Zero-arg factory returning the blocking iterator to
@@ -89,22 +100,47 @@ async def aiter_sync_in_thread(
         max_buffer: Maximum number of unconsumed items held in the
             hand-off queue before the producer blocks. Higher trades
             memory for smoother throughput; the default suits
-            chunk-sized items.
+            chunk-sized items. Must be ``>= 1`` — ``0`` would make the
+            queue unbounded and silently defeat backpressure.
 
     Yields:
         Each item produced by the wrapped iterator, in order.
+
+    Raises:
+        ValueError: If ``max_buffer`` is less than 1.
     """
+    if max_buffer < 1:
+        raise ValueError(f"max_buffer must be >= 1, got {max_buffer}")
+
     bridge: queue.Queue[tuple[int, object]] = queue.Queue(maxsize=max_buffer)
     stop = threading.Event()
+    loop = asyncio.get_running_loop()
+    # Woken (on the loop thread) whenever the producer hands off a message,
+    # so the consumer can park without polling. ``asyncio.Event`` is not
+    # thread-safe, so the producer only ever schedules ``_set_ready`` via
+    # ``call_soon_threadsafe`` — it is never touched from the worker thread.
+    item_ready = asyncio.Event()
+
+    def _set_ready() -> None:
+        item_ready.set()
+
+    def _wake() -> None:
+        """Schedule a consumer wake-up from the worker thread."""
+        try:
+            loop.call_soon_threadsafe(_set_ready)
+        except RuntimeError:
+            # Loop already closed during teardown; the consumer is gone.
+            pass
 
     def _put(message: tuple[int, object]) -> None:
         """Put a message, bailing out promptly if the consumer stopped."""
         while not stop.is_set():
             try:
                 bridge.put(message, timeout=_POLL_SECONDS)
-                return
             except queue.Full:
                 continue
+            _wake()
+            return
 
     def _producer() -> None:
         iterator: Iterator[T] | None = None
@@ -128,22 +164,23 @@ async def aiter_sync_in_thread(
         target=_producer, name=_THREAD_NAME, daemon=True
     )
     thread.start()
-    loop = asyncio.get_running_loop()
-
-    def _get() -> tuple[int, object] | None:
-        try:
-            return bridge.get(timeout=_POLL_SECONDS)
-        except queue.Empty:
-            return None
 
     try:
         while True:
-            message = await loop.run_in_executor(None, _get)
-            if message is None:
-                # No item yet; loop so a cancellation can interrupt us at a
-                # bounded interval rather than blocking forever on ``get``.
-                continue
-            kind, payload = message
+            try:
+                kind, payload = bridge.get_nowait()
+            except queue.Empty:
+                # Clear, then re-check before parking: if the producer put an
+                # item between the first miss and the clear, the second
+                # ``get_nowait`` catches it; otherwise we park and the next
+                # ``put`` schedules a wake-up *after* the clear, so it lands.
+                # (Standard clear-then-recheck against a lost wake-up.)
+                item_ready.clear()
+                try:
+                    kind, payload = bridge.get_nowait()
+                except queue.Empty:
+                    await item_ready.wait()
+                    continue
             if kind == _ITEM:
                 yield cast("T", payload)
             elif kind == _DONE:
@@ -152,4 +189,10 @@ async def aiter_sync_in_thread(
                 raise cast("BaseException", payload)
     finally:
         stop.set()
-        await loop.run_in_executor(None, thread.join)
+        # Join off-loop so a long in-flight blocking step cannot stall the
+        # loop. ``shield`` keeps the join future running to completion even if
+        # this frame is cancelled again mid-teardown — note the frame may then
+        # re-raise ``CancelledError`` and return before the join finishes, so
+        # the daemon flag (not the shield) is the final backstop against a
+        # leaked thread.
+        await asyncio.shield(loop.run_in_executor(None, thread.join))
