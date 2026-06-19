@@ -17,13 +17,18 @@ without being materialised whole.
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import TYPE_CHECKING
 
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
+from dataknobs_fsm.streaming.core import StreamChunk
 from dataknobs_fsm.utils import streaming_file_utils as _module
-from dataknobs_fsm.utils.streaming_file_utils import StreamingFileReader
+from dataknobs_fsm.utils.streaming_file_utils import (
+    StreamingFileReader,
+    StreamingFileWriter,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -200,3 +205,64 @@ async def test_streams_larger_than_one_chunk(tmp_path: Path) -> None:
         assert len(chunk.data) <= 10
     assert chunk_count == 25
     assert seen == 250
+
+
+# --------------------------------------------------------------------------
+# Reproduce-first: the sibling WRITER must not open/flush/close on the loop.
+# ``StreamingFileReader`` was offloaded above; ``StreamingFileWriter`` lives
+# in the same module and had the same defect (blocking ``open`` + buffer
+# flush + close on the event loop). The offload moves each onto a worker
+# thread via ``asyncio.to_thread``.
+# --------------------------------------------------------------------------
+
+
+@requires_blockbuster
+async def test_writer_does_not_block(tmp_path: Path) -> None:
+    """The writer's open + flush + close must not run on the event loop.
+
+    Pre-offload the auto-``open()`` (and the buffer flush + close) ran
+    inline on the loop, so blockbuster trips on the ``open()``. Post-offload
+    they run via ``asyncio.to_thread`` and this PASSES.
+    """
+    path = tmp_path / "out.jsonl"
+    writer = StreamingFileWriter(path, output_format="jsonl")
+    chunk = StreamChunk(data=[{"i": 0}, {"i": 1}], is_last=True)
+    with assert_no_blocking():
+        await writer.write_chunk(chunk)  # auto-opens off-loop, flushes (is_last)
+        await writer.close()
+    records = [json.loads(ln) for ln in path.read_text().splitlines() if ln]
+    assert records == [{"i": 0}, {"i": 1}]
+
+
+async def test_writer_opens_on_worker_thread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Structural proof the writer's blocking ``open`` runs off the loop.
+
+    Records the thread ``open()`` is invoked on (the flush's ``json.dump`` /
+    ``f.write`` may be detector-blind). Pre-offload ``open`` ran on the
+    event-loop thread (FAIL); post-offload it runs on a ``to_thread``
+    worker, never the loop thread (PASS).
+    """
+    path = tmp_path / "out.jsonl"
+    threads: list[str] = []
+    monkeypatch.setattr(_module, "open", _thread_recording_open(threads), raising=False)
+    writer = StreamingFileWriter(path, output_format="jsonl")
+    await writer.write_chunk(StreamChunk(data=[{"i": 0}], is_last=True))
+    await writer.close()
+    assert threads, "open() was never called"
+    assert threading.current_thread().name not in threads
+
+
+async def test_writer_json_format_round_trips(tmp_path: Path) -> None:
+    """The JSON-array writer still produces a single valid array post-offload.
+
+    Guards the offloaded ``open`` (writes ``[``), flush (comma-joined
+    elements), and ``_close_file`` (writes ``]``) across two chunks.
+    """
+    path = tmp_path / "out.json"
+    writer = StreamingFileWriter(path, output_format="json")
+    await writer.write_chunk(StreamChunk(data=[{"i": 0}, {"i": 1}]))
+    await writer.write_chunk(StreamChunk(data=[{"i": 2}], is_last=True))
+    await writer.close()
+    assert json.loads(path.read_text()) == [{"i": 0}, {"i": 1}, {"i": 2}]

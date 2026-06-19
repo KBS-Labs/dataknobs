@@ -7,6 +7,7 @@ large files that may not fit in memory.
 import asyncio
 import csv
 import json
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Tuple, Union
@@ -267,7 +268,16 @@ class StreamingFileReader:
 
 
 class StreamingFileWriter:
-    """Memory-efficient streaming file writer with buffering."""
+    """Memory-efficient streaming file writer with buffering.
+
+    Single-writer only: an instance is **not** safe to share across
+    concurrent coroutines. ``write_chunk``/``close`` await each buffer
+    flush sequentially and the blocking serialization runs off-loop via
+    :func:`asyncio.to_thread`, so flushes never overlap for one writer —
+    but two coroutines driving the same writer could interleave a
+    ``_buffer`` append with an in-flight worker-thread drain. Give each
+    producer its own writer.
+    """
 
     def __init__(
         self,
@@ -300,7 +310,7 @@ class StreamingFileWriter:
 
     async def __aenter__(self):
         """Async context manager entry."""
-        self.open()
+        await asyncio.to_thread(self.open)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -308,7 +318,12 @@ class StreamingFileWriter:
         await self.close()
 
     def open(self):
-        """Open the output file."""
+        """Open the output file (blocking).
+
+        Performs blocking ``open`` (and, for JSON, writes the opening array
+        bracket), so async callers invoke it via :func:`asyncio.to_thread`
+        rather than directly on the event loop.
+        """
         if self.format == 'jsonl':
             self._file_handle = open(self.file_path, 'w')
         elif self.format == 'csv':
@@ -321,7 +336,10 @@ class StreamingFileWriter:
         else:
             self._file_handle = open(self.file_path, 'w')
 
-        self.metrics.start_time = asyncio.get_event_loop().time()
+        # ``time.time()`` (not the event loop's clock) so ``open`` is safe to
+        # run on the ``to_thread`` worker, and consistent with the
+        # ``time.time()`` clock ``StreamMetrics.duration_seconds`` uses.
+        self.metrics.start_time = time.time()
 
     async def write_chunk(self, chunk: StreamChunk) -> None:
         """Write a chunk of data to the file.
@@ -330,7 +348,7 @@ class StreamingFileWriter:
             chunk: StreamChunk to write
         """
         if not self._file_handle:
-            self.open()
+            await asyncio.to_thread(self.open)
 
         # Add chunk data to buffer
         if isinstance(chunk.data, list):
@@ -353,10 +371,19 @@ class StreamingFileWriter:
         self.metrics.chunks_processed += 1
 
     async def _flush_buffer(self) -> None:
-        """Flush the buffer to file."""
+        """Flush the buffer to file off the event loop.
+
+        The serialization + blocking ``write``/``flush`` run on a worker
+        thread via :func:`asyncio.to_thread`. ``write_chunk``/``close`` await
+        each flush sequentially, so the buffer drain is never concurrent with
+        another mutation — no snapshot is needed.
+        """
         if not self._buffer or not self._file_handle:
             return
+        await asyncio.to_thread(self._flush_buffer_to_disk)
 
+    def _flush_buffer_to_disk(self) -> None:
+        """Synchronous buffer drain + write — run via ``to_thread``."""
         if self.format == 'jsonl':
             # Write each record as a JSON line
             while self._buffer:
@@ -409,22 +436,23 @@ class StreamingFileWriter:
         # Flush to disk
         self._file_handle.flush()
 
-        # Allow other tasks to run
-        await asyncio.sleep(0)
-
     async def close(self) -> None:
-        """Close the file and flush remaining buffer."""
+        """Close the file and flush remaining buffer (off the event loop)."""
         if self._buffer:
             await self._flush_buffer()
 
         if self._file_handle:
-            if self.format == 'json':
-                self._file_handle.write(']')  # Close JSON array
+            await asyncio.to_thread(self._close_file)
 
-            self._file_handle.close()
-            self._file_handle = None
+        self.metrics.end_time = time.time()
 
-        self.metrics.end_time = asyncio.get_event_loop().time()
+    def _close_file(self) -> None:
+        """Synchronous close (writes the JSON terminator) — run via ``to_thread``."""
+        if self.format == 'json':
+            self._file_handle.write(']')  # Close JSON array
+
+        self._file_handle.close()
+        self._file_handle = None
 
 
 class StreamingFileProcessor:
@@ -561,7 +589,7 @@ async def create_streaming_file_writer(
         **kwargs
     )
 
-    writer.open()
+    await asyncio.to_thread(writer.open)
 
     async def write_fn(results: List[Dict[str, Any]]) -> None:
         """Write results to file."""

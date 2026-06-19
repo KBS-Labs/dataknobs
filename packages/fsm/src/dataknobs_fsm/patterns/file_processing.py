@@ -474,10 +474,25 @@ data
         
     async def process(self) -> Dict[str, Any]:
         """Process the file.
-        
+
         Returns:
             Processing metrics
+
+        Raises:
+            NotImplementedError: If ``compression`` is configured. No
+                execution path currently writes compressed output (the former
+                stream-mode ``FileStreamSink`` path was removed when the
+                pattern moved onto the async engine), so the option is
+                rejected loudly rather than silently emitting uncompressed
+                output the caller believes is compressed.
         """
+        if self.config.compression:
+            raise NotImplementedError(
+                "FileProcessor does not support compressed output "
+                f"(compression={self.config.compression!r}). Write uncompressed "
+                "output and compress it separately, or omit the 'compression' "
+                "config field."
+            )
         if self.config.mode == ProcessingMode.STREAM:
             return await self._process_stream()
         elif self.config.mode == ProcessingMode.BATCH:
