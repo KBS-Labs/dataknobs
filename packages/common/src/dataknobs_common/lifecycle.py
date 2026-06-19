@@ -45,7 +45,7 @@ async def close_if_owned(
     resource: Any,
     owns: bool,
     *,
-    on_error: Callable[[BaseException], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> None:
     """Close ``resource`` iff this holder owns it (async).
 
@@ -59,12 +59,14 @@ async def close_if_owned(
             False, ``resource`` is left untouched.
         on_error: Optional callback invoked with the exception when
             ``close()`` raises. When provided, the close is
-            *error-isolated* — the exception is caught and passed to
+            *error-isolated* — the ``Exception`` is caught and passed to
             ``on_error`` rather than propagating, so one failing subsystem
             in a teardown cascade does not abort the rest. When None (the
-            default), exceptions propagate. ``asyncio.CancelledError`` and
-            other ``BaseException`` subclasses always propagate regardless,
-            so cancellation is never swallowed.
+            default), exceptions propagate. Only ``Exception`` subclasses
+            are isolated; ``asyncio.CancelledError`` and the other
+            ``BaseException`` subclasses (``KeyboardInterrupt``,
+            ``SystemExit``) always propagate regardless, so cancellation
+            and interpreter shutdown are never swallowed.
     """
     if owns and resource is not None and hasattr(resource, "close"):
         if on_error is None:
@@ -80,7 +82,7 @@ def close_if_owned_sync(
     resource: Any,
     owns: bool,
     *,
-    on_error: Callable[[BaseException], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> None:
     """Close ``resource`` iff this holder owns it (synchronous).
 
@@ -96,6 +98,9 @@ def close_if_owned_sync(
         on_error: Optional callback invoked with the exception when
             ``close()`` raises. When provided, the close is
             error-isolated; when None (the default), exceptions propagate.
+            Only ``Exception`` subclasses are isolated; ``BaseException``
+            subclasses (``KeyboardInterrupt``, ``SystemExit``) always
+            propagate.
     """
     if owns and resource is not None and hasattr(resource, "close"):
         if on_error is None:
