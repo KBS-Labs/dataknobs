@@ -10,10 +10,49 @@ future S3 consumer.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from .base import BasePoolConfig
+
+logger = logging.getLogger(__name__)
+
+# Process-wide cache of warmed ``aioboto3`` sessions, keyed by a digest
+# of the normalized session kwargs. A warmed session holds botocore's
+# loader caches (loop-independent data files) and NO open transport —
+# clients are short-lived per-operation context managers — so one warmed
+# session is safely reused across calls AND across event loops. Without
+# this, every ``create_aioboto3_session`` call re-warms from scratch;
+# consumers that build sessions per-instance rather than once at startup
+# (e.g. a multi-tenant bot registry loading several runtime configs
+# against the same bucket, or one ``AsyncS3Database`` per event loop)
+# would otherwise pay the warm cost repeatedly. The key is a hash of the
+# kwargs rather than the kwargs themselves so credentials are never held
+# as plaintext dict keys.
+_SESSION_CACHE: dict[str, Any] = {}
+
+
+def _session_cache_key(session_kwargs: dict[str, Any]) -> str:
+    """Return a stable digest identifying a set of session kwargs.
+
+    Hashing keeps credentials out of the cache keys (the warmed session
+    value intrinsically holds them, but the key surface stays clean).
+    """
+    payload = repr(sorted(session_kwargs.items())).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def clear_aioboto3_session_cache() -> None:
+    """Drop all cached ``aioboto3`` sessions.
+
+    Sessions hold no open transport, so this is a pure cache reset — the
+    next :func:`create_aioboto3_session` for a given config re-warms.
+    Primarily for test isolation and explicit teardown.
+    """
+    _SESSION_CACHE.clear()
 
 
 @dataclass(frozen=True)
@@ -234,9 +273,21 @@ async def create_aioboto3_session(
     an :class:`S3SessionConfig` (new shared shape). Internally projects
     onto :class:`S3SessionConfig` so kwarg shaping is identical to
     :func:`create_boto3_s3_client`.
-    """
-    import aioboto3
 
+    Both the synchronous ``aioboto3.Session(...)`` construction (botocore
+    loader setup + ``~/.aws`` read) and aiobotocore's lazy, synchronous
+    first-client load of botocore's bundled data files (``endpoints``,
+    ``sdk-default-configuration``, the S3 service model) block the event
+    loop. The whole factory is therefore offloaded onto a worker thread
+    via :func:`asyncio.to_thread`, where it also warms the session's
+    botocore caches by creating-and-discarding one throwaway client, so
+    the first real client creation by any consumer is a cache hit and
+    does not block.
+
+    The warmed session is cached process-wide keyed by the normalized
+    session kwargs (see :data:`_SESSION_CACHE`), so repeated calls for
+    the same config reuse one warmed session instead of re-warming.
+    """
     sess_cfg = (
         config.to_session_config()
         if isinstance(config, S3PoolConfig)
@@ -254,7 +305,62 @@ async def create_aioboto3_session(
         session_kwargs["aws_session_token"] = sess_cfg.aws_session_token
     if sess_cfg.region_name:
         session_kwargs["region_name"] = sess_cfg.region_name
-    return aioboto3.Session(**session_kwargs)
+
+    cache_key = _session_cache_key(session_kwargs)
+    cached = _SESSION_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    session = await asyncio.to_thread(_build_aioboto3_session, session_kwargs)
+    # Dict assignment is atomic under the GIL. A rare concurrent
+    # first-call for the same config double-builds harmlessly — both
+    # sessions are valid, the last write wins, the loser is GC'd — so no
+    # lock is needed (a module-level ``asyncio.Lock`` would also bind to
+    # the first loop that awaits it and break cross-loop reuse).
+    _SESSION_CACHE[cache_key] = session
+    return session
+
+
+def _build_aioboto3_session(session_kwargs: dict[str, Any]) -> Any:
+    """Build an ``aioboto3.Session`` and warm its botocore caches.
+
+    Runs on a ``to_thread`` worker (no event loop of its own). Creating
+    and discarding one throwaway ``s3`` client triggers — and caches on
+    the session — every first-client botocore data load at once (no
+    endpoint, no network: client creation only loads data files), so the
+    consumer's first real client creation reuses the cache instead of
+    loading on the loop. The warm runs in a private event loop on this
+    worker thread; warm-up failure is logged and swallowed (best-effort
+    fallback to the original first-use load).
+
+    Warm-up failure is logged at WARNING, not DEBUG: because the warmed
+    session is cached, a persistently-failing warm (e.g. a corrupt
+    botocore data bundle) would otherwise silently defeat the offload —
+    every consumer's first real client creation would block on the loop
+    with no diagnostic trail.
+    """
+    import aioboto3
+
+    session = aioboto3.Session(**session_kwargs)
+
+    async def _warm() -> None:
+        async with session.client("s3"):
+            pass
+
+    # Install the private loop as this worker thread's current loop so any
+    # aiobotocore path that consults ``asyncio.get_event_loop()`` during
+    # client construction resolves it, then detach it before close so a
+    # reused thread-pool worker never inherits a closed loop.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_warm())
+    except Exception as exc:  # best-effort; falls back to first-use load
+        logger.warning("aioboto3 session warm-up skipped: %s", exc)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+    return session
 
 
 async def validate_s3_session(

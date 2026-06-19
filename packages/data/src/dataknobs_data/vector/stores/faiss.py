@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import pickle
@@ -108,8 +109,11 @@ class FaissVectorStore(VectorStore):
         # _deferred_ivf=False even though _create_index set it True.
         self.index = self._create_index()
 
-        # Load existing index if persist path exists
-        if self.persist_path and os.path.exists(self.persist_path):
+        # Load any existing persisted index. ``load`` offloads its own
+        # existence check + disk read off the loop and is a no-op when no
+        # file exists, so the blocking ``os.path.exists`` stat that used
+        # to run here is gone.
+        if self.persist_path:
             await self.load()
 
         self._initialized = True
@@ -606,10 +610,22 @@ class FaissVectorStore(VectorStore):
             await self.delete_vectors(matching_ext_ids)
 
     async def save(self) -> None:
-        """Save index and metadata to disk."""
+        """Save index and metadata to disk.
+
+        Offloads the entire disk body (``os.makedirs``,
+        ``faiss.write_index``, ``open`` + ``pickle.dump`` of the
+        ``.meta`` side-car) onto a worker thread via
+        :func:`asyncio.to_thread` so the event loop is never blocked.
+        In-memory ``add`` / ``search`` are CPU-bound C++ (the GIL is
+        released inside FAISS) and remain on the loop — only the disk
+        I/O is offloaded.
+        """
         if not self.persist_path:
             return
+        await asyncio.to_thread(self._save_to_disk)
 
+    def _save_to_disk(self) -> None:
+        """Synchronous disk write — run via ``to_thread`` from :meth:`save`."""
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
 
@@ -639,16 +655,29 @@ class FaissVectorStore(VectorStore):
             }, f)
 
     async def load(self) -> None:
-        """Load index and metadata from disk."""
-        if not self.persist_path or not os.path.exists(self.persist_path):
+        """Load index and metadata from disk.
+
+        Offloads the entire disk body (the existence ``os.path.exists``
+        stat, ``faiss.read_index``, ``open`` + ``pickle.load`` of the
+        ``.meta`` side-car) onto a worker thread via
+        :func:`asyncio.to_thread`. A no-op when ``persist_path`` is unset
+        or no file exists.
+        """
+        if not self.persist_path:
+            return
+        await asyncio.to_thread(self._load_from_disk)
+
+    def _load_from_disk(self) -> None:
+        """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
+        # Convert Path to string for FAISS
+        persist_path_str = str(self.persist_path)
+
+        if not os.path.exists(persist_path_str):
             logger.debug(
                 "FAISS: No persist path or file not found: %s",
                 self.persist_path,
             )
             return
-
-        # Convert Path to string for FAISS
-        persist_path_str = str(self.persist_path)
 
         # Load index
         self.index = faiss.read_index(persist_path_str)
