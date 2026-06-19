@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `KnowledgeResourceBackend` protocol (and its shared mixin) now
+  documents an async-transport contract — async file methods use an async
+  transport or offload blocking disk I/O off the event loop. ruff's
+  `ASYNC` lint family is now enforced for the package, catching blocking
+  I/O inside `async def` code at lint time. See the `async-transport`
+  authoring rule.
 - **Knowledge backends no longer block the event loop on storage I/O.**
   The `S3KnowledgeBackend` performs all S3 operations through an async
   (`aioboto3`) client instead of a synchronous `boto3` client, so reads,
@@ -514,6 +520,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SaveConfigTool` no longer blocks the event loop when persisting a
+  configuration.** Finalizing the draft, creating the output directory,
+  and writing the YAML config are blocking disk I/O; they are now offloaded
+  to a worker thread via `asyncio.to_thread`, so saving a config from a
+  wizard tool no longer stalls other concurrent conversations on a shared
+  event loop. Behavior and return value are unchanged.
 - Cross-tenant `chunk_id` UPSERT collision in shared
   `RAGKnowledgeBase` instances under the same `domain_id`: two tenants
   ingesting the same `domain_id` through a shared KB previously

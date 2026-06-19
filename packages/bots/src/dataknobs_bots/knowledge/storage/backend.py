@@ -38,6 +38,14 @@ class KnowledgeResourceBackend(Protocol):
     - FileKnowledgeBackend: For local development
     - S3KnowledgeBackend: For production deployments
 
+    Async transport contract:
+        The async file methods (``put_file``, ``get_file``, ``stream_file``,
+        ``list_files``, ...) MUST NOT block the event loop. Use an async
+        transport (e.g. aioboto3 for S3) or offload blocking ``open()`` /
+        ``os`` disk I/O via ``asyncio.to_thread`` / ``aiter_sync_in_thread``.
+        ruff's ``ASYNC`` family enforces this; ``assert_no_blocking()`` proves
+        it. ``FileKnowledgeBackend`` is the offloaded-local-I/O reference.
+
     Layout (per knowledge base, under a backend-specific prefix):
 
         {domain_id}/

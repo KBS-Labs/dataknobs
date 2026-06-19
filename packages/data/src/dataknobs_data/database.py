@@ -47,6 +47,16 @@ class AsyncDatabase(ABC):
     across different backend databases. Supports schema validation, batch operations,
     and complex queries with boolean logic.
 
+    Async transport contract:
+        Implementations MUST NOT block the event loop. Use an async transport
+        (asyncpg, aiosqlite, aioboto3, ...) or offload blocking calls via
+        ``asyncio.to_thread`` / ``aiter_sync_in_thread``; never do blocking
+        ``open()`` / ``os`` disk I/O or hold a sync client behind an
+        ``async def``. ruff's ``ASYNC`` family enforces this; the
+        ``assert_no_blocking()`` test construct proves it. See
+        ``AsyncS3Database`` (swap-to-async-transport) and
+        ``AsyncDuckDBDatabase`` (offload-the-sync-call).
+
     Example:
         ```python
         from dataknobs_data import async_database_factory, Record, Query, Filter, Operator

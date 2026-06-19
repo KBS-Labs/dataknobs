@@ -64,6 +64,11 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
     free. A backend with a non-standard layout overrides the constants
     (and inherits the same :meth:`classify_key` against the overridden
     values) or overrides :meth:`classify_key` entirely.
+
+    Async transport contract: the shared async storage methods MUST NOT block
+    the event loop — use an async transport or offload blocking disk I/O via
+    ``asyncio.to_thread`` / ``aiter_sync_in_thread`` (ruff ``ASYNC`` enforces;
+    ``assert_no_blocking()`` proves).
     """
 
     # --- Layout constants (consumed by classify_key + each backend) ---
