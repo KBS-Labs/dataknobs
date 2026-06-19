@@ -88,6 +88,13 @@ dev = [
     "ruff>=0.8.0",
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
+    # blockbuster powers the reproduce-first async-blocking assertions
+    # (assert_no_blocking from dataknobs-common) used by the file-processing
+    # and streaming-file utility offload tests. Without it installed here
+    # those assertions would skip instead of proving the readers/writers
+    # keep the loop unblocked. Dev/test-only — never imported by shipped
+    # runtime code.
+    "blockbuster>=1.5.26,<2.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

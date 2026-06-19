@@ -1536,6 +1536,7 @@ vector = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "blockbuster" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "pytest-asyncio" },
@@ -1581,6 +1582,7 @@ provides-extras = ["llm", "http", "vector", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "blockbuster", specifier = ">=1.5.26,<2.0.0" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-material", specifier = ">=9.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },

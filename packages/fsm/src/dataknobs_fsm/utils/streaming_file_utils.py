@@ -9,7 +9,9 @@ import csv
 import json
 from collections import deque
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Tuple, Union
+
+from dataknobs_common import aiter_sync_in_thread
 
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig, StreamMetrics
 from dataknobs_fsm.utils.file_utils import detect_format, get_csv_delimiter
@@ -87,8 +89,20 @@ class StreamingFileReader:
             self.metrics.end_time = asyncio.get_event_loop().time()
 
     async def _read_jsonl_chunks(self) -> AsyncIterator[StreamChunk]:
-        """Read JSONL file in chunks."""
-        chunk_data = []
+        """Read JSONL file in chunks.
+
+        The blocking ``open`` + line iteration and chunk assembly run on a
+        worker thread via :func:`~dataknobs_common.aiter_sync_in_thread`;
+        chunks cross a bounded queue so streaming stays lazy and the loop
+        is never stalled. (The per-chunk ``asyncio.sleep(0)`` yield is no
+        longer needed — the iteration is off the loop entirely.)
+        """
+        async for chunk in aiter_sync_in_thread(self._read_jsonl_chunks_sync):
+            yield chunk
+
+    def _read_jsonl_chunks_sync(self) -> Iterator[StreamChunk]:
+        """Synchronous JSONL chunk reader — driven on a worker thread."""
+        chunk_data: List[Dict[str, Any]] = []
 
         with open(self.file_path) as f:
             for line in f:
@@ -101,9 +115,6 @@ class StreamingFileReader:
                         if len(chunk_data) >= self.chunk_size:
                             yield self._create_chunk(chunk_data)
                             chunk_data = []
-
-                            # Allow other tasks to run
-                            await asyncio.sleep(0)
                     except json.JSONDecodeError:
                         self.metrics.errors_count += 1
                         continue
@@ -113,14 +124,25 @@ class StreamingFileReader:
                 yield self._create_chunk(chunk_data, is_last=True)
 
     async def _read_json_chunks(self) -> AsyncIterator[StreamChunk]:
-        """Read JSON file in chunks (for arrays)."""
+        """Read JSON file in chunks (for arrays).
+
+        Driven on a worker thread via
+        :func:`~dataknobs_common.aiter_sync_in_thread` so the ijson
+        streaming parse (and the whole-file ``json.load`` fallback) never
+        run on the event loop.
+        """
+        async for chunk in aiter_sync_in_thread(self._read_json_chunks_sync):
+            yield chunk
+
+    def _read_json_chunks_sync(self) -> Iterator[StreamChunk]:
+        """Synchronous JSON chunk reader — driven on a worker thread."""
         import ijson
 
         with open(self.file_path, 'rb') as f:
             # First try to parse as an array with streaming
             try:
                 parser = ijson.items(f, 'item')
-                chunk_data = []
+                chunk_data: List[Dict[str, Any]] = []
                 item_count = 0
 
                 for item in parser:
@@ -131,7 +153,6 @@ class StreamingFileReader:
                     if len(chunk_data) >= self.chunk_size:
                         yield self._create_chunk(chunk_data)
                         chunk_data = []
-                        await asyncio.sleep(0)
 
                 if chunk_data:
                     yield self._create_chunk(chunk_data, is_last=True)
@@ -152,15 +173,24 @@ class StreamingFileReader:
                         is_last = (i + self.chunk_size) >= len(data)
                         self.metrics.items_processed += len(chunk)
                         yield self._create_chunk(chunk, is_last=is_last)
-                        await asyncio.sleep(0)
                 else:
                     # Single object
                     self.metrics.items_processed += 1
                     yield self._create_chunk([data], is_last=True)
 
     async def _read_csv_chunks(self) -> AsyncIterator[StreamChunk]:
-        """Read CSV file in chunks."""
-        chunk_data = []
+        """Read CSV file in chunks.
+
+        Driven on a worker thread via
+        :func:`~dataknobs_common.aiter_sync_in_thread` so the blocking
+        ``open`` + row iteration never runs on the event loop.
+        """
+        async for chunk in aiter_sync_in_thread(self._read_csv_chunks_sync):
+            yield chunk
+
+    def _read_csv_chunks_sync(self) -> Iterator[StreamChunk]:
+        """Synchronous CSV chunk reader — driven on a worker thread."""
+        chunk_data: List[Dict[str, Any]] = []
         total_rows = 0
 
         with open(self.file_path, newline='') as f:
@@ -187,14 +217,23 @@ class StreamingFileReader:
                     is_last = (idx + 1) >= total_rows
                     yield self._create_chunk(chunk_data, is_last=is_last)
                     chunk_data = []
-                    await asyncio.sleep(0)
 
             if chunk_data:
                 yield self._create_chunk(chunk_data, is_last=True)
 
     async def _read_text_chunks(self) -> AsyncIterator[StreamChunk]:
-        """Read text file in chunks."""
-        chunk_data = []
+        """Read text file in chunks.
+
+        Driven on a worker thread via
+        :func:`~dataknobs_common.aiter_sync_in_thread` so the blocking
+        ``open`` + line iteration never runs on the event loop.
+        """
+        async for chunk in aiter_sync_in_thread(self._read_text_chunks_sync):
+            yield chunk
+
+    def _read_text_chunks_sync(self) -> Iterator[StreamChunk]:
+        """Synchronous text chunk reader — driven on a worker thread."""
+        chunk_data: List[Dict[str, Any]] = []
 
         with open(self.file_path) as f:
             for line in f:
@@ -206,7 +245,6 @@ class StreamingFileReader:
                     if len(chunk_data) >= self.chunk_size:
                         yield self._create_chunk(chunk_data)
                         chunk_data = []
-                        await asyncio.sleep(0)
 
             if chunk_data:
                 yield self._create_chunk(chunk_data, is_last=True)

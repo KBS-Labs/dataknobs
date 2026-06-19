@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- The FSM file-processing and streaming utilities now perform their
+  file reads and writes off the event loop, so awaiting them from an
+  async context no longer stalls the loop. The lazy chunk/line readers
+  (`StreamingFileReader`, the `read_*_file` helpers in
+  `utils/file_utils`, and `FileProcessor._read_batches`) stream their
+  blocking `open()` + iteration on a worker thread via
+  `aiter_sync_in_thread`, preserving bounded-memory streaming; the
+  whole-file readers/writers (`read_json_file`,
+  `FileProcessor._process_whole`/`_write_output`, the `ChunkReader`
+  format readers, and `FileAppender`'s buffered writes) offload their
+  one-shot disk I/O via `asyncio.to_thread`. Public async surfaces are
+  unchanged.
+
 ### Security
 
 - Bumped minimum `aiohttp` requirement (extra: `http`) from
