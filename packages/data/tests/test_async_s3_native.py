@@ -1,503 +1,411 @@
-"""Tests for native async S3 backend with aioboto3 and session pooling."""
+"""Native async S3 backend (AsyncS3Database) verified against real LocalStack.
+
+The backend drives all S3 I/O through aioboto3 so the event loop is never
+blocked by a synchronous transport. This module:
+
+1. **Reproduce-first async-correctness** — wraps steady-state ops in
+   :func:`assert_no_blocking`. Against the aioboto3 transport the loop
+   stays free → the block passes. The guard was proven to have teeth by
+   temporarily forcing a synchronous ``boto3`` client into ``create`` /
+   ``read`` and observing ``blockbuster``'s ``BlockingError`` (the urllib3
+   socket read firing on the loop); that edit was reverted before commit.
+2. **Functional round-trips** — the real CRUD / query (filter, sort,
+   offset/limit/projection) / streaming / pooling / lifecycle semantics
+   against a real S3 service, so the aioboto3 path and S3 object shape are
+   exercised for real, not against hand-assembled fakes.
+3. **Vector search** — the Python-side ``vector_search`` path ranks records
+   whose embeddings round-trip through S3, against a real service.
+
+Start LocalStack with ``bin/dk up`` (it runs ``SERVICES=s3,sqs``); the whole
+module skips when LocalStack is unavailable. ``moto``'s ``mock_aws`` is
+deliberately NOT used — it is incompatible with the aiobotocore transport
+these tests must exercise.
+"""
+
+from __future__ import annotations
 
 import asyncio
-import json
+import uuid
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from datetime import datetime
+from dataknobs_common.testing import (
+    assert_no_blocking,
+    requires_blockbuster,
+    requires_localstack,
+)
 
 from dataknobs_data.backends.s3_async import AsyncS3Database
+from dataknobs_data.fields import VectorField
+from dataknobs_data.query import Operator, Query, SortOrder
 from dataknobs_data.records import Record
-from dataknobs_data.query import Query, Operator, SortOrder
+from dataknobs_data.streaming import StreamConfig
+from dataknobs_data.vector.types import DistanceMetric
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
+pytestmark = [pytest.mark.integration, pytest.mark.s3, requires_localstack]
+
+#: One session-persistent bucket shared by every test in this module. Each
+#: test owns a unique key prefix so object namespaces stay disjoint within
+#: the bucket (LocalStack persists buckets across the session).
+_BUCKET = "dataknobs-async-native"
 
 
-@pytest_asyncio.fixture
-async def mock_s3_client():
-    """Create a mock S3 client."""
-    client = AsyncMock()
-    
-    # Mock basic operations
-    client.put_object = AsyncMock()
-    client.get_object = AsyncMock()
-    client.delete_object = AsyncMock()
-    client.head_object = AsyncMock()
-    client.delete_objects = AsyncMock()
-    
-    # Mock paginator
-    paginator = AsyncMock()
-    
-    async def mock_paginate(**kwargs):
-        """Mock paginate to yield pages."""
-        yield {
-            'Contents': [
-                {'Key': 'prefix/id1.json'},
-                {'Key': 'prefix/id2.json'}
-            ]
-        }
-    
-    paginator.paginate = mock_paginate
-    client.get_paginator = MagicMock(return_value=paginator)
-    
-    # Context manager support
-    async def async_context_manager():
-        return client
-    
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock()
-    
-    return client
+def _unique_prefix() -> str:
+    """A per-test key prefix so object state never collides across runs."""
+    return f"async-native-{uuid.uuid4().hex[:10]}"
 
 
-@pytest_asyncio.fixture
-async def mock_session():
-    """Create a mock aioboto3 session."""
-    session = AsyncMock()
-    
-    # Create a mock client that will be returned from context manager
-    mock_client_instance = AsyncMock()
-    mock_client_instance.put_object = AsyncMock()
-    mock_client_instance.get_object = AsyncMock()
-    mock_client_instance.delete_object = AsyncMock()
-    mock_client_instance.head_object = AsyncMock()
-    mock_client_instance.delete_objects = AsyncMock()
-    
-    # Mock paginator
-    paginator = AsyncMock()
-    
-    async def mock_paginate(**kwargs):
-        yield {
-            'Contents': [
-                {'Key': 'test-prefix/id1.json'},
-                {'Key': 'test-prefix/id2.json'}
-            ]
-        }
-    
-    paginator.paginate = mock_paginate
-    mock_client_instance.get_paginator = MagicMock(return_value=paginator)
-    
-    # Create mock client factory that returns a context manager
-    def client_factory(*args, **kwargs):
-        mock_client_cm = AsyncMock()
-        mock_client_cm.__aenter__ = AsyncMock(return_value=mock_client_instance)
-        mock_client_cm.__aexit__ = AsyncMock()
-        return mock_client_cm
-    
-    session.client = client_factory
-    session.mock_client_instance = mock_client_instance  # Store reference for tests
-    return session
+@pytest.fixture
+def s3_db_config(make_localstack_s3_bucket) -> Iterator[dict[str, Any]]:
+    """Config dict for an AsyncS3Database with a unique per-test prefix."""
+    for base_cfg in make_localstack_s3_bucket(_BUCKET):
+        yield {**base_cfg, "prefix": _unique_prefix()}
 
 
-@pytest_asyncio.fixture
-async def s3_db():
-    """Create an S3 database instance."""
-    config = {
-        "bucket": "test-bucket",
-        "prefix": "test-prefix",
-        "region": "us-east-1"
+async def _connect(config: dict[str, Any]) -> AsyncS3Database:
+    """Build and connect an AsyncS3Database over the given config."""
+    database = AsyncS3Database(config)
+    await database.connect()
+    return database
+
+
+@pytest.fixture
+async def db(s3_db_config) -> AsyncIterator[AsyncS3Database]:
+    """A connected AsyncS3Database; clears its prefix and closes on teardown."""
+    database = await _connect(s3_db_config)
+    yield database
+    await database.clear()
+    await database.close()
+
+
+@pytest.fixture
+async def vector_db(s3_db_config) -> AsyncIterator[AsyncS3Database]:
+    """A connected vector-enabled AsyncS3Database (cosine), cleared on teardown."""
+    database = await _connect(
+        {**s3_db_config, "vector_enabled": True, "vector_metric": "cosine"}
+    )
+    yield database
+    await database.clear()
+    await database.close()
+
+
+def _vec_record(name: str, vector: list[float], **extra: Any) -> Record:
+    """Build a record carrying an ``embedding`` VectorField + scalar fields."""
+    data: dict[str, Any] = {
+        "name": name,
+        "embedding": VectorField(
+            name="embedding",
+            value=np.array(vector, dtype=np.float32),
+            dimensions=len(vector),
+        ),
     }
-    db = AsyncS3Database(config)
-    return db
+    data.update(extra)
+    return Record(data=data)
 
 
-@pytest.mark.asyncio
-async def test_connect_creates_session(s3_db, mock_session):
-    """Test that connect creates and validates S3 session."""
-    with patch('dataknobs_data.backends.s3_async.create_aioboto3_session',
-               new_callable=AsyncMock) as mock_create:
-        mock_create.return_value = mock_session
-        
-        await s3_db.connect()
-        
-        assert s3_db._connected is True
-        assert s3_db._session is not None
+# ---------------------------------------------------------------------------
+# Reproduce-first async-correctness — the guard (teeth proven, see docstring)
+# ---------------------------------------------------------------------------
+#
+# NOTE: ``connect()`` is deliberately NOT wrapped in ``assert_no_blocking``.
+# The one-time botocore data load (endpoints / sdk-default-config / the S3
+# service model) is warmed inside the shared ``create_aioboto3_session``
+# factory on a worker thread with its own private loop; ``blockbuster``'s
+# detection is per-running-loop and process-global, so wrapping ``connect()``
+# would flag the warm's own ``os.stat`` and misfire. The session-factory's
+# non-blocking guarantee is a separate concern proven at that layer. Every
+# op *after* connect is non-blocking, which the tests below pin.
 
 
-@pytest.mark.asyncio
-async def test_close_releases_session(s3_db):
-    """Test that close properly releases the session."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    await s3_db.close()
-    
-    assert s3_db._connected is False
-    assert s3_db._session is None
+@requires_blockbuster
+async def test_create_and_read_do_not_block(db) -> None:
+    """Create / read must not stall the loop on the aioboto3 transport.
+
+    FAILS under a synchronous boto3 client (the socket read blocks the loop
+    inside ``async def``); PASSES against aioboto3.
+    """
+    rec = Record(data={"name": "alice", "value": 42})
+    with assert_no_blocking():
+        rid = await db.create(rec)
+        got = await db.read(rid)
+    assert got is not None
+    assert got.get_field("name").value == "alice"
 
 
-@pytest.mark.asyncio
-async def test_create_record(s3_db, mock_session):
-    """Test creating a record."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    record = Record(data={"name": "test", "value": 42})
-    
-    result = await s3_db.create(record)
-    
-    assert result is not None  # Should return a UUID
-    mock_session.mock_client_instance.put_object.assert_called_once()
-    
-    call_args = mock_session.mock_client_instance.put_object.call_args
-    assert call_args.kwargs['Bucket'] == "test-bucket"
-    assert call_args.kwargs['ContentType'] == "application/json"
-    
-    # Verify the body contains the record data
-    body = json.loads(call_args.kwargs['Body'])
-    assert body['fields']['name']['value'] == "test"
-    assert body['fields']['value']['value'] == 42
+@requires_blockbuster
+async def test_stream_read_does_not_block(db) -> None:
+    """stream_read must not stall the loop on any per-object body read.
+
+    Seeds records off-band, then proves the paginator iteration plus each
+    ``Body.read()`` stay off the loop.
+    """
+    for i in range(5):
+        await db.create(Record(data={"name": f"doc{i}", "value": i}))
+    with assert_no_blocking():
+        seen = [r async for r in db.stream_read()]
+    assert len(seen) == 5
 
 
-@pytest.mark.asyncio
-async def test_read_record(s3_db, mock_session):
-    """Test reading a record."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    # Setup mock response
-    mock_client = mock_session.mock_client_instance
-    mock_body = AsyncMock()
-    mock_body.read = AsyncMock(return_value=json.dumps({
-        "fields": {"name": {"value": "test"}},
-        "metadata": {"id": "test-id"}
-    }).encode())
-    
-    mock_client.get_object.return_value = {
-        'Body': mock_body
-    }
-    
-    result = await s3_db.read("test-id")
-    
-    assert result is not None
-    assert result.get_field("name").value == "test"
-    mock_client.get_object.assert_called_once_with(
-        Bucket="test-bucket",
-        Key="test-prefix/test-id.json"
-    )
+# ---------------------------------------------------------------------------
+# Functional round-trips — real LocalStack aioboto3
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_read_record_not_found(s3_db, mock_session):
-    """Test reading a non-existent record."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    mock_client.get_object.side_effect = Exception("NoSuchKey")
-    
-    result = await s3_db.read("missing-id")
-    
-    assert result is None
+async def test_create_read_roundtrip(db) -> None:
+    rec = Record(data={"name": "alice", "value": 42, "tags": ["x", "y"]})
+    rid = await db.create(rec)
+    assert rid
+
+    got = await db.read(rid)
+    assert got is not None
+    assert got.get_field("name").value == "alice"
+    assert got.get_field("value").value == 42
+    assert got.get_field("tags").value == ["x", "y"]
+    assert got.metadata["id"] == rid
 
 
-@pytest.mark.asyncio
-async def test_update_record(s3_db, mock_session):
-    """Test updating a record."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    # Mock exists check
-    mock_client = mock_session.mock_client_instance
-    mock_client.head_object.return_value = {}  # Exists
-    
-    record = Record(data={"name": "updated"})
-    
-    result = await s3_db.update("test-id", record)
-    
-    assert result is True
-    mock_client.put_object.assert_called_once()
-    
-    call_args = mock_client.put_object.call_args
-    assert call_args.kwargs['Bucket'] == "test-bucket"
-    assert call_args.kwargs['Key'] == "test-prefix/test-id.json"
+async def test_read_missing_returns_none(db) -> None:
+    assert await db.read("does-not-exist") is None
 
 
-@pytest.mark.asyncio
-async def test_delete_record(s3_db, mock_session):
-    """Test deleting a record."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    
-    result = await s3_db.delete("test-id")
-    
-    assert result is True
-    mock_client.delete_object.assert_called_once_with(
-        Bucket="test-bucket",
-        Key="test-prefix/test-id.json"
-    )
+async def test_update_existing_and_missing(db) -> None:
+    rid = await db.create(Record(data={"name": "old"}))
+
+    assert await db.update(rid, Record(data={"name": "new"})) is True
+    got = await db.read(rid)
+    assert got is not None and got.get_field("name").value == "new"
+
+    # Missing id short-circuits on the ``exists`` check.
+    assert await db.update("missing", Record(data={"name": "x"})) is False
 
 
-@pytest.mark.asyncio
-async def test_exists_record(s3_db, mock_session):
-    """Test checking if record exists."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    mock_client.head_object.return_value = {}  # Exists
-    
-    result = await s3_db.exists("test-id")
-    
-    assert result is True
-    mock_client.head_object.assert_called_once_with(
-        Bucket="test-bucket",
-        Key="test-prefix/test-id.json"
-    )
+async def test_delete_existing_and_missing(db) -> None:
+    rid = await db.create(Record(data={"name": "doomed"}))
+
+    assert await db.delete(rid) is True
+    assert await db.read(rid) is None
+    # Deleting an absent key is idempotent (S3 delete is a no-op).
+    assert await db.delete(rid) is True
 
 
-@pytest.mark.asyncio
-async def test_search_with_filters(s3_db, mock_session):
-    """Test searching with filters."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    # Setup mock client and responses
-    mock_client = mock_session.mock_client_instance
-    
-    # Mock paginator to return file list
-    paginator = AsyncMock()
-    
-    async def mock_paginate(**kwargs):
-        yield {
-            'Contents': [
-                {'Key': 'test-prefix/id1.json'},
-                {'Key': 'test-prefix/id2.json'}
-            ]
-        }
-    
-    paginator.paginate = mock_paginate
-    mock_client.get_paginator.return_value = paginator
-    
-    # Mock get_object responses
-    call_count = 0
-    
-    async def mock_get_object(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        mock_body = AsyncMock()
-        if call_count == 1:
-            mock_body.read = AsyncMock(return_value=json.dumps({
-                "fields": {"name": {"value": "doc1"}, "value": {"value": 10}},
-                "metadata": {}
-            }).encode())
-        else:
-            mock_body.read = AsyncMock(return_value=json.dumps({
-                "fields": {"name": {"value": "doc2"}, "value": {"value": 20}},
-                "metadata": {}
-            }).encode())
-        return {'Body': mock_body}
-    
-    mock_client.get_object = mock_get_object
-    
-    query = Query().filter("value", Operator.GT, 15).limit(10)
-    
-    results = await s3_db.search(query)
-    
+async def test_exists_true_false(db) -> None:
+    rid = await db.create(Record(data={"name": "here"}))
+    assert await db.exists(rid) is True
+    assert await db.exists("nope") is False
+
+
+async def test_upsert_both_call_shapes(db) -> None:
+    # upsert(id, record)
+    returned = await db.upsert("explicit-id", Record(data={"name": "a"}))
+    assert returned == "explicit-id"
+    got = await db.read("explicit-id")
+    assert got is not None and got.get_field("name").value == "a"
+
+    # upsert(record) — id generated when the record carries none.
+    generated = await db.upsert(Record(data={"name": "b"}))
+    assert generated
+    got2 = await db.read(generated)
+    assert got2 is not None and got2.get_field("name").value == "b"
+
+
+async def test_search_filters(db) -> None:
+    await db.create(Record(data={"name": "low", "value": 10}))
+    await db.create(Record(data={"name": "high", "value": 20}))
+
+    results = await db.search(Query().filter("value", Operator.GT, 15))
     assert len(results) == 1
-    assert results[0].get_field("name").value == "doc2"
+    assert results[0].get_field("name").value == "high"
 
 
-@pytest.mark.asyncio
-async def test_search_with_sorting(s3_db, mock_session):
-    """Test searching with sorting."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    # Setup mock client
-    mock_client = mock_session.mock_client_instance
-    
-    # Mock paginator
-    paginator = AsyncMock()
-    
-    async def mock_paginate(**kwargs):
-        yield {
-            'Contents': [
-                {'Key': 'test-prefix/id1.json'},
-                {'Key': 'test-prefix/id2.json'},
-                {'Key': 'test-prefix/id3.json'}
-            ]
-        }
-    
-    paginator.paginate = mock_paginate
-    mock_client.get_paginator.return_value = paginator
-    
-    # Mock get_object responses
-    responses = [
-        {"fields": {"name": {"value": "C"}, "value": {"value": 30}}, "metadata": {}},
-        {"fields": {"name": {"value": "A"}, "value": {"value": 10}}, "metadata": {}},
-        {"fields": {"name": {"value": "B"}, "value": {"value": 20}}, "metadata": {}}
-    ]
-    
-    call_count = 0
-    
-    async def mock_get_object(**kwargs):
-        nonlocal call_count
-        mock_body = AsyncMock()
-        mock_body.read = AsyncMock(return_value=json.dumps(responses[call_count]).encode())
-        call_count += 1
-        return {'Body': mock_body}
-    
-    mock_client.get_object = mock_get_object
-    
-    query = Query().sort("name", SortOrder.ASC)
-    
-    results = await s3_db.search(query)
-    
-    assert len(results) == 3
-    assert results[0].get_field("name").value == "A"
-    assert results[1].get_field("name").value == "B"
-    assert results[2].get_field("name").value == "C"
+async def test_search_sorting(db) -> None:
+    await db.create(Record(data={"name": "C"}))
+    await db.create(Record(data={"name": "A"}))
+    await db.create(Record(data={"name": "B"}))
+
+    results = await db.search(Query().sort("name", SortOrder.ASC))
+    assert [r.get_field("name").value for r in results] == ["A", "B", "C"]
 
 
-@pytest.mark.asyncio
-async def test_count_all(s3_db, mock_session):
-    """Test counting all records."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    
-    count = await s3_db._count_all()
-    
-    assert count == 2  # Based on mock paginator returning 2 items
+async def test_search_sort_numeric_field_including_zero(db) -> None:
+    """Sorting a numeric field whose values include 0 must not crash.
+
+    Reproduce-first regression guard: the backend formerly built its sort
+    key inline as ``... or ""``, which coerces a falsy ``0`` to ``""`` and
+    raises ``TypeError: '<' not supported between 'str' and 'int'`` when
+    other records sort as ints. Routing search() through the shared
+    ``process_search_results`` helper (which keys on ``get_value(field, "")``)
+    fixes it. The prior mock suite never caught this — its fakes only ever
+    returned string-valued records.
+    """
+    for value in (2, 0, 1):
+        await db.create(Record(data={"name": f"n{value}", "value": value}))
+
+    ascending = await db.search(Query().sort("value", SortOrder.ASC))
+    assert [r.get_field("value").value for r in ascending] == [0, 1, 2]
+
+    descending = await db.search(Query().sort("value", SortOrder.DESC))
+    assert [r.get_field("value").value for r in descending] == [2, 1, 0]
 
 
-@pytest.mark.asyncio
-async def test_clear_all(s3_db, mock_session):
-    """Test clearing all records."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    mock_client.delete_objects.return_value = {}
-    
-    count = await s3_db.clear()
-    
-    assert count == 2
-    mock_client.delete_objects.assert_called_once()
-    
-    call_args = mock_client.delete_objects.call_args
-    assert call_args.kwargs['Bucket'] == "test-bucket"
-    assert len(call_args.kwargs['Delete']['Objects']) == 2
+async def test_search_offset_limit_projection(db) -> None:
+    for i in range(5):
+        await db.create(Record(data={"name": f"n{i}", "value": i}))
+
+    # offset + limit over a stable sort.
+    page = await db.search(
+        Query().sort("value", SortOrder.ASC).offset(1).limit(2)
+    )
+    assert [r.get_field("value").value for r in page] == [1, 2]
+
+    # limit=0 → empty (Python-slice semantics, not "no limit").
+    assert await db.search(Query().limit(0)) == []
+
+    # Field projection keeps only the selected field.
+    projected = await db.search(Query().select("name"))
+    assert projected
+    for rec in projected:
+        assert rec.has_field("name")
+        assert not rec.has_field("value")
 
 
-@pytest.mark.asyncio
-async def test_stream_read(s3_db, mock_session):
-    """Test streaming read."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    
-    # Mock get_object responses
-    call_count = 0
-    
-    async def mock_get_object(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        mock_body = AsyncMock()
-        mock_body.read = AsyncMock(return_value=json.dumps({
-            "fields": {"name": {"value": f"doc{call_count}"}},
-            "metadata": {}
-        }).encode())
-        return {'Body': mock_body}
-    
-    mock_client.get_object = mock_get_object
-    
-    records = []
-    async for record in s3_db.stream_read():
-        records.append(record)
-    
-    assert len(records) == 2
-    assert records[0].get_field("name").value == "doc1"
-    assert records[1].get_field("name").value == "doc2"
+async def test_count_all(db) -> None:
+    for i in range(3):
+        await db.create(Record(data={"name": f"n{i}"}))
+    assert await db._count_all() == 3
 
 
-@pytest.mark.asyncio
-async def test_stream_write(s3_db, mock_session):
-    """Test streaming write."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    
-    async def generate_records():
-        for i in range(5):
-            yield Record(data={"name": f"doc{i}"})
-    
-    result = await s3_db.stream_write(generate_records())
-    
+async def test_clear_empties_bucket(db) -> None:
+    for i in range(4):
+        await db.create(Record(data={"name": f"n{i}"}))
+
+    deleted = await db.clear()
+    assert deleted == 4
+    assert await db._count_all() == 0
+
+
+async def test_stream_write_batched_and_unbatched(db) -> None:
+    async def gen(prefix: str, n: int) -> AsyncIterator[Record]:
+        for i in range(n):
+            yield Record(data={"name": f"{prefix}{i}"})
+
+    # Unbatched (default StreamConfig).
+    result = await db.stream_write(gen("u", 5))
     assert result.successful == 5
     assert result.failed == 0
     assert result.total_processed == 5
-    
-    # Should have called put_object multiple times
-    assert mock_client.put_object.call_count == 5
+    assert await db._count_all() == 5
+
+    # Batched.
+    result2 = await db.stream_write(gen("b", 7), StreamConfig(batch_size=3))
+    assert result2.successful == 7
+    assert result2.failed == 0
+    assert result2.total_processed == 7
+    assert await db._count_all() == 12
 
 
-@pytest.mark.asyncio
-async def test_stream_write_batch(s3_db, mock_session):
-    """Test streaming write with batching."""
-    s3_db._session = mock_session
-    s3_db._connected = True
-    
-    mock_client = mock_session.mock_client_instance
-    
-    async def generate_records():
-        for i in range(10):
-            yield Record(data={"name": f"doc{i}"})
-    
-    from dataknobs_data.streaming import StreamConfig
-    config = StreamConfig(batch_size=3)
-    
-    result = await s3_db.stream_write(generate_records(), config)
-    
-    assert result.successful == 10
-    assert result.failed == 0
-    assert result.total_processed == 10
+async def test_list_all(db) -> None:
+    ids = {await db.create(Record(data={"name": f"n{i}"})) for i in range(3)}
+    assert set(await db.list_all()) == ids
 
 
-@pytest.mark.asyncio
-async def test_connection_pooling():
-    """Test that session pooling works across event loops."""
-    config = {
-        "bucket": "test-bucket",
-        "prefix": "test-prefix",
-        "region": "us-east-1"
+async def test_error_without_connection(s3_db_config) -> None:
+    fresh = AsyncS3Database(s3_db_config)  # never connected
+    rec = Record(data={"name": "x"})
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        await fresh.create(rec)
+    with pytest.raises(RuntimeError, match="not connected"):
+        await fresh.read("id")
+    with pytest.raises(RuntimeError, match="not connected"):
+        await fresh.search(Query())
+
+
+async def test_connection_pooling_shares_session(s3_db_config) -> None:
+    """Two backends on the same config + loop share the pooled session."""
+    db1 = await _connect(s3_db_config)
+    db2 = await _connect(s3_db_config)
+    try:
+        assert db1._session is db2._session
+    finally:
+        await db1.close()
+        await db2.close()
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — per-operation client contexts compose under gather
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_creates_and_reads(db) -> None:
+    ids = await asyncio.gather(
+        *(db.create(Record(data={"name": f"c{i}", "value": i})) for i in range(10))
+    )
+    assert len(set(ids)) == 10
+
+    records = await asyncio.gather(*(db.read(rid) for rid in ids))
+    assert all(r is not None for r in records)
+    assert {r.get_field("name").value for r in records} == {
+        f"c{i}" for i in range(10)
     }
-    
-    with patch('dataknobs_data.backends.s3_async._session_manager') as mock_manager:
-        mock_session = AsyncMock()
-        mock_manager.get_pool = AsyncMock(return_value=mock_session)
-        
-        # Create two databases
-        db1 = AsyncS3Database(config)
-        db2 = AsyncS3Database(config)
-        
-        # Connect both
-        await db1.connect()
-        await db2.connect()
-        
-        # Should use the same pool for same config
-        assert mock_manager.get_pool.call_count == 2
-        
-        # Verify pool config is passed correctly
-        calls = mock_manager.get_pool.call_args_list
-        assert calls[0][0][0] == calls[1][0][0]  # Same config
 
 
-@pytest.mark.asyncio
-async def test_error_without_connection(s3_db):
-    """Test that operations fail without connection."""
-    record = Record(data={"test": "data"})
-    
-    with pytest.raises(RuntimeError, match="not connected"):
-        await s3_db.create(record)
-    
-    with pytest.raises(RuntimeError, match="not connected"):
-        await s3_db.read("test-id")
-    
-    with pytest.raises(RuntimeError, match="not connected"):
-        await s3_db.search(Query())
+# ---------------------------------------------------------------------------
+# Vector search — Python-side ranking over embeddings round-tripped via S3
+# ---------------------------------------------------------------------------
+
+
+async def test_vector_search_ranks_by_similarity(vector_db) -> None:
+    """Cosine ranking + top-k against a real S3 round-trip.
+
+    The seeded vectors have an unambiguous cosine ordering to the query, so
+    the asserted order pins extraction + metric + top-k (a "non-empty" check
+    would pass even with broken ranking).
+    """
+    await vector_db.create(_vec_record("near", [1.0, 0.0]))  # cos 1.000
+    await vector_db.create(_vec_record("mid", [1.0, 1.0]))  # cos 0.707
+    await vector_db.create(_vec_record("far", [0.0, 1.0]))  # cos 0.000
+    await vector_db.create(_vec_record("opp", [-1.0, 0.0]))  # cos -1.000
+
+    results = await vector_db.vector_search([1.0, 0.0], k=4)
+    assert [r.record.get_field("name").value for r in results] == [
+        "near",
+        "mid",
+        "far",
+        "opp",
+    ]
+
+    top2 = await vector_db.vector_search([1.0, 0.0], k=2)
+    assert [r.record.get_field("name").value for r in top2] == ["near", "mid"]
+
+
+async def test_vector_search_with_filter(vector_db) -> None:
+    """The filtered branch routes through search(filter) over real aioboto3."""
+    await vector_db.create(_vec_record("a1", [1.0, 0.0], category="A"))
+    await vector_db.create(_vec_record("a2", [0.0, 1.0], category="A"))
+    await vector_db.create(_vec_record("b1", [1.0, 0.0], category="B"))
+
+    results = await vector_db.vector_search(
+        [1.0, 0.0],
+        k=10,
+        filter=Query().filter("category", Operator.EQ, "A"),
+    )
+    names = [r.record.get_field("name").value for r in results]
+    assert names == ["a1", "a2"]  # only category A, ranked by similarity
+
+
+async def test_vector_search_metric_selection(vector_db) -> None:
+    """The metric param threads through: cosine vs dot-product reorder."""
+    await vector_db.create(_vec_record("unit", [1.0, 0.0]))
+    await vector_db.create(_vec_record("long", [3.0, 3.0]))
+
+    cosine = await vector_db.vector_search([1.0, 0.0], k=2)
+    assert [r.record.get_field("name").value for r in cosine] == ["unit", "long"]
+
+    dot = await vector_db.vector_search(
+        [1.0, 0.0], k=2, metric=DistanceMetric.DOT_PRODUCT
+    )
+    assert [r.record.get_field("name").value for r in dot] == ["long", "unit"]
