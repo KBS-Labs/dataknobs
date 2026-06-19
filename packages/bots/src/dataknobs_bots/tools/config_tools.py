@@ -32,7 +32,9 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 import yaml
@@ -134,8 +136,6 @@ class ListTemplatesTool(ContextAwareTool):
         Returns:
             Configured ListTemplatesTool instance.
         """
-        from pathlib import Path
-
         template_dir = config.get("template_dir", "configs/templates")
         registry = ConfigTemplateRegistry()
         path = Path(template_dir)
@@ -249,8 +249,6 @@ class GetTemplateDetailsTool(ContextAwareTool):
         Returns:
             Configured GetTemplateDetailsTool instance.
         """
-        from pathlib import Path
-
         template_dir = config.get("template_dir", "configs/templates")
         registry = ConfigTemplateRegistry()
         path = Path(template_dir)
@@ -713,22 +711,12 @@ class SaveConfigTool(ContextAwareTool):
                 k: v for k, v in wizard_data.items() if not k.startswith("_")
             }
 
-        # Check for existing draft — finalize cleans up the draft file,
-        # but we always use the freshly-built config (draft may be stale)
+        # Finalizing the draft and writing the config are blocking disk I/O;
+        # offload the whole persist tail so the tool never stalls the loop.
         draft_id = wizard_data.get("_draft_id")
-        if draft_id:
-            try:
-                self._draft_manager.finalize(draft_id, final_name=name)
-            except FileNotFoundError:
-                logger.warning("Draft %s not found, saving directly", draft_id)
-        final_config = config
-
-        # Write the final file
-        output_dir = self._draft_manager.output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-        final_path = output_dir / f"{name}.yaml"
-        with open(final_path, "w") as f:
-            yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)
+        final_path = await asyncio.to_thread(
+            self._persist_config, name, draft_id, config
+        )
 
         logger.info(
             "Saved configuration '%s' to %s",
@@ -744,7 +732,7 @@ class SaveConfigTool(ContextAwareTool):
         # Run consumer callback
         if self._on_save is not None:
             try:
-                self._on_save(name, final_config)
+                self._on_save(name, config)
             except Exception:
                 logger.exception("on_save callback failed for '%s'", name)
 
@@ -754,6 +742,30 @@ class SaveConfigTool(ContextAwareTool):
             "file_path": str(final_path),
             "activated": activate,
         }
+
+    def _persist_config(
+        self, name: str, draft_id: str | None, final_config: dict[str, Any]
+    ) -> Path:
+        """Finalize any draft and write the config to disk.
+
+        Synchronous, blocking disk I/O (draft finalize, ``mkdir``, YAML
+        write); :meth:`execute_with_context` runs it via
+        :func:`asyncio.to_thread` so the event loop is never blocked.
+        """
+        # Finalize cleans up the draft file, but we always write the
+        # freshly-built config (the draft may be stale).
+        if draft_id:
+            try:
+                self._draft_manager.finalize(draft_id, final_name=name)
+            except FileNotFoundError:
+                logger.warning("Draft %s not found, saving directly", draft_id)
+
+        output_dir = self._draft_manager.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        final_path = output_dir / f"{name}.yaml"
+        with open(final_path, "w") as f:
+            yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)
+        return final_path
 
 
 class ListAvailableToolsTool(ContextAwareTool):

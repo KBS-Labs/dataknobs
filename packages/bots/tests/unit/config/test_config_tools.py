@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import yaml
+from dataknobs_common.testing import assert_no_blocking
 from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
 
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
@@ -298,6 +299,62 @@ class TestSaveConfigTool:
         assert result["success"] is True
         assert result["config_name"] == "test-bot"
         assert (tmp_path / "test-bot.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_save_does_not_block_event_loop(self, tmp_path: Path) -> None:
+        """The config-save write/finalize must run off the event loop.
+
+        ``execute_with_context`` mkdir's the output dir and writes the YAML
+        config to disk; doing that synchronously on the running loop stalls
+        every other concurrent conversation on a shared event loop. The
+        persist work is offloaded via ``asyncio.to_thread``.
+        """
+        manager = ConfigDraftManager(output_dir=tmp_path)
+        tool = SaveConfigTool(
+            draft_manager=manager,
+            builder_factory=_basic_builder_factory,
+        )
+        context = _make_context(
+            {
+                "domain_id": "test-bot",
+                "llm_provider": "ollama",
+                "storage_backend": "memory",
+            }
+        )
+        with assert_no_blocking():
+            result = await tool.execute_with_context(context)
+        assert result["success"] is True
+        assert (tmp_path / "test-bot.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_save_with_draft_does_not_block_event_loop(
+        self, tmp_path: Path
+    ) -> None:
+        """The draft-finalize path must also run off the event loop.
+
+        When a draft exists, ``execute_with_context`` finalizes it (read /
+        unlink / rewrite — all blocking disk I/O) before writing the final
+        config; the whole persist tail is offloaded together.
+        """
+        manager = ConfigDraftManager(output_dir=tmp_path)
+        draft_id = manager.create_draft(
+            {"llm": {"provider": "ollama"}, "conversation_storage": {"backend": "memory"}}
+        )
+        tool = SaveConfigTool(
+            draft_manager=manager,
+            builder_factory=_basic_builder_factory,
+        )
+        context = _make_context(
+            {
+                "_draft_id": draft_id,
+                "domain_id": "test-bot",
+                "llm_provider": "ollama",
+                "storage_backend": "memory",
+            }
+        )
+        with assert_no_blocking():
+            result = await tool.execute_with_context(context)
+        assert result["success"] is True
 
     @pytest.mark.asyncio
     async def test_save_with_draft(self, tmp_path: Path) -> None:
