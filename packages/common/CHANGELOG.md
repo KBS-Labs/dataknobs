@@ -492,6 +492,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `ValueError` exception class are unchanged.
 
 ### Fixed
+- `PyrateRateLimiter.try_acquire` (and therefore `acquire`, which polls
+  it) now performs its bucket I/O without blocking the event loop when
+  configured with a blocking bucket backend (`sqlite` / `redis` /
+  `postgres`). Those backends drive a synchronous bucket transport
+  (disk / socket) — both the per-acquire bucket operation and the lazy
+  first-call bucket construction previously ran on the loop, stalling it.
+  The synchronous call is now offloaded onto a worker thread via
+  `asyncio.to_thread`. The offload is gated on the bucket backend, decided
+  once at construction: the default `memory` bucket is pure in-memory and
+  stays on the loop, so the common hot path keeps its zero-thread-dispatch
+  behaviour. Limit enforcement, ordering, and the async-bucket contract are
+  unchanged; no public signature changed and no new runtime dependency was
+  added.
+- `PyrateRateLimiter.close()` and `reset()` now release the bucket transport
+  they own instead of only dropping the in-memory bucket registry. For the
+  `sqlite` backend the connection this limiter opened is closed (previously
+  it leaked until garbage collection); for `redis` the client this limiter
+  built is closed. A caller-supplied `postgres` pool is deliberately left
+  open (the caller owns it). The release runs off the event loop via
+  `asyncio.to_thread` for blocking backends, matching `try_acquire`.
+- `PyrateRateLimiter.acquire()` now backs off its poll interval
+  exponentially (capped at 1s) instead of polling every 50ms. For blocking
+  bucket backends each poll dispatches a worker thread, so a long wait under
+  many concurrent waiters no longer risks saturating the shared default
+  executor; short waits stay responsive (the first poll is still 50ms) and
+  the timeout deadline is still honoured promptly.
 - `dataknobs_common.expressions._validate_ast` now blocks
   `.format()` and `.format_map()` calls on any attribute. The
   format-spec mini-language performs runtime attribute access via

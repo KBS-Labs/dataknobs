@@ -31,6 +31,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from inspect import isawaitable
@@ -41,6 +42,20 @@ from dataknobs_common.exceptions import TimeoutError
 from .types import RateLimit, RateLimiterConfig, RateLimitStatus
 
 logger = logging.getLogger(__name__)
+
+# Bucket backends whose driver does synchronous disk / socket I/O. For these,
+# both the per-acquire bucket I/O and the lazy first-call bucket construction
+# run inside ``Limiter.try_acquire`` and must be offloaded off the event loop.
+# The default ``memory`` bucket is pure in-memory and stays on the loop.
+_BLOCKING_BUCKETS = frozenset({"sqlite", "redis", "postgres"})
+
+# acquire() poll cadence. A fixed short interval dispatches a worker thread
+# every iteration for blocking buckets; capped exponential backoff keeps a
+# long wait from dispatching ~20 probes/second per waiter (which would
+# saturate the shared default executor under many concurrent waiters) while
+# staying responsive when capacity frees up quickly.
+_ACQUIRE_POLL_INITIAL = 0.05
+_ACQUIRE_POLL_MAX = 1.0
 
 try:
     from pyrate_limiter import (
@@ -280,13 +295,25 @@ class PyrateRateLimiter:
         self._raw_config = raw_config
         self._factory = _CategoryBucketFactory(config, raw_config)
         self._limiter = Limiter(self._factory)
+        # Decide once: blocking bucket backends need their sync driver I/O
+        # offloaded off the loop; the memory default does not. The bucket
+        # type is fixed for the limiter's lifetime, so this is not
+        # re-evaluated per call.
+        self._offload = raw_config.get("bucket", "memory") in _BLOCKING_BUCKETS
         logger.debug(
             "PyrateRateLimiter initialized with bucket backend: %s",
             raw_config.get("bucket", "memory"),
         )
 
     async def try_acquire(self, name: str = "default", weight: int = 1) -> bool:
-        """Attempt to acquire capacity without blocking.
+        """Attempt to acquire capacity without blocking the event loop.
+
+        For blocking bucket backends (``sqlite`` / ``redis`` / ``postgres``)
+        the synchronous bucket driver runs its disk / socket I/O — and the
+        lazy first-call bucket construction — inside this call, so the whole
+        call is offloaded onto a worker thread via ``asyncio.to_thread`` to
+        keep the loop free. The default ``memory`` bucket is pure in-memory
+        and runs on the loop (no thread-dispatch overhead on the hot path).
 
         Args:
             name: Category name.
@@ -295,7 +322,14 @@ class PyrateRateLimiter:
         Returns:
             True if the acquire succeeded, False otherwise.
         """
-        result = self._limiter.try_acquire(name, weight=weight, blocking=False)
+        call = functools.partial(
+            self._limiter.try_acquire, name, weight=weight, blocking=False
+        )
+        # Concurrent offloaded calls are thread-safe: Limiter.try_acquire runs
+        # its whole body — including the factory's lazy _buckets mutation in
+        # get() — under the Limiter's internal RLock, so worker threads landing
+        # here are serialized there. Do not bypass that lock from the factory.
+        result = await asyncio.to_thread(call) if self._offload else call()
         if isawaitable(result):
             result = await result
         return bool(result)
@@ -313,6 +347,12 @@ class PyrateRateLimiter:
         because that path calls ``time.sleep()`` which blocks the
         event loop thread.
 
+        The poll interval backs off exponentially (capped at
+        ``_ACQUIRE_POLL_MAX``) so a long wait does not dispatch a worker
+        thread per fixed tick for blocking buckets — bounding executor
+        pressure under many concurrent waiters while staying responsive
+        when capacity frees up quickly.
+
         Args:
             name: Category name.
             weight: Weight of the operation (default 1).
@@ -323,6 +363,7 @@ class PyrateRateLimiter:
             TimeoutError: If the timeout is exceeded.
         """
         deadline = (time.monotonic() + timeout) if timeout is not None else None
+        delay = _ACQUIRE_POLL_INITIAL
         while True:
             if await self.try_acquire(name, weight):
                 return
@@ -331,7 +372,12 @@ class PyrateRateLimiter:
                     f"Rate limit acquire timed out for '{name}'",
                     context={"name": name, "weight": weight, "timeout": timeout},
                 )
-            await asyncio.sleep(0.05)
+            sleep_for = delay
+            if deadline is not None:
+                # Never oversleep past the deadline — honor the timeout promptly.
+                sleep_for = min(sleep_for, max(0.0, deadline - time.monotonic()))
+            await asyncio.sleep(sleep_for)
+            delay = min(delay * 2, _ACQUIRE_POLL_MAX)
 
     async def get_status(self, name: str = "default") -> RateLimitStatus:
         """Get approximate status of a rate limiter bucket.
@@ -356,25 +402,102 @@ class PyrateRateLimiter:
             reset_after=0.0,
         )
 
+    def _release_buckets_sync(
+        self, buckets: list[Any]
+    ) -> None:
+        """Close the transports of buckets WE allocated (ownership-aware).
+
+        Releases only resources this limiter created in ``_create_bucket``:
+
+        * ``sqlite`` — ``SQLiteBucket.close()`` closes the sqlite connection
+          we opened; without this the file handle leaks until GC.
+        * ``redis`` — pyrate's ``RedisBucket.close()`` is a base no-op, so the
+          ``redis.Redis`` client we built is closed directly to release its
+          socket.
+        * ``postgres`` — the psycopg pool is **caller-owned** (passed via
+          ``postgres.pool``); ``PostgresBucket.close()`` would close the
+          caller's pool, so it is deliberately NOT called here.
+        * ``memory`` — no transport to release.
+
+        Note: ``Limiter.close()`` / ``Limiter.dispose()`` are NOT used because
+        this limiter's ``_CategoryBucketFactory`` never registers buckets with
+        pyrate's leaker, so ``factory.get_buckets()`` is empty and both would
+        close nothing. The authoritative bucket registry is our own dict.
+        """
+        bucket_type = self._raw_config.get("bucket", "memory")
+        for bucket in buckets:
+            try:
+                if bucket_type == "sqlite":
+                    bucket.close()
+                elif bucket_type == "redis":
+                    # pyrate v4 RedisBucket stores the client we passed to
+                    # RedisBucket.init() as ``.redis``; its own close() is a
+                    # base no-op, so we close that client to free the socket.
+                    conn = getattr(bucket, "redis", None)
+                    if conn is not None and hasattr(conn, "close"):
+                        conn.close()
+                # memory: nothing to release.
+                # postgres: pool is caller-owned — do NOT close it.
+            except Exception:
+                # Best-effort teardown: attempt every bucket, but surface the
+                # failure (WARNING, not DEBUG) so a stuck handle is visible
+                # without enabling debug logging globally.
+                logger.warning(
+                    "Error releasing pyrate %s bucket", bucket_type, exc_info=True
+                )
+
+    async def _release_buckets(self, buckets: list[Any]) -> None:
+        """Release bucket transports off the loop for blocking backends.
+
+        ``bucket.close()`` (sqlite) and the redis client close do synchronous
+        disk / socket I/O — the same driver work ``try_acquire`` offloads — so
+        for blocking buckets the release runs on a worker thread.
+        """
+        if not buckets:
+            return
+        if self._offload:
+            await asyncio.to_thread(self._release_buckets_sync, buckets)
+        else:
+            self._release_buckets_sync(buckets)
+
     async def reset(self, name: str | None = None) -> None:
         """Reset rate limiter state.
 
         Note: For the pyrate backend, this disposes of the relevant
-        bucket(s). New buckets will be created on the next acquire.
+        bucket(s), releasing the transport(s) this limiter owns. New
+        buckets will be created on the next acquire.
 
         Args:
             name: Category to reset. If ``None``, resets all categories.
         """
+        # Remove from the registry BEFORE releasing (see close() for the full
+        # rationale): a concurrent try_acquire must not be handed a bucket
+        # whose transport is being torn down.
         if name is not None:
-            self._factory._buckets.pop(name, None)
+            bucket = self._factory._buckets.pop(name, None)
+            buckets = [bucket] if bucket is not None else []
         else:
+            buckets = list(self._factory._buckets.values())
             self._factory._buckets.clear()
+        await self._release_buckets(buckets)
         logger.debug(
             "PyrateRateLimiter reset: %s",
             name if name else "all",
         )
 
     async def close(self) -> None:
-        """Release resources held by the rate limiter."""
+        """Release resources held by the rate limiter.
+
+        Closes the transports of every bucket this limiter owns (see
+        :meth:`_release_buckets_sync` for the per-backend ownership rules)
+        and drops the bucket registry.
+        """
+        # Snapshot then clear the registry BEFORE releasing, so a concurrent
+        # try_acquire cannot be handed a bucket whose transport is being torn
+        # down. This ordering does not leak: _release_buckets_sync swallows
+        # per-bucket errors (every bucket is still attempted), and a cancelled
+        # to_thread still runs the release to completion on its worker thread.
+        buckets = list(self._factory._buckets.values())
         self._factory._buckets.clear()
+        await self._release_buckets(buckets)
         logger.debug("PyrateRateLimiter closed")
