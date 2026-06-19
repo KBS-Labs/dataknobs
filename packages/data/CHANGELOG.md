@@ -63,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so offloading them buys nothing. No public signatures changed and no new
   runtime dependency was added (`asyncio.to_thread` is stdlib).
 
+- **`MemoryVectorStore.save` and `FaissVectorStore.save` persist a
+  consistent snapshot when a write runs concurrently with the save.**
+  Because the disk write is offloaded to a worker thread, each `save()`
+  now copies its in-memory state — the vectors / metadata / timestamp
+  dicts, plus a clone of the FAISS index — on the event loop *before*
+  handing off, so a `save()` that overlaps an `add_vectors` /
+  `delete_vectors` records the state as of the `save()` call rather than a
+  partially-mutated mix observed mid-serialization. `MemoryVectorStore.save`
+  additionally handles a `persist_path` with no directory component (a bare
+  filename), which previously failed with `FileNotFoundError`.
+
 ### Changed
 
 - **`VectorStore.close()` now documents a backing-resource ownership

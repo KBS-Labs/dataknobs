@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, cast
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
-from ..database_utils import process_search_results
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, create_aioboto3_session, validate_s3_session
 from ..query import Operator, Query
@@ -293,7 +292,7 @@ class AsyncS3Database(  # type: ignore[misc]
         self._check_connection()
 
         # S3 doesn't support complex queries, so we need to list and filter.
-        # Collect (id, record) tuples; the shared ``process_search_results``
+        # Collect (id, record) tuples; the shared ``_process_search_results``
         # helper applies sorting / offset / limit / projection consistently
         # with every other backend (and correctly handles falsy sort values
         # such as a numeric ``0``, which a hand-rolled ``or ""`` key coerces
@@ -342,7 +341,7 @@ class AsyncS3Database(  # type: ignore[misc]
 
         # Records are freshly deserialized from S3 (no shared aliasing), so
         # ``ensure_record_id`` inside the helper is the only copy needed.
-        return process_search_results(results, query, deep_copy=False)
+        return self._process_search_results(results, query, deep_copy=False)
 
     def _matches_filters(self, record: Record, filters: list) -> bool:
         """Check if a record matches all filters."""

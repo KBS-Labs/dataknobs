@@ -622,10 +622,51 @@ class FaissVectorStore(VectorStore):
         """
         if not self.persist_path:
             return
-        await asyncio.to_thread(self._save_to_disk)
+        if self.index is None:
+            # The index is created in initialize(); a save() before that
+            # has nothing to persist. Skip rather than crash downstream in
+            # faiss.write_index(None) (the dicts are necessarily empty too,
+            # since they are only populated through add_vectors).
+            return
+        # Snapshot the mutable in-memory state on the event loop BEFORE
+        # handing off to the worker thread, so a concurrent add_vectors /
+        # delete_vectors can't race the serialization:
+        #   * The dicts are shallow-copied — values (ndarrays, metadata
+        #     dicts, timestamp tuples) are replaced by reference on
+        #     mutation, never mutated in place, so the worker reads them
+        #     safely without "dictionary changed size during iteration".
+        #   * The FAISS index is deep-cloned because ``faiss.write_index``
+        #     would otherwise serialize an index being mutated by a
+        #     concurrent ``add_with_ids`` / ``remove_ids`` on the loop.
+        # Both snapshots are taken synchronously with no ``await`` between
+        # them, so no mutation can interleave — the persisted index and
+        # ``.meta`` side-car are mutually consistent.
+        index_snapshot = faiss.clone_index(self.index)
+        meta_snapshot = {
+            "id_map": dict(self.id_map),
+            "metadata_store": dict(self.metadata_store),
+            "timestamps": dict(self.timestamps),
+            "vectors": dict(self.vectors),
+            "deferred_ivf": self._deferred_ivf,
+            "next_idx": self.next_idx,
+            "config": {
+                "dimensions": self.dimensions,
+                "metric": self.metric.value,
+                "index_type": self.index_type,
+            },
+        }
+        await asyncio.to_thread(
+            self._save_to_disk, index_snapshot, meta_snapshot
+        )
 
-    def _save_to_disk(self) -> None:
-        """Synchronous disk write — run via ``to_thread`` from :meth:`save`."""
+    def _save_to_disk(self, index: Any, meta: dict[str, Any]) -> None:
+        """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
+
+        Receives a loop-side snapshot (a cloned index and a dict of
+        shallow-copied mappings); reads only those, never the live
+        ``self.*`` state, so a concurrent mutation cannot corrupt the
+        write.
+        """
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
 
@@ -635,24 +676,12 @@ class FaissVectorStore(VectorStore):
             os.makedirs(parent_dir, exist_ok=True)
 
         # Save index
-        faiss.write_index(self.index, persist_path_str)
+        faiss.write_index(index, persist_path_str)
 
         # Save metadata and mappings
         metadata_path = persist_path_str + ".meta"
         with open(metadata_path, "wb") as f:
-            pickle.dump({
-                "id_map": self.id_map,
-                "metadata_store": self.metadata_store,
-                "timestamps": dict(self.timestamps),
-                "vectors": self.vectors,
-                "deferred_ivf": self._deferred_ivf,
-                "next_idx": self.next_idx,
-                "config": {
-                    "dimensions": self.dimensions,
-                    "metric": self.metric.value,
-                    "index_type": self.index_type,
-                }
-            }, f)
+            pickle.dump(meta, f)
 
     async def load(self) -> None:
         """Load index and metadata from disk.

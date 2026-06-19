@@ -13,7 +13,6 @@ from uuid import uuid4
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
-from dataknobs_data.database_utils import process_search_results
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
@@ -355,9 +354,9 @@ class SyncS3Database(  # type: ignore[misc]
         self._check_connection()
 
         # List all objects with the prefix. Collect (id, record) tuples and
-        # let the shared ``process_search_results`` helper apply sorting /
+        # let the shared ``_process_search_results`` helper apply sorting /
         # offset / limit / projection — the single canonical implementation
-        # both S3 backends share (it correctly orders falsy sort values such
+        # every backend shares (it correctly orders falsy sort values such
         # as a numeric ``0``).
         results: list[tuple[str, Record]] = []
         paginator = self.s3_client.get_paginator('list_objects_v2')
@@ -382,7 +381,7 @@ class SyncS3Database(  # type: ignore[misc]
 
         # Records are freshly deserialized from S3 (no shared aliasing), so
         # ``ensure_record_id`` inside the helper is the only copy needed.
-        return process_search_results(results, query, deep_copy=False)
+        return self._process_search_results(results, query, deep_copy=False)
 
     def _fetch_and_filter(self, key: str, query: Query) -> Record | None:
         """Fetch an object and apply query filters."""
