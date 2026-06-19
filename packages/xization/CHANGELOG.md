@@ -24,13 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   content was already read into memory through the offloaded source.
   Markdown and (non-streaming) JSON paths were already loop-safe. Output
   is unchanged.
+- **`DirectoryProcessor.process_async` no longer blocks the loop when
+  streaming large local JSON/JSONL files.** The streaming branch hands
+  the on-disk path to a *lazy* synchronous chunker generator that
+  `open`/`gzip.open`s the file and reads forward on every chunk pull —
+  previously each pull ran on the event loop. The generator is now driven
+  on a worker thread and its chunks are pumped to the async consumer
+  across a bounded queue, so the file open, gzip decompression, and every
+  read happen off the loop. Streaming is preserved (chunks are not
+  buffered whole-file), backpressure keeps memory bounded, and abandoned
+  iteration tears the worker thread down and releases the file handle.
+  gzip handling and path/format dispatch are unchanged.
 
 Together these make the local-filesystem async directory-ingest path
 (`process_async`, and `RAGKnowledgeBase.load_from_directory` above it)
-loop-friendly for markdown, YAML, CSV, and small JSON corpora. The
-streaming-JSON local path (large JSON/JSONL handed to a synchronous
-chunker by on-disk path) remains a known blocking site pending a
-dedicated fix.
+loop-friendly across markdown, YAML, CSV, and JSON corpora — including
+large streamed JSON/JSONL.
 
 ## v1.3.8 - 2026-06-02
 

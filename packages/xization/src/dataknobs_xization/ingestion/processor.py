@@ -24,6 +24,8 @@ from typing import Any, Iterator, Literal
 
 from dataknobs_xization.chunking import create_chunker
 from dataknobs_xization.chunking.base import Chunker, DocumentInfo
+from dataknobs_common import aiter_sync_in_thread
+
 from dataknobs_xization.content_transformer import ContentTransformer
 from dataknobs_xization.ingestion.config import (
     FilePatternConfig,
@@ -536,9 +538,15 @@ class DirectoryProcessor:
 
         Three paths, all forward-sequential in chunk emission:
 
-        * :class:`LocalDocumentSource`: pass the on-disk path directly
-          to :meth:`JSONChunker.stream_chunks` so gzip/URL/path-based
-          dispatch works unchanged.
+        * :class:`LocalDocumentSource`: hand the on-disk path to the
+          *lazy* synchronous generator :meth:`JSONChunker.stream_chunks`,
+          which owns gzip/URL/path-based dispatch. That generator
+          ``open``/``gzip.open``s the file and reads forward on every
+          ``__next__``, so it is driven on a worker thread via
+          :func:`dataknobs_common.aiter_sync_in_thread` and its chunks
+          are pumped across a bounded queue — the file open, gzip
+          decompression, and each read happen off the event loop, and
+          streaming is preserved (no whole-file buffering).
         * Remote source + JSONL (``.jsonl``, ``.ndjson``, ``.jsonl.gz``,
           ``.ndjson.gz``): parse one object per line from the async
           byte iterator directly, without buffering the whole file.
@@ -550,7 +558,9 @@ class DirectoryProcessor:
         """
         if isinstance(self._source, LocalDocumentSource):
             path = self._source.root / ref.path
-            for chunk in chunker.stream_chunks(path):
+            async for chunk in aiter_sync_in_thread(
+                lambda: chunker.stream_chunks(path)
+            ):
                 if not chunk.source_file:
                     chunk.source_file = source_display
                 yield chunk

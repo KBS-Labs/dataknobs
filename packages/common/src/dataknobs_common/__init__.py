@@ -61,6 +61,9 @@ from dataknobs_common.callbacks import (
     RecordingCallbackRegistry,
     StageOrdering,
 )
+from dataknobs_common.async_iter import (
+    aiter_sync_in_thread,
+)
 from dataknobs_common.lifecycle import (
     close_if_owned,
     close_if_owned_sync,
@@ -246,6 +249,8 @@ __all__ = [
     "PriorityOrdering",
     "RecordingCallbackRegistry",
     "StageOrdering",
+    # Async iteration
+    "aiter_sync_in_thread",
     # Lifecycle
     "close_if_owned",
     "close_if_owned_sync",
