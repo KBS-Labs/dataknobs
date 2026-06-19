@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pickle
 from datetime import datetime, timezone
@@ -43,9 +44,10 @@ class MemoryVectorStore(VectorStore):
         if self._initialized:
             return
 
-        # Load existing data if persist path exists
-        if self.persist_path and os.path.exists(self.persist_path):
-            await self.load()
+        # Load existing data if any. ``load`` self-guards on the persist
+        # path and the file's existence (off the event loop), so there is
+        # no on-loop ``os.path.exists`` stat here.
+        await self.load()
 
         self._initialized = True
 
@@ -56,10 +58,13 @@ class MemoryVectorStore(VectorStore):
         self._initialized = False
 
     async def save(self) -> None:
-        """Save vectors and metadata to disk."""
+        """Save vectors and metadata to disk (offloaded off the event loop)."""
         if not self.persist_path:
             return
+        await asyncio.to_thread(self._save_to_disk)
 
+    def _save_to_disk(self) -> None:
+        """Synchronous disk write — run via ``to_thread`` from :meth:`save`."""
         # Create directory if needed
         os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
 
@@ -76,8 +81,14 @@ class MemoryVectorStore(VectorStore):
             }, f)
 
     async def load(self) -> None:
-        """Load vectors and metadata from disk."""
-        if not self.persist_path or not os.path.exists(self.persist_path):
+        """Load vectors and metadata from disk (offloaded off the event loop)."""
+        if not self.persist_path:
+            return
+        await asyncio.to_thread(self._load_from_disk)
+
+    def _load_from_disk(self) -> None:
+        """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
+        if not os.path.exists(self.persist_path):
             return
 
         with open(self.persist_path, "rb") as f:

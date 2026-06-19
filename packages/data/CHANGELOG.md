@@ -36,12 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `process_search_results` helper, so result ordering is consistent with
   every other backend and the duplicated per-backend logic is gone.
 
-- **The async file database, Chroma and FAISS vector stores, and the
-  shared aioboto3 session factory perform their I/O without blocking the
-  event loop.** Each held a synchronous, blocking transport behind an
-  `async def`, stalling the loop for the duration of the call:
-  `AsyncFileDatabase` ran its locked file load/save (including the
-  inter-process `FileLock` acquire) on the loop on every CRUD operation;
+- **The async file database, the in-memory, Chroma, and FAISS vector
+  stores, and the shared aioboto3 session factory perform their I/O
+  without blocking the event loop.** Each held a synchronous, blocking
+  transport behind an `async def`, stalling the loop for the duration of
+  the call: `AsyncFileDatabase` ran its locked file load/save (including
+  the inter-process `FileLock` acquire) on the loop on every CRUD
+  operation, plus its temp-file cleanup on `close()`;
+  `MemoryVectorStore.save`/`load` ran their `pickle` disk I/O on the loop
+  (and `initialize` an `os.path.exists` stat before loading);
   `ChromaVectorStore` drove the synchronous chromadb client/collection
   directly; `FaissVectorStore.save`/`load` did blocking `faiss` index +
   pickle disk I/O; and `create_aioboto3_session` blocked on session
