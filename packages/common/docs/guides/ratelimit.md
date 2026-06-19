@@ -255,6 +255,17 @@ limiter = create_rate_limiter({
 from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
 ```
 
+### Event-Loop Safety
+
+The blocking bucket backends (`sqlite`, `redis`, `postgres`) drive a
+**synchronous** bucket transport — disk or socket I/O. To keep the event
+loop free, `try_acquire()` (and `acquire()`, which polls it) offloads that
+synchronous work onto a worker thread via `asyncio.to_thread`; both the
+per-acquire bucket operation and the lazy first-call bucket construction run
+off-loop. The default `memory` bucket is pure in-memory and runs on the loop
+directly, so the common hot path carries no thread-dispatch overhead. This is
+transparent to callers — the public API is unchanged.
+
 ## Configuration-Driven Usage
 
 Rate limiter configuration integrates with environment-specific YAML config:

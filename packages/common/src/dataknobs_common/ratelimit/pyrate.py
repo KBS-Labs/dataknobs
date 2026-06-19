@@ -31,6 +31,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from inspect import isawaitable
@@ -41,6 +42,12 @@ from dataknobs_common.exceptions import TimeoutError
 from .types import RateLimit, RateLimiterConfig, RateLimitStatus
 
 logger = logging.getLogger(__name__)
+
+# Bucket backends whose driver does synchronous disk / socket I/O. For these,
+# both the per-acquire bucket I/O and the lazy first-call bucket construction
+# run inside ``Limiter.try_acquire`` and must be offloaded off the event loop.
+# The default ``memory`` bucket is pure in-memory and stays on the loop.
+_BLOCKING_BUCKETS = frozenset({"sqlite", "redis", "postgres"})
 
 try:
     from pyrate_limiter import (
@@ -280,13 +287,25 @@ class PyrateRateLimiter:
         self._raw_config = raw_config
         self._factory = _CategoryBucketFactory(config, raw_config)
         self._limiter = Limiter(self._factory)
+        # Decide once: blocking bucket backends need their sync driver I/O
+        # offloaded off the loop; the memory default does not. The bucket
+        # type is fixed for the limiter's lifetime, so this is not
+        # re-evaluated per call.
+        self._offload = raw_config.get("bucket", "memory") in _BLOCKING_BUCKETS
         logger.debug(
             "PyrateRateLimiter initialized with bucket backend: %s",
             raw_config.get("bucket", "memory"),
         )
 
     async def try_acquire(self, name: str = "default", weight: int = 1) -> bool:
-        """Attempt to acquire capacity without blocking.
+        """Attempt to acquire capacity without blocking the event loop.
+
+        For blocking bucket backends (``sqlite`` / ``redis`` / ``postgres``)
+        the synchronous bucket driver runs its disk / socket I/O — and the
+        lazy first-call bucket construction — inside this call, so the whole
+        call is offloaded onto a worker thread via ``asyncio.to_thread`` to
+        keep the loop free. The default ``memory`` bucket is pure in-memory
+        and runs on the loop (no thread-dispatch overhead on the hot path).
 
         Args:
             name: Category name.
@@ -295,7 +314,10 @@ class PyrateRateLimiter:
         Returns:
             True if the acquire succeeded, False otherwise.
         """
-        result = self._limiter.try_acquire(name, weight=weight, blocking=False)
+        call = functools.partial(
+            self._limiter.try_acquire, name, weight=weight, blocking=False
+        )
+        result = await asyncio.to_thread(call) if self._offload else call()
         if isawaitable(result):
             result = await result
         return bool(result)
