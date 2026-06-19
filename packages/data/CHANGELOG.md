@@ -25,12 +25,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The async file database, Chroma and FAISS vector stores, and the
-  shared aioboto3 session factory perform their I/O without blocking the
-  event loop.** Each held a synchronous, blocking transport behind an
-  `async def`, stalling the loop for the duration of the call:
-  `AsyncFileDatabase` ran its locked file load/save (including the
-  inter-process `FileLock` acquire) on the loop on every CRUD operation;
+- **`SyncS3Database` and `AsyncS3Database` now sort search results
+  correctly when a sort field holds a falsy value such as a numeric `0`.**
+  The async backend's inline sort key coerced any falsy value (`0`,
+  `False`, `""`) to an empty string, so sorting a numeric field whose
+  values included `0` raised
+  `TypeError: '<' not supported between instances of 'str' and 'int'`.
+  Both S3 backends now apply sorting, `offset`/`limit` (including
+  `limit=0`), and field projection through the shared
+  `process_search_results` helper, so result ordering is consistent with
+  every other backend and the duplicated per-backend logic is gone.
+
+- **The async file database, the in-memory, Chroma, and FAISS vector
+  stores, and the shared aioboto3 session factory perform their I/O
+  without blocking the event loop.** Each held a synchronous, blocking
+  transport behind an `async def`, stalling the loop for the duration of
+  the call: `AsyncFileDatabase` ran its locked file load/save (including
+  the inter-process `FileLock` acquire) on the loop on every CRUD
+  operation, plus its temp-file cleanup on `close()`;
+  `MemoryVectorStore.save`/`load` ran their `pickle` disk I/O on the loop
+  (and `initialize` an `os.path.exists` stat before loading);
   `ChromaVectorStore` drove the synchronous chromadb client/collection
   directly; `FaissVectorStore.save`/`load` did blocking `faiss` index +
   pickle disk I/O; and `create_aioboto3_session` blocked on session
@@ -48,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain on the loop — they are CPU-bound and release the GIL internally,
   so offloading them buys nothing. No public signatures changed and no new
   runtime dependency was added (`asyncio.to_thread` is stdlib).
+
+- **`MemoryVectorStore.save` and `FaissVectorStore.save` persist a
+  consistent snapshot when a write runs concurrently with the save.**
+  Because the disk write is offloaded to a worker thread, each `save()`
+  now copies its in-memory state — the vectors / metadata / timestamp
+  dicts, plus a clone of the FAISS index — on the event loop *before*
+  handing off, so a `save()` that overlaps an `add_vectors` /
+  `delete_vectors` records the state as of the `save()` call rather than a
+  partially-mutated mix observed mid-serialization. `MemoryVectorStore.save`
+  additionally handles a `persist_path` with no directory component (a bare
+  filename), which previously failed with `FileNotFoundError`.
 
 ### Changed
 

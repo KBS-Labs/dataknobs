@@ -18,6 +18,7 @@ guards the real regression risk — that offloading must not break the
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -84,6 +85,27 @@ async def test_search_does_not_block(db: AsyncFileDatabase) -> None:
 async def test_create_batch_does_not_block(db: AsyncFileDatabase) -> None:
     with assert_no_blocking():
         await db.create_batch([_record("a", 1), _record("b", 2)])
+
+
+@requires_blockbuster
+async def test_close_temp_file_cleanup_does_not_block() -> None:
+    """Temp-file cleanup on close() must not block the loop.
+
+    A temp-file-backed AsyncFileDatabase removes its data + ``.lock`` files
+    on close(). Those existence stats + unlinks are blocking disk I/O;
+    pre-offload they ran on the loop (``os.path.exists`` trips blockbuster),
+    post-offload they run via ``to_thread``. Afterwards both files are gone.
+    """
+    database = AsyncFileDatabase({})  # no path → temp-file backed
+    await database.create(_record("alice", 1))  # materialise the data file
+    filepath = database.filepath
+    assert os.path.exists(filepath)
+
+    with assert_no_blocking():
+        await database.close()
+
+    assert not os.path.exists(filepath)
+    assert not os.path.exists(filepath + ".lock")
 
 
 async def test_concurrent_creates_do_not_lose_writes(db: AsyncFileDatabase) -> None:

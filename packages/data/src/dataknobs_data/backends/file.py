@@ -708,17 +708,22 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
     async def close(self) -> None:
         """Close the database and clean up temporary files if needed."""
-        # Clean up temporary file if it was created
+        # Clean up temporary file if it was created. The existence stats
+        # and unlinks are blocking disk I/O, so run them off the loop.
         if getattr(self, '_is_temp_file', False) and self.filepath:
-            try:
-                if os.path.exists(self.filepath):
-                    Path(self.filepath).unlink()
-                # Also remove lock file if it exists
-                lock_file = self.filepath + ".lock"
-                if os.path.exists(lock_file):
-                    Path(lock_file).unlink()
-            except OSError:
-                pass  # Best effort cleanup
+            await asyncio.to_thread(self._cleanup_temp_files)
+
+    def _cleanup_temp_files(self) -> None:
+        """Best-effort temp/lock-file removal — run via ``to_thread``."""
+        try:
+            if os.path.exists(self.filepath):
+                Path(self.filepath).unlink()
+            # Also remove lock file if it exists
+            lock_file = self.filepath + ".lock"
+            if os.path.exists(lock_file):
+                Path(lock_file).unlink()
+        except OSError:
+            pass  # Best effort cleanup
 
 
 class SyncFileDatabase(  # type: ignore[misc]

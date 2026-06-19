@@ -7,15 +7,16 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, create_aioboto3_session, validate_s3_session
-from ..query import Operator, Query, SortOrder
+from ..query import Operator, Query
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
 from ..vector import VectorOperationsMixin
@@ -256,7 +257,7 @@ class AsyncS3Database(  # type: ignore[misc]
         - upsert(record) - extract ID from record using Record's built-in logic
         """
         self._check_connection()
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             id = id_or_record
@@ -290,8 +291,13 @@ class AsyncS3Database(  # type: ignore[misc]
         """Search for records matching the query."""
         self._check_connection()
 
-        # S3 doesn't support complex queries, so we need to list and filter
-        records = []
+        # S3 doesn't support complex queries, so we need to list and filter.
+        # Collect (id, record) tuples; the shared ``_process_search_results``
+        # helper applies sorting / offset / limit / projection consistently
+        # with every other backend (and correctly handles falsy sort values
+        # such as a numeric ``0``, which a hand-rolled ``or ""`` key coerces
+        # to a string and crashes on under mixed types).
+        results: list[tuple[str, Record]] = []
 
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             # List all objects
@@ -331,30 +337,11 @@ class AsyncS3Database(  # type: ignore[misc]
 
                     # Apply filters
                     if self._matches_filters(record, query.filters):
-                        records.append(record)
+                        results.append((id, record))
 
-        # Apply sorting
-        if query.sort_specs:
-            for sort_spec in reversed(query.sort_specs):
-                reverse = sort_spec.order == SortOrder.DESC
-                records.sort(
-                    key=lambda r: (r.get_field(sort_spec.field).value if r.get_field(sort_spec.field) else "") or "",
-                    reverse=reverse
-                )
-
-        # Apply offset and limit.  ``is not None`` so ``limit=0`` is
-        # honored as Python-slice semantics (empty result) and not
-        # silently dropped.
-        if query.offset_value is not None:
-            records = records[query.offset_value:]
-        if query.limit_value is not None:
-            records = records[:query.limit_value]
-
-        # Apply field projection
-        if query.fields:
-            records = [r.project(query.fields) for r in records]
-
-        return records
+        # Records are freshly deserialized from S3 (no shared aliasing), so
+        # ``ensure_record_id`` inside the helper is the only copy needed.
+        return self._process_search_results(results, query, deep_copy=False)
 
     def _matches_filters(self, record: Record, filters: list) -> bool:
         """Check if a record matches all filters."""

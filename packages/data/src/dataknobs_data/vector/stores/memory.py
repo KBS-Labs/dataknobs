@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pickle
 from datetime import datetime, timezone
@@ -43,9 +44,10 @@ class MemoryVectorStore(VectorStore):
         if self._initialized:
             return
 
-        # Load existing data if persist path exists
-        if self.persist_path and os.path.exists(self.persist_path):
-            await self.load()
+        # Load existing data if any. ``load`` self-guards on the persist
+        # path and the file's existence (off the event loop), so there is
+        # no on-loop ``os.path.exists`` stat here.
+        await self.load()
 
         self._initialized = True
 
@@ -56,19 +58,50 @@ class MemoryVectorStore(VectorStore):
         self._initialized = False
 
     async def save(self) -> None:
-        """Save vectors and metadata to disk."""
+        """Save vectors and metadata to disk (offloaded off the event loop)."""
         if not self.persist_path:
             return
+        # Snapshot the mutable in-memory state on the event loop BEFORE
+        # handing off to the worker thread. ``add_vectors`` /
+        # ``delete_vectors`` / ``update_metadata`` mutate these dicts
+        # directly on the loop; iterating them live in the worker would
+        # race a concurrent mutation (``RuntimeError: dictionary changed
+        # size during iteration`` or a torn write). Shallow copies suffice
+        # — the values (ndarrays, metadata dicts, timestamp tuples) are
+        # replaced by reference on mutation, never mutated in place, so the
+        # worker can read them safely. Mirrors ``FaissVectorStore.save``.
+        await asyncio.to_thread(
+            self._save_to_disk,
+            dict(self.vectors),
+            dict(self.metadata_store),
+            dict(self.timestamps),
+        )
 
-        # Create directory if needed
-        os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+    def _save_to_disk(
+        self,
+        vectors: dict[str, np.ndarray],
+        metadata_store: dict[str, dict[str, Any]],
+        timestamps: dict[str, tuple[datetime, datetime]],
+    ) -> None:
+        """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
+
+        Receives a loop-side snapshot of the store's mutable dicts; reads
+        only that snapshot plus immutable config (``persist_path``,
+        ``dimensions``, ``metric``), never the live ``self.*`` dicts.
+        """
+        # Create directory if needed. ``os.path.dirname`` is "" for a
+        # bare filename (no directory component); ``makedirs("")`` raises
+        # FileNotFoundError, so guard it (parity with FaissVectorStore).
+        parent_dir = os.path.dirname(self.persist_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
         # Save all data
         with open(self.persist_path, "wb") as f:
             pickle.dump({
-                "vectors": {k: v.tolist() for k, v in self.vectors.items()},
-                "metadata_store": self.metadata_store,
-                "timestamps": dict(self.timestamps),
+                "vectors": {k: v.tolist() for k, v in vectors.items()},
+                "metadata_store": metadata_store,
+                "timestamps": timestamps,
                 "config": {
                     "dimensions": self.dimensions,
                     "metric": self.metric.value if hasattr(self.metric, 'value') else str(self.metric),
@@ -76,8 +109,14 @@ class MemoryVectorStore(VectorStore):
             }, f)
 
     async def load(self) -> None:
-        """Load vectors and metadata from disk."""
-        if not self.persist_path or not os.path.exists(self.persist_path):
+        """Load vectors and metadata from disk (offloaded off the event loop)."""
+        if not self.persist_path:
+            return
+        await asyncio.to_thread(self._load_from_disk)
+
+    def _load_from_disk(self) -> None:
+        """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
+        if not os.path.exists(self.persist_path):
             return
 
         with open(self.persist_path, "rb") as f:
