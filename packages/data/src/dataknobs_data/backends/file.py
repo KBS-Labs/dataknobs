@@ -329,6 +329,63 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
 
+def _load_file_data(
+    handler: type[FileFormat],
+    filepath: str,
+    file_lock: FileLock,
+) -> dict[str, Record]:
+    """Load and deserialize all records from ``filepath`` under ``file_lock``.
+
+    The single synchronous implementation of the file read shared by both
+    backends: :class:`SyncFileDatabase` calls it directly, while
+    :class:`AsyncFileDatabase` runs it via :func:`asyncio.to_thread` so the
+    blocking ``FileLock`` acquire (``fcntl.lockf`` / Windows spin) and the
+    handler's disk I/O stay off the event loop. Keeping one implementation
+    is why the async and sync paths cannot drift.
+    """
+    with file_lock:
+        raw_data = handler.load(filepath)
+        data = {}
+        for record_id, record_dict in raw_data.items():
+            data[record_id] = Record.from_dict(record_dict)
+        return data
+
+
+def _save_file_data(
+    handler: type[FileFormat],
+    filepath: str,
+    file_lock: FileLock,
+    data: dict[str, Record],
+) -> None:
+    """Atomically serialize ``data`` to ``filepath`` under ``file_lock``.
+
+    Writes to a temp file in the same directory, then ``os.replace``s it
+    into place under the lock. The single synchronous implementation of
+    the file write shared by both backends (sync calls it directly; async
+    via :func:`asyncio.to_thread`) — the ``mkstemp`` + lock + atomic
+    rename logic lives exactly once.
+    """
+    # Convert records to dictionaries
+    raw_data = {}
+    for record_id, record in data.items():
+        raw_data[record_id] = record.to_dict(include_metadata=True, flatten=False)
+
+    # Write to temporary file first
+    temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(filepath) or ".")
+    os.close(temp_fd)
+
+    try:
+        with file_lock:
+            handler.save(temp_path, raw_data)
+            # Atomic rename
+            os.replace(temp_path, filepath)
+    except Exception:
+        # Clean up temp file on error
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
+
 class AsyncFileDatabase(  # type: ignore[misc]
     StructuredConfigConsumer[FileDatabaseConfig],
     AsyncDatabase,
@@ -416,35 +473,34 @@ class AsyncFileDatabase(  # type: ignore[misc]
         return str(uuid.uuid4())
 
     async def _load_data(self) -> dict[str, Record]:
-        """Load all data from file."""
-        with self._file_lock:
-            raw_data = self.handler.load(self.filepath)
-            data = {}
-            for record_id, record_dict in raw_data.items():
-                data[record_id] = Record.from_dict(record_dict)
-            return data
+        """Load all data from file.
+
+        Offloads the blocking ``FileLock`` acquire + disk read onto a
+        worker thread via :func:`asyncio.to_thread` so the whole critical
+        section runs off the event loop. Shares the synchronous
+        implementation (:func:`_load_file_data`) with
+        :class:`SyncFileDatabase` — no third copy.
+        """
+        return await asyncio.to_thread(
+            _load_file_data, self.handler, self.filepath, self._file_lock
+        )
 
     async def _save_data(self, data: dict[str, Record]):
-        """Save all data to file atomically."""
-        # Convert records to dictionaries
-        raw_data = {}
-        for record_id, record in data.items():
-            raw_data[record_id] = record.to_dict(include_metadata=True, flatten=False)
+        """Save all data to file atomically.
 
-        # Write to temporary file first
-        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.filepath) or ".")
-        os.close(temp_fd)
-
-        try:
-            with self._file_lock:
-                self.handler.save(temp_path, raw_data)
-                # Atomic rename
-                os.replace(temp_path, self.filepath)
-        except Exception:
-            # Clean up temp file on error
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+        Offloads the ``mkstemp`` + ``FileLock`` acquire + write + atomic
+        ``os.replace`` onto a worker thread via :func:`asyncio.to_thread`
+        so the entire blocking critical section runs off the event loop.
+        Shares the synchronous implementation (:func:`_save_file_data`)
+        with :class:`SyncFileDatabase`.
+        """
+        await asyncio.to_thread(
+            _save_file_data,
+            self.handler,
+            self.filepath,
+            self._file_lock,
+            data,
+        )
 
     async def create(self, record: Record) -> str:
         """Create a new record in the file."""
@@ -753,35 +809,22 @@ class SyncFileDatabase(  # type: ignore[misc]
         return str(uuid.uuid4())
 
     def _load_data(self) -> dict[str, Record]:
-        """Load all data from file."""
-        with self._file_lock:
-            raw_data = self.handler.load(self.filepath)
-            data = {}
-            for record_id, record_dict in raw_data.items():
-                data[record_id] = Record.from_dict(record_dict)
-            return data
+        """Load all data from file.
+
+        Delegates to the shared synchronous :func:`_load_file_data` — the
+        same implementation :class:`AsyncFileDatabase` offloads via
+        :func:`asyncio.to_thread`.
+        """
+        return _load_file_data(self.handler, self.filepath, self._file_lock)
 
     def _save_data(self, data: dict[str, Record]):
-        """Save all data to file atomically."""
-        # Convert records to dictionaries
-        raw_data = {}
-        for record_id, record in data.items():
-            raw_data[record_id] = record.to_dict(include_metadata=True, flatten=False)
+        """Save all data to file atomically.
 
-        # Write to temporary file first
-        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.filepath) or ".")
-        os.close(temp_fd)
-
-        try:
-            with self._file_lock:
-                self.handler.save(temp_path, raw_data)
-                # Atomic rename
-                os.replace(temp_path, self.filepath)
-        except Exception:
-            # Clean up temp file on error
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+        Delegates to the shared synchronous :func:`_save_file_data` — the
+        same implementation :class:`AsyncFileDatabase` offloads via
+        :func:`asyncio.to_thread`.
+        """
+        _save_file_data(self.handler, self.filepath, self._file_lock, data)
 
     def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
         """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""

@@ -23,6 +23,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorStoreFactory` path is unchanged: it builds and owns its own pool
   and closes + drops it on `close()`.
 
+### Fixed
+
+- **The async file database, Chroma and FAISS vector stores, and the
+  shared aioboto3 session factory perform their I/O without blocking the
+  event loop.** Each held a synchronous, blocking transport behind an
+  `async def`, stalling the loop for the duration of the call:
+  `AsyncFileDatabase` ran its locked file load/save (including the
+  inter-process `FileLock` acquire) on the loop on every CRUD operation;
+  `ChromaVectorStore` drove the synchronous chromadb client/collection
+  directly; `FaissVectorStore.save`/`load` did blocking `faiss` index +
+  pickle disk I/O; and `create_aioboto3_session` blocked on session
+  construction plus aiobotocore's first-client botocore-data load. All
+  now offload their blocking work via `asyncio.to_thread`, and the
+  aioboto3 factory additionally warms the session's botocore caches
+  off-loop so the first client creation by any consumer
+  (`AsyncS3Database`, the SQS event bus, S3-backed knowledge storage) is a
+  cache hit. The async and sync file backends now share a single
+  synchronous load/save implementation. FAISS in-memory `add`/`search`
+  remain on the loop — they are CPU-bound and release the GIL internally,
+  so offloading them buys nothing. No public signatures changed and no new
+  runtime dependency was added (`asyncio.to_thread` is stdlib).
+
 ### Changed
 
 - **`VectorStore.close()` now documents a backing-resource ownership

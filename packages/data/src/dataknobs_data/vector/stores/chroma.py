@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -87,8 +88,12 @@ class ChromaVectorStore(VectorStore):
         }
         self.chroma_metric = metric_map.get(self.metric, "cosine")
 
-        self.client = None
-        self.collection = None
+        # Typed ``Any``: the chromadb client/collection types are
+        # untyped, and these start ``None`` until ``initialize`` builds
+        # them — annotating ``Any`` keeps the post-init attribute accesses
+        # (and the ``to_thread`` offload call sites) type-clean.
+        self.client: Any = None
+        self.collection: Any = None
 
     # chromadb's metadata contract is scalar-only (str/int/float/bool).
     # It rejects an empty/``None`` metadata dict outright, and — worse —
@@ -174,35 +179,50 @@ class ChromaVectorStore(VectorStore):
         return list(value)
 
     async def initialize(self) -> None:
-        """Initialize Chroma client and collection."""
+        """Initialize Chroma client and collection.
+
+        chromadb's client/collection API is synchronous; every call here
+        (client construction, ``get_collection`` / ``create_collection``)
+        is offloaded via :func:`asyncio.to_thread` so the on-disk sqlite
+        load and index setup do not block the event loop.
+        """
         if self._initialized:
             return
 
-        # Create client
+        # Create client. ``Settings(...)`` is built inside the worker
+        # thread too: pydantic-settings reads ``.env`` files on
+        # construction (a blocking ``os.stat``), so evaluating it as an
+        # argument on the loop would defeat the offload.
         if self.persist_path:
-            # Persistent client
-            self.client = chromadb.PersistentClient(
-                path=self.persist_path,
-                settings=Settings(anonymized_telemetry=False)
-            )
+            persist_path = self.persist_path
+
+            def _make_client() -> Any:
+                return chromadb.PersistentClient(
+                    path=persist_path,
+                    settings=Settings(anonymized_telemetry=False),
+                )
         else:
-            # In-memory client
-            self.client = chromadb.Client(
-                settings=Settings(anonymized_telemetry=False)
-            )
+            def _make_client() -> Any:
+                return chromadb.Client(
+                    settings=Settings(anonymized_telemetry=False)
+                )
+
+        self.client = await asyncio.to_thread(_make_client)
 
         # Get or create collection
         try:
-            self.collection = self.client.get_collection(
+            self.collection = await asyncio.to_thread(
+                self.client.get_collection,
                 name=self.collection_name,
-                embedding_function=self.embedding_function
+                embedding_function=self.embedding_function,
             )
         except Exception:
             # Collection doesn't exist, create it
-            self.collection = self.client.create_collection(
+            self.collection = await asyncio.to_thread(
+                self.client.create_collection,
                 name=self.collection_name,
                 metadata={"hnsw:space": self.chroma_metric},
-                embedding_function=self.embedding_function
+                embedding_function=self.embedding_function,
             )
 
         self._initialized = True
@@ -243,8 +263,10 @@ class ChromaVectorStore(VectorStore):
         metadata = self._apply_domain_default(metadata, len(ids))
 
         # Add to collection. chromadb 1.x rejects empty dict / empty-list
-        # metadata; encode per row (decoded back on read).
-        self.collection.add(
+        # metadata; encode per row (decoded back on read). Offloaded:
+        # chromadb's add is a synchronous native call.
+        await asyncio.to_thread(
+            self.collection.add,
             embeddings=vectors,
             ids=ids,
             metadatas=[self._encode_metadata(m) for m in metadata],
@@ -269,7 +291,9 @@ class ChromaVectorStore(VectorStore):
             if include_metadata
             else ["embeddings"]
         )
-        result = self.collection.get(ids=ids, include=include)
+        result = await asyncio.to_thread(
+            self.collection.get, ids=ids, include=include
+        )
 
         # chromadb 1.x returns ndarrays — coerce before truthiness/index.
         result_ids = self._as_list(result.get("ids"))
@@ -301,11 +325,13 @@ class ChromaVectorStore(VectorStore):
             await self.initialize()
 
         # Check which IDs exist
-        existing = self.collection.get(ids=ids, include=[])
+        existing = await asyncio.to_thread(
+            self.collection.get, ids=ids, include=[]
+        )
         existing_ids = self._as_list(existing.get("ids"))
 
         if existing_ids:
-            self.collection.delete(ids=existing_ids)
+            await asyncio.to_thread(self.collection.delete, ids=existing_ids)
             return len(existing_ids)
 
         return 0
@@ -423,7 +449,8 @@ class ChromaVectorStore(VectorStore):
         need_metadata = include_metadata or bool(post_filter)
         include = ["metadatas", "distances"] if need_metadata else ["distances"]
 
-        results = self.collection.query(
+        results = await asyncio.to_thread(
+            self.collection.query,
             query_embeddings=[query_vector],
             n_results=over_k,
             where=where,
@@ -487,7 +514,9 @@ class ChromaVectorStore(VectorStore):
             await self.initialize()
 
         # Check which IDs exist
-        existing = self.collection.get(ids=ids, include=[])
+        existing = await asyncio.to_thread(
+            self.collection.get, ids=ids, include=[]
+        )
         existing_ids = set(self._as_list(existing.get("ids")))
 
         if existing_ids:
@@ -500,9 +529,10 @@ class ChromaVectorStore(VectorStore):
                     filtered_metadata.append(self._encode_metadata(meta))
 
             if filtered_ids:
-                self.collection.update(
+                await asyncio.to_thread(
+                    self.collection.update,
                     ids=filtered_ids,
-                    metadatas=filtered_metadata
+                    metadatas=filtered_metadata,
                 )
                 return len(filtered_ids)
 
@@ -531,7 +561,8 @@ class ChromaVectorStore(VectorStore):
             return 0
 
         where, post_filter = self._partition_filter_for_chroma(filter or {})
-        result = self.collection.get(
+        result = await asyncio.to_thread(
+            self.collection.get,
             where=where if where else None,
             include=["metadatas"],
         )
@@ -551,8 +582,10 @@ class ChromaVectorStore(VectorStore):
             update_metadatas.append(self._encode_metadata(existing))
 
         if update_ids:
-            self.collection.update(
-                ids=update_ids, metadatas=update_metadatas
+            await asyncio.to_thread(
+                self.collection.update,
+                ids=update_ids,
+                metadatas=update_metadatas,
             )
         return len(update_ids)
 
@@ -588,7 +621,7 @@ class ChromaVectorStore(VectorStore):
         filter = self._effective_filter(filter)
 
         if filter is None:
-            return self.collection.count()
+            return await asyncio.to_thread(self.collection.count)
 
         if self._filter_is_unsatisfiable(filter):
             return 0
@@ -598,10 +631,14 @@ class ChromaVectorStore(VectorStore):
         if not post_filter:
             # Filter fully pushed down. Skip metadata materialization
             # — IDs are sufficient for the count.
-            result = self.collection.get(where=where, include=[])
+            result = await asyncio.to_thread(
+                self.collection.get, where=where, include=[]
+            )
             return len(self._as_list(result.get("ids")))
 
-        result = self.collection.get(where=where, include=["metadatas"])
+        result = await asyncio.to_thread(
+            self.collection.get, where=where, include=["metadatas"]
+        )
         metadatas = self._as_list(result.get("metadatas"))
         return sum(
             1
@@ -617,7 +654,9 @@ class ChromaVectorStore(VectorStore):
             await self.initialize()
 
         # Fetch all metadata from the collection
-        result = self.collection.get(include=["metadatas"])
+        result = await asyncio.to_thread(
+            self.collection.get, include=["metadatas"]
+        )
         fields: set[str] = set()
         for meta in self._as_list(result.get("metadatas")):
             fields.update(self._decode_metadata(meta).keys())
@@ -643,8 +682,11 @@ class ChromaVectorStore(VectorStore):
 
         if not filter:
             # Delete and recreate collection
-            self.client.delete_collection(name=self.collection_name)
-            self.collection = self.client.create_collection(
+            await asyncio.to_thread(
+                self.client.delete_collection, name=self.collection_name
+            )
+            self.collection = await asyncio.to_thread(
+                self.client.create_collection,
                 name=self.collection_name,
                 metadata={"hnsw:space": self.chroma_metric},
                 embedding_function=self.embedding_function,
@@ -657,7 +699,8 @@ class ChromaVectorStore(VectorStore):
             return
 
         where, post_filter = self._partition_filter_for_chroma(filter)
-        result = self.collection.get(
+        result = await asyncio.to_thread(
+            self.collection.get,
             where=where if where else None,
             include=["metadatas"],
         )
@@ -671,7 +714,7 @@ class ChromaVectorStore(VectorStore):
             )
         ]
         if ids_to_delete:
-            self.collection.delete(ids=ids_to_delete)
+            await asyncio.to_thread(self.collection.delete, ids=ids_to_delete)
 
     async def add_documents(
         self,
@@ -692,7 +735,8 @@ class ChromaVectorStore(VectorStore):
             metadata = [{} for _ in range(len(documents))]
 
         # Add documents (Chroma will embed them if embedding_function is set)
-        self.collection.add(
+        await asyncio.to_thread(
+            self.collection.add,
             documents=documents,
             ids=ids,
             metadatas=[self._encode_metadata(m) for m in metadata],
@@ -723,7 +767,8 @@ class ChromaVectorStore(VectorStore):
 
         # Always need metadata when post-filtering — caller-visible
         # surface still respects include_metadata.
-        results = self.collection.query(
+        results = await asyncio.to_thread(
+            self.collection.query,
             query_texts=[query_text],
             n_results=over_k,
             where=where,
