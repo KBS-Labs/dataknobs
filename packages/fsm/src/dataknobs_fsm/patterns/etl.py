@@ -17,7 +17,7 @@ from dataknobs_common.structured_config import (
 from dataknobs_data import AsyncDatabase, Query, Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
-from ..api.simple import SimpleFSM
+from ..api.async_simple import AsyncSimpleFSM
 from ..functions.library.database import DatabaseFetch, DatabaseUpsert
 from ..functions.library.transformers import DataEnricher, FieldMapper
 from ..functions.library.validators import SchemaValidator
@@ -74,7 +74,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             'skipped': 0
         }
         
-    def _build_fsm(self) -> SimpleFSM:
+    def _build_fsm(self) -> AsyncSimpleFSM:
         """Build FSM for ETL pipeline."""
         # Build resources list
         resources = [
@@ -174,7 +174,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         # Add functions
         self._register_functions(fsm_config)
         
-        return SimpleFSM(fsm_config, data_mode=DataHandlingMode.COPY)
+        return AsyncSimpleFSM(fsm_config, data_mode=DataHandlingMode.COPY)
         
     def _get_transform_resources(self) -> List[str]:
         """Get resources needed for transformation."""
@@ -337,7 +337,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             await self._load_checkpoint(checkpoint_id)
             
         # Extract data
-        source_db = await AsyncDatabase.create(
+        source_db = await AsyncDatabase.from_backend(
             self.config.source_db['type'],
             self.config.source_db  # type: ignore
         )
@@ -352,7 +352,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             # Process in batches
             async for batch in self._extract_batches(source_db, query):  # type: ignore
                 # Process batch through FSM
-                results = self._fsm.process_batch(
+                results = await self._fsm.process_batch(
                     data=batch,  # type: ignore
                     batch_size=self.config.batch_size,
                     max_workers=self.config.parallel_workers

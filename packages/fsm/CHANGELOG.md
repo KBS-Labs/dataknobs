@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `FileProcessor` and `DatabaseETL` now run their FSM pipelines on the
+  active event loop's async engine instead of driving a synchronous FSM
+  wrapper from their `async` methods, so awaiting `FileProcessor.process()`
+  and `DatabaseETL.run()` no longer stalls the loop on the wrapper's
+  blocking sync-to-async bridge. `DatabaseETL.run()` additionally builds
+  its source database through the async database factory (it previously
+  raised on every call and could not execute), and `FileProcessor`'s
+  streaming mode passes the input/output paths to the streaming executor;
+  both now run end-to-end.
 - The FSM file-processing and streaming utilities now perform their
   file reads and writes off the event loop, so awaiting them from an
   async context no longer stalls the loop. The lazy chunk/line readers
