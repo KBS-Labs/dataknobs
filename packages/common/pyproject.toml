@@ -49,7 +49,11 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "ruff>=0.8.0",
     "mypy>=1.0.0",
-    "pyrate-limiter>=3.0.0",
+    # v4-only API surface (SQLiteBucket.init_from_file, RedisBucket.init,
+    # the v4 try_acquire(blocking=False) contract). Floored at 4 so a
+    # resolution can't drop to the incompatible v3 API; capped below 5
+    # so a future major can't silently break the tested surface.
+    "pyrate-limiter>=4.0.0,<5.0.0",
     "asyncpg>=0.29.0",
     "redis>=5.0.0",
     "aioboto3>=12.0.0",

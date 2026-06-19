@@ -59,8 +59,11 @@ def _make_limiter(
 async def track() -> Iterator[list[PyrateRateLimiter]]:
     """Register limiters for guaranteed close() on teardown.
 
-    Append every limiter a test builds; the fixture closes them all,
-    avoiding leaked sqlite handles / sockets across tests.
+    Append every limiter a test builds; the fixture closes them all.
+    ``close()`` releases the transports the limiter owns — the sqlite
+    connection it opened, the redis client it built — so they do not
+    leak across tests. (A caller-owned postgres pool is NOT closed by
+    ``close()``; tests that pass a pool close it themselves.)
     """
     created: list[PyrateRateLimiter] = []
     yield created
@@ -236,3 +239,109 @@ async def test_sqlite_bucket_enforces_limit(tmp_path, track) -> None:
     limiter2 = _make_limiter(bucket, limit=3, interval=600.0)
     track.append(limiter2)
     assert await limiter2.try_acquire("api") is False
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle — close()/reset() must release the owned bucket transport
+# ---------------------------------------------------------------------------
+
+
+async def test_close_releases_sqlite_connection(sqlite_limiter) -> None:
+    """close() must close the sqlite connection the limiter opened.
+
+    Reproduce-first: pre-fix ``close()`` only cleared the bucket dict, so the
+    ``sqlite3`` connection stayed open (leaked until GC). Asserts the
+    connection is closed after ``close()``.
+    """
+    await sqlite_limiter.try_acquire("api")  # lazily build the bucket
+    bucket = sqlite_limiter._factory._buckets["api"]
+    # pyrate v4 SQLiteBucket.close() closes the connection and nils ``conn``;
+    # asserting on it directly proves THIS limiter released its handle (a
+    # behavioural probe like "a second limiter can acquire" would not — sqlite
+    # permits many independent connections to the same file).
+    assert bucket.conn is not None  # open before close
+    await sqlite_limiter.close()
+    assert bucket.conn is None  # released
+
+
+async def test_reset_releases_sqlite_connection(sqlite_limiter) -> None:
+    """reset(name) must close that category's sqlite connection.
+
+    Same leak as close(): pre-fix ``reset`` popped the dict entry without
+    releasing the connection.
+    """
+    await sqlite_limiter.try_acquire("api")
+    bucket = sqlite_limiter._factory._buckets["api"]
+    assert bucket.conn is not None
+    await sqlite_limiter.reset("api")
+    assert bucket.conn is None
+    # The category is gone; a new acquire rebuilds a fresh bucket.
+    assert "api" not in sqlite_limiter._factory._buckets
+    assert await sqlite_limiter.try_acquire("api") is True
+
+
+async def test_reset_all_releases_every_sqlite_connection(sqlite_limiter) -> None:
+    """reset() with no name closes every category's connection."""
+    await sqlite_limiter.try_acquire("read")
+    await sqlite_limiter.try_acquire("write")
+    buckets = [
+        sqlite_limiter._factory._buckets["read"],
+        sqlite_limiter._factory._buckets["write"],
+    ]
+    assert all(b.conn is not None for b in buckets)
+    await sqlite_limiter.reset()
+    assert all(b.conn is None for b in buckets)
+    assert sqlite_limiter._factory._buckets == {}
+
+
+# ---------------------------------------------------------------------------
+# acquire() backoff — the poll loop must honor the timeout deadline
+# ---------------------------------------------------------------------------
+
+
+async def test_acquire_times_out_when_capacity_unavailable() -> None:
+    """acquire() raises TimeoutError once the deadline passes.
+
+    Exercises the backoff poll loop on the (loop-safe) memory bucket: with a
+    limit of 1, the second acquire can never succeed within the interval, so
+    the bounded-backoff loop must surface a TimeoutError promptly rather than
+    spinning forever.
+    """
+    from dataknobs_common.exceptions import TimeoutError as DKTimeoutError
+
+    limiter = _make_limiter({"bucket": "memory"}, limit=1, interval=600.0)
+    assert await limiter.try_acquire("api") is True  # consume the only permit
+    with pytest.raises(DKTimeoutError):
+        await limiter.acquire("api", timeout=0.1)
+    await limiter.close()
+
+
+# ---------------------------------------------------------------------------
+# Ownership — a caller-owned postgres pool must NOT be closed by close()
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+async def test_close_does_not_close_caller_postgres_pool(
+    postgres_connection_params,
+) -> None:
+    """close() must leave the caller-supplied psycopg pool open.
+
+    The postgres bucket's pool is owned by the caller (passed via
+    ``postgres.pool``); pyrate's ``PostgresBucket.close()`` would close it, so
+    the limiter must NOT trigger that. The caller closes the pool itself.
+    """
+    psycopg_pool = pytest.importorskip("psycopg_pool")
+    p = postgres_connection_params
+    conninfo = (
+        f"host={p['host']} port={p['port']} dbname={p['database']} "
+        f"user={p['user']} password={p['password']}"
+    )
+    pool = psycopg_pool.ConnectionPool(conninfo, open=True)
+    try:
+        limiter = _make_limiter({"bucket": "postgres", "postgres": {"pool": pool}})
+        await limiter.try_acquire("api")  # build the bucket over the pool
+        await limiter.close()
+        assert pool.closed is False  # caller still owns an open pool
+    finally:
+        pool.close()

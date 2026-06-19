@@ -266,6 +266,17 @@ off-loop. The default `memory` bucket is pure in-memory and runs on the loop
 directly, so the common hot path carries no thread-dispatch overhead. This is
 transparent to callers — the public API is unchanged.
 
+`acquire()` waits by polling `try_acquire()` with an async sleep that backs
+off exponentially (capped at 1 second), so a long wait under many concurrent
+waiters does not dispatch a worker thread on every tick for blocking backends.
+The first poll is still prompt and any `timeout` deadline is honoured exactly.
+
+`close()` and `reset()` release the bucket transport the limiter **owns** —
+the `sqlite` connection it opened and the `redis` client it built are closed
+(off-loop for blocking backends). A `postgres` pool you pass via
+`postgres.pool` is caller-owned and is **not** closed for you; close it
+yourself when you are done with it.
+
 ## Configuration-Driven Usage
 
 Rate limiter configuration integrates with environment-specific YAML config:
