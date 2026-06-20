@@ -59,6 +59,14 @@ from .reasoning import (
     create_reasoning_from_config,
     register_strategy,
 )
+from .reasoning.state_bridge import (
+    BiDirectionalBridge,
+    InboxOnlyBridge,
+    PeekBridge,
+    StateBridge,
+    SubscribingBridge,
+    SubsetBridge,
+)
 from .testing import BotTestHarness, CaptureReplay, TurnResult, WizardConfigBuilder, inject_providers
 from .tools import (
     AddKBResourceTool,
@@ -79,6 +87,7 @@ __version__ = "0.7.3"
 
 __all__ = [
     "AddKBResourceTool",
+    "BiDirectionalBridge",
     "BotContext",
     "BotManager",
     "BotRegistry",
@@ -98,6 +107,7 @@ __all__ = [
     "DynaBotConfigBuilder",
     "DynaBotConfigSchema",
     "GetTemplateDetailsTool",
+    "InboxOnlyBridge",
     "IngestKnowledgeBaseTool",
     "KnowledgeSearchTool",
     "ListAvailableToolsTool",
@@ -106,6 +116,7 @@ __all__ = [
     "LoggingMiddleware",
     "Memory",
     "Middleware",
+    "PeekBridge",
     "PhasedReasoningProtocol",
     "ProcessResult",
     "PROVIDER_ROLE_EXTRACTION",
@@ -121,7 +132,10 @@ __all__ = [
     "RemoveKBResourceTool",
     "SaveConfigTool",
     "SimpleReasoning",
+    "StateBridge",
     "StrategyCapabilities",
+    "SubscribingBridge",
+    "SubsetBridge",
     "SummaryMemory",
     "TemplateVariable",
     "UndoResult",

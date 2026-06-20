@@ -7,8 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `StateBridge[InboxT, OutboxT]` Protocol with `InboxOnlyBridge`,
+  `PeekBridge`, `BiDirectionalBridge`, `SubsetBridge`, and
+  `SubscribingBridge` reference implementations in
+  `dataknobs_bots.reasoning.state_bridge` (re-exported from the package
+  root). Codifies the named-key state-bridging contract used by the
+  wizard inbox hook — a bridge reads (`read_inbox`) and writes
+  (`write_outbox`) named keys on a host's `metadata` mapping. Consumers
+  compose bridges with the lifecycle-hook surface for consume-on-read
+  (`InboxOnlyBridge`), peek-without-consume (`PeekBridge`), symmetric
+  assign-or-merge (`BiDirectionalBridge`), projected-subset
+  (`SubsetBridge`, which accepts a bare callable or a scope projector —
+  a source-honoring projector projects the write value, while a
+  source-capturing projector such as `WhitelistProjector` projects its
+  captured source), or observability-aware (`SubscribingBridge`, firing
+  `CallbackRegistry` callbacks on every read and write; dispatch is
+  synchronous, so a coroutine-function callback raises `TypeError`)
+  state bridging. The Protocol's `InboxT`/`OutboxT` type parameters are
+  variance-annotated (covariant return / contravariant parameter),
+  matching the sibling `ScopeProjector` / `ResourceResolver` families.
+
 ### Changed
 
+- `make_metadata_inbox_hook` now routes its read step through
+  `InboxOnlyBridge`. The public surface
+  (`make_metadata_inbox_hook(*, inbox_keys, merge_fn=None)`,
+  `write_to_inbox(manager, key, payload)`) and behavior (consume-on-read,
+  plain `dict.update` default merge, empty-dict no-op, multi-key support,
+  non-mapping payload WARNING) are unchanged.
 - The `KnowledgeResourceBackend` protocol (and its shared mixin) now
   documents an async-transport contract — async file methods use an async
   transport or offload blocking disk I/O off the event loop. ruff's

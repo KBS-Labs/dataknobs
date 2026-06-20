@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `Capability.STATE_BRIDGE_INBOX_ONLY` and
+  `Capability.STATE_BRIDGE_BIDIRECTIONAL` members (with a `state_bridge`
+  entry in `CAPABILITY_FAMILIES`). A host advertises these to declare how
+  it bridges named-key state between components — consume-on-read inbox
+  semantics versus symmetric read/write.
 - `ScopeProjector` Protocol plus `IdentityProjector`, `ReadOnlyProjector`,
   `WhitelistProjector`, `ChainedProjector`, `CallableProjector`, and
   `CachedProjector` reference implementations in `dataknobs_common.scope`

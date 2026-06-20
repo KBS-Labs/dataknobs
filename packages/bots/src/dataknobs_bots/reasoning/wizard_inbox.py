@@ -15,6 +15,13 @@ side effects, etc.) can call the factory directly with a custom
 Also exports :func:`write_to_inbox` — a small writer helper for
 consumer code (pipeline steps, custom logic) that publishes payloads
 for the NEXT turn's inbox consumption.
+
+The read step delegates through
+:class:`~dataknobs_bots.reasoning.state_bridge.InboxOnlyBridge`, the
+named-key consume-on-read bridge. Consumers wanting bi-directional,
+projected, or observability-aware semantics compose the other
+:class:`~dataknobs_bots.reasoning.state_bridge.StateBridge` reference
+implementations with a custom ``on_turn_start`` / ``on_turn_end`` hook.
 """
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .lifecycle import TurnHookCallback
+from .state_bridge import InboxOnlyBridge
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +67,7 @@ def make_metadata_inbox_hook(
       * Logs a DEBUG line per non-empty merge for traceability.
     """
     merge = merge_fn or _default_merge_fn
+    bridge: InboxOnlyBridge[dict[str, Any]] = InboxOnlyBridge()
 
     async def _hook(event: dict[str, Any]) -> None:
         manager = event.get("manager")
@@ -69,7 +78,7 @@ def make_metadata_inbox_hook(
         if not hasattr(manager, "metadata"):
             return
         for key in inbox_keys:
-            payload = manager.metadata.pop(key, None)
+            payload = bridge.read_inbox(manager, key)
             if payload is None:
                 continue
             if not isinstance(payload, dict):
@@ -104,7 +113,13 @@ def write_to_inbox(manager: Any, key: str, payload: dict[str, Any]) -> None:
     Convention: writers should always overwrite (not merge) the inbox
     key — the wizard's consume-on-read pop means a stale write from a
     prior turn cannot survive, so each turn's writer fully owns the
-    inbox content for that turn.
+    inbox content for that turn. This is the writer counterpart to the
+    read side of
+    :class:`~dataknobs_bots.reasoning.state_bridge.InboxOnlyBridge`; a
+    consumer needing assign-or-merge or projected writes uses a
+    :class:`~dataknobs_bots.reasoning.state_bridge.BiDirectionalBridge`
+    / :class:`~dataknobs_bots.reasoning.state_bridge.SubsetBridge`
+    instead.
 
     Args:
         manager: ConversationManager (or compatible — must have a
