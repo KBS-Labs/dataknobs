@@ -17,15 +17,16 @@ Implementations choose semantics:
 - :class:`CallableProjector` — wrap a callable returning a Mapping
 - :class:`CachedProjector` — LRU-memoize an inner projector
 
-Composition with the state-bridging Protocol:
-    A state-bridge (the dataknobs-bots ``SubsetBridge``) shares the
-    ``project`` method name but its value semantics differ — it writes a
-    projected value to a host metadata key rather than returning a scope
-    Mapping. The two remain distinct Protocols: a scope projector returns
-    a ``Mapping``; a state-bridge projector returns whatever value the
-    consumer wants stored under a metadata key. A bridge that accepts a
-    ``ScopeProjector`` duck-types on ``.project`` so a projector drops in
-    with no glue.
+Distinct from a state-bridge ``project``:
+    A *state-bridge* — a projector whose ``project`` writes a derived
+    value into a host metadata key rather than returning a scope Mapping —
+    shares the method name but has different value semantics: it returns
+    whatever value the consumer wants stored under a key, not a
+    ``Mapping[str, Any]`` scope. The two are deliberately NOT unified; a
+    ``ScopeProjector`` always returns a Mapping. The shared method name is
+    a known collision — code accepting one Protocol must not silently
+    accept the other. (No such bridge ships today; this note records the
+    boundary so a future bridge isn't mistaken for a scope projector.)
 
 Composition with the callback substrate:
     Callback bodies registered on a ``CallbackRegistry`` frequently need
@@ -185,6 +186,17 @@ class ChainedProjector:
 
     Mutating the returned dict does not propagate to any inner projector
     or source.
+
+    Caveat — source-capturing inners: this composer passes the per-call
+    ``source`` to every inner, but the source-capturing impls
+    (:class:`ReadOnlyProjector`, :class:`WhitelistProjector`, and the
+    bots-layer ``JinjaInputsProjector``) ignore it and project the source
+    they captured at construction. Composing one of those means the
+    ``source`` passed to :meth:`project` is silently dropped for that
+    inner — the captured source wins with no error. This is the in-tree
+    pattern (the renderer constructs each capturing inner with the exact
+    source it wants), but composing a capturing inner expecting it to see
+    a *different* per-call source will silently misbehave.
     """
 
     def __init__(self, *projectors: ScopeProjector) -> None:
@@ -244,10 +256,22 @@ class CachedProjector:
     sources (e.g. a dict) raise ``TypeError``. The source-capturing
     in-tree projectors that ignore ``source`` are the common cached
     target, so the typical key is a sentinel/constant.
+
+    Caveat — source-capturing inners: the cache keys on the per-call
+    ``source``, but a source-capturing inner ignores ``source`` and always
+    projects its captured source. Caching such an inner under *varying*
+    keys is incoherent — distinct keys map to entries that all return the
+    captured projection, wasting cache slots. Cache a source-capturing
+    inner under a single constant/sentinel key (the in-tree pattern), and
+    reserve varying keys for source-honoring inners
+    (:class:`CallableProjector`).
     """
 
     def __init__(self, inner: ScopeProjector, max_size: int = 128) -> None:
         self._inner = inner
+        # ``lru_cache`` wraps the inner's *bound* method stored on this
+        # instance, so the cache is per-CachedProjector — no cross-instance
+        # leak and no unbounded growth beyond ``max_size``.
         self._cached = lru_cache(maxsize=max_size)(self._inner.project)
 
     def project(self, source: Any) -> Mapping[str, Any]:

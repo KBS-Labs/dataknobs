@@ -155,6 +155,13 @@ class WizardRenderer:
                     stage_inputs,
                     base_context=context,
                     env=self._jinja_env,
+                    # Degrade gracefully: a malformed author expression
+                    # skips (logged) rather than raising out of
+                    # build_context. build_context is called outside the
+                    # per-item guard in render_list and can raise
+                    # non-TemplateError from expression evaluation, so the
+                    # resilience must live here, not in the callers.
+                    strict=False,
                 ),
             )
             context = dict(projector.project(context))

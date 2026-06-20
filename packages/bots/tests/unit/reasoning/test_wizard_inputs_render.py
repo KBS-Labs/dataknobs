@@ -121,3 +121,79 @@ def test_inputs_see_extra_context(renderer: WizardRenderer) -> None:
         stage, state, extra_context={"name": "Sam"},
     )
     assert ctx["greeting"] == "Hi Sam"
+
+
+# --- Security: the wizard inputs path is sandboxed -------------------- #
+
+def test_inputs_sandbox_escape_does_not_leak(
+    renderer: WizardRenderer,
+) -> None:
+    """An attribute-traversal SSTI payload in a stage ``inputs:`` is
+    evaluated through the renderer's sandboxed environment, so it cannot
+    reach interpreter internals. The renderer degrades (strict=False), so
+    the offending input is skipped rather than aborting the build.
+    """
+    stage = {
+        "name": "gather",
+        "inputs": {"pwn": "().__class__.__bases__", "ok": "topic | upper"},
+    }
+    state = _StubState(data={"topic": "python"})
+    ctx = renderer.build_context(stage, state)
+    # Escape neutralized + skipped; the well-formed input still resolves.
+    assert "pwn" not in ctx
+    assert ctx["ok"] == "PYTHON"
+
+
+# --- Resilience: a bad inputs: expression degrades, never aborts ------ #
+
+def test_bad_input_does_not_abort_build_context(
+    renderer: WizardRenderer,
+) -> None:
+    """A malformed expression (type error against runtime data) is skipped
+    while sibling inputs and the rest of the context survive.
+    """
+    stage = {
+        "name": "gather",
+        "inputs": {
+            "bad": "topic | length",  # length of an int -> TypeError
+            "good": "topic + 1",
+        },
+    }
+    state = _StubState(data={"topic": 41})
+    ctx = renderer.build_context(stage, state)
+    assert "bad" not in ctx
+    assert ctx["good"] == 42
+    assert ctx["topic"] == 41  # base context intact
+
+
+def test_bad_input_does_not_abort_render_list(
+    renderer: WizardRenderer,
+) -> None:
+    """``render_list`` calls ``build_context`` outside its per-item guard;
+    a non-TemplateError raised by a bad ``inputs:`` expression must not
+    propagate out of render_list (regression guard for the unguarded
+    build_context path).
+    """
+    stage = {
+        "name": "gather",
+        "inputs": {"bad": "topic | length"},  # TypeError on an int
+    }
+    state = _StubState(data={"topic": 7})
+    # Must not raise — the bad input is skipped, items render normally.
+    result = renderer.render_list(["{{ topic }}", "plain"], stage, state)
+    assert result == ["7", "plain"]
+
+
+def test_bad_input_does_not_abort_render(
+    renderer: WizardRenderer,
+) -> None:
+    """``render`` likewise survives a bad ``inputs:`` expression; the
+    template renders with the bad input simply absent.
+    """
+    stage = {
+        "name": "gather",
+        "inputs": {"bad": "topic | length"},  # TypeError on an int
+    }
+    state = _StubState(data={"topic": 7})
+    rendered = renderer.render("topic is {{ topic }}", stage, state)
+    assert rendered == "topic is 7"

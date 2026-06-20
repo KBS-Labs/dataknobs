@@ -81,3 +81,73 @@ def test_conforms_to_scope_projector_protocol() -> None:
 
     proj = JinjaInputsProjector(inputs={}, base_context={})
     assert isinstance(proj, ScopeProjector)
+
+
+# --- Security: default environment is sandboxed ----------------------- #
+
+def test_default_env_blocks_sandbox_escape() -> None:
+    """With no env= supplied the default is a SandboxedEnvironment, so an
+    attribute-traversal SSTI payload raises instead of leaking interpreter
+    internals.
+    """
+    proj = JinjaInputsProjector(
+        inputs={"escape": "().__class__.__bases__"},
+        base_context={},
+    )
+    with pytest.raises(jinja2.exceptions.TemplateError):
+        proj.project(None)
+
+
+def test_explicit_unsandboxed_env_is_caller_opt_in() -> None:
+    """A caller who explicitly passes a plain (unsandboxed) Environment
+    gets unsandboxed behavior — the unsafe choice is opt-in, not the
+    default. This documents the contrast with the sandboxed default above.
+    """
+    unsafe_env = jinja2.Environment(autoescape=False)
+    proj = JinjaInputsProjector(
+        inputs={"bases": "().__class__.__bases__"},
+        base_context={},
+        env=unsafe_env,
+    )
+    # Plain env leaks; the point is the default does NOT (test above).
+    assert proj.project(None)["bases"] == (object,)
+
+
+# --- Error handling: strict vs graceful degradation ------------------- #
+
+def test_strict_true_propagates_failing_expression() -> None:
+    """Default strict=True: a failing expression propagates."""
+    proj = JinjaInputsProjector(
+        inputs={"bad": "n | length"},  # length of an int -> TypeError
+        base_context={"n": 5},
+    )
+    with pytest.raises(TypeError):
+        proj.project(None)
+
+
+def test_strict_false_skips_failing_expression() -> None:
+    """strict=False: a failing expression is skipped (omitted) while the
+    other inputs still evaluate.
+    """
+    proj = JinjaInputsProjector(
+        inputs={
+            "good": "n | string",
+            "bad": "n | length",  # TypeError on an int
+        },
+        base_context={"n": 5},
+        strict=False,
+    )
+    result = proj.project(None)
+    assert result == {"good": "5"}  # "bad" omitted, "good" survives
+
+
+def test_strict_false_skips_sandbox_escape() -> None:
+    """strict=False degrades on a sandbox violation too — the escape is
+    both blocked and skipped, not raised.
+    """
+    proj = JinjaInputsProjector(
+        inputs={"escape": "().__class__.__bases__"},
+        base_context={},
+        strict=False,
+    )
+    assert proj.project(None) == {}
