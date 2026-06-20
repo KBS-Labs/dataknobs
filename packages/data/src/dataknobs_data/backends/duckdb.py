@@ -110,10 +110,12 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         if self._connected:
             return
 
-        # Create directory if needed for file-based database
+        # Create directory if needed for file-based database (off the loop).
         if self.db_path != ":memory:":
             db_file = Path(self.db_path)
-            db_file.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                db_file.parent.mkdir, parents=True, exist_ok=True
+            )
 
         # Connect to database (in thread pool since DuckDB is sync)
         loop = asyncio.get_event_loop()

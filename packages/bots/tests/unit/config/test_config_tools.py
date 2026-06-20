@@ -406,6 +406,36 @@ class TestSaveConfigTool:
         assert saved_args[0][0] == "cb-bot"
 
     @pytest.mark.asyncio
+    async def test_save_rejects_path_traversal_name(
+        self, tmp_path: Path
+    ) -> None:
+        """A config name with a path separator is rejected, not written.
+
+        ``config_name`` flows from an LLM tool argument and ``domain_id`` from
+        user-driven wizard data; a value like ``../escape`` would otherwise
+        compose ``output_dir/../escape.yaml`` and write outside the output
+        directory (path traversal). The name is validated before the path is
+        composed.
+        """
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        manager = ConfigDraftManager(output_dir=out_dir)
+        tool = SaveConfigTool(
+            draft_manager=manager,
+            builder_factory=_basic_builder_factory,
+        )
+        context = _make_context(
+            {"llm_provider": "ollama", "storage_backend": "memory"}
+        )
+        result = await tool.execute_with_context(
+            context, config_name="../escape"
+        )
+        assert result["success"] is False
+        assert "Invalid config name" in result["error"]
+        # Nothing was written outside the output directory.
+        assert not (tmp_path / "escape.yaml").exists()
+
+    @pytest.mark.asyncio
     async def test_save_no_wizard_data(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)
         tool = SaveConfigTool(draft_manager=manager)

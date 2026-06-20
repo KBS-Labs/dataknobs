@@ -526,6 +526,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a worker thread via `asyncio.to_thread`, so saving a config from a
   wizard tool no longer stalls other concurrent conversations on a shared
   event loop. Behavior and return value are unchanged.
+- **The knowledge-base wizard tools no longer block the event loop on disk
+  I/O.** `CheckKnowledgeSourceTool` ran a directory `glob`/`stat` walk, and
+  `AddKBResourceTool` / `IngestKnowledgeBaseTool` did `mkdir` + file writes,
+  directly on the running loop; all three now offload that work to a worker
+  thread via `asyncio.to_thread`. Tool results and behavior are unchanged.
 - Cross-tenant `chunk_id` UPSERT collision in shared
   `RAGKnowledgeBase` instances under the same `domain_id`: two tenants
   ingesting the same `domain_id` through a shared KB previously
@@ -553,6 +558,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`SaveConfigTool` now rejects config names that could escape the output
+  directory.** The config name flows from an LLM tool argument and
+  user-driven wizard data, then becomes a `<name>.yaml` filename under the
+  draft manager's output directory. A name containing a path separator or a
+  bare parent-directory reference (e.g. `../escape`) is now rejected before
+  the path is composed, and the composed path is re-checked to stay within
+  the output directory (path-traversal prevention).
+- **The knowledge-base wizard tools now reject paths that escape the
+  configured knowledge directory.** `AddKBResourceTool` composes a write
+  destination from the resource `path` (an LLM tool argument) and
+  `domain_id`, and `IngestKnowledgeBaseTool` composes its manifest path from
+  `domain_id` (user-driven wizard data); a `..` segment could previously
+  write outside the knowledge directory. Both now resolve the composed path
+  and reject it if it falls outside that directory, while still allowing a
+  resource `path` to contain legitimate subdirectories (path-traversal
+  prevention).
 - Bumped minimum `starlette` requirement (extra: `server`, and the
   matching dev-dependency floor) from `>=1.0.1` to `>=1.3.1` to
   exclude GHSA-82w8-qh3p-5jfq (CVSS 7.5, `request.form()` silently

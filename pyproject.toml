@@ -302,10 +302,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # ASYNC false positives — verified cheap one-shot stats / poll loops, not hot-loop
 # blocking I/O. Mirrors the per-package per-file-ignores (validate.sh lints with
 # --config <root>, so the suppressions must also live here). See .claude/rules/async-transport.md.
-"packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # cheap 5s queue-drain poll; asyncio.Event does not fit a multi-worker drain
-"packages/bots/src/dataknobs_bots/tools/kb_tools.py" = ["ASYNC240"]  # one-shot KB-source dir validation; cheap setup stat
-"packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # documents_path existence check during one-time ingest setup
-"packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]  # validate() also runs from sync contexts; cheap path stat
+"packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # queue-drain poll; asyncio.sleep does not block the loop (style lint, not an I/O defect). Idiomatic Queue.join()/task_done() migration tracked separately
+"packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # one-time ingest-setup path resolution (cwd + existence checks); setup-time, not a per-record hot path
+"packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]  # cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call
 
 [tool.ruff.lint.isort]
 # Configure import sorting

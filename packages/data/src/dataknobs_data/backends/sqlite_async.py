@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -92,10 +93,12 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         if self._connected:
             return
 
-        # Create directory if needed for file-based database
+        # Create directory if needed for file-based database (off the loop).
         if self.db_path != ":memory:":
             db_file = Path(self.db_path)
-            db_file.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(
+                db_file.parent.mkdir, parents=True, exist_ok=True
+            )
 
         # Connect to database
         self.db = await aiosqlite.connect(

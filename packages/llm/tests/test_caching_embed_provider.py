@@ -1,15 +1,14 @@
 """Tests for CachingEmbedProvider and cache backends."""
 
-import struct
-import tempfile
+import asyncio
 from pathlib import Path
 
 import pytest
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 from dataknobs_llm import EchoProvider, LLMProviderFactory
 from dataknobs_llm.llm.providers.caching import (
     CachingEmbedProvider,
-    EmbeddingCache,
     MemoryEmbeddingCache,
     SqliteEmbeddingCache,
     _cache_key,
@@ -128,6 +127,26 @@ class TestSqliteEmbeddingCache:
         finally:
             await cache.close()
 
+    @requires_blockbuster
+    @pytest.mark.asyncio
+    async def test_initialize_does_not_block(self, tmp_path: Path):
+        """``initialize`` must create the cache dir off the event loop.
+
+        ``initialize`` did ``self._db_path.parent.mkdir(...)`` directly on the
+        loop. ruff's ``ASYNC240`` could not see it (the call is on an
+        attribute-bound Path, not a ``Path(...)`` literal). Pointing the cache
+        at a not-yet-existing nested dir and wrapping ``initialize`` in
+        ``assert_no_blocking`` FAILS pre-fix (``os.mkdir`` on the loop) and
+        PASSES once offloaded via ``asyncio.to_thread``.
+        """
+        cache = SqliteEmbeddingCache(tmp_path / "nested" / "dir" / "embed.db")
+        try:
+            with assert_no_blocking():
+                await cache.initialize()
+        finally:
+            await cache.close()
+        assert (tmp_path / "nested" / "dir").is_dir()
+
     @pytest.mark.asyncio
     async def test_initialize_idempotent(self, tmp_path: Path):
         """Calling initialize() twice is a no-op — no duplicate connections."""
@@ -157,6 +176,12 @@ class TestSqliteEmbeddingCache:
         """
         import threading
 
+        # initialize() offloads its one-shot directory mkdir via
+        # asyncio.to_thread, which parks a worker in the shared default
+        # executor pool (reused, reaped at loop close — not a leak). Warm
+        # that pool first so its worker is in the baseline and not miscounted
+        # as a lingering aiosqlite thread.
+        await asyncio.to_thread(int)
         threads_baseline = threading.active_count()
 
         cache = SqliteEmbeddingCache(tmp_path / "thread.db")

@@ -25,17 +25,29 @@ catastrophic under concurrency.
 
 ## Enforcement
 
-- **Static guard:** ruff's `ASYNC` family (`flake8-async`) is enabled
-  repo-wide (root `select` + each package `select`). It flags blocking
+- **Static guard:** ruff's `ASYNC` family (`flake8-async`) is enabled in the
+  root `select`, which is authoritative — `bin/validate.sh` lints every target
+  with `--config <repo-root>/pyproject.toml`. Packages that define their own
+  `[tool.ruff]` (common, data, bots, fsm, xization) mirror the `select` and any
+  `per-file-ignores` for IDE / hierarchical invocations; `config` and `llm`
+  have no per-package ruff config and inherit the root. It flags blocking
   `open()` (`ASYNC230`), `Path`/`os` calls (`ASYNC240`), `time.sleep`
   (`ASYNC251`), and blocking HTTP clients (`ASYNC210`) inside `async def`.
+
+  > **ASYNC240 blind spot:** ruff reliably flags a `Path`/`os` method only
+  > when it can see the receiver is a `Path` — typically a directly-
+  > constructed `Path(...)` literal. The same call on an attribute-/variable-
+  > bound Path it cannot type — `self._db_path.parent.mkdir(...)`,
+  > `db_file.parent.mkdir(...)` — is NOT flagged. A green ASYNC lint is
+  > necessary but not sufficient; attribute-Path disk I/O in an `async def`
+  > must still be caught by review + `assert_no_blocking()`.
 - **Runtime proof:** the `assert_no_blocking()` test construct
   (`from dataknobs_common.testing import assert_no_blocking`) activates the
   `blockbuster` detector and raises `BlockingError` if a blocking syscall
   runs on a live loop inside the block. Write the reproduce-first test
   *first*: it FAILS against the blocking code, PASSES once offloaded.
 
-  > **Blind spot:** `blockbuster` does not patch `readline` / line
+  > **blockbuster blind spot:** `blockbuster` does not patch `readline` / line
   > iteration. For line-iterating readers, additionally pin the offload with
   > a structural worker-thread-identity proof (spy `open`, assert the read
   > ran on the worker thread, not the event-loop thread).

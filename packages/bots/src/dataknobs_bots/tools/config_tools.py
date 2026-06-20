@@ -86,6 +86,20 @@ def _get_wizard_data_ref(context: ToolExecutionContext) -> dict[str, Any]:
     return {}
 
 
+def _is_safe_config_name(name: str) -> bool:
+    """Return True if ``name`` is safe to use as a ``<name>.yaml`` filename.
+
+    The config name flows from LLM tool arguments and user-driven wizard
+    data, then becomes a filename under the draft manager's output dir. A
+    value containing a path separator, a NUL byte, or a bare current/parent
+    directory reference could escape that directory (path traversal), so it
+    is rejected before the path is composed.
+    """
+    if not name or not name.strip() or name in (".", ".."):
+        return False
+    return not any(sep in name for sep in ("/", "\\", "\x00"))
+
+
 class ListTemplatesTool(ContextAwareTool):
     """Tool for listing available configuration templates.
 
@@ -695,6 +709,14 @@ class SaveConfigTool(ContextAwareTool):
                 "success": False,
                 "error": "No config_name provided and no domain_id in wizard data",
             }
+        if not _is_safe_config_name(name):
+            return {
+                "success": False,
+                "error": (
+                    f"Invalid config name '{name}': must not contain path "
+                    "separators or path-traversal segments"
+                ),
+            }
 
         # Build final config
         if self._builder_factory is not None:
@@ -763,6 +785,12 @@ class SaveConfigTool(ContextAwareTool):
         output_dir = self._draft_manager.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         final_path = output_dir / f"{name}.yaml"
+        # Defense in depth: the name is validated at the entry point, but
+        # re-check the composed path never escapes the output directory.
+        if not final_path.resolve().is_relative_to(output_dir.resolve()):
+            raise ValueError(
+                f"Refusing to write config outside the output directory: {name}"
+            )
         with open(final_path, "w") as f:
             yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)
         return final_path
