@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `StateBridge[InboxT, OutboxT]` Protocol with `InboxOnlyBridge`,
+  `PeekBridge`, `BiDirectionalBridge`, `SubsetBridge`, and
+  `SubscribingBridge` reference implementations in
+  `dataknobs_bots.reasoning.state_bridge` (re-exported from the package
+  root). Codifies the named-key state-bridging contract used by the
+  wizard inbox hook — a bridge reads (`read_inbox`) and writes
+  (`write_outbox`) named keys on a host's `metadata` mapping. Consumers
+  compose bridges with the lifecycle-hook surface for consume-on-read
+  (`InboxOnlyBridge`), peek-without-consume (`PeekBridge`), symmetric
+  assign-or-merge (`BiDirectionalBridge`), projected-subset
+  (`SubsetBridge`, which accepts a bare callable or a scope projector),
+  or observability-aware (`SubscribingBridge`, firing `CallbackRegistry`
+  callbacks on every read and write) state bridging.
+
 ### Changed
 
 - The `KnowledgeResourceBackend` protocol (and its shared mixin) now
