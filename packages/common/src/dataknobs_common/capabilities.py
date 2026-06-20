@@ -311,7 +311,7 @@ def require_capability(host: Any, capability: CapabilityLike) -> None:
     Usage::
 
         require_capability(backend, Capability.TENANT_SCOPED_STATE)
-        await backend.set_ingestion_status(ctx, status)
+        await backend.set_ingestion_status(domain_id, status, ctx=ctx)
 
     Accepts both :class:`Capability` enum members and raw strings (for
     consumer-defined capabilities not part of the dataknobs enum).

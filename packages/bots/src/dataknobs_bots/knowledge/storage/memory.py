@@ -12,7 +12,9 @@ import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, ClassVar
+
+from dataknobs_common.capabilities import Capability, CapabilityLike
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -23,6 +25,9 @@ from .models import (
     KnowledgeFile,
     normalize_ingestion_status,
 )
+
+if TYPE_CHECKING:
+    from dataknobs_common.tenancy import TenantContext
 
 
 class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
@@ -56,10 +61,31 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         ```
     """
 
+    # Tenant-aware state methods honor ``ctx.state_key_prefix()``; the
+    # in-process state dicts ARE tenant-scoped under the prefix, so the
+    # capability surface matches the file / S3 backends (consumers can
+    # test against memory and deploy against file/s3). Unions onto the
+    # mixin's base set (does not replace it).
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
+        KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
+        | frozenset({
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
+        })
+    )
+
     def __init__(self) -> None:
         """Initialize the in-memory backend."""
-        # domain_id -> KnowledgeBaseInfo
+        # domain_id -> KnowledgeBaseInfo. Domain-keyed: KB existence /
+        # identity plus the single-tenant (ctx=None) ingest-state view.
         self._kb_info: dict[str, KnowledgeBaseInfo] = {}
+
+        # state-key (prefix + domain_id) -> KnowledgeBaseInfo. Per-tenant
+        # ingest-state overlay, created lazily on the first tenant-scoped
+        # write. Only populated for a non-empty state prefix; the empty
+        # prefix (ctx=None / SingleTenantContext) uses ``_kb_info``
+        # directly so single-tenant behavior is byte-identical.
+        self._tenant_info: dict[str, KnowledgeBaseInfo] = {}
 
         # domain_id -> path -> file content (bytes)
         self._files: dict[str, dict[str, bytes]] = {}
@@ -67,10 +93,12 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # domain_id -> path -> KnowledgeFile
         self._file_metadata: dict[str, dict[str, KnowledgeFile]] = {}
 
-        # domain_id -> canonical version (get_checksum) -> {path: checksum}.
-        # In-process per-version store backing _load_snapshot so memory
-        # produces minimal diffs (a native per-version diff for the
-        # file/S3 backends is a possible future enhancement).
+        # state-key (prefix + domain_id) -> version (get_checksum) ->
+        # {path: checksum}. In-process per-version store backing
+        # _load_snapshot so memory produces minimal diffs. Tenant-scoped
+        # under the state prefix; content mutations (ctx=None) record
+        # under the bare domain_id, byte-identical to the pre-tenancy
+        # store.
         self._snapshots: dict[str, dict[str, dict[str, str]]] = {}
 
         self._initialized = False
@@ -247,9 +275,36 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         return kb_info
 
-    async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
-        """Get knowledge base metadata."""
-        return self._kb_info.get(domain_id)
+    def _info_overlay_key(
+        self, domain_id: str, ctx: TenantContext | None
+    ) -> str | None:
+        """Per-tenant overlay key, or ``None`` for the single-tenant case.
+
+        Returns ``None`` when the context contributes no state prefix
+        (``ctx=None`` or a ``SingleTenantContext``) so single-tenant
+        reads/writes go straight to the domain-keyed ``_kb_info`` and
+        stay byte-identical to the pre-tenancy behavior.
+        """
+        prefix = self._state_prefix(ctx)
+        return f"{prefix}{domain_id}" if prefix else None
+
+    async def get_info(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> KnowledgeBaseInfo | None:
+        """Get knowledge base metadata.
+
+        KB existence/identity is keyed by ``domain_id``. When ``ctx``
+        carries a state prefix and that tenant has written ingest state,
+        the per-tenant overlay is returned; otherwise the shared
+        domain-keyed view is returned.
+        """
+        base = self._kb_info.get(domain_id)
+        if base is None:
+            return None
+        overlay_key = self._info_overlay_key(domain_id, ctx)
+        if overlay_key is not None:
+            return self._tenant_info.get(overlay_key, base)
+        return base
 
     async def delete_kb(self, domain_id: str) -> bool:
         """Delete entire knowledge base and all files."""
@@ -261,7 +316,18 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             del self._files[domain_id]
         if domain_id in self._file_metadata:
             del self._file_metadata[domain_id]
-        self._snapshots.pop(domain_id, None)
+        # Drop the single-tenant snapshot store plus every per-tenant
+        # state-keyed store/overlay for this domain (state keys are
+        # ``{prefix}{domain_id}`` where the prefix ends in ``/``).
+        suffix = f"/{domain_id}"
+
+        def _is_domain_key(key: str) -> bool:
+            return key == domain_id or key.endswith(suffix)
+
+        for snap_key in [k for k in self._snapshots if _is_domain_key(k)]:
+            self._snapshots.pop(snap_key, None)
+        for info_key in [k for k in self._tenant_info if _is_domain_key(k)]:
+            self._tenant_info.pop(info_key, None)
 
         return True
 
@@ -278,12 +344,31 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         error: str | None = None,
         *,
         generation: str | None = None,
+        ctx: TenantContext | None = None,
     ) -> None:
-        """Update ingestion status for a knowledge base."""
+        """Update ingestion status for a knowledge base.
+
+        KB existence stays keyed by ``domain_id``. With ``ctx=None`` the
+        status is written in place on the shared domain-keyed info
+        (byte-identical to the pre-tenancy behavior); with a tenant
+        context the status is written to a per-tenant overlay created
+        lazily on first write — mirroring the file / S3 lazy per-tenant
+        metadata document.
+        """
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        kb_info = self._kb_info[domain_id]
+        overlay_key = self._info_overlay_key(domain_id, ctx)
+        if overlay_key is None:
+            kb_info = self._kb_info[domain_id]
+        else:
+            kb_info = self._tenant_info.get(overlay_key)
+            if kb_info is None:
+                kb_info = KnowledgeBaseInfo.from_dict(
+                    {"domain_id": domain_id}
+                )
+                self._tenant_info[overlay_key] = kb_info
+
         kb_info.ingestion_status = normalize_ingestion_status(status)
         kb_info.ingestion_error = error
         # Always written through: a non-SWAPPING transition passes the
@@ -294,7 +379,8 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # but the state-write event fires for surface parity with the
         # file / S3 backends (so consumers compose one observability
         # path across every backend). ``byte_size`` reflects the
-        # would-be serialized status payload.
+        # would-be serialized status payload. The event key folds in the
+        # tenant state prefix for parity with the file/S3 observed keys.
         body = json.dumps(
             {
                 "ingestion_status": kb_info.ingestion_status,
@@ -305,7 +391,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         )
         await self._fire_state_write(
             domain_id=domain_id,
-            key=f"{domain_id}/{self.METADATA_FILE}",
+            key=f"{self._state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}",
             kind=KnowledgeKeyKind.METADATA,
             byte_size=len(body.encode("utf-8")),
         )
@@ -342,18 +428,28 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     # additionally retains a per-version snapshot so it produces minimal
     # diffs rather than the mixin's full-set default.
 
-    async def _record_snapshot(self, domain_id: str) -> None:
+    async def _record_snapshot(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> None:
         """Snapshot the current file→checksum map under its version.
 
         Called after every mutation so a later
         ``list_changes_since(domain_id, that_version)`` can diff against
         the exact state. The version key is the canonical
         :meth:`get_checksum` value (computed once, here, by the mixin).
+
+        The snapshot store is tenant-scoped under ``ctx`` — content
+        mutations (``ctx=None``) record under the bare ``domain_id``,
+        byte-identical to the pre-tenancy store; a tenant-bound call
+        records under ``ctx.state_key_prefix()`` so per-tenant snapshot
+        lineage cannot collide. The captured ``{path: checksum}`` map is
+        the shared (domain-keyed) content state in either case.
         """
-        version = await self.get_checksum(domain_id)
+        version = await self.get_checksum(domain_id, ctx=ctx)
+        state_key = f"{self._state_prefix(ctx)}{domain_id}"
         meta = self._file_metadata.get(domain_id, {})
         snapshot = {path: f.checksum for path, f in meta.items()}
-        self._snapshots.setdefault(domain_id, {})[version] = snapshot
+        self._snapshots.setdefault(state_key, {})[version] = snapshot
         # The empty-KB baseline (version "") writes no real snapshot in
         # the file / S3 backends, so skip the event there too for parity.
         if not version:
@@ -361,16 +457,26 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         body = json.dumps(snapshot)
         await self._fire_state_write(
             domain_id=domain_id,
-            key=f"{domain_id}/{self.SNAPSHOTS_DIR}/{version}.json",
+            key=f"{state_key}/{self.SNAPSHOTS_DIR}/{version}.json",
             kind=KnowledgeKeyKind.SNAPSHOT,
             byte_size=len(body.encode("utf-8")),
         )
 
     async def _load_snapshot(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> dict[str, str]:
-        """Return the retained ``{path: checksum}`` map for ``version``."""
-        snaps = self._snapshots.get(domain_id, {})
+        """Return the retained ``{path: checksum}`` map for ``version``.
+
+        Resolved from the tenant-scoped snapshot store (``ctx``); a
+        version recorded under a different tenant (or single-tenant) is
+        not visible here.
+        """
+        state_key = f"{self._state_prefix(ctx)}{domain_id}"
+        snaps = self._snapshots.get(state_key, {})
         if version not in snaps:
             raise InvalidVersionError(
                 f"Version {version!r} is not retained for domain "

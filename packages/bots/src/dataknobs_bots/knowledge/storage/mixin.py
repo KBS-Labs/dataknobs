@@ -46,6 +46,7 @@ from .models import ChangeSet, InvalidVersionError
 
 if TYPE_CHECKING:
     from dataknobs_common.events import Event, EventBus, Subscription
+    from dataknobs_common.tenancy import TenantContext
 
     from .models import KnowledgeBaseInfo, KnowledgeFile
 
@@ -101,10 +102,35 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         Capability.CALLBACK_REGISTRY,
     })
 
+    # --- Tenant-context scoping (shared) ---
+
+    @staticmethod
+    def _state_prefix(ctx: TenantContext | None) -> str:
+        """State-key prefix for ``ctx`` (``""`` for the no-tenant case).
+
+        When ``ctx`` is ``None`` (every single-tenant call site) the
+        prefix is empty, so the tenant-scoped state keys/paths are
+        byte-identical to the pre-tenancy layout. A bound tenant context
+        contributes its
+        :meth:`~dataknobs_common.tenancy.TenantContext.state_key_prefix`,
+        isolating per-tenant ingest **state** (metadata + snapshot
+        lineage). **Content** stays keyed by ``domain_id`` alone — a
+        backend routes only its state key/path construction through this
+        helper, never its content paths.
+        """
+        return ctx.state_key_prefix() if ctx is not None else ""
+
     # --- Required of any backend (supplied by the concrete class) ---
 
-    async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
-        """Return KB metadata, or ``None`` if it does not exist."""
+    async def get_info(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> KnowledgeBaseInfo | None:
+        """Return KB metadata, or ``None`` if it does not exist.
+
+        ``ctx`` scopes the per-tenant ingest **state** view (ingestion
+        status / generation token); ``None`` preserves the single-tenant
+        view. KB existence/identity stays keyed by ``domain_id``.
+        """
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
     async def list_files(
@@ -175,7 +201,9 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         return cls._identity_of_snapshot({f.path: f.checksum for f in files})
 
-    async def get_checksum(self, domain_id: str) -> str:
+    async def get_checksum(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str:
         """Canonical content-snapshot identity of the whole KB.
 
         MD5 over the sorted ``path:checksum`` of every file. The empty
@@ -183,15 +211,24 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         pass it back to :meth:`has_changes_since` /
         :meth:`list_changes_since`.
 
+        ``ctx`` scopes only the KB-existence check (via
+        :meth:`get_info`); the identity itself is a **content** hash over
+        the shared ``list_files`` result, so it is the same across
+        tenants of the same ``domain_id``.
+
         Raises:
             ValueError: If ``domain_id`` does not exist.
         """
-        if await self.get_info(domain_id) is None:
+        if await self.get_info(domain_id, ctx=ctx) is None:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
         return self._snapshot_identity(await self.list_files(domain_id))
 
     async def list_changes_since(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> ChangeSet:
         """Diff the current KB against the snapshot identified by ``version``.
 
@@ -209,7 +246,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
                 (predates retention / unknown). Consumers fall back to a
                 full re-ingest.
         """
-        if await self.get_info(domain_id) is None:
+        if await self.get_info(domain_id, ctx=ctx) is None:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
         files = await self.list_files(domain_id)
         current_version = self._snapshot_identity(files)
@@ -219,7 +256,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
                 added=[], modified=[], deleted=[], version=current_version
             )
 
-        snapshot = await self._load_snapshot(domain_id, version)
+        snapshot = await self._load_snapshot(domain_id, version, ctx=ctx)
         added: list[KnowledgeFile] = []
         modified: list[KnowledgeFile] = []
         for path, file in current.items():
@@ -235,7 +272,13 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
             version=current_version,
         )
 
-    async def has_changes_since(self, domain_id: str, version: str) -> bool:
+    async def has_changes_since(
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
+    ) -> bool:
         """``True`` if the KB differs from the snapshot at ``version``.
 
         The degenerate case of :meth:`list_changes_since`:
@@ -247,13 +290,17 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         try:
             return not (
-                await self.list_changes_since(domain_id, version)
+                await self.list_changes_since(domain_id, version, ctx=ctx)
             ).is_empty
         except InvalidVersionError:
             return True
 
     async def _load_snapshot(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> dict[str, str]:
         """Resolve ``version`` to a ``{path: checksum}`` snapshot map.
 
