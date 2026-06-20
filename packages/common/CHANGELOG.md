@@ -16,11 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backends use it to compute distributed-lock keys (`lock_key(operation)`)
   and state-storage prefixes (`state_key_prefix()`) for per-tenant
   isolation, and to compare scopes (`matches(other)`). `SingleTenantContext`
-  is the backwards-compatible default — its lock keys and empty state
-  prefix are byte-identical to single-tenant code written before the
-  context surface existed, and it accepts `str` equality for incremental
-  migration. Multi-tenant impls compose tenant + domain into lock keys and
-  state prefixes. Build a context from a config mapping with
+  is the backwards-compatible default — its empty state prefix preserves the
+  on-disk state layout of single-tenant code written before the context
+  surface existed, its lock keys follow a stable canonical format, and it
+  accepts `str` equality for incremental migration. Multi-tenant impls
+  compose tenant + domain into lock keys and state prefixes. Build a context
+  from a config mapping with
   `create_tenant_context({...})` or from `DOMAIN_ID` / `TENANT_ID`
   environment variables with `tenant_context_from_env()`.
 - `Capability.STATE_BRIDGE_INBOX_ONLY` and

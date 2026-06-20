@@ -115,6 +115,18 @@ def test_prefixed_matches_includes_pattern() -> None:
     assert not a.matches(c)
 
 
+def test_prefixed_rejects_unknown_placeholder() -> None:
+    # A placeholder the accessors do not supply must fail at construction,
+    # not deep inside a later lock_key / state_key_prefix call.
+    with pytest.raises(ValueError, match="Invalid prefix_pattern"):
+        PrefixedTenantContext("t", "k", "region_{region}/")
+
+
+def test_prefixed_rejects_malformed_braces() -> None:
+    with pytest.raises(ValueError, match="Invalid prefix_pattern"):
+        PrefixedTenantContext("t", "k", "cust_{tenant_id/")
+
+
 # --- SharedCorpusTenantContext ---------------------------------------- #
 
 
@@ -142,3 +154,40 @@ def test_shared_corpus_does_not_match_different_tenant() -> None:
     a = SharedCorpusTenantContext("alpha", "view", "corpus")
     b = SharedCorpusTenantContext("beta", "view", "corpus")
     assert not a.matches(b)
+
+
+def test_shared_corpus_matching_views_are_equal() -> None:
+    # __eq__ is keyed on (tenant_id, shared_corpus_id), aligned with matches().
+    a = SharedCorpusTenantContext("alpha", "view_a", "corpus")
+    b = SharedCorpusTenantContext("alpha", "view_b", "corpus")
+    assert a == b
+    assert a.matches(b) == (a == b)
+
+
+def test_shared_corpus_matching_views_hash_equal() -> None:
+    # The matches/__eq__ alignment MUST extend to __hash__, or context-keyed
+    # caches would bucket two matching views separately and never share.
+    a = SharedCorpusTenantContext("alpha", "view_a", "corpus")
+    b = SharedCorpusTenantContext("alpha", "view_b", "corpus")
+    assert a.matches(b)
+    assert hash(a) == hash(b)
+
+
+def test_shared_corpus_matching_views_collapse_in_set() -> None:
+    a = SharedCorpusTenantContext("alpha", "view_a", "corpus")
+    b = SharedCorpusTenantContext("alpha", "view_b", "corpus")
+    assert len({a, b}) == 1
+
+
+def test_shared_corpus_distinct_corpus_not_equal() -> None:
+    a = SharedCorpusTenantContext("alpha", "view", "corpus_a")
+    b = SharedCorpusTenantContext("alpha", "view", "corpus_b")
+    assert a != b
+    assert not a.matches(b)
+    assert len({a, b}) == 2
+
+
+def test_shared_corpus_not_equal_to_other_types() -> None:
+    ctx = SharedCorpusTenantContext("alpha", "view", "corpus")
+    assert ctx != "alpha"
+    assert ctx != BoundTenantContext("alpha", "view")

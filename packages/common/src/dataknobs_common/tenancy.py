@@ -35,6 +35,18 @@ Reference implementations:
 
 Construct a context from a config mapping with :func:`create_tenant_context`
 or from the environment with :func:`tenant_context_from_env`.
+
+Capability advertisement (e.g. ``TENANT_SCOPED_STATE`` /
+``TENANT_SCOPED_LOCKS``) is the responsibility of the *consuming* backend,
+not the context. A context only projects identity into keys; the backend
+decides whether it honors strict per-tenant locking or snapshot isolation and
+declares the matching capability.
+
+Extend the family by writing a frozen, hashable class satisfying
+:class:`TenantContext` (and, if config-driven construction is needed, your own
+small factory). The four reference impls plus :class:`PrefixedTenantContext`'s
+format-string escape hatch cover the common conventions, so there is
+intentionally no plugin registry here.
 """
 
 from __future__ import annotations
@@ -154,11 +166,14 @@ class TenantContext(Protocol):
 class SingleTenantContext:
     """Backwards-compat default for single-tenant deployments.
 
-    Lock keys are ``"{operation}:{domain_id}"`` — byte-identical to the
-    format produced by the pre-context single-tenant code.
+    Lock keys follow the canonical single-tenant format
+    ``"{operation}:{domain_id}"`` — the stable shape backends adopting the
+    context surface route their single-tenant locks through. (The contract
+    tests pin this format so it cannot drift once backends depend on it.)
 
     State-key prefix is ``""`` — state-write paths are unchanged from the
-    pre-context single-tenant layout.
+    single-tenant on-disk layout used before the context surface existed, so
+    existing state files stay readable.
 
     The ``tenant_id`` property returns ``None``; backends use this as the
     "no tenant context" signal to skip per-tenant routing.
@@ -253,12 +268,32 @@ class PrefixedTenantContext:
     per-convention reference impl.
 
     The pattern is formatted once per accessor call; implementations MUST
-    NOT mutate the pattern after construction.
+    NOT mutate the pattern after construction. The pattern is validated at
+    construction time (an unknown placeholder or malformed braces raise
+    ``ValueError`` immediately, rather than deep inside a later lock /
+    state-key call).
     """
 
     tenant_id: str
     domain_id: str
     prefix_pattern: str
+
+    def __post_init__(self) -> None:
+        # Fail fast on a bad template instead of at first lock_key /
+        # state_key_prefix call. Dry-run the format with the instance's own
+        # values across both placeholder sets the accessors use.
+        try:
+            self.prefix_pattern.format(
+                tenant_id=self.tenant_id,
+                domain_id=self.domain_id,
+                operation="",
+            )
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid prefix_pattern {self.prefix_pattern!r}: only "
+                f"{{tenant_id}}, {{domain_id}}, and {{operation}} placeholders "
+                f"are supported ({exc})."
+            ) from exc
 
     def lock_key(self, operation: str) -> str:
         return (
@@ -279,6 +314,10 @@ class PrefixedTenantContext:
         )
 
     def matches(self, other: TenantContext) -> bool:
+        # Compares the raw pattern string, not its projected output: two
+        # textually different patterns that happen to project identically do
+        # NOT match. Textual identity is the conservative choice for an
+        # isolation boundary.
         return (
             isinstance(other, PrefixedTenantContext)
             and other.tenant_id == self.tenant_id
@@ -287,7 +326,7 @@ class PrefixedTenantContext:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class SharedCorpusTenantContext:
     """Tenant-isolated state on a shared content corpus.
 
@@ -298,10 +337,14 @@ class SharedCorpusTenantContext:
     operations key on ``tenant_id`` so each tenant's metadata + snapshot
     writes are isolated.
 
-    ``matches`` returns True for any context with the same ``tenant_id``
-    and ``shared_corpus_id`` (the ``domain_id`` field may differ between
-    per-tenant "views" of the same shared corpus). This lets content-keyed
-    cache lookups share entries across views.
+    Equality, hashing, and :meth:`matches` are all keyed on
+    ``(tenant_id, shared_corpus_id)`` — the ``domain_id`` field may differ
+    between per-tenant "views" of the same shared corpus, and such views
+    compare equal and hash equal. This is deliberate: it lets content-keyed
+    caches keyed by the context (``dict`` / ``set`` membership) share a single
+    entry across views, which is the whole point of the shared corpus. Keeping
+    ``__eq__`` / ``__hash__`` aligned with ``matches`` avoids the trap where
+    two views ``matches()`` each other yet land in different cache buckets.
 
     Use case: legal / regulatory deployments where each tenant has its own
     snapshot lineage but the underlying corpus is shared (cost + cache
@@ -323,10 +366,24 @@ class SharedCorpusTenantContext:
     def matches(self, other: TenantContext) -> bool:
         # Equivalence is on (tenant_id, shared_corpus_id), not domain_id —
         # different per-tenant views of the same shared corpus match.
-        return (
-            isinstance(other, SharedCorpusTenantContext)
-            and other.tenant_id == self.tenant_id
-            and other.shared_corpus_id == self.shared_corpus_id
+        # Defers to __eq__ so matches / equality / hashing cannot diverge.
+        return self == other
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, SharedCorpusTenantContext):
+            return (
+                self.tenant_id == other.tenant_id
+                and self.shared_corpus_id == other.shared_corpus_id
+            )
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                "SharedCorpusTenantContext",
+                self.tenant_id,
+                self.shared_corpus_id,
+            )
         )
 
 
@@ -381,6 +438,13 @@ def create_tenant_context(config: Mapping[str, Any]) -> TenantContext:
 
     Extra keys in ``config`` are ignored, so a single deployment-config
     section can carry knobs the chosen impl does not consume.
+
+    Inference is by truthiness: a present-but-falsy discriminator (e.g.
+    ``tenant_id: None`` or ``prefix_pattern: ""``) is treated as absent, so a
+    config section that always carries an optional ``tenant_id`` key still
+    yields a single-tenant context when that value is ``None``/empty. To force
+    a specific impl — and get a clear "requires a non-empty ..." error when a
+    required field is falsy — set an explicit ``kind``.
 
     Raises ``ValueError`` for a missing ``domain_id``, an unknown explicit
     ``kind``, or a kind whose required fields are absent.
@@ -454,6 +518,13 @@ def tenant_context_from_env(
     Pass ``environ`` to read from a mapping other than ``os.environ`` (for
     tests or layered config). Raises ``ValueError`` when ``DOMAIN_ID`` is
     unset.
+
+    Note that these variable names are unprefixed (``DOMAIN_ID`` / ``TENANT_ID``
+    rather than a namespaced ``DK_*`` form). In a deployment whose environment
+    already defines a generic ``DOMAIN_ID`` / ``TENANT_ID`` for an unrelated
+    purpose, read the tenant scope from explicit config via
+    :func:`create_tenant_context` and pass a scoped ``environ`` mapping here
+    rather than relying on the ambient process environment.
     """
     env = environ if environ is not None else os.environ
     config: dict[str, Any] = {}

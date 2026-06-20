@@ -1,14 +1,25 @@
-"""Byte-identity contract tests for TenantContext reference impls.
+"""Format-stability contract tests for TenantContext reference impls.
 
-THESE TESTS ARE LOAD-BEARING. Outstanding distributed locks acquired before
-the tenant-context surface existed are stranded if
-``SingleTenantContext.lock_key`` drifts by even one character; per-tenant
-snapshot state files become unreadable if ``state_key_prefix`` drifts.
+THESE TESTS ARE LOAD-BEARING. They pin the canonical lock-key and
+state-key-prefix formats so they cannot drift once backends adopt the context
+surface and start depending on them. Two guarantees are genuinely
+backwards-compatible with pre-context single-tenant code:
 
-The operation names enumerated below MUST match exactly the operation names
-used in the pre-context backend code. If a backend adds a new operation,
-this test gains a row; if a backend renames an operation, this test catches
-the drift before consumers do.
+- ``SingleTenantContext.state_key_prefix() == ""`` — the empty prefix keeps
+  existing on-disk state-file paths readable; any drift here (e.g. ``"_state/"``)
+  silently orphans those files.
+- ``BoundTenantContext.lock_key(op) == "{op}:{tenant}:{domain}"`` — the
+  tenant-scoped lock shape adopting backends route bound-tenant locks through.
+
+The ``SingleTenantContext.lock_key`` rows pin the *canonical* single-tenant
+format. (There is no single pre-context lock-key format to be byte-identical
+to — the only existing lock key is a per-domain ingest lock with its own
+shape; reconciling specific call sites to the context surface, with their own
+per-backend identity tests, is the adoption step that follows this substrate.)
+
+The operation names enumerated below are representative; the parametrization
+asserts the format is stable across operation names, not that this is the
+exhaustive operation set.
 """
 
 from __future__ import annotations
@@ -21,9 +32,9 @@ from dataknobs_common.tenancy import (
     SingleTenantContext,
 )
 
-# Operation names used by the wizard / knowledge layer. This list MUST be
-# kept in sync with backend code. CI guard: any backend code computing a
-# lock key for a name not in this list is a new operation and gains a row.
+# Representative operation names used by the knowledge layer. Used to assert
+# the lock-key format is stable across operation names (not an exhaustive or
+# authoritative operation set — backends own their own operation vocabularies).
 SHIMMED_OPERATIONS = [
     "set_ingestion_status",
     "get_info",
@@ -39,17 +50,17 @@ SHIMMED_OPERATIONS = [
 
 
 @pytest.mark.parametrize("operation", SHIMMED_OPERATIONS)
-def test_single_tenant_lock_key_matches_pre_context_format(
+def test_single_tenant_lock_key_canonical_format(
     operation: str,
 ) -> None:
-    """SingleTenantContext.lock_key MUST equal ``"{operation}:{domain_id}"``
-    for every operation name."""
+    """SingleTenantContext.lock_key MUST equal the canonical
+    ``"{operation}:{domain_id}"`` for every operation name. Pinned so the
+    format cannot drift once backends route single-tenant locks through it."""
     ctx = SingleTenantContext("my_kb")
     expected = f"{operation}:my_kb"
     assert ctx.lock_key(operation) == expected, (
-        f"Byte-drift: SingleTenantContext('my_kb').lock_key({operation!r}) "
-        f"= {ctx.lock_key(operation)!r}, expected {expected!r}. "
-        f"Outstanding distributed locks would be stranded."
+        f"Format drift: SingleTenantContext('my_kb').lock_key({operation!r}) "
+        f"= {ctx.lock_key(operation)!r}, expected {expected!r}."
     )
 
 
