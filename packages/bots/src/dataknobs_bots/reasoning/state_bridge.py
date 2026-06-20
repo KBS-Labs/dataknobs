@@ -62,12 +62,19 @@ __all__ = [
     "SubsetBridge",
 ]
 
-InboxT = TypeVar("InboxT")
-OutboxT = TypeVar("OutboxT")
+# Variance-annotated TypeVars for the Protocol (mirrors the sibling
+# Discriminator / ResourceResolver families in dataknobs_common): InboxT
+# appears only in return position (covariant); OutboxT appears only in
+# parameter position (contravariant). The concrete implementations use plain
+# invariant TypeVars (underscore-prefixed), as the sibling families do.
+InboxT_co = TypeVar("InboxT_co", covariant=True)
+OutboxT_contra = TypeVar("OutboxT_contra", contravariant=True)
+_InboxT = TypeVar("_InboxT")
+_OutboxT = TypeVar("_OutboxT")
 
 
 @runtime_checkable
-class StateBridge(Protocol, Generic[InboxT, OutboxT]):
+class StateBridge(Protocol, Generic[InboxT_co, OutboxT_contra]):
     """Named-key state bridging between components on a shared host.
 
     Two methods:
@@ -85,13 +92,16 @@ class StateBridge(Protocol, Generic[InboxT, OutboxT]):
 
     ``host`` is typically a ``ConversationManager`` instance carrying
     ``host.metadata`` as the state-carrying mapping; the Protocol does
-    not require that exact shape — any object exposing a mapping-like
-    ``metadata`` attribute conforms.
+    not require that exact shape — but the write/pop reference impls need
+    a **mutable** ``metadata`` mapping (a ``dict``, as a
+    ``ConversationManager`` exposes), not a read-only ``Mapping``.
     """
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None: ...
+    def read_inbox(self, host: Any, key: str) -> InboxT_co | None: ...
 
-    def write_outbox(self, host: Any, key: str, value: OutboxT) -> None: ...
+    def write_outbox(
+        self, host: Any, key: str, value: OutboxT_contra
+    ) -> None: ...
 
 
 def _host_metadata(host: Any) -> dict[str, Any]:
@@ -114,7 +124,7 @@ def _host_metadata(host: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------- #
 
 
-class InboxOnlyBridge(Generic[InboxT]):
+class InboxOnlyBridge(Generic[_InboxT]):
     """Consume-on-read inbox; write side unsupported.
 
     The wizard ``make_metadata_inbox_hook`` semantic. The writer (a
@@ -130,7 +140,7 @@ class InboxOnlyBridge(Generic[InboxT]):
     no-op'ing.
     """
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None:
+    def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         return _host_metadata(host).pop(key, None)
 
     def write_outbox(self, host: Any, key: str, value: Any) -> None:
@@ -140,7 +150,7 @@ class InboxOnlyBridge(Generic[InboxT]):
         )
 
 
-class PeekBridge(Generic[InboxT]):
+class PeekBridge(Generic[_InboxT]):
     """Read-without-consume inbox; write side unsupported.
 
     Identical to :class:`InboxOnlyBridge` except read = ``dict.get``
@@ -152,7 +162,7 @@ class PeekBridge(Generic[InboxT]):
     :class:`InboxOnlyBridge`).
     """
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None:
+    def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         return _host_metadata(host).get(key)
 
     def write_outbox(self, host: Any, key: str, value: Any) -> None:
@@ -162,7 +172,7 @@ class PeekBridge(Generic[InboxT]):
         )
 
 
-class BiDirectionalBridge(Generic[InboxT, OutboxT]):
+class BiDirectionalBridge(Generic[_InboxT, _OutboxT]):
     """Symmetric bridge: read = pop; write = assign or merge.
 
     Construct with an optional ``merge_fn`` taking ``(existing, new)``
@@ -182,10 +192,10 @@ class BiDirectionalBridge(Generic[InboxT, OutboxT]):
     ) -> None:
         self._merge_fn = merge_fn
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None:
+    def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         return _host_metadata(host).pop(key, None)
 
-    def write_outbox(self, host: Any, key: str, value: OutboxT) -> None:
+    def write_outbox(self, host: Any, key: str, value: _OutboxT) -> None:
         metadata = _host_metadata(host)
         if self._merge_fn is None:
             metadata[key] = value
@@ -201,7 +211,7 @@ class BiDirectionalBridge(Generic[InboxT, OutboxT]):
         self._merge_fn(existing, value)
 
 
-class SubsetBridge(Generic[InboxT, OutboxT]):
+class SubsetBridge(Generic[_InboxT, _OutboxT]):
     """Partial-state projection bridge.
 
     The ``project`` callable transforms the full state-bearing source
@@ -221,24 +231,36 @@ class SubsetBridge(Generic[InboxT, OutboxT]):
     ``SubsetBridge`` with no glue. The two Protocols stay distinct (a
     scope projector is not a ``StateBridge``); only the ``project``
     callable is shared.
+
+    Caveat — source-honoring vs source-capturing projectors: the write
+    ``value`` is passed as the projection source. *Source-honoring*
+    projectors (a bare callable, ``CallableProjector``,
+    ``IdentityProjector``) project that ``value`` — the expected case.
+    But *source-capturing* projectors (``WhitelistProjector``,
+    ``ReadOnlyProjector``) capture their source at construction and
+    **ignore** the ``project(source)`` argument, so the write ``value``
+    is silently dropped and the captured source is projected instead.
+    The two scope-projector families have opposite semantics through this
+    same seam; pick a source-honoring projector when the write ``value``
+    must drive the projection.
     """
 
-    def __init__(self, project: Callable[[Any], OutboxT] | Any) -> None:
+    def __init__(self, project: Callable[[Any], _OutboxT] | Any) -> None:
         # Normalize: a scope projector exposes `.project`; a bare callable
         # is used directly. Duck-typed — no import of the projector layer.
         proj_method = getattr(project, "project", None)
-        self._project: Callable[[Any], OutboxT] = (
+        self._project: Callable[[Any], _OutboxT] = (
             proj_method if callable(proj_method) else project
         )
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None:
+    def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         return _host_metadata(host).pop(key, None)
 
     def write_outbox(self, host: Any, key: str, value: Any) -> None:
         _host_metadata(host)[key] = self._project(value)
 
 
-class SubscribingBridge(Generic[InboxT, OutboxT]):
+class SubscribingBridge(Generic[_InboxT, _OutboxT]):
     """Bridge that fires callbacks on read and write.
 
     Composes with the callback substrate: every read and write fires its
@@ -249,11 +271,17 @@ class SubscribingBridge(Generic[InboxT, OutboxT]):
     Use case: observability — a metrics consumer registers callbacks on
     the read / write topics to count bridge activity per key without
     modifying the production bridge code.
+
+    Dispatch is synchronous (``CallbackRegistry.fire``): registered
+    callbacks MUST be sync. A coroutine-function callback raises
+    ``TypeError`` rather than silently creating an unawaited coroutine —
+    use ``CallbackRegistry.fire_async`` upstream (or a sync wrapper) for
+    async observers.
     """
 
     def __init__(
         self,
-        inner: StateBridge[InboxT, OutboxT],
+        inner: StateBridge[_InboxT, _OutboxT],
         *,
         registry: Any,  # CallbackRegistry; typed Any to avoid an import cycle
         read_topic: str = "state_bridge:read",
@@ -264,7 +292,7 @@ class SubscribingBridge(Generic[InboxT, OutboxT]):
         self._read_topic = read_topic
         self._write_topic = write_topic
 
-    def read_inbox(self, host: Any, key: str) -> InboxT | None:
+    def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         popped = self._inner.read_inbox(host, key)
         self._registry.fire(
             self._read_topic,
@@ -272,7 +300,7 @@ class SubscribingBridge(Generic[InboxT, OutboxT]):
         )
         return popped
 
-    def write_outbox(self, host: Any, key: str, value: OutboxT) -> None:
+    def write_outbox(self, host: Any, key: str, value: _OutboxT) -> None:
         self._inner.write_outbox(host, key, value)
         self._registry.fire(
             self._write_topic,

@@ -1390,6 +1390,106 @@ handle and the `manager` parameter — no instance attributes.
 Multi-replica / multi-tenant runtimes adopting the knob get the
 bridge without inheriting any per-turn shared state hazard.
 
+#### State Bridges — the named-key bridging contract
+
+The inbox hook above is one consumer of a general contract:
+**`StateBridge`** codifies *how* one component publishes state for
+another to consume, named by key, over a host's `metadata` mapping
+(typically a `ConversationManager`). The inbox hook's
+consume-on-read pop is just one point in that design space; if you
+need a *variation* — peek instead of pop, a symmetric writer side, a
+projected subset, or observability of every read/write — build on
+the shipped reference implementations instead of hand-rolling a
+parallel hook.
+
+```python
+from dataknobs_bots.reasoning.state_bridge import (
+    InboxOnlyBridge,      # read = pop;   write raises NotImplementedError
+    PeekBridge,           # read = get;   write raises NotImplementedError
+    BiDirectionalBridge,  # read = pop;   write = assign or in-place merge
+    SubsetBridge,         # read = pop;   write = metadata[key] = project(value)
+    SubscribingBridge,    # wraps any bridge; fires read/write callbacks
+)
+```
+
+`StateBridge[InboxT, OutboxT]` is a `@runtime_checkable` generic
+Protocol with two methods — `read_inbox(host, key) -> InboxT | None`
+and `write_outbox(host, key, value)`. The type parameters are
+variance-annotated (`InboxT` covariant — return-only; `OutboxT`
+contravariant — parameter-only; spelled `InboxT_co` / `OutboxT_contra`
+in the source, per the sibling `ScopeProjector` / `ResourceResolver`
+families). The Protocol is shape-only; it does **not** define the
+payload shape (per-key payload conventions stay consumer-controlled,
+exactly as the inbox bridge documents its own payload). Read-only
+bridges raise `NotImplementedError` on write (rather than silently
+no-op'ing) with a message pointing at `BiDirectionalBridge` /
+`SubsetBridge`.
+
+| Impl | Read | Write |
+|---|---|---|
+| `InboxOnlyBridge` | pop (consume-on-read) | `NotImplementedError` |
+| `PeekBridge` | `get` (peek, key survives) | `NotImplementedError` |
+| `BiDirectionalBridge(merge_fn=None)` | pop | assign, or in-place merge |
+| `SubsetBridge(project)` | pop | `metadata[key] = project(value)` |
+| `SubscribingBridge(inner, *, registry, ...)` | delegate + fire callback | delegate + fire callback |
+
+**Re-platformed inbox hook.** The wizard's
+`make_metadata_inbox_hook` routes its per-key read through
+`InboxOnlyBridge.read_inbox` — same consume-on-read behavior,
+now on the shared contract.
+
+**`BiDirectionalBridge` merge.** With `merge_fn=None` every write
+overwrites `host.metadata[key]`. Supply a `(existing, new) -> None`
+in-place mutator AND a dict-valued existing key to merge in place; a
+non-dict existing key (or non-mapping value) falls back to
+assignment.
+
+```python
+bridge = BiDirectionalBridge(merge_fn=lambda existing, new: existing.update(new))
+bridge.write_outbox(manager, "_acc", {"a": 1})   # assign (key absent)
+bridge.write_outbox(manager, "_acc", {"b": 2})   # merge -> {"a": 1, "b": 2}
+```
+
+**Scope-projector interop (`SubsetBridge`).** `project` accepts
+EITHER a bare `Callable[[Any], OutboxT]` OR a scope projector
+(duck-typed on `.project`, e.g. a
+`dataknobs_common.scope.WhitelistProjector`) — a consumer's
+projector drops in with no glue. The two Protocols stay distinct;
+only the `project` callable is shared.
+
+> **Caveat — source-honoring vs source-capturing projectors.** The
+> write `value` is the projection source. A *source-honoring*
+> projector (bare callable, `CallableProjector`, `IdentityProjector`)
+> projects that `value` — the expected case. A *source-capturing*
+> projector (`WhitelistProjector`, `ReadOnlyProjector`) captures its
+> source at construction and ignores `project(source)`, so the write
+> `value` is silently dropped and the captured source is projected.
+> Pick a source-honoring projector when the write `value` must drive
+> the projection.
+
+**Observability (`SubscribingBridge`).** Wrap any bridge to fire
+read/write topics on a `CallbackRegistry`, so a metrics consumer
+monitors bridge activity without touching the production bridge:
+
+```python
+from dataknobs_common.callbacks import CallbackRegistry
+
+registry = CallbackRegistry()
+registry.register("state_bridge:read", lambda p: log_read(p["key"]))
+observed = SubscribingBridge(InboxOnlyBridge(), registry=registry)
+```
+
+Dispatch is synchronous (`CallbackRegistry.fire`): registered
+callbacks MUST be sync — a coroutine-function callback raises
+`TypeError` rather than silently creating an unawaited coroutine.
+Compose the registry's `also_publish_to(bus, ...)` fan-out to extend
+observability across replicas via a shared `EventBus`.
+
+**Capability advertisement.** `Capability.STATE_BRIDGE_INBOX_ONLY`
+and `Capability.STATE_BRIDGE_BIDIRECTIONAL` (the `state_bridge`
+family) let a host advertise how it bridges named-key state. Shipped
+as available members for adoption-on-demand.
+
 #### Adopting `LifecycleHooks` in Your Own Reasoning Strategy
 
 The wizard isn't the only composing strategy that wants pre-turn /

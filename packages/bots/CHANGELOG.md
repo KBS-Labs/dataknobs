@@ -19,9 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compose bridges with the lifecycle-hook surface for consume-on-read
   (`InboxOnlyBridge`), peek-without-consume (`PeekBridge`), symmetric
   assign-or-merge (`BiDirectionalBridge`), projected-subset
-  (`SubsetBridge`, which accepts a bare callable or a scope projector),
-  or observability-aware (`SubscribingBridge`, firing `CallbackRegistry`
-  callbacks on every read and write) state bridging.
+  (`SubsetBridge`, which accepts a bare callable or a scope projector —
+  a source-honoring projector projects the write value, while a
+  source-capturing projector such as `WhitelistProjector` projects its
+  captured source), or observability-aware (`SubscribingBridge`, firing
+  `CallbackRegistry` callbacks on every read and write; dispatch is
+  synchronous, so a coroutine-function callback raises `TypeError`)
+  state bridging. The Protocol's `InboxT`/`OutboxT` type parameters are
+  variance-annotated (covariant return / contravariant parameter),
+  matching the sibling `ScopeProjector` / `ResourceResolver` families.
 
 ### Changed
 

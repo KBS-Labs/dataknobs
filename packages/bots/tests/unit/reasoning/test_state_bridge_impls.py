@@ -139,6 +139,24 @@ def test_bidirectional_write_assigns_when_existing_not_dict() -> None:
     assert host.metadata["k"] == {"x": 1}
 
 
+def test_bidirectional_write_assigns_when_existing_is_none() -> None:
+    """A configured merge_fn assigns (does not attempt to merge) when the
+    key is present but holds ``None``.
+
+    The branch keys on ``metadata.get(key) is None``, which cannot
+    distinguish "absent" from "present-but-None" — both correctly fall
+    through to assignment (you cannot merge into ``None``). This pins the
+    intentional conflation so a future change to a ``key in metadata``
+    check doesn't silently alter behavior.
+    """
+    bridge: BiDirectionalBridge = BiDirectionalBridge(
+        merge_fn=lambda existing, new: existing.update(new),
+    )
+    host = _host({"k": None})
+    bridge.write_outbox(host, "k", {"x": 1})
+    assert host.metadata["k"] == {"x": 1}
+
+
 # --- SubsetBridge ----------------------------------------------------- #
 
 
@@ -253,3 +271,38 @@ def test_subscribing_observability_with_real_registry() -> None:
     assert len(seen_reads) == 2
     assert seen_reads[0]["key"] == "k1"
     assert seen_reads[1]["key"] == "k2"
+
+
+def test_subscribing_rejects_async_read_callback() -> None:
+    """Dispatch is synchronous (``CallbackRegistry.fire``): an async
+    callback registered on the read topic raises ``TypeError`` rather
+    than silently creating an unawaited coroutine. This pins the
+    sync-callback-only contract the bridge advertises.
+    """
+    registry: CallbackRegistry = CallbackRegistry()
+
+    async def async_observer(payload: dict) -> None:  # pragma: no cover
+        # Never invoked — fire() raises TypeError before dispatching to any
+        # callback. (The inner pop already ran before fire(); a misconfigured
+        # async callback is a dev-time error that surfaces loudly.)
+        ...
+
+    registry.register("state_bridge:read", async_observer)
+    bridge = SubscribingBridge(InboxOnlyBridge(), registry=registry)
+    host = _host({"k": "v"})
+    with pytest.raises(TypeError, match="async callback"):
+        bridge.read_inbox(host, "k")
+
+
+def test_subscribing_rejects_async_write_callback() -> None:
+    """The write side enforces the same sync-callback-only contract."""
+    registry: CallbackRegistry = CallbackRegistry()
+
+    async def async_observer(payload: dict) -> None:  # pragma: no cover
+        ...
+
+    registry.register("state_bridge:write", async_observer)
+    bridge = SubscribingBridge(BiDirectionalBridge(), registry=registry)
+    host = _host({})
+    with pytest.raises(TypeError, match="async callback"):
+        bridge.write_outbox(host, "k", "v")

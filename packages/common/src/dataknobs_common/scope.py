@@ -17,16 +17,22 @@ Implementations choose semantics:
 - :class:`CallableProjector` — wrap a callable returning a Mapping
 - :class:`CachedProjector` — LRU-memoize an inner projector
 
-Distinct from a state-bridge ``project``:
-    A *state-bridge* — a projector whose ``project`` writes a derived
-    value into a host metadata key rather than returning a scope Mapping —
+State-bridge interop (the bots-layer ``SubsetBridge``):
+    A *state-bridge* — a bridge whose ``project`` writes a derived value
+    into a host metadata key rather than returning a scope Mapping —
     shares the method name but has different value semantics: it returns
     whatever value the consumer wants stored under a key, not a
     ``Mapping[str, Any]`` scope. The two are deliberately NOT unified; a
-    ``ScopeProjector`` always returns a Mapping. The shared method name is
-    a known collision — code accepting one Protocol must not silently
-    accept the other. (No such bridge ships today; this note records the
-    boundary so a future bridge isn't mistaken for a scope projector.)
+    ``ScopeProjector`` always returns a Mapping, and the shared method
+    name is a known collision — code accepting one Protocol must not
+    silently accept the other.
+
+    The interop is one-directional and opt-in: the bots-layer
+    ``dataknobs_bots.reasoning.state_bridge.SubsetBridge`` accepts EITHER
+    a bare callable OR a ``ScopeProjector`` (duck-typed on ``.project``),
+    so a consumer's projector drops into a bridge with no glue. The
+    dependency runs downstream only — a bridge consumes a projector; a
+    ``ScopeProjector`` never imports or depends on the bridge layer.
 
 Composition with the callback substrate:
     Callback bodies registered on a ``CallbackRegistry`` frequently need
