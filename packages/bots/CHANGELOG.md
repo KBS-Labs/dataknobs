@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `make_metadata_inbox_hook` now routes its read step through
+  `InboxOnlyBridge`. The public surface
+  (`make_metadata_inbox_hook(*, inbox_keys, merge_fn=None)`,
+  `write_to_inbox(manager, key, payload)`) and behavior (consume-on-read,
+  plain `dict.update` default merge, empty-dict no-op, multi-key support,
+  non-mapping payload WARNING) are unchanged.
 - The `KnowledgeResourceBackend` protocol (and its shared mixin) now
   documents an async-transport contract — async file methods use an async
   transport or offload blocking disk I/O off the event loop. ruff's
