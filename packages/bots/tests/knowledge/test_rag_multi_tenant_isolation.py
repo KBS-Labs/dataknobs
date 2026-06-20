@@ -821,10 +821,15 @@ async def test_rag_knowledge_base_advertises_tenant_scoped_chunks_only() -> None
 
 
 @pytest.mark.asyncio
-async def test_ingestion_manager_advertises_tenant_scoped_chunks_only() -> None:
+async def test_ingestion_manager_advertises_chunk_and_state_not_locks() -> None:
     """Symmetric assertion against :class:`KnowledgeIngestionManager`.
-    Both bound and unbound managers advertise the chunk-layer
-    capability and do NOT over-claim the state/locks layers.
+    Both bound and unbound managers advertise the chunk-layer capability
+    AND the per-tenant state capabilities (a tenant-bound manager routes
+    every backend state operation through a per-tenant context, so
+    ``TENANT_SCOPED_STATE`` / ``SNAPSHOT_ISOLATION`` hold structurally),
+    but do NOT over-claim the locks layer — concurrent same-tenant
+    ingests serialize through the orchestrator's distributed lock, not a
+    manager/backend lock.
     """
     kb = await _make_shared_kb()
     backend = InMemoryKnowledgeBackend()
@@ -845,8 +850,16 @@ async def test_ingestion_manager_advertises_tenant_scoped_chunks_only() -> None:
             Capability.TENANT_SCOPED_CHUNKS
             in KnowledgeIngestionManager.supported_capabilities()
         )
-        assert mgr.supports(Capability.TENANT_SCOPED_STATE) is False
+        # The state capabilities are structural (always advertised).
+        assert mgr.supports(Capability.TENANT_SCOPED_STATE) is True
+        assert mgr.supports(Capability.SNAPSHOT_ISOLATION) is True
+        assert (
+            Capability.TENANT_SCOPED_STATE
+            in KnowledgeIngestionManager.supported_capabilities()
+        )
+        # Locking is the orchestrator's contract, not the manager's.
         assert mgr.supports(Capability.TENANT_SCOPED_LOCKS) is False
+        assert mgr.supports(Capability.TRANSACTIONAL_METADATA) is False
 
 
 @pytest.mark.asyncio

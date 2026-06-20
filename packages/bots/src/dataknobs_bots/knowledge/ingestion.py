@@ -21,6 +21,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     DynamicCapabilityMixin,
 )
+from dataknobs_common.tenancy import BoundTenantContext
 
 from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
 from .storage import IngestionStatus, InvalidVersionError
@@ -28,6 +29,7 @@ from .storage import IngestionStatus, InvalidVersionError
 if TYPE_CHECKING:
     from dataknobs_common.events import EventBus
     from dataknobs_common.ratelimit import RateLimiter
+    from dataknobs_common.tenancy import TenantContext
     from dataknobs_xization.ingestion import KnowledgeBaseConfig
 
     from .rag import RAGKnowledgeBase
@@ -208,9 +210,29 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
     # :meth:`_compose_extra_metadata` AND into every destination write/
     # delete filter via :meth:`_scope_for_tenant`, so two managers bound
     # to distinct tenants but sharing a destination cannot collide.
-    # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared:
-    # ingestion-status writes through :class:`KnowledgeResourceBackend`
-    # remain per-domain at the contract layer.
+    #
+    # A tenant-bound manager also routes every backend state operation
+    # (``set_ingestion_status`` / ``get_info`` / ``get_checksum`` /
+    # ``has_changes_since`` / ``list_changes_since``) through a
+    # per-tenant :class:`~dataknobs_common.tenancy.BoundTenantContext`
+    # (see :meth:`_resolve_context`), so the backend isolates the
+    # tenant's ingestion-status metadata under the tenant's state-key
+    # prefix on a shared backend. ``Capability.TENANT_SCOPED_STATE`` and
+    # ``Capability.SNAPSHOT_ISOLATION`` therefore hold structurally: the
+    # class always has the ctx-routing code path; whether a given
+    # instance is currently isolating is the ``self._tenant_id is not
+    # None`` binding check (mirroring how :class:`RAGKnowledgeBase`
+    # declares ``TENANT_SCOPED_CHUNKS`` structurally). Change detection
+    # resolves against the shared domain *content* lineage — content,
+    # and the snapshot lineage derived from it, stay domain-keyed; only
+    # ingest status is per-tenant.
+    #
+    # ``TENANT_SCOPED_LOCKS`` / ``TRANSACTIONAL_METADATA`` are
+    # deliberately NOT declared: the manager and backends are lock-free.
+    # Concurrent same-tenant ingests serialize through the
+    # :class:`~dataknobs_bots.knowledge.orchestration.IngestOrchestrator`'s
+    # tenant-scoped :class:`~dataknobs_common.locks.DistributedLock`, not
+    # a manager/backend lock.
     #
     # The static set holds only the always-true capabilities.
     # ``EVENT_BUS_EMISSION`` is config-dependent — a manager constructed
@@ -220,6 +242,8 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
         {
             Capability.TENANT_SCOPED_CHUNKS,
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
             Capability.CALLBACK_REGISTRY,
             Capability.INGEST_EVENT_PUBLICATION,
         }
@@ -327,6 +351,28 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             if self._event_bus is not None:
                 self._lifecycle_callbacks.also_publish_to(self._event_bus)
         return self._lifecycle_callbacks
+
+    def _resolve_context(self, domain_id: str) -> TenantContext | None:
+        """The :class:`TenantContext` for a per-domain state operation.
+
+        Returns ``BoundTenantContext(self._tenant_id, domain_id)`` when
+        this manager is tenant-bound, else ``None`` — which every
+        backend treats as the single-tenant case (byte-identical state
+        paths to an unbound manager). Returning ``None`` (rather than a
+        throwaway ``SingleTenantContext``) keeps the unbound path's
+        backend state calls literally unchanged: an unbound manager
+        passes ``ctx=None``, exactly as before this routing existed.
+
+        Threaded into every backend state call so a tenant-bound
+        manager isolates its ingestion **status** under the tenant's
+        state-key prefix on a shared backend. Content — and the snapshot
+        lineage derived from it — stays domain-keyed; a tenant's change
+        detection resolves against the shared content lineage and stays
+        minimal.
+        """
+        if self._tenant_id is not None:
+            return BoundTenantContext(self._tenant_id, domain_id)
+        return None
 
     def _scope_for_tenant(self, base: Mapping[str, Any]) -> dict[str, Any]:
         """AND-compose the bound ``tenant_id`` into a write/delete filter.
@@ -458,6 +504,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         """
         effective_mode = self._resolve_swap_mode(clear_existing, swap_mode)
         result = IngestionResult(domain_id=domain_id)
+        ctx = self._resolve_context(domain_id)
         await self._publish_ingest_start(domain_id, result.started_at)
         failed = False
 
@@ -467,7 +514,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # persisted token. No-op when not interrupted.
             await self._reconcile_interrupted_swap(domain_id)
             await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.INGESTING
+                domain_id, IngestionStatus.INGESTING, ctx=ctx
             )
             logger.info("Starting ingestion for domain: %s", domain_id)
 
@@ -488,7 +535,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             failed = True
             logger.error("Ingestion failed for %s: %s", domain_id, e)
             await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.ERROR, str(e)
+                domain_id, IngestionStatus.ERROR, str(e), ctx=ctx
             )
             raise
         finally:
@@ -795,7 +842,10 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 tombstone_scope, {"_stale": True}
             )
         await self._source.set_ingestion_status(
-            domain_id, IngestionStatus.SWAPPING, generation=generation
+            domain_id,
+            IngestionStatus.SWAPPING,
+            generation=generation,
+            ctx=self._resolve_context(domain_id),
         )
         logger.debug(
             "Tombstoned existing chunks for domain %s "
@@ -931,7 +981,8 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         Returns ``True`` if a reconcile was performed, ``False`` if the
         domain was not in an interrupted-swap state (a safe no-op).
         """
-        info = await self._source.get_info(domain_id)
+        ctx = self._resolve_context(domain_id)
+        info = await self._source.get_info(domain_id, ctx=ctx)
         if (
             info is None
             or info.ingestion_status is not IngestionStatus.SWAPPING
@@ -950,7 +1001,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 )
             )
         await self._source.set_ingestion_status(
-            domain_id, IngestionStatus.READY
+            domain_id, IngestionStatus.READY, ctx=ctx
         )
         logger.warning(
             "Reconciled an interrupted TOMBSTONE swap for domain %s "
@@ -995,6 +1046,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             if result.success
             else IngestionStatus.ERROR,
             error_msg,
+            ctx=self._resolve_context(domain_id),
         )
 
         logger.info(
@@ -1093,7 +1145,11 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         """
         if last_version is not None:
             try:
-                has_changes = await self._source.has_changes_since(domain_id, last_version)
+                has_changes = await self._source.has_changes_since(
+                    domain_id,
+                    last_version,
+                    ctx=self._resolve_context(domain_id),
+                )
                 if not has_changes:
                     logger.debug(
                         "No changes since version %s for domain: %s",
@@ -1174,9 +1230,10 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         # stay outside the lifecycle ``try`` below — otherwise a failure
         # inside the delegated ``ingest`` would get its terminal "error"
         # status and ``result.finish()`` written a second time here.
+        ctx = self._resolve_context(domain_id)
         try:
             change = await self._source.list_changes_since(
-                domain_id, since_version
+                domain_id, since_version, ctx=ctx
             )
         except InvalidVersionError:
             logger.warning(
@@ -1195,7 +1252,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 "Incremental ingestion failed for %s: %s", domain_id, e
             )
             await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.ERROR, str(e)
+                domain_id, IngestionStatus.ERROR, str(e), ctx=ctx
             )
             raise
 
@@ -1208,7 +1265,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # persisted token. No-op when not interrupted.
             await self._reconcile_interrupted_swap(domain_id)
             await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.INGESTING
+                domain_id, IngestionStatus.INGESTING, ctx=ctx
             )
 
             changed_paths = {f.path for f in change.added} | {
@@ -1263,7 +1320,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 "Incremental ingestion failed for %s: %s", domain_id, e
             )
             await self._source.set_ingestion_status(
-                domain_id, IngestionStatus.ERROR, str(e)
+                domain_id, IngestionStatus.ERROR, str(e), ctx=ctx
             )
             raise
         finally:
@@ -1293,6 +1350,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             Canonical snapshot identity, or ``None`` if domain doesn't
             exist
         """
-        if await self._source.get_info(domain_id) is None:
+        ctx = self._resolve_context(domain_id)
+        if await self._source.get_info(domain_id, ctx=ctx) is None:
             return None
-        return await self._source.get_checksum(domain_id)
+        return await self._source.get_checksum(domain_id, ctx=ctx)
