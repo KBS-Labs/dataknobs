@@ -81,6 +81,9 @@ class Capability(str, Enum):
     KEY_PATTERN_FILTERING = "key_pattern_filtering"
     CHANGE_SUBSCRIPTION = "change_subscription"
 
+    # ---- Scope projection ----
+    SCOPE_PROJECTOR_READ_ONLY = "scope_projector_read_only"
+
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     "tenancy": frozenset({
@@ -106,6 +109,9 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     "composition": frozenset({
         Capability.KEY_PATTERN_FILTERING,
         Capability.CHANGE_SUBSCRIPTION,
+    }),
+    "scope_projection": frozenset({
+        Capability.SCOPE_PROJECTOR_READ_ONLY,
     }),
 })
 """Family → capability-member mapping. Family membership is

@@ -169,6 +169,15 @@ from dataknobs_common.resolver import (
     partition_resolver_backends,
     resolver_backends,
 )
+from dataknobs_common.scope import (
+    CachedProjector,
+    CallableProjector,
+    ChainedProjector,
+    IdentityProjector,
+    ReadOnlyProjector,
+    ScopeProjector,
+    WhitelistProjector,
+)
 from dataknobs_common.serialization import (
     Serializable,
     deserialize,
@@ -334,6 +343,14 @@ __all__ = [
     "JoiningPartitionResolver",
     "partition_resolver_backends",
     "resolver_backends",
+    # Scope projectors
+    "ScopeProjector",
+    "IdentityProjector",
+    "ReadOnlyProjector",
+    "WhitelistProjector",
+    "ChainedProjector",
+    "CallableProjector",
+    "CachedProjector",
     # Serialization
     "Serializable",
     "serialize",

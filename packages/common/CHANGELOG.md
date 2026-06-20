@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `ScopeProjector` Protocol plus `IdentityProjector`, `ReadOnlyProjector`,
+  `WhitelistProjector`, `ChainedProjector`, `CallableProjector`, and
+  `CachedProjector` reference implementations in `dataknobs_common.scope`
+  (exported from the package root). A `ScopeProjector` projects a runtime
+  state-bearing value into a `Mapping[str, Any]` suitable for a safe-eval
+  scope, a template-evaluation context, or any key-lookup-by-name surface.
+  Consumers compose projectors to expose state read-only
+  (`ReadOnlyProjector`), filter to a declared key set
+  (`WhitelistProjector`), chain projections with later-wins merge
+  (`ChainedProjector`), or memoize an expensive projection
+  (`CachedProjector`). The `Capability.SCOPE_PROJECTOR_READ_ONLY` member
+  lets a host advertise that its eval scope is read-only-wrapped.
 - `aiter_sync_in_thread(make_iter, *, max_buffer=32)` in
   `dataknobs_common.async_iter` (exported from the package root). Drives a
   *lazy, blocking* synchronous iterator on a worker thread and pumps its
