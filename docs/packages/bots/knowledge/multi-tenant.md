@@ -174,12 +174,78 @@ The default `_RESERVED_METADATA_KEYS` deliberately does NOT include
 caller-augmented fold keys (`region` above) — a subclass that wants
 to reserve them additionally overrides both ClassVars in lockstep.
 
+## Per-tenant ingest state on a shared backend
+
+Stamping per-tenant chunks (above) keeps tenants' *content* disjoint on
+a shared vector store. The matching concern on the *source* side is
+ingest **state** — the ingestion status the manager records on the
+backend (`PENDING` → `INGESTING` → `READY` / `ERROR`, plus the
+in-flight TOMBSTONE generation token). On a backend shared by several
+tenants, each tenant must track its own ingestion status independently.
+
+A tenant-bound `KnowledgeIngestionManager` handles this automatically:
+it routes every backend state operation (`set_ingestion_status`,
+`get_info`, `get_checksum`, `has_changes_since`, `list_changes_since`)
+through a per-tenant context, so the backend isolates that tenant's
+ingestion-status metadata under the tenant's state-key prefix.
+
+```python
+shared_backend = S3KnowledgeBackend.from_config({
+    "bucket": "acme-knowledge",
+    "prefix": "knowledge/",
+})
+await shared_backend.initialize()
+
+mgr_a = KnowledgeIngestionManager(
+    source=shared_backend, destination=shared_kb, tenant_id="acme"
+)
+mgr_b = KnowledgeIngestionManager(
+    source=shared_backend, destination=shared_kb, tenant_id="umbrella"
+)
+
+# Each manager's ingest records its own ingestion status — tenant
+# "acme"'s status write does not touch tenant "umbrella"'s state doc,
+# nor the shared per-domain default view.
+await mgr_a.ingest(domain_id="prompts")
+# Note: get_current_version returns the *content* identity, which is shared
+# across every tenant of this domain — it is NOT a per-tenant value. Per-tenant
+# ingest *status* is what differs (read it via the backend's get_info(ctx=...)).
+version = await mgr_a.get_current_version("prompts")  # shared content identity
+```
+
+**Content vs. state.** Content (the files under `{domain_id}/content/`)
+is shared by `domain_id` — two tenants of the same knowledge base read
+the same bytes, and `get_checksum` returns the same content identity for
+both. Only ingest *status* is per-tenant. Consequently a tenant's change
+detection resolves against the shared domain content lineage and stays
+**minimal**: a tenant that has never recorded a snapshot of its own
+still gets a precise file-level diff (not a forced full re-ingest) when
+it ingests changes since a prior content version. A tenant that has not
+ingested yet sees a fresh default `get_info` view (`PENDING`, no
+generation token) — never another tenant's or the domain's in-flight
+state.
+
+**Single-tenant readers: no change required.** An unbound manager
+(`tenant_id` omitted) passes no context, which every backend treats as
+the single-tenant case — storage paths and behavior are identical to a
+deployment that never adopted tenant binding.
+
+**Cross-replica serialization.** The manager and backends are
+lock-free. Two replicas running the *same* tenant's ingest for the
+*same* domain serialize through the `IngestOrchestrator`'s tenant-scoped
+`DistributedLock` (process-local by default; cross-replica when
+configured with a `postgres` lock backend) — see the ingest-orchestrator
+docs. The manager does not (and should not) hold its own lock.
+
 ## Capability advertisement
 
 `RAGKnowledgeBase` and `KnowledgeIngestionManager` declare
 `Capability.TENANT_SCOPED_CHUNKS` through the
-`CapabilityContract` protocol from `dataknobs_common`. Consumers
-fail-fast at config-load time:
+`CapabilityContract` protocol from `dataknobs_common`. A tenant-bound
+`KnowledgeIngestionManager` additionally declares
+`Capability.TENANT_SCOPED_STATE` and `Capability.SNAPSHOT_ISOLATION`
+(both structural — the class always has the ctx-routing code path).
+Consumers fail-fast at config-load time:
 
 ```python
 from dataknobs_common.capabilities import (
@@ -205,24 +271,33 @@ independently:
 
 | Capability | Layer | Activated where |
 |---|---|---|
-| `TENANT_SCOPED_CHUNKS` | Content / chunk storage | `RAGKnowledgeBase` + `KnowledgeIngestionManager` (this page) |
-| `TENANT_SCOPED_STATE` | Backend bookkeeping (ingestion status, snapshots, checksums) | `KnowledgeResourceBackend` (future deliverable) |
-| `TENANT_SCOPED_LOCKS` | Cross-replica concurrency control | `DistributedLock` (future deliverable) |
+| `TENANT_SCOPED_CHUNKS` | Content / chunk storage | `RAGKnowledgeBase` + `KnowledgeIngestionManager` |
+| `TENANT_SCOPED_STATE` | Backend bookkeeping (ingestion status) | `KnowledgeResourceBackend` + a tenant-bound `KnowledgeIngestionManager` (see "Per-tenant ingest state on a shared backend" below) |
+| `TENANT_SCOPED_LOCKS` | Cross-replica concurrency control | `IngestOrchestrator`'s tenant-scoped `DistributedLock` |
 
-Declaring these as distinct identifiers avoids over-claiming.
-A `RAGKnowledgeBase` declaring `TENANT_SCOPED_CHUNKS` authentically
-supports per-chunk tenant scoping; the same class declaring
-`TENANT_SCOPED_STATE` would over-claim because the underlying
-`KnowledgeResourceBackend.set_ingestion_status` is still per-domain.
+Declaring these as distinct identifiers avoids over-claiming. A
+`RAGKnowledgeBase` declaring `TENANT_SCOPED_CHUNKS` authentically
+supports per-chunk tenant scoping; it declares **only** that —
+`RAGKnowledgeBase` makes no backend-state calls (it delegates ingest
+state to `KnowledgeIngestionManager`), so it would over-claim by
+declaring `TENANT_SCOPED_STATE`. The **manager** legitimately declares
+both: a tenant-bound `KnowledgeIngestionManager` routes every backend
+state operation through a per-tenant context, and the in-tree backends
+isolate the tenant's ingestion-status metadata under the tenant's
+state-key prefix.
 
 The in-tree backends (`FileKnowledgeBackend`,
 `InMemoryKnowledgeBackend`, `S3KnowledgeBackend`) inherit
-`CapabilityMixin` today via the shared
-`KnowledgeResourceBackendMixin` so the contract surface is uniformly
-present, but declare an empty `SUPPORTED_CAPABILITIES` set —
-per-backend widening (e.g. `STREAMING_READS`, `CHANGE_SUBSCRIPTION`,
-`KEY_PATTERN_FILTERING`, `TENANT_SCOPED_STATE`) is captured in the
-roadmap rather than advertised speculatively.
+`CapabilityMixin` via the shared `KnowledgeResourceBackendMixin` and
+advertise the state-observability / change-subscription surface they
+implement — `KEY_PATTERN_FILTERING`, `CHANGE_SUBSCRIPTION`,
+`BACKEND_STATE_OBSERVABILITY`, `CALLBACK_REGISTRY` — together with the
+two tenant-state capabilities they support: `TENANT_SCOPED_STATE`
+(state methods honor `ctx.state_key_prefix()`) and `SNAPSHOT_ISOLATION`
+(a tenant's change detection resolves against the shared domain content
+lineage). They do **not** advertise `TENANT_SCOPED_LOCKS` /
+`TRANSACTIONAL_METADATA` — backends are lock-free; cross-replica
+serialization lives in the `IngestOrchestrator`.
 
 ## Tombstone swap interaction
 

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A tenant-bound `KnowledgeIngestionManager` (constructed with
+  `tenant_id`) isolates its per-tenant ingestion **status** on a shared
+  knowledge backend by routing every backend state operation through a
+  per-tenant context. Two managers bound to different tenants but sharing
+  one backend track independent ingestion status; an unbound manager's
+  storage paths are identical to single-tenant. Change detection stays
+  minimal for every tenant: a tenant's snapshot diff resolves against the
+  shared domain content lineage (content — and the snapshot lineage
+  derived from it — is shared by `domain_id`; only ingest status is
+  per-tenant). The manager advertises `Capability.TENANT_SCOPED_STATE`
+  and `Capability.SNAPSHOT_ISOLATION` (not `Capability.TENANT_SCOPED_LOCKS`
+  — cross-replica serialization of concurrent ingests for the same tenant
+  and domain remains the ingest orchestrator's distributed lock).
 - `KnowledgeResourceBackend` state operations (`set_ingestion_status`,
   `get_info`, `get_checksum`, `has_changes_since`, `list_changes_since`)
   accept an optional keyword-only `ctx: TenantContext` argument. When
