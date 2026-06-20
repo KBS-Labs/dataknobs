@@ -207,7 +207,10 @@ mgr_b = KnowledgeIngestionManager(
 # "acme"'s status write does not touch tenant "umbrella"'s state doc,
 # nor the shared per-domain default view.
 await mgr_a.ingest(domain_id="prompts")
-status_a = (await mgr_a.get_current_version("prompts"))  # acme's view
+# Note: get_current_version returns the *content* identity, which is shared
+# across every tenant of this domain — it is NOT a per-tenant value. Per-tenant
+# ingest *status* is what differs (read it via the backend's get_info(ctx=...)).
+version = await mgr_a.get_current_version("prompts")  # shared content identity
 ```
 
 **Content vs. state.** Content (the files under `{domain_id}/content/`)
