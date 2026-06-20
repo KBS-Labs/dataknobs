@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `TenantContext` Protocol plus `SingleTenantContext`,
+  `BoundTenantContext`, `PrefixedTenantContext`, and
+  `SharedCorpusTenantContext` reference implementations in
+  `dataknobs_common.tenancy` (exported from the package root). A
+  `TenantContext` describes the tenant scope of a backend operation;
+  backends use it to compute distributed-lock keys (`lock_key(operation)`)
+  and state-storage prefixes (`state_key_prefix()`) for per-tenant
+  isolation, and to compare scopes (`matches(other)`). `SingleTenantContext`
+  is the backwards-compatible default — its empty state prefix preserves the
+  on-disk state layout of single-tenant code written before the context
+  surface existed, its lock keys follow a stable canonical format, and it
+  accepts `str` equality for incremental migration. Multi-tenant impls
+  compose tenant + domain into lock keys and state prefixes. Build a context
+  from a config mapping with
+  `create_tenant_context({...})` or from `DOMAIN_ID` / `TENANT_ID`
+  environment variables with `tenant_context_from_env()`.
 - `Capability.STATE_BRIDGE_INBOX_ONLY` and
   `Capability.STATE_BRIDGE_BIDIRECTIONAL` members (with a `state_bridge`
   entry in `CAPABILITY_FAMILIES`). A host advertises these to declare how
