@@ -84,6 +84,10 @@ class Capability(str, Enum):
     # ---- Scope projection ----
     SCOPE_PROJECTOR_READ_ONLY = "scope_projector_read_only"
 
+    # ---- State bridging ----
+    STATE_BRIDGE_INBOX_ONLY = "state_bridge_inbox_only"
+    STATE_BRIDGE_BIDIRECTIONAL = "state_bridge_bidirectional"
+
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     "tenancy": frozenset({
@@ -112,6 +116,10 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
     }),
     "scope_projection": frozenset({
         Capability.SCOPE_PROJECTOR_READ_ONLY,
+    }),
+    "state_bridge": frozenset({
+        Capability.STATE_BRIDGE_INBOX_ONLY,
+        Capability.STATE_BRIDGE_BIDIRECTIONAL,
     }),
 })
 """Family → capability-member mapping. Family membership is
