@@ -29,5 +29,11 @@ from dataknobs_bots.prompts.envelope import (
     PromptEnvelope,
     PromptEnvelopeStyle,
 )
+from dataknobs_bots.prompts.scope import JinjaInputsProjector
 
-__all__ = ["SECTION_LABELS", "PromptEnvelope", "PromptEnvelopeStyle"]
+__all__ = [
+    "SECTION_LABELS",
+    "JinjaInputsProjector",
+    "PromptEnvelope",
+    "PromptEnvelopeStyle",
+]

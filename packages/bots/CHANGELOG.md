@@ -188,6 +188,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `JinjaInputsProjector` in `dataknobs_bots.prompts.scope` (re-exported
+  from `dataknobs_bots.prompts`). A `ScopeProjector` implementation that
+  evaluates declarative Jinja-expression inputs against a base context;
+  lazily imports `jinja2`. Sandboxed by default — when no `env=` is
+  supplied it builds a `SandboxedEnvironment` (via `create_template_env`),
+  so attribute-traversal escapes raise rather than leak interpreter
+  internals; an unsandboxed environment is opt-in via `env=`. The
+  `strict=` flag (default `True`) selects whether a failing expression
+  propagates or is logged-and-skipped (`strict=False`).
+- Wizard stages accept a declarative `inputs:` mapping
+  (`name -> Jinja expression`). The renderer evaluates each expression
+  against the assembled template context — through the wizard's sandboxed
+  environment — and merges the derived variables into the template scope
+  (later-wins), so response templates can reference computed values
+  without subclassing the renderer. Declared inputs are evaluated against
+  author params, collected user data, and any extra context
+  (bank/artifact). A malformed expression degrades gracefully: it is
+  logged and skipped, never aborting the stage render.
 - `dataknobs_bots.knowledge.events` module — the canonical
   knowledge-layer event topic constants (`INGEST_DOMAIN_START`,
   `INGEST_DOMAIN_END`, `INGEST_METADATA_WRITE`,

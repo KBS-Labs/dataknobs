@@ -120,6 +120,11 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     _StageField("is_end", default=False),
     # Prompts and templates
     _StageField("prompt", default=""),
+    # Declarative derived template variables: name -> Jinja expression,
+    # evaluated against the render context and merged into the template
+    # scope (later-wins) so response templates can reference computed
+    # values without a consumer subclassing the renderer.
+    _StageField("inputs"),
     _StageField("response_template"),
     _StageField("clarification_template"),
     _StageField("confirmation_template"),

@@ -196,6 +196,10 @@ class StageConfig(StructuredConfig):
     reasoning_config: dict[str, Any] | None = None
     max_iterations: int | None = None
     extraction_model: str | None = None
+    # Declarative derived template variables (name -> Jinja expression),
+    # evaluated against the render context and merged into the template
+    # scope at render time.
+    inputs: dict[str, str] | None = None
     # Response generation
     response_template: str | None = None
     clarification_template: str | None = None

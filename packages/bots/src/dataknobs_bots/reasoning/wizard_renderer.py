@@ -133,6 +133,38 @@ class WizardRenderer:
         }
         if extra_context:
             context.update(extra_context)
+
+        # Declarative ``inputs:`` — evaluate each Jinja expression against
+        # the assembled context and merge the derived variables back in
+        # (later-wins). The author-controlled context is projected first
+        # (IdentityProjector), then the declarative inputs may override.
+        # Evaluating against the full context means inputs can reference
+        # author params, user data, and any extra_context (bank/artifact).
+        stage_inputs = stage.get("inputs")
+        if stage_inputs:
+            from dataknobs_common.scope import (
+                ChainedProjector,
+                IdentityProjector,
+            )
+
+            from dataknobs_bots.prompts.scope import JinjaInputsProjector
+
+            projector = ChainedProjector(
+                IdentityProjector(),
+                JinjaInputsProjector(
+                    stage_inputs,
+                    base_context=context,
+                    env=self._jinja_env,
+                    # Degrade gracefully: a malformed author expression
+                    # skips (logged) rather than raising out of
+                    # build_context. build_context is called outside the
+                    # per-item guard in render_list and can raise
+                    # non-TemplateError from expression evaluation, so the
+                    # resilience must live here, not in the callers.
+                    strict=False,
+                ),
+            )
+            context = dict(projector.project(context))
         return context
 
     # ------------------------------------------------------------------
