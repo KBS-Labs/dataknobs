@@ -21,7 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty, e.g. a `SingleTenantContext` — preserves single-tenant behavior
   and storage paths exactly. The in-tree file, S3, and in-memory
   backends advertise `Capability.TENANT_SCOPED_STATE` and
-  `Capability.SNAPSHOT_ISOLATION`.
+  `Capability.SNAPSHOT_ISOLATION`. Snapshot *versions* are content
+  identities and the snapshot *map* is shared domain content state, so
+  per-tenant change detection (`has_changes_since` / `list_changes_since`
+  with a `ctx`) diffs against the shared domain-keyed content-snapshot
+  lineage — a tenant with no tenant-scoped snapshot of its own still gets
+  a minimal diff rather than a forced full re-ingest. `get_info` for a
+  tenant that has not written ingest state yet returns a fresh default
+  view (`PENDING`, no `generation` token) uniformly across all three
+  backends — never the shared domain view.
 - `StateBridge[InboxT, OutboxT]` Protocol with `InboxOnlyBridge`,
   `PeekBridge`, `BiDirectionalBridge`, `SubsetBridge`, and
   `SubscribingBridge` reference implementations in

@@ -167,3 +167,80 @@ async def test_file_snapshot_store_is_tenant_isolated(tmp_path) -> None:
         )
 
     await b.close()
+
+
+@pytest.mark.parametrize("kind", ["memory", "file"])
+async def test_tenant_change_detection_uses_shared_content_snapshot(
+    kind, tmp_path
+) -> None:
+    """A tenant sees a *minimal* diff against the shared domain-keyed
+    content snapshot lineage — even though it never recorded a
+    tenant-scoped snapshot itself.
+
+    Content mutations (``put_file``) record snapshots under the
+    domain-keyed store (content is domain-keyed, not tenant state). The
+    per-tenant snapshot store is only ever populated by an upper layer
+    that has not been wired yet, so without a fallback a tenant's
+    change detection against any prior version would hit an unresolvable
+    version and force a full re-ingest on every content change. The
+    change-detection layer falls back to the shared lineage so per-tenant
+    diffs stay minimal.
+    """
+    b = await _build(kind, tmp_path)
+    await b.create_kb("kb")
+    await b.put_file("kb", "a.md", b"hello")
+    v1 = await b.get_checksum("kb")
+
+    tenant = BoundTenantContext("alpha", "kb")
+    # The tenant adds a file — content version advances. The tenant never
+    # recorded a tenant-scoped snapshot for v1 (only the domain-keyed
+    # content mutation did).
+    await b.put_file("kb", "b.md", b"world")
+
+    changes = await b.list_changes_since("kb", v1, ctx=tenant)
+    assert [f.path for f in changes.added] == ["b.md"]
+    assert not changes.modified
+    assert not changes.deleted
+    assert await b.has_changes_since("kb", v1, ctx=tenant)
+
+    await b.close()
+
+
+async def test_fresh_tenant_get_info_is_default_view_across_backends(
+    tmp_path,
+) -> None:
+    """A tenant with no ingest state yet gets a fresh DEFAULT view on every
+    backend — not the shared domain view.
+
+    Regression: the memory backend returned the shared domain-keyed
+    ``KnowledgeBaseInfo`` for a fresh tenant, leaking the domain's
+    ``ingestion_status`` and in-flight ``generation`` token (load-bearing
+    for TOMBSTONE-swap reconciliation), while file/S3 returned a fresh
+    default. A fresh tenant must observe identical default state on every
+    backend.
+    """
+    mem = InMemoryKnowledgeBackend()
+    await mem.initialize()
+    fil = FileKnowledgeBackend(str(tmp_path / "kb"))
+    await fil.initialize()
+
+    fresh = BoundTenantContext("newcomer", "kb")
+    for b in (mem, fil):
+        await b.create_kb("kb")
+        # Domain-level state: a non-default status plus an in-flight
+        # generation token (as a mid-swap domain would carry).
+        await b.set_ingestion_status("kb", "ingesting", generation="gen-1")
+
+    mem_info = await mem.get_info("kb", ctx=fresh)
+    fil_info = await fil.get_info("kb", ctx=fresh)
+    assert mem_info is not None and fil_info is not None
+
+    # Identical fresh default on both backends...
+    assert mem_info.ingestion_status == fil_info.ingestion_status
+    assert mem_info.generation == fil_info.generation
+    # ...and specifically NOT the leaked domain status/generation.
+    assert mem_info.generation is None
+    assert str(mem_info.ingestion_status) != str("ingesting")
+
+    await mem.close()
+    await fil.close()

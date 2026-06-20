@@ -256,7 +256,7 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
                 added=[], modified=[], deleted=[], version=current_version
             )
 
-        snapshot = await self._load_snapshot(domain_id, version, ctx=ctx)
+        snapshot = await self._load_content_snapshot(domain_id, version, ctx)
         added: list[KnowledgeFile] = []
         modified: list[KnowledgeFile] = []
         for path, file in current.items():
@@ -295,6 +295,40 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         except InvalidVersionError:
             return True
 
+    async def _load_content_snapshot(
+        self,
+        domain_id: str,
+        version: str,
+        ctx: TenantContext | None,
+    ) -> dict[str, str]:
+        """Resolve a content ``version`` to its snapshot, tenant-first.
+
+        The change-detection policy layer over :meth:`_load_snapshot`.
+        Snapshot *versions* are content identities (the value
+        :meth:`get_checksum` returns is the same for every tenant of a
+        domain) and the snapshot *map* is shared domain content state.
+        Content mutations (``put_file`` / ``delete_file``) therefore
+        record snapshots only under the domain-keyed store; the
+        per-tenant snapshot store is populated solely by an upper layer
+        that may not be wired.
+
+        So a tenant whose own scope has no retained snapshot for a
+        content version falls back to the shared domain-keyed lineage
+        (``ctx=None``) rather than treating the version as unresolvable
+        and forcing a full re-ingest. This keeps per-tenant change
+        detection minimal while leaving the strict, scope-local
+        semantics of :meth:`_load_snapshot` itself unchanged. The
+        fallback only engages for a context that actually carries a
+        state prefix; single-tenant callers are byte-identical to a
+        direct :meth:`_load_snapshot` call.
+        """
+        try:
+            return await self._load_snapshot(domain_id, version, ctx=ctx)
+        except InvalidVersionError:
+            if not self._state_prefix(ctx):
+                raise
+            return await self._load_snapshot(domain_id, version, ctx=None)
+
     async def _load_snapshot(
         self,
         domain_id: str,
@@ -303,6 +337,13 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         ctx: TenantContext | None = None,
     ) -> dict[str, str]:
         """Resolve ``version`` to a ``{path: checksum}`` snapshot map.
+
+        Strict and scope-local: reads only the store selected by ``ctx``
+        (the domain-keyed store for ``ctx=None`` / an empty prefix, the
+        per-tenant store otherwise) and raises
+        :class:`InvalidVersionError` for a version not retained *in that
+        scope*. The tenant-first fallback across scopes lives in
+        :meth:`_load_content_snapshot`, the change-detection caller.
 
         Default: no per-version store ⇒ the empty snapshot. Combined
         with the equality short-circuit in :meth:`list_changes_since`

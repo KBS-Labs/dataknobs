@@ -293,17 +293,27 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
     ) -> KnowledgeBaseInfo | None:
         """Get knowledge base metadata.
 
-        KB existence/identity is keyed by ``domain_id``. When ``ctx``
-        carries a state prefix and that tenant has written ingest state,
-        the per-tenant overlay is returned; otherwise the shared
-        domain-keyed view is returned.
+        KB existence/identity is keyed by ``domain_id`` (guarded first).
+        With ``ctx=None`` / a no-prefix context the shared domain-keyed
+        view is returned (byte-identical to the pre-tenancy behavior).
+        With a tenant prefix the per-tenant overlay is returned — or, when
+        that tenant has not written ingest state yet, a *fresh default*
+        view (``PENDING`` / no ``generation``), NOT the shared domain
+        view. Returning the domain view here would leak the domain's
+        ``ingestion_status`` and in-flight ``generation`` token (load-
+        bearing for TOMBSTONE-swap reconciliation) to a tenant that never
+        wrote, and would diverge from the file / S3 backends (whose
+        per-tenant metadata-document miss yields the same fresh default).
         """
         base = self._kb_info.get(domain_id)
         if base is None:
             return None
         overlay_key = self._info_overlay_key(domain_id, ctx)
         if overlay_key is not None:
-            return self._tenant_info.get(overlay_key, base)
+            overlay = self._tenant_info.get(overlay_key)
+            if overlay is None:
+                return KnowledgeBaseInfo.from_dict({"domain_id": domain_id})
+            return overlay
         return base
 
     async def delete_kb(self, domain_id: str) -> bool:
