@@ -12,10 +12,11 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 
 from botocore.exceptions import ClientError
 
+from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_aioboto3_session
 
 from .key_layout import KnowledgeKeyKind
@@ -27,6 +28,9 @@ from .models import (
     KnowledgeFile,
     normalize_ingestion_status,
 )
+
+if TYPE_CHECKING:
+    from dataknobs_common.tenancy import TenantContext
 
 _CHANGE_DETECTION_MODES = ("snapshot", "s3_versioning")
 # head_object surfaces a missing key as HTTP "404"; get_object as
@@ -83,6 +87,18 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         await backend.close()
         ```
     """
+
+    # State methods honor ``ctx.state_key_prefix()`` — per-tenant ingest
+    # state (metadata + snapshots) is isolated under the prefix while
+    # content stays keyed by ``domain_id``. Unions onto the mixin's base
+    # set (does not replace it).
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
+        KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
+        | frozenset({
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
+        })
+    )
 
     def __init__(
         self,
@@ -251,15 +267,35 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             return f"{self._prefix}{domain_id}/{self.CONTENT_DIR}/{path}"
         return f"{self._prefix}{domain_id}/"
 
-    def _metadata_key(self, domain_id: str) -> str:
-        """Get the S3 key for a KB's metadata file."""
-        return f"{self._prefix}{domain_id}/{self.METADATA_FILE}"
+    def _metadata_key(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> str:
+        """Get the S3 key for a KB's metadata file.
 
-    def _snapshot_key(self, domain_id: str, version: str) -> str:
-        """S3 key of the snapshot object for ``version`` (snapshot mode)."""
+        With ``ctx=None`` this is the pre-tenancy key
+        (``{prefix}{domain}/_metadata.json``); a tenant context inserts
+        ``ctx.state_key_prefix()`` between the backend prefix and the
+        domain, isolating per-tenant ingest **state**.
+        """
         return (
-            f"{self._prefix}{domain_id}/{self.SNAPSHOTS_DIR}/"
-            f"{version}.json"
+            f"{self._prefix}{self._state_prefix(ctx)}"
+            f"{domain_id}/{self.METADATA_FILE}"
+        )
+
+    def _snapshot_key(
+        self,
+        domain_id: str,
+        version: str,
+        ctx: TenantContext | None = None,
+    ) -> str:
+        """S3 key of the snapshot object for ``version`` (snapshot mode).
+
+        Tenant-scoped via ``ctx`` (the per-tenant snapshot lineage lives
+        under the state prefix); ``ctx=None`` is the pre-tenancy key.
+        """
+        return (
+            f"{self._prefix}{self._state_prefix(ctx)}"
+            f"{domain_id}/{self.SNAPSHOTS_DIR}/{version}.json"
         )
 
     def key_pattern(
@@ -295,12 +331,14 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             f"(only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    async def _load_metadata(self, domain_id: str) -> dict:
-        """Load metadata from S3."""
+    async def _load_metadata(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> dict:
+        """Load metadata from S3 (tenant-scoped via ``ctx``)."""
         if not self._session:
             raise RuntimeError("Backend not initialized")
 
-        key = self._metadata_key(domain_id)
+        key = self._metadata_key(domain_id, ctx)
         try:
             async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.get_object(Bucket=self._bucket, Key=key)
@@ -311,12 +349,21 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 return {}
             raise
 
-    async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
-        """Save metadata to S3, then fire a state-write event."""
+    async def _save_metadata(
+        self,
+        domain_id: str,
+        metadata: dict,
+        ctx: TenantContext | None = None,
+    ) -> None:
+        """Save metadata to S3, then fire a state-write event.
+
+        Tenant-scoped via ``ctx`` (the per-tenant metadata object lives
+        under the state prefix); ``ctx=None`` writes the pre-tenancy key.
+        """
         if not self._session:
             raise RuntimeError("Backend not initialized")
 
-        key = self._metadata_key(domain_id)
+        key = self._metadata_key(domain_id, ctx)
         body = json.dumps(metadata, indent=2, default=str).encode("utf-8")
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.put_object(
@@ -583,12 +630,20 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         logger.info("Created knowledge base: s3://%s/%s%s/", self._bucket, self._prefix, domain_id)
         return kb_info
 
-    async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
-        """Get knowledge base metadata."""
+    async def get_info(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> KnowledgeBaseInfo | None:
+        """Get knowledge base metadata.
+
+        KB existence is checked against the domain-keyed metadata object;
+        the returned ingest **state** view is read from the per-tenant
+        metadata object when ``ctx`` carries a state prefix (the shared
+        single-tenant object otherwise).
+        """
         if not await self._kb_exists(domain_id):
             return None
 
-        kb_metadata = await self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id, ctx)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         return KnowledgeBaseInfo.from_dict(info_dict)
 
@@ -660,12 +715,19 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         error: str | None = None,
         *,
         generation: str | None = None,
+        ctx: TenantContext | None = None,
     ) -> None:
-        """Update ingestion status for a knowledge base."""
+        """Update ingestion status for a knowledge base.
+
+        KB existence is checked against the domain-keyed metadata object;
+        the status is written to the per-tenant metadata object when
+        ``ctx`` carries a state prefix (the shared single-tenant object
+        otherwise).
+        """
         if not await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        kb_metadata = await self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id, ctx)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
@@ -678,7 +740,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata, ctx)
 
     # --- Change Detection ---
     #
@@ -702,7 +764,11 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         }
 
     async def _record_snapshot(
-        self, domain_id: str, files: dict[str, dict]
+        self,
+        domain_id: str,
+        files: dict[str, dict],
+        *,
+        ctx: TenantContext | None = None,
     ) -> None:
         """Persist the post-mutation ``{path: checksum}`` map.
 
@@ -714,6 +780,11 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         map via the shared mixin formula). The empty KB has identity
         ``""`` and needs no object — :meth:`_load_snapshot` resolves
         ``""`` to the empty snapshot directly.
+
+        Called after :meth:`put_file` / :meth:`delete_file` (``ctx=None``
+        — content-mutation snapshots stay under the domain-keyed store,
+        byte-identical to the pre-tenancy layout); a tenant context
+        writes the snapshot object under the per-tenant state prefix.
         """
         if self._change_detection_mode != "snapshot":
             return
@@ -725,7 +796,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
-        key = self._snapshot_key(domain_id, version)
+        key = self._snapshot_key(domain_id, version, ctx)
         body = json.dumps(snapshot).encode("utf-8")
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.put_object(
@@ -742,7 +813,11 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         )
 
     async def _load_snapshot(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> dict[str, str]:
         """Resolve ``version`` to its retained ``{path: checksum}`` map.
 
@@ -750,20 +825,23 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         ``added``). Otherwise the resolution depends on
         ``change_detection_mode``; an unresolvable version raises
         :class:`InvalidVersionError` so callers fall back to a full
-        re-ingest.
+        re-ingest. The snapshot is read from the tenant-scoped store
+        when ``ctx`` carries a state prefix.
         """
         if not version:
             return {}
         if not self._session:
             raise RuntimeError("Backend not initialized")
         if self._change_detection_mode == "s3_versioning":
-            return await self._load_snapshot_from_versions(domain_id, version)
+            return await self._load_snapshot_from_versions(
+                domain_id, version, ctx
+            )
         # snapshot mode
         try:
             async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.get_object(
                     Bucket=self._bucket,
-                    Key=self._snapshot_key(domain_id, version),
+                    Key=self._snapshot_key(domain_id, version, ctx),
                 )
                 raw = await response["Body"].read()
         except ClientError as e:
@@ -777,7 +855,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         return data
 
     async def _load_snapshot_from_versions(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        ctx: TenantContext | None = None,
     ) -> dict[str, str]:
         """Walk the metadata object's S3 version history for ``version``.
 
@@ -786,11 +867,13 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         equals ``version`` is the answer. Requires bucket versioning;
         with it disabled only the current version is listed, so a stale
         ``version`` raises :class:`InvalidVersionError` (a correct,
-        non-minimal full re-ingest — never a wrong diff).
+        non-minimal full re-ingest — never a wrong diff). The metadata
+        object walked is the tenant-scoped one when ``ctx`` carries a
+        state prefix.
         """
         if not self._session:
             raise RuntimeError("Backend not initialized")
-        metadata_key = self._metadata_key(domain_id)
+        metadata_key = self._metadata_key(domain_id, ctx)
         async with self._session.client("s3", **self._client_kwargs) as s3:
             paginator = s3.get_paginator("list_object_versions")
             async for page in paginator.paginate(

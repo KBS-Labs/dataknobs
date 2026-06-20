@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from dataknobs_common.events import Event, EventBus, Subscription
+    from dataknobs_common.tenancy import TenantContext
 
     from .models import (
         ChangeSet,
@@ -68,6 +69,24 @@ class KnowledgeResourceBackend(Protocol):
     paying the message-receive cost for state writes); use
     :meth:`classify_key` for per-event filtering when patterns are not
     supported. See :class:`KnowledgeKeyKind` for the enum vocabulary.
+
+    Tenant scoping:
+        The state-touching methods (:meth:`set_ingestion_status`,
+        :meth:`get_info`, :meth:`get_checksum`,
+        :meth:`has_changes_since`, :meth:`list_changes_since`) accept an
+        optional keyword-only ``ctx: TenantContext | None = None``. When
+        a context is supplied, the backend isolates per-tenant ingest
+        **state** — the metadata document (ingestion status / generation
+        token) and the per-version snapshot lineage — under
+        ``ctx.state_key_prefix()``. **Content** (the files under
+        ``{domain_id}/content/``) stays keyed by ``domain_id`` alone, so
+        tenants of the same ``domain_id`` share content but keep
+        independent ingest state. ``ctx=None`` (and any context whose
+        ``state_key_prefix()`` is empty, e.g.
+        ``SingleTenantContext``) preserves single-tenant behavior and
+        storage paths exactly. Backends advertising this behavior
+        declare :attr:`~dataknobs_common.Capability.TENANT_SCOPED_STATE`
+        and :attr:`~dataknobs_common.Capability.SNAPSHOT_ISOLATION`.
 
     Example:
         ```python
@@ -235,11 +254,17 @@ class KnowledgeResourceBackend(Protocol):
         """
         ...
 
-    async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
+    async def get_info(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> KnowledgeBaseInfo | None:
         """Get knowledge base metadata.
 
         Args:
             domain_id: Knowledge base identifier
+            ctx: Optional tenant context. When supplied, the per-tenant
+                ingest **state** view (ingestion status / generation
+                token) is returned; ``None`` preserves the single-tenant
+                view. KB existence/identity stays keyed by ``domain_id``.
 
         Returns:
             KnowledgeBaseInfo, or None if KB doesn't exist
@@ -276,6 +301,7 @@ class KnowledgeResourceBackend(Protocol):
         error: str | None = None,
         *,
         generation: str | None = None,
+        ctx: TenantContext | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -294,6 +320,11 @@ class KnowledgeResourceBackend(Protocol):
                 written through (so any non-SWAPPING transition clears
                 a stale token). Implementations store it on
                 :attr:`KnowledgeBaseInfo.generation`.
+            ctx: Optional tenant context. When supplied, the status is
+                written to the per-tenant state store
+                (``ctx.state_key_prefix()``); ``None`` preserves the
+                single-tenant store and storage paths exactly. KB
+                existence stays keyed by ``domain_id``.
 
         Raises:
             ValueError: If ``domain_id`` doesn't exist.
@@ -308,7 +339,9 @@ class KnowledgeResourceBackend(Protocol):
 
     # --- Change Detection ---
 
-    async def get_checksum(self, domain_id: str) -> str:
+    async def get_checksum(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str:
         """Canonical content-snapshot identity of the whole KB.
 
         A stable hash over every file's ``path:checksum``, so it changes
@@ -323,6 +356,9 @@ class KnowledgeResourceBackend(Protocol):
 
         Args:
             domain_id: Knowledge base identifier
+            ctx: Optional tenant context. Scopes only the KB-existence
+                check; the returned identity is a **content** hash shared
+                across tenants of the same ``domain_id``.
 
         Returns:
             Canonical snapshot identity string (MD5 of file checksums)
@@ -332,7 +368,13 @@ class KnowledgeResourceBackend(Protocol):
         """
         ...
 
-    async def has_changes_since(self, domain_id: str, version: str) -> bool:
+    async def has_changes_since(
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
+    ) -> bool:
         """Check if the KB changed since the given snapshot version.
 
         The degenerate case of :meth:`list_changes_since`:
@@ -343,6 +385,8 @@ class KnowledgeResourceBackend(Protocol):
         Args:
             domain_id: Knowledge base identifier
             version: A value previously returned by :meth:`get_checksum`
+            ctx: Optional tenant context. Scopes the per-tenant snapshot
+                lineage consulted for the diff.
 
         Returns:
             True if the current snapshot differs from ``version``
@@ -353,7 +397,11 @@ class KnowledgeResourceBackend(Protocol):
         ...
 
     async def list_changes_since(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> ChangeSet:
         """File-level diff of the KB since the given snapshot version.
 
@@ -367,6 +415,9 @@ class KnowledgeResourceBackend(Protocol):
         Args:
             domain_id: Knowledge base identifier
             version: A value previously returned by :meth:`get_checksum`
+            ctx: Optional tenant context. Scopes the per-tenant snapshot
+                lineage consulted for the diff; ``None`` uses the
+                single-tenant store.
 
         Returns:
             A :class:`ChangeSet` (added / modified / deleted + the

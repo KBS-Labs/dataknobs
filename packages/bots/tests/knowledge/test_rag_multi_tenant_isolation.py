@@ -892,16 +892,20 @@ async def test_ingestion_manager_event_bus_emission_is_dynamic() -> None:
 
 def test_backend_subclasses_advertise_state_observability_surface() -> None:
     """In-tree backends inherit :class:`CapabilityMixin` via the shared
-    :class:`KnowledgeResourceBackendMixin` and now advertise the four
-    capabilities the mixin genuinely implements: ``KEY_PATTERN_FILTERING``
+    :class:`KnowledgeResourceBackendMixin` and advertise the four
+    capabilities the mixin genuinely implements — ``KEY_PATTERN_FILTERING``
     and ``CHANGE_SUBSCRIPTION`` (every backend ships ``classify_key`` /
     ``key_pattern`` / ``subscribe_to_changes``) plus
     ``BACKEND_STATE_OBSERVABILITY`` / ``CALLBACK_REGISTRY`` (every backend
     fires metadata / snapshot state-write events on
-    ``state_write_callbacks``). Capabilities whose behaviour has not
-    shipped (``STREAMING_READS``, ``TENANT_SCOPED_STATE``) stay
-    unadvertised; ``TENANT_SCOPED_CHUNKS`` lives at the chunk layer
-    (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
+    ``state_write_callbacks``) — together with the two tenant-state
+    capabilities each backend unions on: ``TENANT_SCOPED_STATE`` (state
+    methods honor ``ctx.state_key_prefix()``) and ``SNAPSHOT_ISOLATION``
+    (per-tenant snapshot lineage). Capabilities whose behaviour has not
+    shipped at the backend layer (``STREAMING_READS``,
+    ``TENANT_SCOPED_LOCKS``, ``TRANSACTIONAL_METADATA`` — backends do not
+    lock) stay unadvertised; ``TENANT_SCOPED_CHUNKS`` lives at the chunk
+    layer (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
     backend.
     """
     advertised = frozenset({
@@ -909,6 +913,8 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
         Capability.CHANGE_SUBSCRIPTION,
         Capability.BACKEND_STATE_OBSERVABILITY,
         Capability.CALLBACK_REGISTRY,
+        Capability.TENANT_SCOPED_STATE,
+        Capability.SNAPSHOT_ISOLATION,
     })
     backend_classes: list[type[Any]] = [
         InMemoryKnowledgeBackend,
@@ -922,14 +928,15 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
             "KnowledgeResourceBackendMixin"
         )
         assert cls.supported_capabilities() == advertised, (
-            f"{cls.__name__} must advertise the state-observability "
-            f"surface; got {cls.supported_capabilities()}"
+            f"{cls.__name__} must advertise the state-observability + "
+            f"tenant-state surface; got {cls.supported_capabilities()}"
         )
         # Capabilities whose behaviour has not shipped stay unadvertised.
         for cap in (
-            Capability.TENANT_SCOPED_CHUNKS,  # chunk layer, not backend
-            Capability.TENANT_SCOPED_STATE,   # not yet shipped
-            Capability.STREAMING_READS,        # not yet shipped
+            Capability.TENANT_SCOPED_CHUNKS,    # chunk layer, not backend
+            Capability.TENANT_SCOPED_LOCKS,     # backends do not lock
+            Capability.TRANSACTIONAL_METADATA,  # no atomic lock-wrap
+            Capability.STREAMING_READS,          # not yet shipped
         ):
             assert cls.SUPPORTED_CAPABILITIES.isdisjoint({cap}), (
                 f"{cls.__name__} unexpectedly advertises {cap.value!r}"
@@ -949,4 +956,6 @@ def test_in_memory_backend_satisfies_capability_contract_protocol() -> None:
         Capability.CHANGE_SUBSCRIPTION,
         Capability.BACKEND_STATE_OBSERVABILITY,
         Capability.CALLBACK_REGISTRY,
+        Capability.TENANT_SCOPED_STATE,
+        Capability.SNAPSHOT_ISOLATION,
     })

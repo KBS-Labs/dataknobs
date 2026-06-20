@@ -16,7 +16,9 @@ import tempfile
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, ClassVar
+
+from dataknobs_common.capabilities import Capability, CapabilityLike
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -27,6 +29,9 @@ from .models import (
     KnowledgeFile,
     normalize_ingestion_status,
 )
+
+if TYPE_CHECKING:
+    from dataknobs_common.tenancy import TenantContext
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,18 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         ```
     """
 
+    # State methods honor ``ctx.state_key_prefix()`` — per-tenant ingest
+    # state (metadata + snapshots) is isolated under the prefix while
+    # content stays keyed by ``domain_id``. Unions onto the mixin's base
+    # set (does not replace it).
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
+        KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
+        | frozenset({
+            Capability.TENANT_SCOPED_STATE,
+            Capability.SNAPSHOT_ISOLATION,
+        })
+    )
+
     def __init__(self, base_path: str | Path) -> None:
         """Initialize the file backend.
 
@@ -106,28 +123,48 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         """Close the backend. No-op for file backend."""
         self._initialized = False
 
-    def _kb_path(self, domain_id: str) -> Path:
-        """Get the path to a knowledge base directory."""
-        return self._base_path / domain_id
+    def _kb_path(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> Path:
+        """Get the path to a knowledge base's state directory.
 
-    def _metadata_path(self, domain_id: str) -> Path:
-        """Get the path to a KB's metadata file."""
-        return self._kb_path(domain_id) / self.METADATA_FILE
+        With ``ctx=None`` (the default — every content path and every
+        single-tenant call) this is ``{base}/{domain_id}``, byte-
+        identical to the pre-tenancy layout (``Path / "" `` is a no-op).
+        A tenant context inserts ``ctx.state_key_prefix()`` between the
+        base and the domain, isolating per-tenant **state**. Content
+        helpers (:meth:`_content_path`, :meth:`_file_path`) call this
+        without a context so content stays keyed by ``domain_id``.
+        """
+        return self._base_path / self._state_prefix(ctx) / domain_id
+
+    def _metadata_path(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> Path:
+        """Get the path to a KB's metadata file (tenant-scoped via ``ctx``)."""
+        return self._kb_path(domain_id, ctx) / self.METADATA_FILE
 
     def _content_path(self, domain_id: str) -> Path:
-        """Get the path to a KB's content directory."""
+        """Get the path to a KB's content directory (domain-keyed)."""
         return self._kb_path(domain_id) / self.CONTENT_DIR
 
-    def _snapshots_path(self, domain_id: str) -> Path:
-        """Get the path to a KB's per-version snapshot directory."""
-        return self._kb_path(domain_id) / self.SNAPSHOTS_DIR
+    def _snapshots_path(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> Path:
+        """Path to a KB's per-version snapshot directory (tenant-scoped)."""
+        return self._kb_path(domain_id, ctx) / self.SNAPSHOTS_DIR
 
-    def _snapshot_file(self, domain_id: str, version: str) -> Path:
+    def _snapshot_file(
+        self,
+        domain_id: str,
+        version: str,
+        ctx: TenantContext | None = None,
+    ) -> Path:
         """Path of the snapshot JSON for ``version`` (an MD5 hex id)."""
-        return self._snapshots_path(domain_id) / f"{version}.json"
+        return self._snapshots_path(domain_id, ctx) / f"{version}.json"
 
     def _file_path(self, domain_id: str, path: str) -> Path:
-        """Get the full path to a file."""
+        """Get the full path to a file (domain-keyed content)."""
         return self._content_path(domain_id) / path
 
     def key_pattern(
@@ -157,17 +194,23 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             f"(only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    def _load_metadata_sync(self, domain_id: str) -> dict:
+    def _load_metadata_sync(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> dict:
         """Load metadata from disk (blocking; call via :meth:`_load_metadata`)."""
-        meta_path = self._metadata_path(domain_id)
+        meta_path = self._metadata_path(domain_id, ctx)
         if not meta_path.exists():
             return {}
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
 
-    async def _load_metadata(self, domain_id: str) -> dict:
-        """Load metadata from disk, off the event loop."""
-        return await asyncio.to_thread(self._load_metadata_sync, domain_id)
+    async def _load_metadata(
+        self, domain_id: str, ctx: TenantContext | None = None
+    ) -> dict:
+        """Load metadata from disk, off the event loop (tenant-scoped via ``ctx``)."""
+        return await asyncio.to_thread(
+            self._load_metadata_sync, domain_id, ctx
+        )
 
     @staticmethod
     def _atomic_write_text(target: Path, body: str) -> None:
@@ -204,11 +247,27 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
                 tmp.unlink()
             raise
 
-    async def _save_metadata(self, domain_id: str, metadata: dict) -> None:
-        """Save metadata to disk atomically, then fire a state-write event."""
-        meta_path = self._metadata_path(domain_id)
+    async def _save_metadata(
+        self,
+        domain_id: str,
+        metadata: dict,
+        ctx: TenantContext | None = None,
+    ) -> None:
+        """Save metadata to disk atomically, then fire a state-write event.
+
+        With a tenant context the metadata lands under the per-tenant
+        state prefix; that directory does not exist for a fresh tenant
+        (``create_kb`` is domain-keyed), so the parent is created on
+        demand. The ``ctx=None`` path performs no extra directory work,
+        keeping single-tenant behavior byte-identical.
+        """
+        meta_path = self._metadata_path(domain_id, ctx)
         body = json.dumps(metadata, indent=2, default=str)
 
+        if self._state_prefix(ctx):
+            await asyncio.to_thread(
+                meta_path.parent.mkdir, parents=True, exist_ok=True
+            )
         await asyncio.to_thread(self._atomic_write_text, meta_path, body)
 
         await self._fire_state_write(
@@ -441,12 +500,20 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         self._content_path(domain_id).mkdir()
         return True
 
-    async def get_info(self, domain_id: str) -> KnowledgeBaseInfo | None:
-        """Get knowledge base metadata."""
+    async def get_info(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> KnowledgeBaseInfo | None:
+        """Get knowledge base metadata.
+
+        KB existence is checked against the domain-keyed directory; the
+        returned ingest **state** view is read from the per-tenant
+        metadata document when ``ctx`` carries a state prefix (the shared
+        single-tenant document otherwise).
+        """
         if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             return None
 
-        kb_metadata = await self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id, ctx)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         return KnowledgeBaseInfo.from_dict(info_dict)
 
@@ -501,12 +568,19 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         error: str | None = None,
         *,
         generation: str | None = None,
+        ctx: TenantContext | None = None,
     ) -> None:
-        """Update ingestion status for a knowledge base."""
+        """Update ingestion status for a knowledge base.
+
+        KB existence is checked against the domain-keyed directory; the
+        status is written to the per-tenant metadata document when
+        ``ctx`` carries a state prefix (the shared single-tenant document
+        otherwise).
+        """
         if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
-        kb_metadata = await self._load_metadata(domain_id)
+        kb_metadata = await self._load_metadata(domain_id, ctx)
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
@@ -519,7 +593,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(domain_id, kb_metadata)
+        await self._save_metadata(domain_id, kb_metadata, ctx)
 
     # --- Change Detection ---
     #
@@ -533,7 +607,11 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     # every mutation, mirroring InMemoryKnowledgeBackend.
 
     async def _record_snapshot(
-        self, domain_id: str, files: dict[str, dict]
+        self,
+        domain_id: str,
+        files: dict[str, dict],
+        *,
+        ctx: TenantContext | None = None,
     ) -> None:
         """Persist the post-mutation ``{path: checksum}`` map.
 
@@ -545,8 +623,12 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         snapshot directly.
 
         Called after :meth:`put_file` / :meth:`delete_file` write
-        metadata. ``files`` is the KB's file index (the value already in
-        hand at the call site) — ``{path: KnowledgeFile.to_dict()}``.
+        metadata (``ctx=None`` — content-mutation snapshots stay under
+        the domain-keyed store, byte-identical to the pre-tenancy
+        layout). ``files`` is the KB's file index (the value already in
+        hand at the call site) — ``{path: KnowledgeFile.to_dict()}``. A
+        tenant context writes the snapshot under the per-tenant state
+        prefix.
         """
         snapshot = {
             path: info.get("checksum", "") for path, info in files.items()
@@ -554,7 +636,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
-        snap_path = self._snapshot_file(domain_id, version)
+        snap_path = self._snapshot_file(domain_id, version, ctx)
         body = json.dumps(snapshot)
         wrote = await asyncio.to_thread(
             self._write_snapshot_file, snap_path, body
@@ -582,7 +664,11 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         return True
 
     async def _load_snapshot(
-        self, domain_id: str, version: str
+        self,
+        domain_id: str,
+        version: str,
+        *,
+        ctx: TenantContext | None = None,
     ) -> dict[str, str]:
         """Resolve ``version`` to its retained ``{path: checksum}`` map.
 
@@ -590,11 +676,12 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         current file diffs as ``added``). Any other version with no
         retained snapshot predates retention / is unknown ⇒
         :class:`InvalidVersionError` (callers fall back to a full
-        re-ingest).
+        re-ingest). The snapshot is read from the tenant-scoped store
+        when ``ctx`` carries a state prefix.
         """
         if not version:
             return {}
-        snap_path = self._snapshot_file(domain_id, version)
+        snap_path = self._snapshot_file(domain_id, version, ctx)
         data = await asyncio.to_thread(self._read_snapshot_file, snap_path)
         if data is None:
             raise InvalidVersionError(
