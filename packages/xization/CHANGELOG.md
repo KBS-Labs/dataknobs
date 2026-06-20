@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ruff's `ASYNC` lint family (`flake8-async`) is now enforced for this
+  package, so blocking I/O on the event loop inside `async def` code is
+  caught at lint time. See the `async-transport` authoring rule.
+
 - **`LocalDocumentSource.iter_files` no longer blocks the event loop.**
   The `Path.glob` walk and per-path `stat` are blocking filesystem
   calls; they are now collected in a single worker-thread hop via

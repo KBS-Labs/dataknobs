@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AsyncSQLiteDatabase.connect` and `AsyncDuckDBDatabase.connect` no
+  longer block the event loop creating the database directory.** For a
+  file-based database each created the parent directory with a synchronous
+  `mkdir` on the running loop; the `mkdir` is now offloaded via
+  `asyncio.to_thread`. Behavior is unchanged.
 - **`SyncS3Database` and `AsyncS3Database` now sort search results
   correctly when a sort field holds a falsy value such as a numeric `0`.**
   The async backend's inline sort key coerced any falsy value (`0`,
@@ -76,6 +81,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `AsyncDatabase` and `VectorStore` base classes now document an
+  async-transport contract — implementations use an async transport or
+  offload blocking calls off the event loop (`asyncio.to_thread` /
+  `aiter_sync_in_thread`), never blocking `open()` / `os` disk I/O behind
+  an `async def`. ruff's `ASYNC` lint family now enforces this for the
+  package.
 - **`VectorStore.close()` now documents a backing-resource ownership
   contract.** A store that built its own backing resource (connection
   pool, client, session) closes it; a store handed an externally supplied

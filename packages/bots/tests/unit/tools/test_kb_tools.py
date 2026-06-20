@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
 
 from dataknobs_bots.tools.kb_tools import (
@@ -464,3 +465,120 @@ class TestIngestKnowledgeBaseTool:
     async def test_schema(self) -> None:
         tool = IngestKnowledgeBaseTool()
         assert "chunk_size" in tool.schema["properties"]
+
+
+class TestKBToolsDoNotBlockEventLoop:
+    """Reproduce-first: the KB tools must not run disk I/O on the event loop.
+
+    All three KB tools previously did blocking filesystem work directly in
+    their ``async def execute_with_context`` — ``CheckKnowledgeSourceTool``
+    ran a ``glob``/``stat`` directory walk, and ``AddKBResourceTool`` /
+    ``IngestKnowledgeBaseTool`` did ``mkdir`` + ``write_text``. ruff's
+    ``ASYNC240`` could not see it (the calls were on attribute-bound Paths,
+    not ``Path(...)`` literals), so a file-wide ``ASYNC240`` ignore masked
+    it. Each test wraps the awaited call in :func:`assert_no_blocking`: it
+    FAILS against the pre-fix code and PASSES once the work is offloaded via
+    ``asyncio.to_thread``.
+    """
+
+    @requires_blockbuster
+    @pytest.mark.asyncio
+    async def test_check_source_does_not_block(self, tmp_path: Path) -> None:
+        (tmp_path / "intro.md").write_text("# Intro")
+        (tmp_path / "guide.txt").write_text("Guide")
+        tool = CheckKnowledgeSourceTool()
+        with assert_no_blocking():
+            result = await tool.execute_with_context(
+                _make_context({}), source_path=str(tmp_path)
+            )
+        assert result["exists"] is True
+        assert result["file_count"] == 2
+
+    @requires_blockbuster
+    @pytest.mark.asyncio
+    async def test_add_inline_resource_does_not_block(
+        self, tmp_path: Path
+    ) -> None:
+        wizard_data: dict[str, Any] = {
+            "_kb_resources": [],
+            "domain_id": "test-bot",
+        }
+        tool = AddKBResourceTool(knowledge_dir=tmp_path)
+        with assert_no_blocking():
+            result = await tool.execute_with_context(
+                _make_context(wizard_data),
+                path="faq.md",
+                resource_type="inline",
+                content="# FAQ",
+            )
+        assert result["success"] is True
+        assert (tmp_path / "test-bot" / "faq.md").exists()
+
+    @requires_blockbuster
+    @pytest.mark.asyncio
+    async def test_ingest_manifest_does_not_block(
+        self, tmp_path: Path
+    ) -> None:
+        wizard_data: dict[str, Any] = {
+            "domain_id": "test-domain",
+            "_kb_resources": [{"path": "intro.md", "type": "file"}],
+        }
+        tool = IngestKnowledgeBaseTool(knowledge_dir=tmp_path)
+        with assert_no_blocking():
+            result = await tool.execute_with_context(
+                _make_context(wizard_data), chunk_size=256
+            )
+        assert result["success"] is True
+        assert (tmp_path / "test-domain" / "manifest.json").exists()
+
+
+class TestKBToolsRejectPathTraversal:
+    """The KB tools must not write outside the configured knowledge dir.
+
+    A resource ``path`` (LLM tool argument) and ``domain_id`` (user-driven
+    wizard data) compose a destination under the knowledge directory. A
+    ``..`` segment would otherwise escape it; both tools now validate the
+    composed path stays within the knowledge directory (path traversal).
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_inline_rejects_traversal_path(
+        self, tmp_path: Path
+    ) -> None:
+        kb_dir = tmp_path / "kb"
+        kb_dir.mkdir()
+        wizard_data: dict[str, Any] = {
+            "_kb_resources": [],
+            "domain_id": "test-bot",
+        }
+        tool = AddKBResourceTool(knowledge_dir=kb_dir)
+        # Two `..` segments escape kb_dir entirely (kb/test-bot/../../x ->
+        # tmp_path/x). A single `..` (kb/test-bot/../x -> kb/x) stays within
+        # kb_dir and is intentionally allowed — see `_safe_join`'s docstring.
+        result = await tool.execute_with_context(
+            _make_context(wizard_data),
+            path="../../escape.md",
+            resource_type="inline",
+            content="pwned",
+        )
+        assert result["success"] is False
+        assert "outside" in result["error"]
+        assert not (tmp_path / "escape.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_ingest_rejects_traversal_domain_id(
+        self, tmp_path: Path
+    ) -> None:
+        kb_dir = tmp_path / "kb"
+        kb_dir.mkdir()
+        wizard_data: dict[str, Any] = {
+            "domain_id": "../escape",
+            "_kb_resources": [{"path": "intro.md", "type": "file"}],
+        }
+        tool = IngestKnowledgeBaseTool(knowledge_dir=kb_dir)
+        result = await tool.execute_with_context(
+            _make_context(wizard_data), chunk_size=256
+        )
+        assert result["success"] is False
+        assert "outside" in result["error"]
+        assert not (tmp_path / "escape" / "manifest.json").exists()

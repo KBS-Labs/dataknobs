@@ -162,6 +162,7 @@ select = [
     "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
     "RUF",  # Ruff-specific rules
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [
@@ -184,6 +185,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104", "F401"]
 "tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+# One-time ingest-setup path resolution (cwd + existence checks); setup-time,
+# not a per-record hot path.
+"src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]
 
 [tool.ruff.lint.isort]
 known-first-party = [

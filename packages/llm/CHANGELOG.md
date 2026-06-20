@@ -130,6 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so multi-word affirmative/negative phrases beat single-word
   matches; its public `bool | None` verdict is unchanged.
 
+### Fixed
+
+- **`SqliteEmbeddingCache.initialize` no longer blocks the event loop
+  creating the cache directory.** It created the database's parent
+  directory with a synchronous `mkdir` on the running loop; the `mkdir` is
+  now offloaded via `asyncio.to_thread`. Behavior is unchanged.
+
 ### Security
 
 - Acknowledged GHSA-rrmf-rvhw-rf47 (CVSS 5.3, local memory corruption

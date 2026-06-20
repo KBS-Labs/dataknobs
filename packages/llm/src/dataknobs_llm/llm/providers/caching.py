@@ -10,6 +10,7 @@ Cache backends:
       Requires ``aiosqlite`` (install via ``pip install 'dataknobs-llm[sqlite-cache]'``).
 """
 
+import asyncio
 import hashlib
 import logging
 import struct
@@ -190,7 +191,9 @@ class SqliteEmbeddingCache(EmbeddingCache):
                 "Install it with: pip install 'dataknobs-llm[sqlite-cache]'"
             ) from None
 
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            self._db_path.parent.mkdir, parents=True, exist_ok=True
+        )
         self._conn = await aiosqlite.connect(str(self._db_path))
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute(

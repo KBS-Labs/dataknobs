@@ -30,8 +30,11 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +68,68 @@ def _resolve_knowledge_dir(
     if wd_dir is not None:
         return Path(wd_dir)
     return None
+
+
+def _scan_source_dir(
+    source_path: str, patterns: Sequence[str]
+) -> tuple[Path, bool, list[str]]:
+    """Resolve, stat, and glob a knowledge-source directory (blocking).
+
+    Returns ``(resolved_path, is_dir, sorted_file_names)``. The blocking
+    ``exists``/``is_dir``/``glob``/``is_file`` filesystem walk is isolated
+    here so callers can offload it via :func:`asyncio.to_thread` and never
+    stall the event loop on a large directory tree.
+    """
+    path = Path(source_path).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        return path, False, []
+    found: list[str] = []
+    for pattern in patterns:
+        for match in path.glob(pattern):
+            if match.is_file():
+                found.append(match.name)
+    return path, True, sorted(set(found))
+
+
+def _write_text_with_parents(path: Path, text: str) -> None:
+    """Create parent directories and write ``text`` to ``path`` (blocking).
+
+    Isolated for offloading via :func:`asyncio.to_thread` — ``mkdir`` plus
+    ``write_text`` are blocking disk I/O that must not run on the loop.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _safe_join(base: Path, *parts: str) -> Path | None:
+    """Join ``parts`` onto ``base``, returning ``None`` if the result escapes.
+
+    The ``domain_id`` and resource ``path`` components flow from user-driven
+    wizard data and LLM tool arguments; a ``..`` segment or an absolute
+    component could otherwise compose a path outside the configured knowledge
+    directory (path traversal). A resource ``path`` may legitimately contain
+    subdirectories, so containment is enforced by normalizing the composed
+    path rather than rejecting separators outright.
+
+    Containment is checked **lexically** via :func:`os.path.normpath` — no
+    filesystem I/O, so the guard is safe to run on the event loop (a
+    ``Path.resolve()`` would stat the filesystem and block the loop). The
+    destination directory is created fresh by the caller, so symlink
+    resolution does not apply to the leaf. The guard trusts that ``base``
+    itself is a real (non-symlinked) directory; a symlink within ``base``
+    that, if followed, would widen the effective containment region is the
+    caller's responsibility (``base`` comes from trusted config here).
+    Returns the normalized joined ``Path`` (``..``/``.`` segments collapsed)
+    when it stays within ``base``, else ``None``.
+    """
+    candidate = base.joinpath(*parts)
+    base_norm = os.path.normpath(base)
+    candidate_norm = os.path.normpath(candidate)
+    if candidate_norm != base_norm and not candidate_norm.startswith(
+        base_norm + os.sep
+    ):
+        return None
+    return Path(candidate_norm)
 
 
 class CheckKnowledgeSourceTool(ContextAwareTool):
@@ -144,8 +209,11 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         wizard_data = _get_wizard_data_ref(context)
         patterns = file_patterns or _DEFAULT_GLOB_PATTERNS
 
-        path = Path(source_path).expanduser().resolve()
-        if not path.exists() or not path.is_dir():
+        # Resolve + stat + glob are blocking disk I/O; run them off the loop.
+        path, is_dir, found_files = await asyncio.to_thread(
+            _scan_source_dir, source_path, patterns
+        )
+        if not is_dir:
             wizard_data["source_verified"] = False
             wizard_data["files_found"] = []
             logger.debug(
@@ -158,14 +226,6 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
                 "error": f"Directory not found: {source_path}",
                 "files_found": [],
             }
-
-        # Find matching files
-        found_files: list[str] = []
-        for pattern in patterns:
-            for match in path.glob(pattern):
-                if match.is_file():
-                    found_files.append(match.name)
-        found_files = sorted(set(found_files))
 
         # Update wizard data
         wizard_data["source_verified"] = True
@@ -402,10 +462,19 @@ class AddKBResourceTool(ContextAwareTool):
                     "error": "No knowledge directory configured",
                 }
             domain_id = wizard_data.get("domain_id", "default")
-            target_dir = kb_dir / domain_id
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / path
-            target_path.write_text(content, encoding="utf-8")
+            target_path = _safe_join(kb_dir, domain_id, path)
+            if target_path is None:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Invalid resource path '{path}': resolves outside "
+                        "the knowledge directory"
+                    ),
+                }
+            # mkdir + write are blocking disk I/O; run them off the loop.
+            await asyncio.to_thread(
+                _write_text_with_parents, target_path, content
+            )
             resource["source"] = str(target_path)
             logger.debug(
                 "Wrote inline resource: %s",
@@ -620,8 +689,15 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             }
 
         # Write manifest
-        manifest_dir = kb_dir / domain_id
-        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_dir = _safe_join(kb_dir, domain_id)
+        if manifest_dir is None:
+            return {
+                "success": False,
+                "error": (
+                    f"Invalid domain_id '{domain_id}': resolves outside the "
+                    "knowledge directory"
+                ),
+            }
         manifest = {
             "domain_id": domain_id,
             "source_path": source_path,
@@ -631,8 +707,11 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             },
         }
         manifest_path = manifest_dir / "manifest.json"
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
+        # mkdir + write are blocking disk I/O; run them off the loop.
+        await asyncio.to_thread(
+            _write_text_with_parents,
+            manifest_path,
+            json.dumps(manifest, indent=2),
         )
 
         # Build KB config for the bot configuration

@@ -17,11 +17,19 @@ if TYPE_CHECKING:
 
 class VectorStore(ABC, VectorStoreBase):
     """Abstract base class for specialized vector stores.
-    
+
     This provides a dedicated vector storage backend that can be used
     independently or alongside traditional databases. It inherits from
     VectorStoreBase which provides common configuration parsing and
     utility methods.
+
+    Async transport contract:
+        The async methods (``initialize``, ``add_vectors``, ``search``,
+        persist paths, ...) MUST NOT block the event loop. Use an async
+        transport or offload blocking ``open()`` / ``pickle`` disk I/O via
+        ``asyncio.to_thread``; ruff's ``ASYNC`` family enforces this and
+        ``assert_no_blocking()`` proves it. See ``MemoryVectorStore.save``
+        for the offloaded-persist reference.
     """
 
     @abstractmethod

@@ -571,6 +571,12 @@ offloads the blocking call via `asyncio.to_thread`. Scope the block tightly
 around the `await` under test — not synchronous setup (building a temp
 directory, constructing fixtures) which may legitimately block.
 
+`assert_no_blocking()` is the *runtime* proof; ruff's `ASYNC` lint family
+(`flake8-async`, enabled repo-wide) is the *static* counterpart — it flags
+blocking `open()` / `os` / `time.sleep` / sync-HTTP calls inside an
+`async def` at lint time. The authoring contract both enforce lives in
+`.claude/rules/async-transport.md`.
+
 Detection only fires while an event loop is running, so `assert_no_blocking`
 is meaningful inside an `async` test (or any frame with a running loop); in
 a synchronous frame it is a no-op.

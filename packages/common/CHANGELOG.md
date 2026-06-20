@@ -369,6 +369,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolver_backends.create({...})`.
 
 ### Changed
+- ruff's `ASYNC` lint family (`flake8-async`) is now enforced for this
+  package, so blocking I/O on the event loop inside `async def` code is
+  caught at lint time; the `assert_no_blocking()` construct proves the
+  runtime behavior. See the `async-transport` authoring rule.
 - **Breaking:** Backend-factory construction errors raised by
   `create_event_bus()` / `create_event_bus_async()` are now wrapped in
   `OperationError` (with the original exception preserved via

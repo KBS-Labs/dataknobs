@@ -108,6 +108,7 @@ select = [
     "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
     "RUF",  # Ruff-specific rules
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [

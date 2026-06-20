@@ -179,6 +179,7 @@ select = [
     "SIM",  # flake8-simplify
     "TCH",  # flake8-type-checking
     "RUF",  # Ruff-specific rules
+    "ASYNC",  # flake8-async - async code must not block the event loop
 ]
 
 ignore = [
@@ -191,6 +192,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104", "F401"]
 "tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+# Cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call.
+"src/dataknobs_fsm/io/adapters.py" = ["ASYNC240"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["dataknobs_fsm", "dataknobs_data", "dataknobs_structures", "dataknobs_utils", "dataknobs_config"]
