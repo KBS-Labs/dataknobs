@@ -197,6 +197,15 @@ from dataknobs_common.structured_config import (
     config_registries,
     register_sensitive_interior_key,
 )
+from dataknobs_common.tenancy import (
+    BoundTenantContext,
+    PrefixedTenantContext,
+    SharedCorpusTenantContext,
+    SingleTenantContext,
+    TenantContext,
+    create_tenant_context,
+    tenant_context_from_env,
+)
 from dataknobs_common.testing import (
     create_test_json_files,
     create_test_markdown_files,
@@ -351,6 +360,14 @@ __all__ = [
     "ChainedProjector",
     "CallableProjector",
     "CachedProjector",
+    # Tenancy
+    "TenantContext",
+    "SingleTenantContext",
+    "BoundTenantContext",
+    "PrefixedTenantContext",
+    "SharedCorpusTenantContext",
+    "create_tenant_context",
+    "tenant_context_from_env",
     # Serialization
     "Serializable",
     "serialize",
