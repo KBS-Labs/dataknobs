@@ -6,7 +6,8 @@
 # schema, and routing transitions — no hand-rolled response template,
 # schema, or transition list required.
 #
-# Stages: propose_itinerary -> {confirm_plan | adjust_plan | custom_plan}
+# Stages: propose_itinerary ->
+#         {confirm_plan | adjust_plan | custom_plan | clarify_intent}
 
 name: propose-consent-wizard
 description: Trip planner that proposes an itinerary and routes on the reply
@@ -27,8 +28,10 @@ stages:
           extract: destination        # captures the user-named place
           llm_fallback: true          # opt-in LLM tier for this intent
       on_no_match:
-        clarification_template: >
-          Was that a yes, a no, or did you have somewhere else in mind?
+        # Routing variant: an unrecognized reply routes to a dedicated
+        # stage. Supply `clarification_template:` here *instead of*
+        # `target:` to re-prompt *this* stage in place rather than routing.
+        target: clarify_intent
 
   - name: confirm_plan
     is_end: true
@@ -41,3 +44,9 @@ stages:
   - name: custom_plan
     is_end: true
     response_template: "Got it — planning a trip to {{ destination }} instead."
+
+  - name: clarify_intent
+    is_end: true
+    response_template: >
+      Sorry, I didn't catch that — let's start over and I'll lay out the
+      options again.

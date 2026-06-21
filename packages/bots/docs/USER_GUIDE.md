@@ -1325,7 +1325,7 @@ auto-registers a built-in `on_turn_start` hook that pops the named
 ```yaml
 reasoning:
   strategy: wizard
-  wizard_config: configs/wizards/propose-consent-wizard.yaml
+  wizard_config: wizard.yaml
   manager_metadata_inbox_key: "_wizard_inbox"   # str or list[str]
 ```
 
@@ -1606,6 +1606,11 @@ stages:
     is_end: true
     response_template: "Activating {{ framework_name }}."
 ```
+
+A complete, loadable version of this shape ships at
+`packages/bots/examples/configs/wizards/propose-consent-wizard.yaml`
+(exercised in CI by `packages/bots/tests/test_example_wizards.py`). It
+also shows the `on_no_match.target` routing variant described below.
 
 What the synthesized stage looks like under the hood (visible in the
 loader output and in stage metadata):
