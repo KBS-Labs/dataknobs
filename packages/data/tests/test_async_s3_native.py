@@ -143,11 +143,13 @@ async def test_stream_read_does_not_block(db) -> None:
     Seeds records off-band, then proves the paginator iteration plus each
     ``Body.read()`` stay off the loop.
 
-    Order note: botocore's loader cache is process-global, so this only
-    reproduces the regression when it runs first in the process (an earlier
-    test building a paginator warms ``paginators-1.json`` into the cache and
-    masks it). The session-warm building a paginator is the actual guarantee;
-    this test is its in-isolation reproduction.
+    Order note: botocore's paginator-model load is cached on the session's
+    loader, and our own ``_SESSION_CACHE`` reuses one session across this
+    module's tests, so this only reproduces the regression when it runs first
+    in the process (an earlier test building a paginator warms
+    ``paginators-1.json`` into the shared session's loader cache and masks it).
+    The session-warm building a paginator is the actual guarantee; this test is
+    its in-isolation reproduction.
     """
     for i in range(5):
         await db.create(Record(data={"name": f"doc{i}", "value": i}))

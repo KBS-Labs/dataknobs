@@ -31,9 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creation loads the service model but not the paginator model, so the warm
   also builds a throwaway `list_objects_v2` paginator on its private
   worker-thread loop — the consumer's first real paginator build then reuses
-  the cache instead of blocking the loop. The same pre-load also covers the
-  knowledge S3 backend's paginating paths, since `paginators-1.json` is a
-  single process-global data file.
+  the session's loader cache instead of blocking the loop. The same pre-load
+  also covers the knowledge S3 backend's paginating paths: every aioboto3
+  client is built from one cached session (`_SESSION_CACHE`), so warming that
+  session's loader once covers all of its paginator consumers.
 - **`AsyncSQLiteDatabase.connect` and `AsyncDuckDBDatabase.connect` no
   longer block the event loop creating the database directory.** For a
   file-based database each created the parent directory with a synchronous
