@@ -389,8 +389,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         with no conditional-write support). A non-``None`` token is the
         object's ETag from a prior :meth:`get_state_version`; it is passed
         as the ``IfMatch`` precondition so S3 server-side rejects the PUT
-        with HTTP 412 when another writer has overwritten the object since
-        — surfaced as :class:`ConcurrencyError`.
+        when another writer has overwritten the object since (HTTP 412) OR
+        deleted it (HTTP 404) — both surface as :class:`ConcurrencyError`,
+        symmetric with the file backend (where a vanished document also
+        conflicts rather than silently re-creating it).
         """
         if not self._session:
             raise RuntimeError("Backend not initialized")
@@ -420,7 +422,16 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                         IfMatch=expected_version,
                     )
             except ClientError as e:
-                if self._is_precondition_failed(e):
+                # A conditional write carries a token, so two outcomes are
+                # the same optimistic-concurrency conflict: the object was
+                # overwritten (412 PreconditionFailed) OR it was deleted out
+                # from under the token (404 NoSuchKey on the If-Match PUT).
+                # Both surface as ConcurrencyError so the contract is
+                # symmetric with the file backend, where a vanished document
+                # (current_version=None != expected_version) already raises
+                # ConcurrencyError.
+                code = e.response.get("Error", {}).get("Code")
+                if self._is_precondition_failed(e) or code in _MISSING_KEY_CODES:
                     raise ConcurrencyError(
                         "Knowledge-base state document was modified by a "
                         "concurrent writer",

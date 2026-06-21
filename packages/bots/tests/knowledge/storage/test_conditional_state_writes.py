@@ -40,6 +40,7 @@ from pathlib import Path
 import pytest
 from dataknobs_common.capabilities import Capability
 from dataknobs_common.exceptions import ConcurrencyError
+from dataknobs_common.tenancy import BoundTenantContext
 
 from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
 from dataknobs_bots.knowledge.storage.memory import InMemoryKnowledgeBackend
@@ -167,6 +168,81 @@ async def test_cas_conflict_raises_concurrency_error(
         info = await backend.get_info("d")
         assert info is not None
         assert info.ingestion_status == IngestionStatus.READY
+    finally:
+        await backend.close()
+
+
+@pytest.mark.parametrize("kind", _LOCAL_KINDS)
+async def test_cas_routes_to_the_per_tenant_document(
+    kind: str, tmp_path: Path
+) -> None:
+    """The CAS surface (``get_state_version`` + ``expected_version``) must
+    resolve the SAME per-tenant document as the sibling state methods.
+
+    The version-read and the conditional-write share one routing helper
+    (memory ``_state_version_key`` / file ``_metadata_path``), so a
+    single-tenant write must neither advance the tenant token nor false-
+    conflict a tenant conditional write — and vice-versa. A regression
+    where the read and the write resolved different documents would CAS
+    the wrong document and be invisible to the ``ctx=None`` tests above.
+
+    Reproduce-first framing: capture a tenant token, write to the
+    *single-tenant* document, then confirm the tenant conditional write
+    still succeeds (no false cross-scope conflict).
+    """
+    tenant = BoundTenantContext("acme", "d")
+    backend = await _make_local_backend(kind, tmp_path)
+    try:
+        await backend.create_kb("d")
+
+        # The per-tenant document is lazy: absent until the tenant's first
+        # write, so its token is None while the single-tenant token (seeded
+        # at create_kb) is already present. The two are independent.
+        assert await backend.get_state_version("d", ctx=tenant) is None
+        assert await backend.get_state_version("d") is not None
+
+        # Establish the per-tenant document (first tenant write is
+        # unconditional — there is no prior token to condition on).
+        await backend.set_ingestion_status(
+            "d", IngestionStatus.INGESTING, ctx=tenant
+        )
+        tenant_token = await backend.get_state_version("d", ctx=tenant)
+        assert tenant_token is not None
+
+        # A single-tenant write must NOT advance the tenant token — the two
+        # documents are disjoint. If the read routed to the wrong document
+        # this would change.
+        await backend.set_ingestion_status("d", IngestionStatus.ERROR)
+        assert (
+            await backend.get_state_version("d", ctx=tenant) == tenant_token
+        )
+
+        # And the tenant conditional write does not false-conflict against
+        # the single-tenant write — it succeeds with the still-fresh tenant
+        # token (proving the write half also routes per-tenant).
+        await backend.set_ingestion_status(
+            "d",
+            IngestionStatus.READY,
+            ctx=tenant,
+            expected_version=tenant_token,
+        )
+
+        # The now-stale tenant token conflicts only on the tenant document.
+        with pytest.raises(ConcurrencyError):
+            await backend.set_ingestion_status(
+                "d",
+                IngestionStatus.ERROR,
+                ctx=tenant,
+                expected_version=tenant_token,
+            )
+
+        # The scopes stayed isolated: tenant READY, single-tenant ERROR.
+        tenant_info = await backend.get_info("d", ctx=tenant)
+        assert tenant_info is not None
+        assert tenant_info.ingestion_status == IngestionStatus.READY
+        single_info = await backend.get_info("d")
+        assert single_info is not None
+        assert single_info.ingestion_status == IngestionStatus.ERROR
     finally:
         await backend.close()
 
@@ -354,5 +430,114 @@ async def test_s3_default_path_writes_unconditionally(s3_kb_config) -> None:
         info = await backend.get_info("d")
         assert info is not None
         assert info.ingestion_status == IngestionStatus.ERROR
+    finally:
+        await backend.close()
+
+
+@pytest.mark.integration
+@pytest.mark.s3
+@requires_localstack
+async def test_s3_deleted_object_conflicts_on_conditional_write(
+    s3_kb_config,
+) -> None:
+    """A metadata object deleted out from under a token is the same
+    optimistic-concurrency conflict as an overwrite: the conditional PUT
+    hits HTTP 404 (not 412) and must still raise ``ConcurrencyError``,
+    symmetric with the file backend's vanished-document handling.
+
+    Reachable in the per-tenant case: the domain-keyed existence check
+    passes while the per-tenant object is gone. Deletion is simulated by
+    removing the per-tenant key directly (a concurrent ``delete``).
+
+    Skips explicitly when the LocalStack build does not enforce
+    conditional PUT — there the missing-key write would simply recreate
+    the object (no 404), so the conflict cannot be observed.
+    """
+    tenant = BoundTenantContext("acme", "d")
+    backend = S3KnowledgeBackend.from_config(s3_kb_config)
+    await backend.initialize()
+    try:
+        await backend.create_kb("d")
+        # Establish the per-tenant object, then capture its token.
+        await backend.set_ingestion_status(
+            "d", IngestionStatus.READY, ctx=tenant
+        )
+        token = await backend.get_state_version("d", ctx=tenant)
+        assert token is not None
+
+        # Simulate a concurrent deletion of the per-tenant metadata object.
+        key = backend._metadata_key("d", tenant)
+        async with backend._session.client(
+            "s3", **backend._client_kwargs
+        ) as s3:
+            await s3.delete_object(Bucket=backend._bucket, Key=key)
+
+        try:
+            await backend.set_ingestion_status(
+                "d",
+                IngestionStatus.ERROR,
+                ctx=tenant,
+                expected_version=token,
+            )
+        except ConcurrencyError as exc:
+            assert exc.context["domain_id"] == "d"
+            assert exc.context["expected_version"] == token
+        else:
+            pytest.skip(
+                "LocalStack build does not enforce S3 If-Match "
+                "conditional PUT"
+            )
+    finally:
+        await backend.close()
+
+
+@pytest.mark.integration
+@pytest.mark.s3
+@requires_localstack
+async def test_s3_cas_routes_to_the_per_tenant_document(
+    s3_kb_config,
+) -> None:
+    """S3's per-tenant ETag routing (``_metadata_key`` prefix insertion)
+    is exercised the same as the local backends: a single-tenant write
+    neither advances the tenant ETag nor false-conflicts a tenant
+    conditional write. Mirrors ``test_cas_routes_to_the_per_tenant_document``
+    over the real async S3 transport.
+    """
+    tenant = BoundTenantContext("acme", "d")
+    backend = S3KnowledgeBackend.from_config(s3_kb_config)
+    await backend.initialize()
+    try:
+        await backend.create_kb("d")
+
+        # Per-tenant object is lazy (absent until first tenant write).
+        assert await backend.get_state_version("d", ctx=tenant) is None
+        assert await backend.get_state_version("d") is not None
+
+        await backend.set_ingestion_status(
+            "d", IngestionStatus.INGESTING, ctx=tenant
+        )
+        tenant_token = await backend.get_state_version("d", ctx=tenant)
+        assert tenant_token is not None
+
+        # Single-tenant write must not touch the tenant object's ETag.
+        await backend.set_ingestion_status("d", IngestionStatus.ERROR)
+        assert (
+            await backend.get_state_version("d", ctx=tenant) == tenant_token
+        )
+
+        # Tenant conditional write succeeds with the still-fresh token.
+        await backend.set_ingestion_status(
+            "d",
+            IngestionStatus.READY,
+            ctx=tenant,
+            expected_version=tenant_token,
+        )
+
+        tenant_info = await backend.get_info("d", ctx=tenant)
+        assert tenant_info is not None
+        assert tenant_info.ingestion_status == IngestionStatus.READY
+        single_info = await backend.get_info("d")
+        assert single_info is not None
+        assert single_info.ingestion_status == IngestionStatus.ERROR
     finally:
         await backend.close()
