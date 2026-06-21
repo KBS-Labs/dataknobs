@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state bridging. The Protocol's `InboxT`/`OutboxT` type parameters are
   variance-annotated (covariant return / contravariant parameter),
   matching the sibling `ScopeProjector` / `ResourceResolver` families.
+- A propose-then-consent example wizard
+  (`examples/configs/wizards/propose-consent-wizard.yaml`) demonstrating
+  the `intent_confirm:` stage primitive end-to-end: a proposal stage that
+  routes to accept / decline / alternative targets, including an
+  alternative intent that extracts the user-named value via the LLM tier.
+- USER_GUIDE guidance distinguishing the two confirmation surfaces: the
+  forward-looking `intent_confirm:` stage primitive (propose, then route
+  on the reply) versus the backward-looking `ConfirmationEvaluator`
+  (double-check values already gathered, driven by the
+  `confirm_first_render` / `confirm_on_new_data` stage knobs).
 
 ### Changed
 

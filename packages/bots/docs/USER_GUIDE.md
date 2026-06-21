@@ -1325,7 +1325,7 @@ auto-registers a built-in `on_turn_start` hook that pops the named
 ```yaml
 reasoning:
   strategy: wizard
-  wizard_config: configs/wizards/advisor.yaml
+  wizard_config: wizard.yaml
   manager_metadata_inbox_key: "_wizard_inbox"   # str or list[str]
 ```
 
@@ -1607,6 +1607,11 @@ stages:
     response_template: "Activating {{ framework_name }}."
 ```
 
+A complete, loadable version of this shape ships at
+`packages/bots/examples/configs/wizards/propose-consent-wizard.yaml`
+(exercised in CI by `packages/bots/tests/test_example_wizards.py`). It
+also shows the `on_no_match.target` routing variant described below.
+
 What the synthesized stage looks like under the hood (visible in the
 loader output and in stage metadata):
 
@@ -1663,6 +1668,38 @@ Per-intent overrides:
 - `negation_filter: true` (block level) — wrap the classifier in
   `NegationFilter` so `"no, I don't want to accept that"` doesn't
   match `accept`.
+
+#### Picking a confirmation primitive
+
+Two wizard surfaces have "confirm" in the name and are easy to mix up.
+They face opposite directions:
+
+- `intent_confirm:` is **forward-looking**. The bot *proposes*
+  something and the user accepts, declines, or names an alternative.
+  It is a load-time stage primitive (YAML sugar) that expands into a
+  proposal template, intent detection, a schema, and routing
+  `transitions`. A "no" — or a no-match against `on_no_match` —
+  **routes to another stage**.
+- `ConfirmationEvaluator` is **backward-looking**. The wizard has
+  already *collected* values and this asks the user to double-check
+  them before moving on. It is stateless runtime decision logic
+  (`reasoning/wizard_confirmation.py`) driven by the
+  `confirm_first_render` / `confirm_on_new_data` stage knobs, the
+  stage's render count, and a snapshot diff of the gathered data. A
+  "no" or a correction **re-prompts and re-extracts those same
+  values** — it does not route to a different stage.
+
+| Axis | `intent_confirm:` | `ConfirmationEvaluator` |
+|---|---|---|
+| Direction | Forward — propose, then act on the answer | Backward — confirm values already gathered |
+| What it is | Load-time stage primitive (YAML sugar) | Runtime decision logic (stage knobs) |
+| A "no" | Routes to another stage (`on_no_match` / per-intent target) | Re-prompts / re-extracts the same values |
+| Author surface | The `intent_confirm:` block | `confirm_first_render` / `confirm_on_new_data` |
+
+Use `intent_confirm:` when the bot offers or suggests and branches on
+the reply. Use the `confirm_first_render` / `confirm_on_new_data` knobs
+(evaluated by `ConfirmationEvaluator`) when the bot must double-check
+data it just captured before acting on it.
 
 #### Word-boundary keyword matching
 

@@ -158,12 +158,15 @@ class TestDetectBooleanSignal:
 # ---------------------------------------------------------------------------
 # Drift guard: wrapper and classifier path agree on the canonical spec.
 #
-# ``detect_boolean_signal`` dispatches through
-# ``KeywordIntentClassifier(phrase_priority=True)`` wrapped in
-# ``NegationFilter(flip_when_alone={"affirmative": "negative"})``.
-# This class re-derives the wrapper's verdict from the classifier
-# primitives directly and asserts equivalence over the same set of
-# canonical messages exercised by ``TestDetectBooleanSignal``. A
+# ``detect_boolean_signal`` runs the
+# ``KeywordIntentClassifier(phrase_priority=True)`` sync core to get the
+# four-quadrant verdict, then layers the affirmative-alone flip
+# **inline** (not via a ``NegationFilter`` argument): when the verdict
+# is affirmative and no negative signal/phrase matches the message, a
+# stray negation keyword flips it to ``False``. This class re-derives
+# the wrapper's verdict from the classifier primitives directly,
+# applying that same inline flip, and asserts equivalence over the same
+# set of canonical messages exercised by ``TestDetectBooleanSignal``. A
 # future change to either path that produces a different ``bool |
 # None`` for any case fails this parity check before the consumer
 # sees it.

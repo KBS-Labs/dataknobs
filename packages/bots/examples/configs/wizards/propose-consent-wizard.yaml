@@ -1,0 +1,52 @@
+# Propose-then-consent wizard: the intent_confirm: stage primitive
+#
+# The bot proposes an itinerary; the user accepts, declines, or names a
+# different destination. The single intent_confirm: block expands at load
+# time into a proposal template, intent detection, a boolean-per-intent
+# schema, and routing transitions — no hand-rolled response template,
+# schema, or transition list required.
+#
+# Stages: propose_itinerary ->
+#         {confirm_plan | adjust_plan | custom_plan | clarify_intent}
+
+name: propose-consent-wizard
+description: Trip planner that proposes an itinerary and routes on the reply
+
+stages:
+  - name: propose_itinerary
+    is_start: true
+    intent_confirm:
+      proposal_template: |
+        I'd suggest a long weekend in Lisbon. Want to go with that?
+      intents:
+        accept:
+          target: confirm_plan
+        decline:
+          target: adjust_plan
+        alternative:
+          target: custom_plan
+          extract: destination        # captures the user-named place
+          llm_fallback: true          # opt-in LLM tier for this intent
+      on_no_match:
+        # Routing variant: an unrecognized reply routes to a dedicated
+        # stage. Supply `clarification_template:` here *instead of*
+        # `target:` to re-prompt *this* stage in place rather than routing.
+        target: clarify_intent
+
+  - name: confirm_plan
+    is_end: true
+    response_template: "Great — locking in the Lisbon itinerary."
+
+  - name: adjust_plan
+    is_end: true
+    response_template: "No problem — let's rework the plan from scratch."
+
+  - name: custom_plan
+    is_end: true
+    response_template: "Got it — planning a trip to {{ destination }} instead."
+
+  - name: clarify_intent
+    is_end: true
+    response_template: >
+      Sorry, I didn't catch that — let's start over and I'll lay out the
+      options again.
