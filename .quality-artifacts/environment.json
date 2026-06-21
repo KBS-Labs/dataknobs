@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-21T00:48:06Z",
+  "timestamp": "2026-06-21T01:07:03Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/sharedcorpus-onramp",
-  "git_commit": "cf917d4ca92fc5ea1e03ccf1529c37fc2cdfa393",
+  "git_branch": "sbk/backend-conditional-writes",
+  "git_commit": "8fc90fac1b86dc7f424d5905c1e854abf32e3d2b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
