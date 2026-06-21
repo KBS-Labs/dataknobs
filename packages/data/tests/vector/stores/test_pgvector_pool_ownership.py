@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from dataknobs_common.exceptions import ResourceError
 from dataknobs_common.testing import (
     requires_real_postgres,
     safe_sql_ident,
@@ -220,6 +221,26 @@ async def test_injected_pool_reference_retained_across_close() -> None:
     assert store._pool is sentinel_pool
     assert store._owns_pool is False
     assert store._initialized is False
+
+
+@pytest.mark.asyncio
+async def test_injected_pool_reference_lost_raises_resource_error() -> None:
+    """If an injected (caller-owned) pool reference is lost out of band,
+    ``initialize()`` fails loud rather than fabricating a pool the store
+    would not own.
+
+    No live server needed: with ``_pool is None`` and ``_owns_pool`` False,
+    ``initialize()`` hits the defensive guard and raises before any asyncpg
+    call.
+    """
+    store = PgVectorStore.from_components(
+        _store_config("noserver_lost_ref", dimensions=8), pool=object()
+    )
+    # Simulate out-of-band loss of the injected reference.
+    store._pool = None
+    assert store._owns_pool is False
+    with pytest.raises(ResourceError):
+        await store.initialize()
 
 
 @requires_real_postgres

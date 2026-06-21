@@ -326,12 +326,15 @@ def _build_aioboto3_session(session_kwargs: dict[str, Any]) -> Any:
 
     Runs on a ``to_thread`` worker (no event loop of its own). Creating
     and discarding one throwaway ``s3`` client triggers — and caches on
-    the session — every first-client botocore data load at once (no
-    endpoint, no network: client creation only loads data files), so the
-    consumer's first real client creation reuses the cache instead of
-    loading on the loop. The warm runs in a private event loop on this
-    worker thread; warm-up failure is logged and swallowed (best-effort
-    fallback to the original first-use load).
+    the session — the first-client botocore data loads (service model,
+    endpoints, sdk-default-config; no endpoint, no network: client
+    creation only loads data files). Client creation alone does **not**
+    load the paginator model, so the warm also builds a throwaway
+    ``list_objects_v2`` paginator to pre-load ``paginators-1.json`` here.
+    The consumer's first real client creation and first paginator build
+    then reuse the cache instead of loading on the loop. The warm runs in
+    a private event loop on this worker thread; warm-up failure is logged
+    and swallowed (best-effort fallback to the original first-use load).
 
     Warm-up failure is logged at WARNING, not DEBUG: because the warmed
     session is cached, a persistently-failing warm (e.g. a corrupt
@@ -344,8 +347,14 @@ def _build_aioboto3_session(session_kwargs: dict[str, Any]) -> Any:
     session = aioboto3.Session(**session_kwargs)
 
     async def _warm() -> None:
-        async with session.client("s3"):
-            pass
+        async with session.client("s3") as client:
+            # Touch the paginator API so botocore's paginator model
+            # (paginators-1.json) loads here, on this worker thread's private
+            # loop, rather than lazily on the consumer's event loop the first
+            # time a list_objects_v2 paginator is built. get_paginator is a
+            # sync call that triggers the data-file load; the paginator is
+            # discarded.
+            client.get_paginator("list_objects_v2")
 
     # Install the private loop as this worker thread's current loop so any
     # aiobotocore path that consults ``asyncio.get_event_loop()`` during

@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The aioboto3 session-warm now pre-loads botocore's paginator model so
+  `AsyncS3Database.stream_read` (and any aioboto3 paginator consumer) never
+  stats for `paginators-1.json` on the event loop on first use.** Client
+  creation loads the service model but not the paginator model, so the warm
+  also builds a throwaway `list_objects_v2` paginator on its private
+  worker-thread loop — the consumer's first real paginator build then reuses
+  the cache instead of blocking the loop. The same pre-load also covers the
+  knowledge S3 backend's paginating paths, since `paginators-1.json` is a
+  single process-global data file.
 - **`AsyncSQLiteDatabase.connect` and `AsyncDuckDBDatabase.connect` no
   longer block the event loop creating the database directory.** For a
   file-based database each created the parent directory with a synchronous
