@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 from botocore.exceptions import ClientError
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
+from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_data.pooling.s3 import S3SessionConfig, create_aioboto3_session
 
 from .key_layout import KnowledgeKeyKind
@@ -36,6 +37,12 @@ _CHANGE_DETECTION_MODES = ("snapshot", "s3_versioning")
 # head_object surfaces a missing key as HTTP "404"; get_object as
 # "NoSuchKey". Accept both wherever we translate absence into a return.
 _MISSING_KEY_CODES = ("404", "NoSuchKey")
+# A failed If-Match conditional PUT surfaces as HTTP 412. Real S3 sets
+# the error Code to "PreconditionFailed"; accept the raw status too so
+# S3-compatible services that omit the symbolic code still map to a
+# ConcurrencyError.
+_PRECONDITION_FAILED_CODE = "PreconditionFailed"
+_PRECONDITION_FAILED_STATUS = 412
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +104,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         | frozenset({
             Capability.TENANT_SCOPED_STATE,
             Capability.SNAPSHOT_ISOLATION,
+            # Conditional metadata writes use S3's server-enforced
+            # If-Match precondition on the metadata object's ETag — the
+            # race-free CAS primitive for many replicas over one bucket.
+            Capability.TRANSACTIONAL_METADATA,
         })
     )
 
@@ -349,29 +360,87 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 return {}
             raise
 
+    @staticmethod
+    def _is_precondition_failed(error: ClientError) -> bool:
+        """Whether ``error`` is a failed If-Match precondition (HTTP 412)."""
+        err = error.response.get("Error", {})
+        if err.get("Code") == _PRECONDITION_FAILED_CODE:
+            return True
+        status = error.response.get("ResponseMetadata", {}).get(
+            "HTTPStatusCode"
+        )
+        return status == _PRECONDITION_FAILED_STATUS
+
     async def _save_metadata(
         self,
         domain_id: str,
         metadata: dict,
         ctx: TenantContext | None = None,
+        *,
+        expected_version: str | None = None,
     ) -> None:
         """Save metadata to S3, then fire a state-write event.
 
         Tenant-scoped via ``ctx`` (the per-tenant metadata object lives
         under the state prefix); ``ctx=None`` writes the pre-tenancy key.
+
+        ``expected_version`` (default ``None``) selects the write mode.
+        ``None`` is the unconditional PUT (byte-identical to a backend
+        with no conditional-write support). A non-``None`` token is the
+        object's ETag from a prior :meth:`get_state_version`; it is passed
+        as the ``IfMatch`` precondition so S3 server-side rejects the PUT
+        when another writer has overwritten the object since (HTTP 412) OR
+        deleted it (HTTP 404) — both surface as :class:`ConcurrencyError`,
+        symmetric with the file backend (where a vanished document also
+        conflicts rather than silently re-creating it).
         """
         if not self._session:
             raise RuntimeError("Backend not initialized")
 
         key = self._metadata_key(domain_id, ctx)
         body = json.dumps(metadata, indent=2, default=str).encode("utf-8")
-        async with self._session.client("s3", **self._client_kwargs) as s3:
-            await s3.put_object(
-                Bucket=self._bucket,
-                Key=key,
-                Body=body,
-                ContentType="application/json",
-            )
+        if expected_version is None:
+            async with self._session.client(
+                "s3", **self._client_kwargs
+            ) as s3:
+                await s3.put_object(
+                    Bucket=self._bucket,
+                    Key=key,
+                    Body=body,
+                    ContentType="application/json",
+                )
+        else:
+            try:
+                async with self._session.client(
+                    "s3", **self._client_kwargs
+                ) as s3:
+                    await s3.put_object(
+                        Bucket=self._bucket,
+                        Key=key,
+                        Body=body,
+                        ContentType="application/json",
+                        IfMatch=expected_version,
+                    )
+            except ClientError as e:
+                # A conditional write carries a token, so two outcomes are
+                # the same optimistic-concurrency conflict: the object was
+                # overwritten (412 PreconditionFailed) OR it was deleted out
+                # from under the token (404 NoSuchKey on the If-Match PUT).
+                # Both surface as ConcurrencyError so the contract is
+                # symmetric with the file backend, where a vanished document
+                # (current_version=None != expected_version) already raises
+                # ConcurrencyError.
+                code = e.response.get("Error", {}).get("Code")
+                if self._is_precondition_failed(e) or code in _MISSING_KEY_CODES:
+                    raise ConcurrencyError(
+                        "Knowledge-base state document was modified by a "
+                        "concurrent writer",
+                        context={
+                            "domain_id": domain_id,
+                            "expected_version": expected_version,
+                        },
+                    ) from e
+                raise
         await self._fire_state_write(
             domain_id=domain_id,
             key=key,
@@ -708,6 +777,33 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Ingestion Status ---
 
+    async def get_state_version(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str | None:
+        """The metadata object's ETag (opaque), or ``None`` if absent.
+
+        Returned verbatim as S3 hands it back (quoted), so it round-trips
+        directly into the ``IfMatch`` precondition on a conditional
+        :meth:`set_ingestion_status` write. ``None`` when the (per-tenant)
+        metadata object does not exist. See the protocol for the
+        round-trip contract.
+        """
+        if not self._session:
+            raise RuntimeError("Backend not initialized")
+
+        key = self._metadata_key(domain_id, ctx)
+        try:
+            async with self._session.client(
+                "s3", **self._client_kwargs
+            ) as s3:
+                response = await s3.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
+                return None
+            raise
+        etag = response.get("ETag")
+        return etag if etag else None
+
     async def set_ingestion_status(
         self,
         domain_id: str,
@@ -716,6 +812,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         *,
         generation: str | None = None,
         ctx: TenantContext | None = None,
+        expected_version: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -723,6 +820,12 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         the status is written to the per-tenant metadata object when
         ``ctx`` carries a state prefix (the shared single-tenant object
         otherwise).
+
+        When ``expected_version`` is supplied, the save is conditional
+        (see :meth:`_save_metadata`): the PUT carries an ``IfMatch``
+        precondition on the object ETag and raises
+        :class:`ConcurrencyError` if a concurrent writer overwrote the
+        object first.
         """
         if not await self._kb_exists(domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
@@ -740,7 +843,9 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(domain_id, kb_metadata, ctx)
+        await self._save_metadata(
+            domain_id, kb_metadata, ctx, expected_version=expected_version
+        )
 
     # --- Change Detection ---
     #

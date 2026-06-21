@@ -15,6 +15,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
+from dataknobs_common.exceptions import ConcurrencyError
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -71,6 +72,10 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         | frozenset({
             Capability.TENANT_SCOPED_STATE,
             Capability.SNAPSHOT_ISOLATION,
+            # Conditional state writes are trivially race-free in a
+            # single-process backend: the version-counter check and
+            # increment in set_ingestion_status run synchronously.
+            Capability.TRANSACTIONAL_METADATA,
         })
     )
 
@@ -100,6 +105,18 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # under the bare domain_id, byte-identical to the pre-tenancy
         # store.
         self._snapshots: dict[str, dict[str, dict[str, str]]] = {}
+
+        # state-key (prefix + domain_id) -> monotonic version counter.
+        # The native optimistic-concurrency token for this backend:
+        # get_state_version returns the current counter (as str) and
+        # set_ingestion_status increments it on every write. Tenant-
+        # scoped under the state prefix, mirroring _snapshots / the
+        # _tenant_info overlay; the single-tenant (ctx=None) counter is
+        # keyed by the bare domain_id and seeded at create_kb so the
+        # single-tenant document has a token from creation onward (the
+        # in-process analog of the file/S3 metadata document existing
+        # after create_kb).
+        self._state_versions: dict[str, int] = {}
 
         self._initialized = False
 
@@ -271,6 +288,12 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         self._kb_info[domain_id] = kb_info
         self._files[domain_id] = {}
         self._file_metadata[domain_id] = {}
+        # Seed the single-tenant state-version counter: the metadata
+        # document now exists, so get_state_version(ctx=None) returns a
+        # token (the file/S3 analog: _metadata.json exists after
+        # create_kb). Per-tenant counters stay unseeded (lazy on first
+        # tenant write), mirroring the lazy per-tenant metadata document.
+        self._state_versions[domain_id] = 0
         await self._record_snapshot(domain_id)  # baseline: "" -> {}
 
         return kb_info
@@ -338,6 +361,8 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             self._snapshots.pop(snap_key, None)
         for info_key in [k for k in self._tenant_info if _is_domain_key(k)]:
             self._tenant_info.pop(info_key, None)
+        for ver_key in [k for k in self._state_versions if _is_domain_key(k)]:
+            self._state_versions.pop(ver_key, None)
 
         return True
 
@@ -347,6 +372,36 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Ingestion Status ---
 
+    def _state_version_key(
+        self, domain_id: str, ctx: TenantContext | None
+    ) -> str:
+        """State-version counter key (``{state-prefix}{domain_id}``).
+
+        Matches the snapshot store's ``state_key`` shape: the bare
+        ``domain_id`` for the single-tenant case (empty prefix) and
+        ``{prefix}{domain_id}`` for a tenant-scoped call.
+        """
+        return f"{self._state_prefix(ctx)}{domain_id}"
+
+    async def get_state_version(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str | None:
+        """Current monotonic version counter as an opaque ``str`` token.
+
+        ``None`` when the KB does not exist or — for a tenant context —
+        when that tenant has not written ingest state yet (its counter is
+        lazy, mirroring the file / S3 per-tenant metadata document being
+        absent until first write). The single-tenant counter is seeded at
+        :meth:`create_kb`, so it returns ``"0"`` immediately after
+        creation. See the protocol for the round-trip contract.
+        """
+        if domain_id not in self._kb_info:
+            return None
+        counter = self._state_versions.get(
+            self._state_version_key(domain_id, ctx)
+        )
+        return str(counter) if counter is not None else None
+
     async def set_ingestion_status(
         self,
         domain_id: str,
@@ -355,6 +410,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         *,
         generation: str | None = None,
         ctx: TenantContext | None = None,
+        expected_version: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -364,9 +420,33 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         context the status is written to a per-tenant overlay created
         lazily on first write — mirroring the file / S3 lazy per-tenant
         metadata document.
+
+        When ``expected_version`` is supplied, the write is conditional:
+        it proceeds only if the current state-version counter still
+        matches the token, otherwise raises :class:`ConcurrencyError`
+        without mutating state. The check-then-increment runs
+        synchronously (single process, single loop), so the guard is
+        race-free. Every write — conditional or not — advances the
+        counter, so a stale token from before any write conflicts.
         """
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
+
+        version_key = self._state_version_key(domain_id, ctx)
+        current_counter = self._state_versions.get(version_key)
+        current_token = (
+            str(current_counter) if current_counter is not None else None
+        )
+        if expected_version is not None and expected_version != current_token:
+            raise ConcurrencyError(
+                "Knowledge-base state document was modified by a "
+                "concurrent writer",
+                context={
+                    "domain_id": domain_id,
+                    "expected_version": expected_version,
+                    "actual_version": current_token,
+                },
+            )
 
         overlay_key = self._info_overlay_key(domain_id, ctx)
         if overlay_key is None:
@@ -384,6 +464,11 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         # Always written through: a non-SWAPPING transition passes the
         # default None and so clears any stale in-flight swap token.
         kb_info.generation = generation
+
+        # Advance the version counter on every write (the token must
+        # change so a concurrent writer holding the prior token
+        # conflicts). A lazy per-tenant counter starts at None -> 1.
+        self._state_versions[version_key] = (current_counter or 0) + 1
 
         # In-process backend: no serialized metadata file is written,
         # but the state-write event fires for surface parity with the
