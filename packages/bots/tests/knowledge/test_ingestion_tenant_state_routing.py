@@ -25,6 +25,8 @@ not a bot conversation flow.
 
 from __future__ import annotations
 
+import pytest
+
 from dataknobs_bots.knowledge import (
     InMemoryKnowledgeBackend,
     IngestSwapMode,
@@ -33,7 +35,12 @@ from dataknobs_bots.knowledge import (
 )
 from dataknobs_bots.knowledge.storage import IngestionStatus
 from dataknobs_common.capabilities import Capability
-from dataknobs_common.tenancy import BoundTenantContext
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.tenancy import (
+    BoundTenantContext,
+    PrefixedTenantContext,
+    SharedCorpusTenantContext,
+)
 
 
 async def _make_kb() -> RAGKnowledgeBase:
@@ -256,6 +263,118 @@ async def test_resolve_context_bound_vs_unbound() -> None:
 
     unbound = KnowledgeIngestionManager(source=backend, destination=kb)
     assert unbound._resolve_context("kb") is None
+
+    await kb.close()
+    await backend.close()
+
+
+# --- T4b: tenant_context_config shape selection ---
+#
+# The default (no-config) byte-identity guard — bound resolves
+# ``BoundTenantContext`` and unbound resolves ``None`` — is already pinned by
+# ``test_resolve_context_bound_vs_unbound`` above; it is not duplicated here.
+
+
+async def test_context_config_selects_shared_corpus() -> None:
+    """A ``shared_corpus`` config keeps per-tenant state but locks/matches
+    on the corpus, so two domain views of one corpus are the same scope."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    mgr = KnowledgeIngestionManager(
+        source=backend,
+        destination=kb,
+        tenant_id="acme",
+        tenant_context_config={
+            "kind": "shared_corpus",
+            "shared_corpus_id": "corpus-1",
+        },
+    )
+    ctx = mgr._resolve_context("kb_a")
+    assert isinstance(ctx, SharedCorpusTenantContext)
+    assert ctx.tenant_id == "acme"
+    assert ctx.shared_corpus_id == "corpus-1"
+    assert ctx.domain_id == "kb_a"
+    # The meaningful delta: the lock key is on the corpus, not the domain.
+    assert ctx.lock_key("ingest") == "ingest:acme:corpus-1"
+    # Two domain views of the same corpus are the same scope — this is what
+    # distinguishes shared_corpus from bound (which would be False here).
+    assert ctx.matches(mgr._resolve_context("kb_b")) is True
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_context_config_selects_prefixed_changes_state_prefix() -> None:
+    """A ``prefixed`` config redirects where the backend writes state —
+    the seam changes backend behavior, not just the returned type."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    prefixed = KnowledgeIngestionManager(
+        source=backend,
+        destination=kb,
+        tenant_id="acme",
+        tenant_context_config={
+            "kind": "prefixed",
+            "prefix_pattern": "t-{tenant_id}/{domain_id}/",
+        },
+    )
+    ctx = prefixed._resolve_context("kb")
+    assert isinstance(ctx, PrefixedTenantContext)
+    assert ctx.state_key_prefix() == "t-acme/kb/"
+
+    # Contrast: a bound manager's state prefix is the default convention.
+    bound = KnowledgeIngestionManager(
+        source=backend, destination=kb, tenant_id="acme"
+    )
+    bound_ctx = bound._resolve_context("kb")
+    assert bound_ctx is not None
+    assert bound_ctx.state_key_prefix() == "tenants/acme/_state/"
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_context_config_identity_is_authoritative() -> None:
+    """The manager's bound tenant and per-call domain override any identity
+    a config tries to smuggle in."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    mgr = KnowledgeIngestionManager(
+        source=backend,
+        destination=kb,
+        tenant_id="acme",
+        tenant_context_config={
+            "kind": "bound",
+            "tenant_id": "intruder",
+            "domain_id": "other",
+        },
+    )
+    assert mgr._resolve_context("real_kb") == BoundTenantContext(
+        "acme", "real_kb"
+    )
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_unbound_manager_with_non_single_config_raises() -> None:
+    """A tenant-requiring config on an unbound manager fails fast at
+    construction."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    with pytest.raises(ConfigurationError):
+        KnowledgeIngestionManager(
+            source=backend,
+            destination=kb,
+            tenant_context_config={
+                "kind": "shared_corpus",
+                "shared_corpus_id": "c",
+            },
+        )
 
     await kb.close()
     await backend.close()

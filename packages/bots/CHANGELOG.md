@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `KnowledgeIngestionManager` accepts a `tenant_context_config` mapping
+  selecting the per-tenant state-context shape (`bound` / `prefixed` /
+  `shared_corpus` / `single`) via the shared tenant-context factory; the
+  manager's bound tenant and per-call domain remain authoritative, so the
+  config never re-targets identity. A tenant-requiring shape on a manager
+  with no bound `tenant_id` raises at construction. Default behavior
+  (no config) is unchanged.
 - A tenant-bound `KnowledgeIngestionManager` (constructed with
   `tenant_id`) isolates its per-tenant ingestion **status** on a shared
   knowledge backend by routing every backend state operation through a

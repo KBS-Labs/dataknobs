@@ -21,7 +21,8 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     DynamicCapabilityMixin,
 )
-from dataknobs_common.tenancy import BoundTenantContext
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.tenancy import BoundTenantContext, create_tenant_context
 
 from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
 from .storage import IngestionStatus, InvalidVersionError
@@ -257,6 +258,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         rate_limiter: RateLimiter | None = None,
         *,
         tenant_id: str | None = None,
+        tenant_context_config: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize the ingestion manager.
 
@@ -284,12 +286,50 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 — identity is sacred at the write boundary. ``None``
                 (default) is today's single-tenant byte-identical
                 posture.
+            tenant_context_config: Optional keyword-only mapping selecting
+                the per-tenant **state-context shape** for backend state
+                operations, dispatched through
+                :func:`~dataknobs_common.tenancy.create_tenant_context`.
+                Set ``kind`` (``"bound"`` / ``"prefixed"`` /
+                ``"shared_corpus"`` / ``"single"``) plus that kind's
+                required fields (see ``create_tenant_context`` for the
+                full key list); for example
+                ``{"kind": "shared_corpus", "shared_corpus_id":
+                "regulatory-corpus"}`` keeps per-tenant ingest state while
+                locking/matching on the shared corpus. The manager's bound
+                ``tenant_id`` and the per-call ``domain_id`` are
+                authoritative — a ``tenant_id`` / ``domain_id`` carried in
+                the config is overridden, so the config never re-targets
+                identity. A non-``single`` shape requires a bound
+                ``tenant_id``; supplying one on an unbound manager raises
+                :class:`~dataknobs_common.exceptions.ConfigurationError`
+                at construction. ``None`` (default) is today's behaviour:
+                :class:`~dataknobs_common.tenancy.BoundTenantContext` when
+                tenant-bound, the unbound single-tenant path otherwise.
+                Note ``{"kind": "single"}`` resolves a
+                :class:`~dataknobs_common.tenancy.SingleTenantContext`
+                (empty state-key prefix — byte-identical backend state to
+                the unbound path), **not** ``None``.
         """
+        if tenant_context_config is not None and tenant_id is None:
+            # A non-single context shape draws its tenant identity from
+            # self._tenant_id, so a tenant-requiring config on an unbound
+            # manager is a configuration error — surface it here rather than
+            # lazily on the first backend state call. (kind defaults to a
+            # truthiness-inferred shape; absent an explicit "single" the
+            # config is treated as tenant-requiring.) The bound tenant value
+            # is never echoed into the message.
+            if tenant_context_config.get("kind") != "single":
+                raise ConfigurationError(
+                    "tenant_context_config selects a tenant-scoped context "
+                    "but no tenant_id was bound on the manager."
+                )
         self._source = source
         self._destination = destination
         self._event_bus = event_bus
         self._rate_limiter = rate_limiter
         self._tenant_id = tenant_id
+        self._tenant_context_config = tenant_context_config
         # Lazily constructed in-process callback registry for ingest
         # lifecycle events (see :attr:`lifecycle_callbacks`).
         self._lifecycle_callbacks: CallbackRegistry | None = None
@@ -355,13 +395,23 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
     def _resolve_context(self, domain_id: str) -> TenantContext | None:
         """The :class:`TenantContext` for a per-domain state operation.
 
-        Returns ``BoundTenantContext(self._tenant_id, domain_id)`` when
-        this manager is tenant-bound, else ``None`` — which every
-        backend treats as the single-tenant case (byte-identical state
-        paths to an unbound manager). Returning ``None`` (rather than a
-        throwaway ``SingleTenantContext``) keeps the unbound path's
-        backend state calls literally unchanged: an unbound manager
-        passes ``ctx=None``, exactly as before this routing existed.
+        When a ``tenant_context_config`` was supplied, the shape it
+        selects (``bound`` / ``prefixed`` / ``shared_corpus`` /
+        ``single``) is built through
+        :func:`~dataknobs_common.tenancy.create_tenant_context`. The
+        manager's bound ``tenant_id`` and the per-call ``domain_id`` are
+        spread in last, so they override any same-named key the config
+        carries — identity is authoritative at the boundary and the
+        config never re-targets which tenant/domain the state belongs to.
+
+        Absent that config, returns
+        ``BoundTenantContext(self._tenant_id, domain_id)`` when this
+        manager is tenant-bound, else ``None`` — which every backend
+        treats as the single-tenant case (byte-identical state paths to
+        an unbound manager). Returning ``None`` (rather than a throwaway
+        ``SingleTenantContext``) keeps the unbound path's backend state
+        calls literally unchanged: an unbound manager passes ``ctx=None``,
+        exactly as before this routing existed.
 
         Threaded into every backend state call so a tenant-bound
         manager isolates its ingestion **status** under the tenant's
@@ -370,6 +420,14 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         detection resolves against the shared content lineage and stays
         minimal.
         """
+        if self._tenant_context_config is not None:
+            return create_tenant_context(
+                {
+                    **self._tenant_context_config,
+                    "domain_id": domain_id,
+                    "tenant_id": self._tenant_id,
+                }
+            )
         if self._tenant_id is not None:
             return BoundTenantContext(self._tenant_id, domain_id)
         return None
