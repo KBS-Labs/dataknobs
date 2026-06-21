@@ -40,6 +40,7 @@ from dataknobs_common.tenancy import (
     BoundTenantContext,
     PrefixedTenantContext,
     SharedCorpusTenantContext,
+    SingleTenantContext,
 )
 
 
@@ -374,6 +375,80 @@ async def test_unbound_manager_with_non_single_config_raises() -> None:
                 "kind": "shared_corpus",
                 "shared_corpus_id": "c",
             },
+        )
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_unbound_manager_with_inferred_shape_raises() -> None:
+    """The fail-closed guard cannot be bypassed by omitting ``kind``: a
+    config carrying only the tenant-requiring keys (here ``shared_corpus_id``,
+    which ``create_tenant_context`` would infer as ``shared_corpus``) on an
+    unbound manager still raises at construction. Absent an explicit
+    ``"single"``, the config is treated as tenant-requiring."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    with pytest.raises(ConfigurationError):
+        KnowledgeIngestionManager(
+            source=backend,
+            destination=kb,
+            # No "kind" — relies on create_tenant_context's inference path.
+            tenant_context_config={"shared_corpus_id": "c"},
+        )
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_context_config_single_resolves_single_context_not_none() -> None:
+    """``{"kind": "single"}`` on a bound manager resolves a real
+    :class:`SingleTenantContext` with an empty state-key prefix —
+    byte-identical backend state to the unbound path, but distinctly
+    **not** ``None`` (the documented distinction the seam preserves)."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    mgr = KnowledgeIngestionManager(
+        source=backend,
+        destination=kb,
+        tenant_id="acme",
+        tenant_context_config={"kind": "single"},
+    )
+    ctx = mgr._resolve_context("kb")
+    assert isinstance(ctx, SingleTenantContext)
+    assert ctx is not None
+    # Empty prefix == byte-identical backend state to the unbound (None) path.
+    assert ctx.state_key_prefix() == ""
+
+    await kb.close()
+    await backend.close()
+
+
+async def test_malformed_bound_config_raises_at_construction() -> None:
+    """A bound manager with a malformed shape (here ``prefixed`` missing its
+    required ``prefix_pattern``) fails fast at construction with a
+    ``ConfigurationError`` — not lazily on the first backend state call as a
+    bare ``ValueError`` from ``create_tenant_context``."""
+    backend = await _seed_backend()
+    kb = await _make_kb()
+
+    with pytest.raises(ConfigurationError):
+        KnowledgeIngestionManager(
+            source=backend,
+            destination=kb,
+            tenant_id="acme",
+            tenant_context_config={"kind": "prefixed"},  # no prefix_pattern
+        )
+
+    # An unknown kind on a bound manager is likewise rejected at construction.
+    with pytest.raises(ConfigurationError):
+        KnowledgeIngestionManager(
+            source=backend,
+            destination=kb,
+            tenant_id="acme",
+            tenant_context_config={"kind": "nonsense"},
         )
 
     await kb.close()

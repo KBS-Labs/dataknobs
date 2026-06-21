@@ -296,14 +296,25 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 full key list); for example
                 ``{"kind": "shared_corpus", "shared_corpus_id":
                 "regulatory-corpus"}`` keeps per-tenant ingest state while
-                locking/matching on the shared corpus. The manager's bound
-                ``tenant_id`` and the per-call ``domain_id`` are
-                authoritative — a ``tenant_id`` / ``domain_id`` carried in
-                the config is overridden, so the config never re-targets
-                identity. A non-``single`` shape requires a bound
-                ``tenant_id``; supplying one on an unbound manager raises
+                matching on the shared corpus. Only the selected context's
+                ``state_key_prefix()`` / ``matches()`` are load-bearing in
+                this manager; ``lock_key()`` is **not** consumed here
+                (ingest serialization lives in
+                :class:`IngestOrchestrator`, which keys its lock
+                independently), so a ``shared_corpus`` shape redirects
+                state-key layout without changing how ingests serialize.
+                The manager's bound ``tenant_id`` and the per-call
+                ``domain_id`` are authoritative — a ``tenant_id`` /
+                ``domain_id`` carried in the config is overridden, so the
+                config never re-targets identity. A non-``single`` shape
+                requires a bound ``tenant_id``; supplying one on an unbound
+                manager raises
                 :class:`~dataknobs_common.exceptions.ConfigurationError`
-                at construction. ``None`` (default) is today's behaviour:
+                at construction, as does a malformed shape (e.g.
+                ``{"kind": "prefixed"}`` with no ``prefix_pattern``, or an
+                unknown ``kind``) on a bound manager — both fail fast at
+                construction rather than lazily on the first backend state
+                call. ``None`` (default) is today's behaviour:
                 :class:`~dataknobs_common.tenancy.BoundTenantContext` when
                 tenant-bound, the unbound single-tenant path otherwise.
                 Note ``{"kind": "single"}`` resolves a
@@ -311,7 +322,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                 (empty state-key prefix — byte-identical backend state to
                 the unbound path), **not** ``None``.
         """
-        if tenant_context_config is not None and tenant_id is None:
+        if tenant_context_config is not None:
             # A non-single context shape draws its tenant identity from
             # self._tenant_id, so a tenant-requiring config on an unbound
             # manager is a configuration error — surface it here rather than
@@ -319,11 +330,33 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             # truthiness-inferred shape; absent an explicit "single" the
             # config is treated as tenant-requiring.) The bound tenant value
             # is never echoed into the message.
-            if tenant_context_config.get("kind") != "single":
+            if tenant_id is None and tenant_context_config.get("kind") != "single":
                 raise ConfigurationError(
                     "tenant_context_config selects a tenant-scoped context "
                     "but no tenant_id was bound on the manager."
                 )
+            # Dry-run the shape against the authoritative identity so a
+            # malformed config (missing prefix_pattern / shared_corpus_id,
+            # unknown kind) fails fast at construction with a
+            # ConfigurationError — symmetric with the unbound guard above —
+            # rather than lazily on the first backend state call as a bare
+            # ValueError from create_tenant_context. The placeholder
+            # domain_id stands in for the per-call value; identity is
+            # spread in last exactly as _resolve_context does it. The
+            # config contents are never interpolated into the message (the
+            # original is chained for the traceback only).
+            try:
+                create_tenant_context(
+                    {
+                        **tenant_context_config,
+                        "domain_id": "_validation_",
+                        "tenant_id": tenant_id,
+                    }
+                )
+            except ValueError as exc:
+                raise ConfigurationError(
+                    "tenant_context_config is not a valid tenant-context shape."
+                ) from exc
         self._source = source
         self._destination = destination
         self._event_bus = event_bus
