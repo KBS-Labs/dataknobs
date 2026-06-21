@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
+from dataknobs_common.exceptions import ConcurrencyError
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -88,8 +89,17 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         | frozenset({
             Capability.TENANT_SCOPED_STATE,
             Capability.SNAPSHOT_ISOLATION,
+            # Conditional metadata writes are guarded by an ephemeral
+            # advisory file lock (POSIX fcntl.flock) held for the
+            # read-check-write critical section; see _cas_write_metadata_sync.
+            Capability.TRANSACTIONAL_METADATA,
         })
     )
+
+    # Sidecar lock file for the conditional-write critical section. Held
+    # via an advisory ``flock`` only while ``expected_version`` is
+    # supplied; the default unconditional write path never touches it.
+    METADATA_LOCK_FILE: ClassVar[str] = "_metadata.json.lock"
 
     def __init__(self, base_path: str | Path) -> None:
         """Initialize the file backend.
@@ -252,6 +262,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         domain_id: str,
         metadata: dict,
         ctx: TenantContext | None = None,
+        *,
+        expected_version: str | None = None,
     ) -> None:
         """Save metadata to disk atomically, then fire a state-write event.
 
@@ -260,6 +272,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         (``create_kb`` is domain-keyed), so the parent is created on
         demand. The ``ctx=None`` path performs no extra directory work,
         keeping single-tenant behavior byte-identical.
+
+        ``expected_version`` (default ``None``) selects the write mode.
+        ``None`` is the unconditional atomic write (byte-identical to a
+        backend with no conditional-write support). A non-``None`` token
+        routes through :meth:`_cas_write_metadata_sync`, which holds an
+        advisory file lock for the read-check-write critical section and
+        raises :class:`ConcurrencyError` if the on-disk document no
+        longer hashes to ``expected_version``.
         """
         meta_path = self._metadata_path(domain_id, ctx)
         body = json.dumps(metadata, indent=2, default=str)
@@ -268,7 +288,22 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             await asyncio.to_thread(
                 meta_path.parent.mkdir, parents=True, exist_ok=True
             )
-        await asyncio.to_thread(self._atomic_write_text, meta_path, body)
+
+        if expected_version is None:
+            await asyncio.to_thread(self._atomic_write_text, meta_path, body)
+        else:
+            lock_path = meta_path.parent / self.METADATA_LOCK_FILE
+            # The whole open+flock+read+compare+replace critical section
+            # runs in one to_thread call so the advisory lock is held off
+            # the event loop.
+            await asyncio.to_thread(
+                self._cas_write_metadata_sync,
+                meta_path,
+                lock_path,
+                body,
+                expected_version,
+                domain_id,
+            )
 
         await self._fire_state_write(
             domain_id=domain_id,
@@ -276,6 +311,68 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             kind=KnowledgeKeyKind.METADATA,
             byte_size=len(body.encode("utf-8")),
         )
+
+    @staticmethod
+    def _read_document_bytes(meta_path: Path) -> bytes | None:
+        """Read the raw metadata-document bytes, or ``None`` if absent.
+
+        Blocking — call via ``asyncio.to_thread`` from async methods.
+        """
+        if not meta_path.exists():
+            return None
+        return meta_path.read_bytes()
+
+    def _cas_write_metadata_sync(
+        self,
+        meta_path: Path,
+        lock_path: Path,
+        body: str,
+        expected_version: str,
+        domain_id: str,
+    ) -> None:
+        """Compare-and-swap the metadata document under an advisory lock.
+
+        POSIX-only (``fcntl.flock`` — the file backend already assumes
+        POSIX ``os.replace`` / ``tempfile`` semantics; no new dependency).
+        An exclusive advisory lock on a **stable** sidecar ``.lock`` inode
+        is held for the entire read-check-write critical section so
+        concurrent writers on the same host serialize: re-read the current
+        document, hash it, and write only when the hash still equals
+        ``expected_version``; otherwise raise :class:`ConcurrencyError`
+        without writing. The lock is never on the metadata file itself —
+        :meth:`_atomic_write_text` swaps that inode via ``os.replace``, so
+        a lock on the swapped-out inode would not serialize a later
+        writer.
+
+        Blocking — call via ``asyncio.to_thread`` so the lock is held off
+        the event loop.
+        """
+        import fcntl  # POSIX-only; localized so import cost is CAS-path-only
+
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            current = self._read_document_bytes(meta_path)
+            current_version = (
+                hashlib.sha256(current).hexdigest()
+                if current is not None
+                else None
+            )
+            if current_version != expected_version:
+                raise ConcurrencyError(
+                    "Knowledge-base state document was modified by a "
+                    "concurrent writer",
+                    context={
+                        "domain_id": domain_id,
+                        "expected_version": expected_version,
+                        "actual_version": current_version,
+                    },
+                )
+            self._atomic_write_text(meta_path, body)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     # --- File Operations ---
 
@@ -561,6 +658,24 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Ingestion Status ---
 
+    async def get_state_version(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str | None:
+        """sha256 of the metadata-document bytes (opaque), or ``None``.
+
+        ``None`` when the (per-tenant) metadata document does not exist.
+        The hash is taken over the exact on-disk bytes that
+        :meth:`_cas_write_metadata_sync` re-reads and compares, so a
+        captured token round-trips to a conditional
+        :meth:`set_ingestion_status` write. See the protocol for the
+        round-trip contract.
+        """
+        meta_path = self._metadata_path(domain_id, ctx)
+        data = await asyncio.to_thread(self._read_document_bytes, meta_path)
+        if data is None:
+            return None
+        return hashlib.sha256(data).hexdigest()
+
     async def set_ingestion_status(
         self,
         domain_id: str,
@@ -569,6 +684,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         *,
         generation: str | None = None,
         ctx: TenantContext | None = None,
+        expected_version: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -576,6 +692,11 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         status is written to the per-tenant metadata document when
         ``ctx`` carries a state prefix (the shared single-tenant document
         otherwise).
+
+        When ``expected_version`` is supplied, the save is conditional
+        (see :meth:`_save_metadata`): the document is loaded, mutated, and
+        written only if it still hashes to ``expected_version`` under the
+        advisory lock, otherwise :class:`ConcurrencyError` is raised.
         """
         if not await asyncio.to_thread(self._kb_path(domain_id).exists):
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
@@ -593,7 +714,9 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(domain_id, kb_metadata, ctx)
+        await self._save_metadata(
+            domain_id, kb_metadata, ctx, expected_version=expected_version
+        )
 
     # --- Change Detection ---
     #

@@ -139,6 +139,24 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """Return all files in the KB (used to compute the snapshot)."""
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
+    async def get_state_version(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str | None:
+        """Opaque state-version token of the KB metadata document.
+
+        Declared abstract here rather than defaulted: the token is
+        backend-native (S3 ETag / file content hash / in-memory counter),
+        and — more importantly — a real token is only honest when the
+        backend also enforces it on the write side (the
+        ``expected_version`` guard in :meth:`set_ingestion_status`). A
+        mixin default would hand an out-of-tree backend a read token with
+        no enforcement, advertising a conditional-write contract it does
+        not keep. Backends that realize both halves override this method
+        and advertise :attr:`~dataknobs_common.Capability.TRANSACTIONAL_METADATA`.
+        See the protocol for the full contract.
+        """
+        raise NotImplementedError  # pragma: no cover - overridden by backends
+
     def key_pattern(
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,

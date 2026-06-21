@@ -114,9 +114,12 @@ async def test_capability_advertisement(kind, tmp_path) -> None:
     b = await _build(kind, tmp_path)
     assert b.supports(Capability.TENANT_SCOPED_STATE)
     assert b.supports(Capability.SNAPSHOT_ISOLATION)
-    # No backend locking in this layer — must not advertise it.
+    # Conditional metadata writes are enforced (S3 If-Match / file flock /
+    # memory counter), so the consistency capability is advertised.
+    assert b.supports(Capability.TRANSACTIONAL_METADATA)
+    # No architectural backend locking in this layer — the conditional-
+    # write flock is an in-operation atomicity detail, not an ingest lock.
     assert not b.supports(Capability.TENANT_SCOPED_LOCKS)
-    assert not b.supports(Capability.TRANSACTIONAL_METADATA)
     # The mixin's base capabilities survive the union (not replaced).
     assert b.supports(Capability.KEY_PATTERN_FILTERING)
     await b.close()

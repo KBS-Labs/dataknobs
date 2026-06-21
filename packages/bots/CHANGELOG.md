@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Knowledge-storage backends support optimistic-concurrency state writes:
+  read the current state-version token via `get_state_version`, pass it as
+  `expected_version` to `set_ingestion_status`, and a stale token raises
+  `ConcurrencyError` instead of clobbering a concurrent writer's status
+  transition. S3 uses a native `If-Match` conditional PUT on the metadata
+  object's ETag; in-memory uses a monotonic version counter; the file
+  backend guards the read-check-write critical section with an ephemeral
+  advisory `flock` on POSIX hosts. The token is opaque (round-trip it
+  verbatim). Omitting `expected_version` preserves the unconditional
+  write. The three in-tree backends advertise
+  `Capability.TRANSACTIONAL_METADATA`. Snapshot writes are unaffected —
+  they are content-addressed and write-once by identity.
 - `KnowledgeIngestionManager` accepts a `tenant_context_config` mapping
   selecting the per-tenant state-context shape (`bound` / `prefixed` /
   `shared_corpus` / `single`) via the shared tenant-context factory; the

@@ -302,6 +302,7 @@ class KnowledgeResourceBackend(Protocol):
         *,
         generation: str | None = None,
         ctx: TenantContext | None = None,
+        expected_version: str | None = None,
     ) -> None:
         """Update ingestion status for a knowledge base.
 
@@ -325,6 +326,20 @@ class KnowledgeResourceBackend(Protocol):
                 (``ctx.state_key_prefix()``); ``None`` preserves the
                 single-tenant store and storage paths exactly. KB
                 existence stays keyed by ``domain_id``.
+            expected_version: Optional optimistic-concurrency guard. When
+                ``None`` (the default) the status is written
+                unconditionally (last-writer-wins, byte-identical to a
+                backend with no conditional-write support). When set to a
+                token previously returned by :meth:`get_state_version`,
+                the write is conditional: it succeeds only if the current
+                state-version token still equals ``expected_version``,
+                otherwise raises
+                :class:`~dataknobs_common.exceptions.ConcurrencyError`
+                without modifying the document. This closes the
+                read-modify-write race where two concurrent writers each
+                load the metadata document, mutate it, and save — the
+                later save silently dropping the earlier writer's status
+                transition.
 
         Raises:
             ValueError: If ``domain_id`` doesn't exist.
@@ -334,6 +349,40 @@ class KnowledgeResourceBackend(Protocol):
                 accepted values). ``ValidationError`` is a
                 :class:`~dataknobs_common.exceptions.DataknobsError`,
                 not a ``ValueError`` subclass.
+            ConcurrencyError: If ``expected_version`` is supplied and no
+                longer matches the current state-version token (a
+                concurrent writer advanced it first).
+        """
+        ...
+
+    async def get_state_version(
+        self, domain_id: str, *, ctx: TenantContext | None = None
+    ) -> str | None:
+        """Opaque state-version token of the KB metadata document.
+
+        Captures the current version of the per-tenant metadata document
+        (ingestion status / generation token) for an optimistic-
+        concurrency write: read it, then pass it back as
+        ``expected_version`` to :meth:`set_ingestion_status`. Mirrors the
+        ``get_checksum`` "capture it and pass it back" idiom — the token
+        is **opaque**, minted by each backend in its native currency (S3
+        object ETag, file content hash, in-memory counter). Never parse,
+        compare across backends, or construct it; round-trip it verbatim.
+
+        Unlike :meth:`get_checksum` (a **content** hash that does not
+        change on a status-only transition), this token changes on every
+        metadata-document write, so it correctly guards status-only
+        updates.
+
+        Args:
+            domain_id: Knowledge base identifier
+            ctx: Optional tenant context. Scopes the token to the
+                per-tenant state document when supplied; ``None`` reads
+                the single-tenant document.
+
+        Returns:
+            The current opaque token, or ``None`` when the (per-tenant)
+            state document does not exist.
         """
         ...
 

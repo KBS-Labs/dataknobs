@@ -913,12 +913,16 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
     fires metadata / snapshot state-write events on
     ``state_write_callbacks``) — together with the two tenant-state
     capabilities each backend unions on: ``TENANT_SCOPED_STATE`` (state
-    methods honor ``ctx.state_key_prefix()``) and ``SNAPSHOT_ISOLATION``
-    (per-tenant snapshot lineage). Capabilities whose behaviour has not
+    methods honor ``ctx.state_key_prefix()``), ``SNAPSHOT_ISOLATION``
+    (per-tenant snapshot lineage), and ``TRANSACTIONAL_METADATA``
+    (conditional metadata writes — S3 ``If-Match`` / file ``flock`` /
+    memory counter — enforced by ``set_ingestion_status``'s
+    ``expected_version`` guard). Capabilities whose behaviour has not
     shipped at the backend layer (``STREAMING_READS``,
-    ``TENANT_SCOPED_LOCKS``, ``TRANSACTIONAL_METADATA`` — backends do not
-    lock) stay unadvertised; ``TENANT_SCOPED_CHUNKS`` lives at the chunk
-    layer (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
+    ``TENANT_SCOPED_LOCKS`` — backends do not take an architectural lock;
+    the conditional-write flock is an in-operation atomicity detail) stay
+    unadvertised; ``TENANT_SCOPED_CHUNKS`` lives at the chunk layer
+    (``RAGKnowledgeBase`` / ``KnowledgeIngestionManager``), not the
     backend.
     """
     advertised = frozenset({
@@ -928,6 +932,7 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
         Capability.CALLBACK_REGISTRY,
         Capability.TENANT_SCOPED_STATE,
         Capability.SNAPSHOT_ISOLATION,
+        Capability.TRANSACTIONAL_METADATA,
     })
     backend_classes: list[type[Any]] = [
         InMemoryKnowledgeBackend,
@@ -947,8 +952,7 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
         # Capabilities whose behaviour has not shipped stay unadvertised.
         for cap in (
             Capability.TENANT_SCOPED_CHUNKS,    # chunk layer, not backend
-            Capability.TENANT_SCOPED_LOCKS,     # backends do not lock
-            Capability.TRANSACTIONAL_METADATA,  # no atomic lock-wrap
+            Capability.TENANT_SCOPED_LOCKS,     # no architectural lock
             Capability.STREAMING_READS,          # not yet shipped
         ):
             assert cls.SUPPORTED_CAPABILITIES.isdisjoint({cap}), (
@@ -971,4 +975,5 @@ def test_in_memory_backend_satisfies_capability_contract_protocol() -> None:
         Capability.CALLBACK_REGISTRY,
         Capability.TENANT_SCOPED_STATE,
         Capability.SNAPSHOT_ISOLATION,
+        Capability.TRANSACTIONAL_METADATA,
     })

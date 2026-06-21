@@ -292,12 +292,53 @@ The in-tree backends (`FileKnowledgeBackend`,
 advertise the state-observability / change-subscription surface they
 implement — `KEY_PATTERN_FILTERING`, `CHANGE_SUBSCRIPTION`,
 `BACKEND_STATE_OBSERVABILITY`, `CALLBACK_REGISTRY` — together with the
-two tenant-state capabilities they support: `TENANT_SCOPED_STATE`
-(state methods honor `ctx.state_key_prefix()`) and `SNAPSHOT_ISOLATION`
-(a tenant's change detection resolves against the shared domain content
-lineage). They do **not** advertise `TENANT_SCOPED_LOCKS` /
-`TRANSACTIONAL_METADATA` — backends are lock-free; cross-replica
-serialization lives in the `IngestOrchestrator`.
+tenant-state and consistency capabilities they support:
+`TENANT_SCOPED_STATE` (state methods honor `ctx.state_key_prefix()`),
+`SNAPSHOT_ISOLATION` (a tenant's change detection resolves against the
+shared domain content lineage), and `TRANSACTIONAL_METADATA` (conditional
+metadata writes — see "Conditional state writes" below). They do **not**
+advertise `TENANT_SCOPED_LOCKS` — backends take no architectural lock
+(the conditional-write flock is an in-operation atomicity detail, not an
+ingest lock); cross-replica ingest serialization lives in the
+`IngestOrchestrator`.
+
+## Conditional state writes (optimistic concurrency)
+
+The public state-write entry, `set_ingestion_status`, does a
+read-modify-write on the whole KB metadata document. When several bot
+replicas share one knowledge backend, two writers interleaving here
+last-writer-wins clobber — the later save silently drops the earlier
+writer's status transition. To close that race, read the current
+state-version token before writing and pass it back:
+
+```python
+token = await backend.get_state_version(domain_id)
+# ... decide the next status ...
+await backend.set_ingestion_status(
+    domain_id, IngestionStatus.READY, expected_version=token
+)
+```
+
+`get_state_version` returns an **opaque** token minted in each backend's
+native currency — round-trip it verbatim, never parse it:
+
+- **S3** uses the metadata object's ETag with a server-enforced
+  `If-Match` precondition (the race-free primitive for many replicas over
+  one bucket).
+- **In-memory** uses a monotonic version counter (trivially race-free in
+  a single process).
+- **File** hashes the metadata-document bytes and guards the
+  read-check-write critical section with an ephemeral advisory
+  `fcntl.flock` on a sidecar lock file — multi-process safe on POSIX
+  hosts.
+
+When the token no longer matches at write time (a concurrent writer
+advanced it first), `set_ingestion_status` raises `ConcurrencyError`
+without modifying the document; the caller re-reads and retries. Omitting
+`expected_version` (the default) preserves the unconditional
+last-writer-wins write. Snapshots are out of scope — they are
+content-addressed and write-once by identity, so concurrent writers of a
+given snapshot key always agree on its bytes.
 
 ## Tombstone swap interaction
 
