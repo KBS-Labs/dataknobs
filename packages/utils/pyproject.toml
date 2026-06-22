@@ -18,7 +18,7 @@ dependencies = [
     "json-stream>=2.3.0",
     "python3-nmap>=1.5.0",
     "python-dotenv>=1.2.2",  # GHSA-mf9w-mj56-hr94 fixed in 1.2.2
-    "nltk>=3.9.4",  # GHSA-rf74-v2fm-23pw, CVE-2026-33230, CVE-2026-33231 fixed in 3.9.4
+    "nltk>=3.9.4",  # GHSA-rf74-v2fm-23pw, CVE-2026-33230, CVE-2026-33231 fixed in 3.9.4. GHSA-p4gq-832x-fm9v (CVSS 7.5, path traversal in nltk.data.find() via url-encoded nltk:-scheme resource names) affects all versions through 3.9.4 with no upstream fix as of 2026-06-22 — accepted: this codebase loads only fixed corpus names (wordnet/omw-1.4/wordnet_ic) and never passes caller-controlled strings into nltk.data.find()
 ]
 
 [tool.uv.sources]

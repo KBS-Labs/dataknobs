@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-06-21T01:18:39Z",
+  "timestamp": "2026-06-22T17:05:39Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": ["bots"],
+  "packages": "all",
+  "tested_packages": [],
   "package_hashes": {
   "bots": "eda0ff352ddf8813afc1121d7bf66fdab553b03b9a182e6e83c4ba4b7aafd766",
   "common": "596eb138d762acf33434dafcbf2154f4264aa919ad01a6aad692dbc6c7f1fdd8",
   "config": "1cba16240d9dfae40bf8dfaf5d13844edb8f503b4761cac2b682fd5d3f4c5aa8",
   "data": "728a586337028d202c0ffda9301a865dc3f53c18c856196babf5000ccd1119b5",
-  "fsm": "3a539a545dc5a5e50e7bd3f4d8ac5b155042a345fd57bf7c67cf8ac33dbf3e67",
+  "fsm": "56fda0e12d8b7e8a80ff7e4ade41c69ec7504f03a3c991d4dda6f4efd259fab0",
   "legacy": "ddc6bd0d83e9e40ea4107cd6db0f40f7fcdbe5f5814c0814aabeb050d1ed039c",
   "llm": "18dfc02f4e6184a519cadbb2416e47609b4592a585a156d781b21eb10f421bdb",
   "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
-  "utils": "3244e0bd69237efdf3ed7dbccfa425a9efb3c1f6e3b51323aa4444e07a9b3987",
-  "xization": "f0bc0ad911c7ae1ba7cc7d48d7d2643e0bb74f04f417ada0d526d1a562a9846a",
+  "utils": "a885e2b1f9debc7f38391de31210808a08eaa208bf0dd6573fa472a839bb7e79",
+  "xization": "9cdddcc16b1c816b2d6f4f27b4fc0c965a4897e96561d7a3074b0049ff070b5d",
   "_algorithm_version": 3
 },
   "checks": {

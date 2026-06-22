@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped the minimum `langchain` requirement in the `llm` extra from
+  `>=1.0.0` to `>=1.3.9` to exclude versions affected by
+  GHSA-gr75-jv2w-4656 (CVSS 5.1), which affects 1.0.0–1.3.8 and is fixed
+  in 1.3.9. `langchain` is declared only as a convenience extra and is
+  not imported by this package. Surfaced by the floor-resolve audit in
+  the `dependency-update` workflow.
+
 ### Changed
 
 - ruff's `ASYNC` lint family (`flake8-async`) is now enforced for this
