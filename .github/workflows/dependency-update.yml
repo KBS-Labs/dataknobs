@@ -31,8 +31,11 @@ name: Update Python Dependencies
 
 on:
   schedule:
-    # Run weekly on Monday at 15:00 UTC (9 AM MDT / 8 AM MST)
-    - cron: '0 15 * * 1'
+    # Run weekly on Monday at 14:37 UTC (8:37 AM MDT / 7:37 AM MST).
+    # Off the top of the hour deliberately: GitHub throttles schedule
+    # triggers hardest at round-hour slots (e.g. :00), so an odd minute
+    # lands in a less-contended queue and starts closer to the nominal time.
+    - cron: '37 14 * * 1'
   workflow_dispatch:
 
 concurrency:
