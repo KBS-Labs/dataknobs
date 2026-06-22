@@ -35,7 +35,7 @@ dependencies = [
 llm = [
     "openai>=1.0.0",
     "anthropic>=0.7.0",
-    "langchain>=1.0.0",  # multiple langchain/langchain-core/langchain-community CVEs (highest CVSS 9.3: GHSA-c67j-w6g6-q2cm) fixed by langchain 1.x line; we only declare this as a convenience extra and do not import it
+    "langchain>=1.3.9",  # multiple langchain/langchain-core/langchain-community CVEs (highest CVSS 9.3: GHSA-c67j-w6g6-q2cm) fixed by the langchain 1.x line; GHSA-gr75-jv2w-4656 (CVSS 5.1) still affects 1.0.0–1.3.8 and is fixed in 1.3.9. We only declare this as a convenience extra and do not import it
 ]
 http = [
     "httpx>=0.27.0",  # GHSA-vqfr-h8mv-ghfj in transitive h11<0.16 (CVSS 9.1) swept by httpcore 1.x (required by httpx>=0.27)
