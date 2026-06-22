@@ -76,7 +76,7 @@ from dataknobs_xization.ingestion import (
     process_directory,
 )
 
-__version__ = "1.3.8"
+__version__ = "1.3.9"
 
 __all__ = [
     # Existing exports

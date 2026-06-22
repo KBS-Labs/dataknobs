@@ -4,7 +4,7 @@ A flexible FSM framework with data modes, resource management, and streaming sup
 for building complex data processing workflows.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # Core FSM components
 from .core.fsm import FSM

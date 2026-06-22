@@ -5,6 +5,126 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-06-22
+
+### dataknobs-common [1.5.0]
+
+#### Added
+- Add TenantContext protocol + reference implementations for per-tenant scoping
+- Add CallbackRegistry with pluggable ordering, error policy, and EventBus fan-out
+- Add Capability enum + CapabilityContract/Mixin for declarative feature advertisement
+- Add Discriminator and ResourceResolver protocols + reference implementations
+- Add vector-store partition resolvers (null, metadata-key, temporal, callable, joining)
+- Add ScopeProjector protocol + reference implementations
+- Add BackendRegistry protocol unifying Registry and PluginRegistry
+- Add rate_limiter_backends / resolver_backends / partition_resolver_backends plugin registries
+- Add async factory shims: create_event_bus_async, create_lock_async, create_rate_limiter_async
+- Add aiter_sync_in_thread to stream a blocking sync iterator off the event loop
+- Add close_if_owned / close_if_owned_sync owned-vs-injected teardown guards
+- Add assert_no_blocking() test construct + no_blocking pytest fixture
+- Add forwardable_components() to StructuredConfigConsumer for composing strategies
+- Extend safe_eval allowlist with frozenset, sum, any, all, reversed
+
+#### Changed
+- BREAKING: Wrap backend-factory construction errors in OperationError for create_event_bus / create_lock / create_rate_limiter (catch DataknobsError)
+- BREAKING: Convert event_bus_backends and lock_backends to PluginRegistry; use BackendRegistry for isinstance checks (unregister now returns None)
+- Enforce the ruff ASYNC lint family
+
+#### Fixed
+- Offload PyrateRateLimiter bucket I/O off the event loop for blocking backends
+- Release the owned bucket transport on PyrateRateLimiter close() / reset()
+- Back off PyrateRateLimiter.acquire() poll interval exponentially under contention
+- Block .format() / .format_map() sandbox-escape vector in safe_eval
+
+### dataknobs-data [0.5.2]
+
+#### Added
+- Add PgVectorStore.from_components(pool=...) for externally supplied connection pools
+
+#### Changed
+- Document async-transport and backing-resource ownership contracts; enforce ruff ASYNC
+
+#### Fixed
+- Run async file/vector-store I/O and the aioboto3 session warm off the event loop
+- Offload AsyncSQLite / AsyncDuckDB connect directory creation off the loop
+- Fix S3 search sort error on falsy sort values such as numeric 0
+- Snapshot consistent state in MemoryVectorStore / FaissVectorStore save; handle bare-filename persist_path
+
+### dataknobs-fsm [0.2.2]
+
+#### Changed
+- Enforce the ruff ASYNC lint family
+
+#### Fixed
+- Run FileProcessor / DatabaseETL pipelines on the async engine; DatabaseETL now executes end-to-end
+- Offload FSM file-processing and streaming reads/writes off the event loop
+- Accept Path source/sink in AsyncSimpleFSM.process_stream; raise on unsupported compression
+
+#### Security
+- Bump langchain floor (llm extra) to >=1.3.9 for GHSA-gr75-jv2w-4656
+- Bump aiohttp floor (http extra) to >=3.14.1
+
+### dataknobs-llm [0.6.3]
+
+#### Added
+- Add dataknobs_llm.intent module (IntentClassifier protocol, keyword/LLM/composite classifiers, NegationFilter, plugin registry, factories)
+- Add CallbackRegistry composition to ExecutionTracker (execution:record fan-out)
+
+#### Fixed
+- Offload SqliteEmbeddingCache.initialize directory creation off the event loop
+
+#### Security
+- Bump aiohttp floor (ollama/huggingface extras) to >=3.14.1
+- Acknowledge accepted torch CVE GHSA-rrmf-rvhw-rf47 (torch.jit.script unused)
+
+### dataknobs-utils [1.2.14]
+
+#### Security
+- Acknowledge accepted nltk CVE GHSA-p4gq-832x-fm9v (fixed corpus names only; no caller-controlled input to nltk.data.find())
+
+### dataknobs-xization [1.3.9]
+
+#### Changed
+- Enforce the ruff ASYNC lint family
+
+#### Fixed
+- Offload LocalDocumentSource.iter_files glob/stat off the event loop
+- Offload DirectoryProcessor YAML/CSV conversion and streamed JSON/JSONL ingest off the loop
+
+### dataknobs-bots [0.8.0]
+
+#### Added
+- Add intent_confirm: wizard stage primitive + extensible stage-synthesizer registry
+- Add clarification_template: stage field for conversation-mode re-renders
+- Add turn-lifecycle hooks (LifecycleHooks / WizardHooks on_turn_start / on_turn_end)
+- Add StateBridge protocol + reference implementations for named-key state bridging
+- Add tenant-scoped chunks to RAGKnowledgeBase and KnowledgeIngestionManager (tenant_id)
+- Add per-tenant ingest-state isolation on knowledge backends (TenantContext)
+- Add optimistic-concurrency state writes to knowledge backends (expected_version)
+- Add knowledge-layer event topics + KnowledgeIngestionManager lifecycle events
+- Add KnowledgeKeyKind classification, key_pattern, and subscribe_to_changes for event-driven ingestion
+- Add JinjaInputsProjector + declarative wizard stage inputs:
+- Add capability advertisement across knowledge bases, managers, and backends
+- Add extra_metadata / tenant_id keyword params across RAGKnowledgeBase ingest entry points
+- Forward construction collaborators to per-stage wizard sub-strategies (enables composing reasoning: pipeline stages)
+
+#### Changed
+- close() across the bot stack tears down only collaborators the holder owns (migration: direct-construction default flipped to leave injected collaborators open)
+- Re-platform LifecycleHooks / WizardHooks onto the CallbackRegistry substrate
+- Publish knowledge ingestion lifecycle on ingest:domain:start / :end (replaces knowledge:ingestion)
+- Run the S3 knowledge backend on aioboto3 and offload file-backend I/O off the loop
+- Enforce the ruff ASYNC lint family
+
+#### Fixed
+- Fix cross-tenant chunk_id UPSERT collision in shared RAGKnowledgeBase instances
+- Fix cross-tenant filter-based deletion in KnowledgeIngestionManager
+- Offload wizard config and knowledge-base tool disk I/O off the event loop
+
+#### Security
+- Reject path-traversal config/resource names in SaveConfigTool and the KB wizard tools
+- Bump starlette floor (server extra) to >=1.3.1 for GHSA-82w8-qh3p-5jfq and related sweeps
+
+
 ## Release - 2026-06-08
 
 ### dataknobs-data [0.5.1]

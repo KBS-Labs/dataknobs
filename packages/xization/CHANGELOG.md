@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.3.9 - 2026-06-22
+
 ### Changed
 
 - ruff's `ASYNC` lint family (`flake8-async`) is now enforced for this
