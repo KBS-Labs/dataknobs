@@ -958,15 +958,24 @@ class AsyncPostgresDatabase(
             else:
                 raise
 
-        # Initialize query builder
-        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        # get_pool incremented this holder's claim on the shared pool. If
+        # table/vector setup fails we never set _connected, so balance the
+        # increment here rather than relying on the caller invoking close()
+        # after a failed connect() (which would otherwise leak the holder).
+        try:
+            # Initialize query builder
+            self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Ensure table exists
-        await self._ensure_table()
+            # Ensure table exists
+            await self._ensure_table()
 
-        # Check and enable vector support if requested
-        if self.vector_enabled:
-            await self._detect_vector_support()
+            # Check and enable vector support if requested
+            if self.vector_enabled:
+                await self._detect_vector_support()
+        except Exception:
+            await _pool_manager.release_pool(self._pool_config)
+            self._pool = None
+            raise
 
         self._connected = True
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
@@ -1004,12 +1013,24 @@ class AsyncPostgresDatabase(
             await conn.close()
 
     async def close(self) -> None:
-        """Close the database connection and properly close the pool."""
+        """Release this holder's claim on the shared connection pool.
+
+        Pools are shared by DSN across every ``AsyncPostgresDatabase`` on
+        the same event loop (``ConnectionPoolManager`` keys on
+        host/port/database/user, not table). ``close()`` is a *release*,
+        not a teardown: it decrements the manager's holder count and the
+        pool is closed only when the last holder releases. This prevents
+        one instance's ``close()`` from closing the pool out from under
+        siblings that still hold it.
+        """
         if self._pool is not None:
             try:
-                await self._pool.close()
+                await _pool_manager.release_pool(self._pool_config)
             except Exception as e:
-                logger.warning("Error closing connection pool: %s", e)
+                logger.warning("Error releasing connection pool: %s", e)
+            # Guarding on ``self._pool is not None`` makes a double-close a
+            # no-op (no double-decrement) — release_pool is idempotent for
+            # an already-evicted config, but this avoids the call entirely.
             self._pool = None
         self._connected = False
 

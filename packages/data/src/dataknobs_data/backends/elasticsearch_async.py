@@ -125,15 +125,33 @@ class AsyncElasticsearchDatabase(
             close_elasticsearch_client
         )
 
-        # Ensure index exists
-        await self._ensure_index()
+        # get_pool incremented this holder's claim on the shared client.
+        # If index setup fails we never set _connected, so close() (which
+        # guards on _connected) would never release — leaking the holder
+        # slot for the life of the process. Balance the increment here.
+        try:
+            await self._ensure_index()
+        except Exception:
+            await _client_manager.release_pool(self._pool_config)
+            self._client = None
+            raise
         self._connected = True
 
     async def close(self) -> None:
-        """Close the database connection."""
+        """Release this holder's claim on the shared Elasticsearch client.
+
+        The client is shared across instances on a loop (keyed on
+        hosts + index) and owned by the pool manager. ``close()`` releases
+        this holder; the registered close-func runs when the last holder
+        releases. (Prior behavior dropped the local reference only, so the
+        client was never closed until ``close_all()``/``atexit`` — a
+        resource leak under instance churn.)
+        """
         if self._connected:
-            # Note: The client is managed by the pool manager, so we don't close it here
-            # Just mark as disconnected
+            try:
+                await _client_manager.release_pool(self._pool_config)
+            except Exception as e:
+                logger.warning("Error releasing Elasticsearch client: %s", e)
             self._client = None
             self._connected = False
 

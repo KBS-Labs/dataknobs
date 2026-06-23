@@ -123,6 +123,41 @@ async def test_connect_creates_index_if_missing(es_db):
 
 
 @pytest.mark.asyncio
+async def test_connect_releases_holder_when_index_setup_fails(es_db):
+    """A connect() that fails after acquiring the shared client must release it.
+
+    Reproduce-first for the partial-connect refcount leak: connect()
+    increments the manager holder count via get_pool, then runs
+    _ensure_index(). If index setup raises, _connected is never set, so a
+    later close() (guarded on _connected) would never release — leaking the
+    holder slot for the life of the process. connect() must release the
+    holder before propagating, so the manager's count returns to baseline.
+    """
+    from dataknobs_data.backends.elasticsearch_async import _client_manager
+
+    mock_client = AsyncMock()
+    # Make index setup fail inside _ensure_index (indices.exists raises).
+    mock_client.indices.exists = AsyncMock(side_effect=RuntimeError("es down"))
+    mock_client.close = AsyncMock()
+
+    baseline = _client_manager.get_pool_count()
+
+    with patch(
+        'dataknobs_data.backends.elasticsearch_async.create_async_elasticsearch_client',
+        new_callable=AsyncMock,
+    ) as mock_create:
+        mock_create.return_value = mock_client
+
+        with pytest.raises(RuntimeError, match="es down"):
+            await es_db.connect()
+
+    # The failed connect must not leak a holder slot.
+    assert es_db._connected is False
+    assert es_db._client is None
+    assert _client_manager.get_pool_count() == baseline
+
+
+@pytest.mark.asyncio
 async def test_close_releases_client(es_db, mock_es_client):
     """Test that close properly releases the client."""
     es_db._client = mock_es_client

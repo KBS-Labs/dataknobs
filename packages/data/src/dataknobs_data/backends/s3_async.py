@@ -102,11 +102,28 @@ class AsyncS3Database(  # type: ignore[misc]
             ),
         )
 
+        # Invariant: nothing fallible runs between the get_pool increment and
+        # _connected = True, so the holder count is always balanced (close()
+        # releases on the success path). If a step that can raise is added
+        # here, it MUST release the holder on failure (release_pool) — see the
+        # elasticsearch/postgres connect() paths — or the slot leaks.
         self._connected = True
 
     async def close(self) -> None:
-        """Close the S3 connection."""
+        """Release this holder's claim on the shared aioboto3 session.
+
+        Sessions are shared by DSN across instances on a loop and owned by
+        the pool manager. ``close()`` releases this holder; the session is
+        evicted when the last holder releases. (aioboto3 sessions are
+        stateless, so there is no registered close-func; the release simply
+        keeps the manager's accounting honest and the contract uniform
+        across backends.)
+        """
         if self._connected:
+            try:
+                await _session_manager.release_pool(self._pool_config)
+            except Exception as e:
+                logger.warning("Error releasing S3 session: %s", e)
             self._session = None
             self._connected = False
 

@@ -70,6 +70,60 @@ pool = await _pool_manager.get_pool(
 )
 ```
 
+### Pool Ownership & Lifetime
+
+A pool returned by `get_pool()` is **shared by configuration** across
+every holder on the same event loop, scoped to each backend's
+`to_hash_key()`:
+
+- **PostgreSQL** keys on `(host, port, database, user)` — table-independent,
+  so instances on the same DSN but different **tables** collapse to one
+  pool. (A pool is per-connection, not per-table.)
+- **Elasticsearch** keys on `(hosts, index)`, so instances on the same
+  hosts **and** index share one client; different indices get their own.
+- **S3** keys on its session config (host/region/credentials).
+
+Whatever the key includes, the manager owns the pooled resource's
+*lifetime* via a holder reference count:
+
+- Each `get_pool()` hand-out **increments** the holder count.
+- `release_pool(config)` **decrements** it; when the last holder
+  releases (count reaches zero) the pool is closed (via its registered
+  close-func or `close()`) and evicted from the manager.
+- A backend's `close()` is therefore a **release, not a teardown**. It
+  calls `release_pool` rather than closing the shared pool directly.
+
+```python
+# Two instances on the same DSN share one pool (different tables).
+a = await AsyncDatabase.from_backend("postgres", {**dsn, "table": "users"})
+b = await AsyncDatabase.from_backend("postgres", {**dsn, "table": "orders"})
+assert a._pool is b._pool                 # one shared pool
+assert _pool_manager.get_pool_count() == 1
+
+await b.close()        # releases b's claim — the shared pool stays alive
+await a.read(user_id)  # still works: a still holds the pool
+
+await a.close()        # last holder releases — pool is closed & evicted
+assert _pool_manager.get_pool_count() == 0
+```
+
+!!! note "Why this matters"
+    Closing the pool directly on `close()` would tear it down out from
+    under sibling instances that still hold it (one instance's shutdown
+    breaking another's live queries). Never reclaiming it leaks the
+    pooled client until process exit. The refcount/`release_pool`
+    contract resolves both: single-holder teardown is unchanged (count
+    `1 → 0 → real close`); multi-holder resources survive until the last
+    holder releases.
+
+`release_pool` is idempotent for a config the manager no longer tracks,
+so a double `close()` is safe. Concurrent first-time `connect()` calls on
+a cold key are serialized by a per-event-loop create lock, so exactly one
+pool is created and the holder count stays sound under concurrency.
+
+`remove_pool(config)` and `close_all()` remain **force** teardowns: they
+close and evict regardless of the holder count (admin / shutdown paths).
+
 ### Pool Configuration
 
 Each backend has its own configuration class:
@@ -306,13 +360,17 @@ class ConnectionPoolManager:
 
 ### Manual Cleanup
 
-You can also manually clean up resources:
+You can also manually manage resources:
 
 ```python
-# Clean up specific pool
+# Release one holder's claim (the normal close path) — closes the pool
+# only when the last holder releases.
+await manager.release_pool(config)
+
+# Force-remove a specific pool, ignoring the holder count (admin/test).
 await manager.remove_pool(config)
 
-# Clean up all pools
+# Force-close all pools (shutdown path).
 await manager.close_all()
 
 # Check pool status
@@ -583,6 +641,7 @@ config = {
       show_source: true
       members:
         - get_pool
+        - release_pool
         - remove_pool
         - close_all
         - get_pool_count
