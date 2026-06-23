@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-22T17:05:39Z",
+  "timestamp": "2026-06-23T20:16:33Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "5f1ba773e5770669c19950a8fe7eae3b1e1f2ae8",
+  "git_branch": "sbk/173-pool-manager-shared-close",
+  "git_commit": "0e967bb6fd2d1412337101d0890cd2c401ee3a2a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
