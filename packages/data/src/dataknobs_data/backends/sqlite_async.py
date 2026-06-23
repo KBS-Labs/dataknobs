@@ -11,7 +11,6 @@ import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
-from ..pooling import ConnectionPoolManager
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
@@ -30,9 +29,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-# Global pool manager for SQLite connections
-_pool_manager = ConnectionPoolManager()
 
 
 class AsyncSQLiteDatabase(  # type: ignore[misc]

@@ -1004,12 +1004,24 @@ class AsyncPostgresDatabase(
             await conn.close()
 
     async def close(self) -> None:
-        """Close the database connection and properly close the pool."""
+        """Release this holder's claim on the shared connection pool.
+
+        Pools are shared by DSN across every ``AsyncPostgresDatabase`` on
+        the same event loop (``ConnectionPoolManager`` keys on
+        host/port/database/user, not table). ``close()`` is a *release*,
+        not a teardown: it decrements the manager's holder count and the
+        pool is closed only when the last holder releases. This prevents
+        one instance's ``close()`` from closing the pool out from under
+        siblings that still hold it.
+        """
         if self._pool is not None:
             try:
-                await self._pool.close()
+                await _pool_manager.release_pool(self._pool_config)
             except Exception as e:
-                logger.warning("Error closing connection pool: %s", e)
+                logger.warning("Error releasing connection pool: %s", e)
+            # Guarding on ``self._pool is not None`` makes a double-close a
+            # no-op (no double-decrement) — release_pool is idempotent for
+            # an already-evicted config, but this avoids the call entirely.
             self._pool = None
         self._connected = False
 
