@@ -958,15 +958,24 @@ class AsyncPostgresDatabase(
             else:
                 raise
 
-        # Initialize query builder
-        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        # get_pool incremented this holder's claim on the shared pool. If
+        # table/vector setup fails we never set _connected, so balance the
+        # increment here rather than relying on the caller invoking close()
+        # after a failed connect() (which would otherwise leak the holder).
+        try:
+            # Initialize query builder
+            self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Ensure table exists
-        await self._ensure_table()
+            # Ensure table exists
+            await self._ensure_table()
 
-        # Check and enable vector support if requested
-        if self.vector_enabled:
-            await self._detect_vector_support()
+            # Check and enable vector support if requested
+            if self.vector_enabled:
+                await self._detect_vector_support()
+        except Exception:
+            await _pool_manager.release_pool(self._pool_config)
+            self._pool = None
+            raise
 
         self._connected = True
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")

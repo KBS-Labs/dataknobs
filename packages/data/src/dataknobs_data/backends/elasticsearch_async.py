@@ -125,8 +125,16 @@ class AsyncElasticsearchDatabase(
             close_elasticsearch_client
         )
 
-        # Ensure index exists
-        await self._ensure_index()
+        # get_pool incremented this holder's claim on the shared client.
+        # If index setup fails we never set _connected, so close() (which
+        # guards on _connected) would never release — leaking the holder
+        # slot for the life of the process. Balance the increment here.
+        try:
+            await self._ensure_index()
+        except Exception:
+            await _client_manager.release_pool(self._pool_config)
+            self._client = None
+            raise
         self._connected = True
 
     async def close(self) -> None:

@@ -63,41 +63,39 @@ class BasePoolConfig:
 
 class ConnectionPoolManager(Generic[PoolType]):
     """Generic connection pool manager that handles pools per event loop.
-    
+
     This class ensures that each event loop gets its own connection pool,
     preventing cross-loop usage errors that can occur with async connections.
+
+    Pools are *shared* by config across holders on one event loop:
+    :meth:`get_pool` reference-counts each hand-out and :meth:`release_pool`
+    tears the pool down only when the last holder releases. The manager is
+    used concurrently, so every mutation of an entry that spans an ``await``
+    (cold create, validate-rebuild, release-close) is serialized per loop by
+    the create lock and removes the entry from the live map *before* awaiting
+    the close — a concurrent :meth:`get_pool` can never observe a pool that is
+    mid-close.
+
+    Reference-counting does **not** absolve the application of calling
+    :meth:`close_all` during shutdown: pools still open at interpreter exit
+    (when a loop is running and cannot be driven from the synchronous
+    ``atexit`` hook) are abandoned, not closed.
     """
 
     def __init__(self):
         """Initialize the connection pool manager."""
-        # Map of (config_hash, loop_id) -> _PoolEntry. Legacy shapes (a
-        # bare pool, or a (pool, close_func) 2-tuple) may still be injected
-        # directly by tests / pre-refcount callers; read paths normalize
-        # them through ``_as_entry``.
-        self._pools: dict[tuple, Any] = {}
+        # Map of (config_hash, loop_id) -> _PoolEntry.
+        self._pools: dict[tuple, _PoolEntry] = {}
         # Weak references to event loops for cleanup
         self._loop_refs: WeakValueDictionary = WeakValueDictionary()
-        # Per-loop locks guarding the cold-key create critical section.
-        # Keyed on loop_id (an int, never a loop reference, so it cannot
-        # hold a loop alive). Mutation is await-free -> atomic under
-        # asyncio; evicted alongside a loop's last pool.
+        # Per-loop locks guarding the entry-mutation critical sections
+        # (cold create, validate-rebuild, release-close). Keyed on loop_id
+        # (an int, never a loop reference, so it cannot hold a loop alive).
+        # Mutation is await-free -> atomic under asyncio; an idle lock is
+        # evicted once its loop's last pool is gone.
         self._create_locks: dict[int, asyncio.Lock] = {}
         # Register cleanup on exit
         atexit.register(self._cleanup_on_exit)
-
-    @staticmethod
-    def _as_entry(raw: Any) -> _PoolEntry:
-        """Normalize a stored value to a :class:`_PoolEntry`.
-
-        Tolerates the two legacy shapes some tests / pre-refcount callers
-        inject directly: a ``(pool, close_func)`` 2-tuple and a bare pool.
-        """
-        if isinstance(raw, _PoolEntry):
-            return raw
-        if isinstance(raw, tuple):  # legacy (pool, close_func)
-            pool, close_func = raw
-            return _PoolEntry(pool, close_func, refcount=1)
-        return _PoolEntry(raw, None, refcount=1)  # legacy bare pool
 
     def _create_lock_for(self, loop_id: int) -> asyncio.Lock:
         """Return (lazily creating) the create-lock for ``loop_id``.
@@ -144,16 +142,12 @@ class ConnectionPoolManager(Generic[PoolType]):
         # the assignment, so it is atomic under asyncio and needs no lock.
         stale_pool: Any = None  # the pool object we proved invalid below
         if pool_key in self._pools:
-            entry = self._as_entry(self._pools[pool_key])
+            entry = self._pools[pool_key]
             if validate_pool_func is None:
                 entry.refcount += 1
-                self._pools[pool_key] = entry  # persist (normalizes legacy)
                 return entry.pool
             try:
                 await validate_pool_func(entry.pool)
-                entry.refcount += 1
-                self._pools[pool_key] = entry
-                return entry.pool
             except Exception as e:
                 logger.warning(
                     "Pool for loop %s is invalid: %s. Recreating.",
@@ -161,6 +155,17 @@ class ConnectionPoolManager(Generic[PoolType]):
                 )
                 stale_pool = entry.pool
                 # Fall through to the locked create/rebuild region.
+            else:
+                # Validation succeeded — but ``validate`` awaited, so a
+                # concurrent release (last holder) may have closed and
+                # evicted this entry, or a rebuild may have replaced it,
+                # while we were parked. Commit only if it is still the live
+                # entry; otherwise fall through to the locked region to
+                # re-resolve (``stale_pool`` stays None — it was not proven
+                # invalid, just superseded).
+                if self._pools.get(pool_key) is entry:
+                    entry.refcount += 1
+                    return entry.pool
 
         # Slow path: create (or rebuild) under the per-loop lock so two
         # concurrent cold-key callers cannot both create a pool and corrupt
@@ -169,7 +174,12 @@ class ConnectionPoolManager(Generic[PoolType]):
         async with self._create_lock_for(loop_id):
             carried = 0  # holder count carried across a validate-rebuild
             if pool_key in self._pools:
-                entry = self._as_entry(self._pools[pool_key])
+                # Holding the lock, the entry cannot be evicted or replaced
+                # mid-await here: release-close and rebuild also hold the
+                # lock, and the only lock-free mutator (warm no-validator
+                # reuse) merely increments the *same* entry object. So the
+                # post-validate re-store below is safe without a re-check.
+                entry = self._pools[pool_key]
                 if entry.pool is stale_pool:
                     # We already proved this exact pool invalid in the fast
                     # path — don't re-run the (potentially side-effectful)
@@ -217,55 +227,102 @@ class ConnectionPoolManager(Generic[PoolType]):
         ``close()`` signals "I am done", not "tear the pool down". The pool
         dies only when no holder remains.
         """
-        pool_key = (
-            hash(config.to_hash_key()),
-            id(asyncio.get_running_loop()),
-        )
-        if pool_key not in self._pools:
+        loop_id = id(asyncio.get_running_loop())
+        pool_key = (hash(config.to_hash_key()), loop_id)
+        # Serialize against cold-create / validate-rebuild on the same loop
+        # (which also hold this lock): a release that interleaved with an
+        # in-flight create could otherwise lose this decrement or race the
+        # eviction. The decrement-and-decision below is await-free, so a
+        # lock-free warm reuse can only observe the entry fully present
+        # (and bump it) or fully evicted (and rebuild) — never mid-close.
+        async with self._create_lock_for(loop_id):
+            if pool_key not in self._pools:
+                return
+            entry = self._pools[pool_key]
+            entry.refcount -= 1
+            if entry.refcount < 0:
+                # Pop-at-zero means the public API cannot normally drive a
+                # live entry negative; surface a latent double-release loudly
+                # rather than closing one hand-out early and silently.
+                logger.warning(
+                    "Pool holder count for loop %s went negative (%d): more "
+                    "release_pool() calls than get_pool() hand-outs.",
+                    loop_id, entry.refcount,
+                )
+            if entry.refcount <= 0:
+                await self._close_pool(pool_key)  # evicts + closes
+
+    def _evict_entry(self, pool_key: tuple) -> _PoolEntry | None:
+        """Pop a pool entry out of the live map (await-free, atomic).
+
+        Removing the entry *before* the close is awaited is what makes the
+        close atomic with respect to :meth:`get_pool`: a concurrent warm
+        reuse can never re-grab a pool that is mid-close, and a missing key
+        forces the reuse through the per-loop create lock. Also evicts the
+        loop's idle create-lock once its last pool is gone. Returns the
+        detached entry, or None if the key was absent.
+        """
+        entry = self._pools.pop(pool_key, None)
+        if entry is None:
+            return None
+        self._maybe_evict_create_lock(pool_key[1])
+        return entry
+
+    def _maybe_evict_create_lock(self, loop_id: int) -> None:
+        """Drop the loop's create-lock once it has no pools and is idle.
+
+        Mirrors the ``WeakValueDictionary`` discipline for ``_loop_refs`` —
+        don't accrete per-loop state. Never evicts a lock that is currently
+        held (a lock only has parked waiters while held), so a rebuild /
+        release holding the lock, or a cold-create parked on it, is never
+        pulled out from under an in-flight critical section (which would
+        re-admit the cold-create race). An in-use lock simply lingers until
+        a later idle teardown or :meth:`close_all` reclaims it.
+        """
+        if any(key[1] == loop_id for key in self._pools):
             return
-        entry = self._as_entry(self._pools[pool_key])
-        entry.refcount -= 1
-        if entry.refcount <= 0:
-            await self._close_pool(pool_key)  # closes + dels
-        else:
-            self._pools[pool_key] = entry  # persist decremented count
+        lock = self._create_locks.get(loop_id)
+        if lock is not None and lock.locked():
+            return
+        self._create_locks.pop(loop_id, None)
 
     async def _close_pool(self, pool_key: tuple, close_func: Callable | None = None):
-        """Close and remove a pool, ignoring the refcount (force teardown)."""
-        if pool_key in self._pools:
-            entry = self._as_entry(self._pools[pool_key])
-            pool = entry.pool
-            close_func = close_func or entry.close_func
+        """Close and remove a pool, ignoring the refcount (force teardown).
 
+        The entry is evicted from the live map (:meth:`_evict_entry`)
+        *before* the close is awaited, so the close is atomic with respect
+        to a concurrent :meth:`get_pool`.
+        """
+        entry = self._evict_entry(pool_key)
+        if entry is None:
+            return
+        await self._close_entry(entry, close_func)
+
+    async def _close_entry(self, entry: _PoolEntry, close_func: Callable | None = None):
+        """Await the close on an already-detached entry (never touches the map)."""
+        pool = entry.pool
+        close_func = close_func or entry.close_func
+        try:
+            # Check if we have a running event loop
             try:
-                # Check if we have a running event loop
-                try:
-                    loop = asyncio.get_running_loop()
-                    if loop.is_closed():
-                        # Event loop is closed, skip async cleanup
-                        return
-                except RuntimeError:
-                    # No running event loop, skip async cleanup
+                loop = asyncio.get_running_loop()
+                if loop.is_closed():
+                    # Event loop is closed, skip async cleanup
                     return
+            except RuntimeError:
+                # No running event loop, skip async cleanup
+                return
 
-                if close_func:
-                    await close_func(pool)
-                elif hasattr(pool, 'close'):
-                    await pool.close()
-            except RuntimeError as e:
-                # Silently ignore "Event loop is closed" errors
-                if "Event loop is closed" not in str(e):
-                    logger.error(f"Error closing pool: {e}")
-            except Exception as e:
-                logger.error(f"Error closing pool: {e}")
-            finally:
-                del self._pools[pool_key]
-                # Evict the loop's create-lock once its last pool is gone
-                # (mirror the WeakValueDictionary discipline for _loop_refs:
-                # don't accrete per-loop state).
-                loop_id = pool_key[1]
-                if not any(key[1] == loop_id for key in self._pools):
-                    self._create_locks.pop(loop_id, None)
+            if close_func:
+                await close_func(pool)
+            elif hasattr(pool, 'close'):
+                await pool.close()
+        except RuntimeError as e:
+            # Silently ignore "Event loop is closed" errors
+            if "Event loop is closed" not in str(e):
+                logger.error("Error closing pool: %s", e)
+        except Exception as e:
+            logger.error("Error closing pool: %s", e)
 
     async def remove_pool(self, config: BasePoolConfig) -> bool:
         """Force-remove a pool for the current event loop, ignoring holders.
@@ -292,8 +349,8 @@ class ConnectionPoolManager(Generic[PoolType]):
         """Close all connection pools (force teardown, ignores holders)."""
         for pool_key in list(self._pools.keys()):
             await self._close_pool(pool_key)
-        # _close_pool evicts each loop's lock as its last pool goes; clear
-        # any stragglers (e.g. locks created but never used).
+        # _close_pool evicts each loop's idle lock as its last pool goes;
+        # clear any stragglers (e.g. locks held/created but never evicted).
         self._create_locks.clear()
 
     def get_pool_count(self) -> int:
@@ -303,14 +360,12 @@ class ConnectionPoolManager(Generic[PoolType]):
     def get_pool_info(self) -> dict[str, Any]:
         """Get information about all active pools."""
         info = {}
-        for (config_hash, loop_id), pool_entry in self._pools.items():
-            pool = self._as_entry(pool_entry).pool
-
+        for (config_hash, loop_id), entry in self._pools.items():
             key = f"config_{config_hash}_loop_{loop_id}"
             info[key] = {
                 "loop_id": loop_id,
                 "config_hash": config_hash,
-                "pool": str(pool)
+                "pool": str(entry.pool)
             }
         return info
 
@@ -335,8 +390,10 @@ class ConnectionPoolManager(Generic[PoolType]):
             finally:
                 loop.close()
         else:
-            # Running loop exists — cannot reliably await from synchronous atexit.
-            # Application should have called close_all() during shutdown.
+            # Running loop exists — cannot reliably await from synchronous
+            # atexit, so the still-open pools are abandoned (not closed).
+            # Reference-counting does not cover this: the application must
+            # call close_all() during shutdown to close pools cleanly.
             logger.warning(
                 "%d connection pool(s) not closed before exit. "
                 "Ensure close_all() is called during shutdown.",

@@ -102,6 +102,11 @@ class AsyncS3Database(  # type: ignore[misc]
             ),
         )
 
+        # Invariant: nothing fallible runs between the get_pool increment and
+        # _connected = True, so the holder count is always balanced (close()
+        # releases on the success path). If a step that can raise is added
+        # here, it MUST release the holder on failure (release_pool) — see the
+        # elasticsearch/postgres connect() paths — or the slot leaks.
         self._connected = True
 
     async def close(self) -> None:

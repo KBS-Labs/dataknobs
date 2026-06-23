@@ -10,6 +10,7 @@ from dataknobs_data.pooling import (
     BasePoolConfig,
     ConnectionPoolManager,
 )
+from dataknobs_data.pooling.base import _PoolEntry
 from dataknobs_data.pooling.postgres import (
     PostgresPoolConfig,
     create_asyncpg_pool,
@@ -356,8 +357,8 @@ class TestConnectionPoolManager:
 
         # Mock some pools
         manager._pools = {
-            (12345, 67890): MockPool(),
-            (54321, 67890): MockPool()
+            (12345, 67890): _PoolEntry(MockPool()),
+            (54321, 67890): _PoolEntry(MockPool())
         }
 
         info = manager.get_pool_info()
@@ -487,7 +488,7 @@ class TestPoolRefcount:
         await manager.get_pool(config, create_pool)
         await manager.get_pool(config, create_pool)
         pool_key = self._pool_key(manager, config)
-        assert manager._as_entry(manager._pools[pool_key]).refcount == 2
+        assert manager._pools[pool_key].refcount == 2
 
         # Third acquire validates, fails, rebuilds — the two existing
         # holders plus the new one must be carried into the rebuilt entry.
@@ -496,7 +497,7 @@ class TestPoolRefcount:
         assert create_count == 2
         pool1.close.assert_called_once()
         assert manager.get_pool_count() == 1
-        assert manager._as_entry(manager._pools[pool_key]).refcount == 3
+        assert manager._pools[pool_key].refcount == 3
 
         # Three releases drive it to zero with no premature/underflow close.
         await manager.release_pool(config)
@@ -564,12 +565,158 @@ class TestPoolRefcount:
         assert results[0] is pool and results[1] is pool
         assert create_count == 1
         assert manager.get_pool_count() == 1
-        assert manager._as_entry(manager._pools[self._pool_key(manager, config)]).refcount == 2
+        assert manager._pools[self._pool_key(manager, config)].refcount == 2
 
         # Two releases drive the shared entry to zero with one close.
         await manager.release_pool(config)
         pool.close.assert_not_called()
         await manager.release_pool(config)
+        pool.close.assert_called_once()
+        assert manager.get_pool_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_validate_during_release_does_not_resurrect_closed_pool(self):
+        """A warm validate overlapping the last release must not return a closed pool.
+
+        Reproduce-first for the validate-success resurrection race: holder
+        B enters the warm path with a validator and parks inside it; while
+        B is parked, holder A's release drops the count to zero and closes
+        + evicts the pool. B's validate then succeeds — but the entry it
+        validated is gone, so B must rebuild a fresh pool, NOT re-insert and
+        return the now-closed one.
+        """
+        manager = ConnectionPoolManager[MockPool]()
+        config = MockPoolConfig(host="localhost", port=5432)
+
+        pool1 = MockPool()
+        pool1.close = AsyncMock()
+        pool2 = MockPool()
+        pool2.close = AsyncMock()
+        create_count = 0
+
+        async def create_pool(cfg):
+            nonlocal create_count
+            create_count += 1
+            return pool1 if create_count == 1 else pool2
+
+        release_gate = asyncio.Event()
+        validate_started = asyncio.Event()
+
+        async def validate_pool(pool):
+            # Signal entry into validate, then park so the release can
+            # interleave (close + evict) the pool we are validating.
+            validate_started.set()
+            await release_gate.wait()
+            # Validation "succeeds" against the (now closed) pool.
+
+        # Holder A acquires the shared pool (no validator -> no await point).
+        a_pool = await manager.get_pool(config, create_pool)
+        assert a_pool is pool1
+        assert create_count == 1
+
+        # Holder B begins a warm *validated* acquire and parks in validate.
+        b_task = asyncio.create_task(
+            manager.get_pool(config, create_pool, validate_pool)
+        )
+        await validate_started.wait()
+
+        # While B is parked, A releases — last holder -> close + evict.
+        await manager.release_pool(config)
+        pool1.close.assert_called_once()
+        assert manager.get_pool_count() == 0
+
+        # Let B's validate finish. B must rebuild rather than resurrect pool1.
+        release_gate.set()
+        b_pool = await b_task
+
+        assert b_pool is pool2, "B resurrected the closed pool instead of rebuilding"
+        assert b_pool is not pool1
+        assert create_count == 2
+        assert manager.get_pool_count() == 1
+        key = self._pool_key(manager, config)
+        assert manager._pools[key].refcount == 1
+
+    @pytest.mark.asyncio
+    async def test_release_during_warm_get_does_not_hand_out_closing_pool(self):
+        """A warm get overlapping the last release's close must not get the closing pool.
+
+        Reproduce-first for the release/close atomicity race: the last
+        holder's release begins closing the pool (the close awaits). The
+        entry must be evicted from the live map *before* the close is
+        awaited, so a concurrent warm get_pool misses it and rebuilds a
+        fresh pool instead of grabbing the one being torn down.
+        """
+        manager = ConnectionPoolManager[MockPool]()
+        config = MockPoolConfig(host="localhost", port=5432)
+
+        pool1 = MockPool()
+        pool2 = MockPool()
+        pool2.close = AsyncMock()
+        create_count = 0
+
+        async def create_pool(cfg):
+            nonlocal create_count
+            create_count += 1
+            return pool1 if create_count == 1 else pool2
+
+        close_gate = asyncio.Event()
+        close_started = asyncio.Event()
+
+        async def slow_close(pool):
+            # Park inside the last-holder close so a warm get can interleave.
+            close_started.set()
+            await close_gate.wait()
+
+        # Single holder acquires; the entry registers slow_close.
+        first = await manager.get_pool(
+            config, create_pool, close_pool_func=slow_close
+        )
+        assert first is pool1
+
+        # Release -> last holder -> begins closing pool1 and parks.
+        release_task = asyncio.create_task(manager.release_pool(config))
+        await close_started.wait()
+
+        # A concurrent warm get arrives while pool1 is mid-close. It must
+        # NOT receive the closing pool1; pop-first eviction makes it rebuild.
+        get_task = asyncio.create_task(manager.get_pool(config, create_pool))
+        for _ in range(10):  # let the warm get reach its decision point
+            await asyncio.sleep(0)
+
+        close_gate.set()
+        await release_task
+        new_pool = await get_task
+
+        assert new_pool is pool2, "warm get received the closing pool"
+        assert new_pool is not pool1
+        assert create_count == 2
+        key = self._pool_key(manager, config)
+        assert manager._pools[key].refcount == 1
+
+    @pytest.mark.asyncio
+    async def test_release_pool_underflow_is_logged(self, caplog):
+        """Releasing more times than acquired logs a holder-count underflow.
+
+        Pop-at-zero means the public API cannot normally drive a live entry
+        negative, but a future accounting bug could. Inject an
+        already-at-zero entry (simulating that bug) and assert the next
+        release surfaces the underflow loudly rather than silently closing
+        one hand-out early.
+        """
+        manager = ConnectionPoolManager[MockPool]()
+        config = MockPoolConfig(host="localhost", port=5432)
+        pool = MockPool()
+        pool.close = AsyncMock()
+
+        key = self._pool_key(manager, config)
+        manager._pools[key] = _PoolEntry(pool, None, refcount=0)
+
+        with caplog.at_level("WARNING", logger="dataknobs_data.pooling.base"):
+            await manager.release_pool(config)
+
+        assert any(
+            "negative" in r.message.lower() for r in caplog.records
+        ), "underflow was not logged"
         pool.close.assert_called_once()
         assert manager.get_pool_count() == 0
 
@@ -614,7 +761,7 @@ class TestCleanupOnExit:
         config = MockPoolConfig(host="localhost", port=5432)
         loop_id = id(asyncio.new_event_loop())
         config_hash = hash(config.to_hash_key())
-        manager._pools[(config_hash, loop_id)] = pool
+        manager._pools[(config_hash, loop_id)] = _PoolEntry(pool)
 
         assert manager.get_pool_count() == 1
 
