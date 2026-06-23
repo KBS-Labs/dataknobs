@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-23T20:16:33Z",
+  "timestamp": "2026-06-23T21:40:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/173-pool-manager-shared-close",
-  "git_commit": "0e967bb6fd2d1412337101d0890cd2c401ee3a2a",
+  "git_commit": "458963092f4123fc8143b49ad391e6d9f944d12f",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
