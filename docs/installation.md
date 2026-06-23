@@ -305,10 +305,10 @@ CMD ["python", "app.py"]
 ```text
 # requirements.txt
 dataknobs-config>=0.4.0
-dataknobs-data>=0.5.2
-dataknobs-fsm>=0.2.2
-dataknobs-llm>=0.6.3
-dataknobs-bots>=0.8.0
+dataknobs-data>=0.5.3
+dataknobs-fsm>=0.2.3
+dataknobs-llm>=0.6.4
+dataknobs-bots>=0.8.1
 dataknobs-structures>=1.0.11
 dataknobs-utils>=1.2.14
 dataknobs-xization>=1.3.9
