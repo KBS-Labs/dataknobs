@@ -206,6 +206,25 @@ await db.connect()
 - **S3**: aioboto3 session management
 - All backends support connection reuse and automatic reconnection
 
+#### Pool ownership (shared by DSN)
+`ConnectionPoolManager` shares one pooled resource per connection
+(keyed on host/port/database/user — *not* the table or index) across
+every async-backend instance on the same event loop. The manager owns
+the resource's lifetime through a holder reference count:
+
+- Each `get_pool()` hand-out increments the holder count.
+- A backend's `close()` is a **release**, not a teardown — it calls the
+  manager's async `release_pool(config)`, which decrements the count.
+- The pooled resource is closed and evicted only when the **last**
+  holder releases (count reaches zero).
+
+This prevents one instance's `close()` from closing the pool out from
+under sibling instances that still hold it, and guarantees the resource
+is reclaimed once no holder remains (no leak). Single-holder teardown is
+unchanged (count `1 → 0 → real close`). See the MkDocs
+[Async Connection Pooling](../../../docs/packages/data/async-pooling.md)
+page for the full contract and `release_pool` reference.
+
 ## Performance Characteristics
 
 | Backend | Create | Read | Update | Delete | Search | Batch Create |

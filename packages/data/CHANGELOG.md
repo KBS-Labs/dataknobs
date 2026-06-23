@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`ConnectionPoolManager` now reference-counts pools shared by DSN
+  across instances on an event loop.** A new async `release_pool(config)`
+  closes and evicts a pool only when its last holder releases.
+  `AsyncPostgresDatabase`, `AsyncElasticsearchDatabase`, and
+  `AsyncS3Database` `close()` now *release* their shared resource instead
+  of either hard-closing it (Postgres — which closed the pool out from
+  under sibling instances on the same DSN, so a sibling's `close()` broke
+  the others' live connections) or never reclaiming it (Elasticsearch —
+  whose pooled client was leaked until process exit under instance churn).
+  Concurrent first-time connects on a cold key are serialized by a
+  per-event-loop create lock so exactly one pool is created and the holder
+  count stays sound under concurrency. Single-holder teardown is
+  unchanged; the public `close()` signatures are unchanged.
+
 ## v0.5.2 - 2026-06-22
 
 ### Added
