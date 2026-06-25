@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receive their injected resources (matching the synchronous engine).
 - `StepResult` (advanced API) gains a `failed_states` field listing the
   states whose transform raised during a stepped record's execution.
+- States gain a `run_on_failure` flag (`StateDefinition.run_on_failure`, and the
+  `run_on_failure:` state config key). A state declared with
+  `run_on_failure=True` runs its transforms even after an upstream transform
+  failed — the per-state opt-out for recovery / compensation / cleanup /
+  dead-letter states that must execute despite a prior failure. It re-enables
+  the transforms only; the record is still reported as a failure.
 
 ### Changed
 
@@ -32,7 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state transforms are **skipped** rather than run against the indeterminate
   pre-failure data. This stops a later state (e.g. an ETL `load` upsert) from
   persisting a record whose transform already failed, while traversal still
-  continues so the record is accounted as an error.
+  continues so the record is accounted as an error. States that must run
+  despite a prior failure (recovery / compensation / cleanup / dead-letter)
+  opt out with `run_on_failure=True`. A transform failure on a parallel /
+  subnetwork sub-path is propagated to the parent context on merge, so it gates
+  the parent's persistence decision too.
 
 ### Fixed
 

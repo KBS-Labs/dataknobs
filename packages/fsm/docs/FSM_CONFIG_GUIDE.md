@@ -75,9 +75,20 @@ States are the nodes in your FSM graph. Each state has a name and metadata that 
     # Resources and configuration
     "resources": ["db", "api"],          # Optional: Required resource names
     "data_mode": "copy",                 # Optional: Override data mode for this state
+    "run_on_failure": True,              # Optional: Run transforms despite a prior failure (default: False)
     "metadata": {...}                    # Optional: Additional metadata
 }
 ```
+
+**`run_on_failure`** — When a state transform raises, the engines record the
+failure and skip the transforms of every subsequent state (and the failing
+state's remaining transforms) so indeterminate, pre-failure data is not mutated
+or persisted (e.g. a downstream load/upsert is not run). The record still
+traverses to a final state and is reported as a failure. Set
+`run_on_failure: true` to opt a state out of that skip — its transforms run even
+after an upstream failure. Use it for recovery / compensation / cleanup /
+dead-letter states. It re-enables the transforms only; the record is still
+reported as a failure (`execute()` returns `success=False`).
 
 ### State Types
 

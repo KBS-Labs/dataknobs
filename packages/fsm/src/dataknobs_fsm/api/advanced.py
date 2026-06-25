@@ -363,6 +363,14 @@ class StepResult:
     # the offending state name(s) here, mirroring the execution engines'
     # finalize_single_result contract (a swallowed transform failure must not
     # be reported as a successful step).
+    #
+    # NOTE for manual step-driving: `success` reflects only THIS step's target
+    # state. Once a record has failed in an earlier state, subsequent steps
+    # (whose transforms are skipped) report success=True while still carrying
+    # the accumulated `failed_states`. A consumer driving the FSM step-by-step
+    # past a failure must therefore check `failed_states`, not `success` alone,
+    # to detect that the record failed upstream. (run_until_breakpoint already
+    # stops at the first success=False step, so it is unaffected.)
     failed_states: list[str] | None = None
 
 
@@ -1463,8 +1471,16 @@ class AdvancedFSM:
         for transform_func in transform_functions:
             # Skip running transforms on a record that already failed an
             # upstream transform — mirrors the engine's behavior so a stepped
-            # record is not mutated/persisted after a transform raised.
-            if self._engine.record_has_failed(context):
+            # record is not mutated/persisted after a transform raised. A state
+            # declared run_on_failure=True (recovery/cleanup/dead-letter) is
+            # exempt and runs regardless.
+            if self._engine.should_skip_state_transforms(context, state_def):
+                logger.debug(
+                    "Skipping transform in state '%s': record already failed "
+                    "in %s",
+                    state_name,
+                    self._engine.failed_states_sorted(context),
+                )
                 break
             try:
                 # Create function context

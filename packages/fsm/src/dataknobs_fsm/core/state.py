@@ -507,7 +507,24 @@ class StateDefinition:
     timeout: float | None = None  # Timeout in seconds
     retry_count: int = 0  # Number of retries on failure
     retry_delay: float = 1.0  # Delay between retries in seconds
-    
+
+    # Failure handling
+    run_on_failure: bool = False
+    """Run this state's transforms even after an upstream transform failed.
+
+    By default, once any state transform raises for a record, the execution
+    engines skip the transforms of every subsequent state (and any remaining
+    transforms in the failing state) so indeterminate data is not mutated or
+    persisted — e.g. an ETL ``load`` upsert is not run on a record whose
+    ``transform`` raised. Setting ``run_on_failure=True`` marks this state as a
+    recovery/compensation/cleanup/dead-letter state whose transforms MUST still
+    run despite a prior failure, so the FSM can route a failed record here to
+    perform side effects (dead-letter write, rollback, notification,
+    status-stamp). Running these transforms does NOT clear the record's failure
+    status — the record is still reported as a failure by
+    :meth:`finalize_single_result`; this flag only re-enables the transforms.
+    """
+
     def is_start_state(self) -> bool:
         """Check if this is a start state.
         

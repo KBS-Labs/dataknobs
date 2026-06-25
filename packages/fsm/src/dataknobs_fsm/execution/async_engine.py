@@ -631,13 +631,15 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # upstream transform — don't mutate/persist indeterminate data
                 # (e.g. don't run the ETL load upsert after the transform
                 # raised). Traversal still continues so the record reaches a
-                # final state and is reported as a failure.
-                if self.record_has_failed(context):
+                # final state and is reported as a failure. A state declared
+                # run_on_failure=True (recovery/cleanup/dead-letter) is exempt
+                # and runs regardless.
+                if self.should_skip_state_transforms(context, state):
                     logger.debug(
                         "Skipping transform in state '%s': record already "
                         "failed in %s",
                         state_name,
-                        sorted(getattr(context, 'failed_states', set()) or set()),
+                        self.failed_states_sorted(context),
                     )
                     break
                 try:

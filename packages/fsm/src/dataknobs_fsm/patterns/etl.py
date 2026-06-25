@@ -309,15 +309,16 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         self._fsm = self._build_fsm()
         self._reset_metrics()
 
-        # Resume from checkpoint if provided (after reset so checkpointed
-        # metrics are not zeroed out).
-        if checkpoint_id:
-            await self._load_checkpoint(checkpoint_id)
-
-        # Open the source inside the try so the finally always closes the
-        # freshly-rebuilt FSM, even if source-open itself fails.
+        # Everything that could fail after the FSM is built runs inside the try
+        # so the finally always closes the freshly-rebuilt FSM — including a
+        # checkpoint-load failure or source-open failure.
         source_db: AsyncDatabase | None = None
         try:
+            # Resume from checkpoint if provided (after reset so checkpointed
+            # metrics are not zeroed out).
+            if checkpoint_id:
+                await self._load_checkpoint(checkpoint_id)
+
             source_db = await AsyncDatabase.from_backend(
                 self.config.source_db['type'],
                 self.config.source_db  # type: ignore

@@ -241,11 +241,20 @@ class BaseExecutionEngine(ABC):
         is left in an indeterminate (pre-failure) state. Running *further* state
         transforms against it is unsafe — e.g. an ETL ``load`` step would upsert
         the stale, untransformed record into the target even though the run is
-        (correctly) reporting the record as a failure. Downstream transforms
-        must therefore be skipped once this returns True; only traversal (the
-        record still reaching a final state, for accounting) continues, so
-        :meth:`finalize_single_result` reports the failure rather than silently
-        persisting corrupt data.
+        (correctly) reporting the record as a failure.
+
+        While this returns True, the transform guard gates **all** subsequent
+        transforms for the record: not only downstream states, but also the
+        remaining transforms of the *failing* state (the transform that raised
+        flips this to True, so later transforms in the same state are skipped
+        too). Only traversal (the record still reaching a final state, for
+        accounting) continues, so :meth:`finalize_single_result` reports the
+        failure rather than silently persisting corrupt data.
+
+        The skip is overridable per state: a state declared with
+        ``run_on_failure=True`` (recovery/compensation/cleanup/dead-letter
+        states) still runs its transforms despite a prior failure — see
+        :meth:`should_skip_state_transforms`.
 
         Args:
             context: Execution context for the in-flight record.
@@ -254,6 +263,53 @@ class BaseExecutionEngine(ABC):
             True if any state has recorded a failure for this record.
         """
         return bool(getattr(context, 'failed_states', None))
+
+    def failed_states_sorted(self, context: ExecutionContext) -> List[str]:
+        """Sorted list of states whose transform failed for this record.
+
+        Centralizes the defensive ``sorted(getattr(...failed_states...))``
+        idiom shared by the transform-skip log lines, the batch-result builder,
+        and :meth:`finalize_single_result`.
+
+        Args:
+            context: Execution context for the in-flight record.
+
+        Returns:
+            Sorted list of failed state names (empty if none).
+        """
+        return sorted(getattr(context, 'failed_states', None) or set())
+
+    def should_skip_state_transforms(
+        self,
+        context: ExecutionContext,
+        state_def: Any,
+    ) -> bool:
+        """Whether to skip a state's transforms because the record already failed.
+
+        Returns True when a prior state transform failed for this record
+        (:meth:`record_has_failed`) AND the state is **not** marked
+        ``run_on_failure``. A state declared with ``run_on_failure=True`` is a
+        recovery/compensation/cleanup/dead-letter state whose transforms must
+        run despite the failure, so the guard never trips for it (its transforms
+        run even when ``record_has_failed`` is True). For an ordinary state the
+        guard trips, skipping its transforms so indeterminate data is not
+        mutated or persisted.
+
+        Called once per transform iteration (not once per state) so that, for an
+        ordinary state, a transform that raises mid-state still causes the
+        *remaining* transforms of that same state to be skipped — while a
+        ``run_on_failure`` state runs all of its transforms regardless.
+
+        Args:
+            context: Execution context for the in-flight record.
+            state_def: The definition of the state whose transforms are running.
+
+        Returns:
+            True if the state's (remaining) transforms should be skipped.
+        """
+        if not self.record_has_failed(context):
+            return False
+        return not getattr(state_def, 'run_on_failure', False)
 
     def finalize_single_result(
         self,
@@ -277,10 +333,10 @@ class BaseExecutionEngine(ABC):
         Returns:
             Tuple of (success, result value or failure message).
         """
-        failed = getattr(context, 'failed_states', None)
+        failed = self.failed_states_sorted(context)
         if failed:
             return False, (
-                "State transform failed in: " + ", ".join(sorted(failed))
+                "State transform failed in: " + ", ".join(failed)
             )
         return True, context.data
 

@@ -234,6 +234,14 @@ separately.
   inspection — which requires a conditional error-arc design and is tracked
   separately.
 
+  If you build a custom FSM (rather than using `DatabaseETL`) and need a
+  recovery / cleanup / dead-letter state whose transforms must run despite an
+  upstream failure, mark that state `run_on_failure: true` — the engine's
+  post-failure transform skip does not apply to it (see
+  [Failure handling](../guides/configuration.md#failure-handling-run_on_failure)).
+  It re-enables the state's transforms only; the record is still reported as a
+  failure.
+
 ## Testing
 
 Use real constructs — a file-backed `AsyncDatabase` is reopenable, so a test can

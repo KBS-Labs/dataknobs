@@ -197,3 +197,58 @@ async def test_failed_transform_record_not_loaded_to_target(tmp_path: Path) -> N
     # The persisted rows must carry the transform's output, not raw source data.
     assert target["1"]["tag"] == "ok"
     assert target["3"]["tag"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_load_failure_still_closes_fsm(tmp_path: Path) -> None:
+    """A checkpoint-load failure must not leak the freshly-built FSM.
+
+    ``run()`` rebuilds the FSM and then resumes from a checkpoint. The rebuild
+    happens before the ``try`` whose ``finally`` closes the FSM; the
+    checkpoint-load must run *inside* that ``try`` so a checkpoint-store outage
+    still tears the FSM down.
+
+    Reproduce-first: with ``_load_checkpoint`` outside the ``try`` the FSM is
+    never closed when it raises (``closed == []``); once it runs inside the
+    ``try`` the ``finally`` closes the FSM (``closed == [True]``). Real
+    constructs only — a real ``DatabaseETL`` / ``AsyncSimpleFSM`` / file backend;
+    only the external checkpoint load is forced to fail.
+    """
+    src = str(tmp_path / "source.json")
+    tgt = str(tmp_path / "target.json")
+    await _seed_source(src, [{"id": "1", "name": "A"}])
+
+    closed: list[bool] = []
+
+    class _LeakProbeETL(DatabaseETL):
+        def _build_fsm(self):  # type: ignore[override]
+            fsm = super()._build_fsm()
+            original_close = fsm.close
+
+            async def _tracked_close() -> None:
+                closed.append(True)
+                await original_close()
+
+            fsm.close = _tracked_close  # type: ignore[method-assign]
+            return fsm
+
+        async def _load_checkpoint(self, checkpoint_id: str) -> None:
+            raise RuntimeError("checkpoint store unavailable")
+
+    etl = _LeakProbeETL(
+        ETLConfig(
+            source_db={"type": "file", "path": src},
+            target_db={"type": "file", "path": tgt},
+            source_query=None,
+            target_table="records",
+            key_columns=["id"],
+            mode=ETLMode.FULL_REFRESH,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="checkpoint store unavailable"):
+        await etl.run(checkpoint_id="missing")
+
+    assert closed == [True], (
+        "a checkpoint-load failure leaked the freshly-built FSM (close not called)"
+    )
