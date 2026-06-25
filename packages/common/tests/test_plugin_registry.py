@@ -1018,3 +1018,50 @@ class TestPluginRegistryMetadata:
 
         registry.unregister("h")
         assert registry.get_metadata("h") == {}
+
+
+class TestFirstAccessAtomicity:
+    """First-access initialization must be atomic (roll back on failure).
+
+    A populator that registers some keys and then raises must not leave
+    those keys behind: ``_ensure_initialized`` resets ``_initialized`` to
+    ``False`` so the next access retries, and without rollback that retry
+    re-runs the populator from the top and hits "already registered",
+    masking the real error.
+    """
+
+    def test_partial_init_failure_rolls_back_and_retries_cleanly(self) -> None:
+        calls = {"n": 0}
+
+        def populator(reg: PluginRegistry) -> None:
+            reg.register("a", lambda: 1)  # partial state before the failure
+            calls["n"] += 1
+            raise RuntimeError("boom")
+
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "atomic_init", on_first_access=populator
+        )
+
+        # First access surfaces the populator's own error.
+        with pytest.raises(RuntimeError, match="boom"):
+            registry.is_registered("a")
+
+        # The retry must re-run the populator and surface the SAME error,
+        # not an OperationError("'a' already registered") from a leftover
+        # partial registration.
+        with pytest.raises(RuntimeError, match="boom"):
+            registry.is_registered("a")
+
+        assert calls["n"] == 2, "populator should have re-run after rollback"
+
+    def test_successful_init_is_unaffected(self) -> None:
+        def populator(reg: PluginRegistry) -> None:
+            reg.register("a", lambda: 1)
+            reg.register("b", lambda: 2)
+
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "good_init", on_first_access=populator
+        )
+
+        assert registry.is_registered("a")
+        assert registry.is_registered("b")

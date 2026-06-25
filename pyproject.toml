@@ -115,6 +115,17 @@ module = [
 ]
 ignore_missing_imports = true
 
+# numpy >= 2.5 ships stubs that use PEP 695 `type` statements (3.12+ syntax).
+# With python_version = "3.10" mypy treats the present stub as a fatal syntax
+# error and aborts. We do not type-check against numpy's API, so skip following
+# into its stubs entirely (treat as Any). ignore_missing_imports alone does not
+# help — the stub is present, just unparseable at the 3.10 target.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [[tool.mypy.overrides]]
 module = "dataknobs_legacy.*"
 disallow_untyped_defs = false
