@@ -927,10 +927,26 @@ class PluginRegistry(Generic[T]):
         with self._lock:
             if self._initialized:
                 return
+            # Snapshot so a partial-failure init can be rolled back atomically.
+            # Without this, a populator that registers some keys and then
+            # raises leaves those keys behind; because we reset _initialized
+            # below, the next access re-runs the populator from the top and
+            # hits "already registered", masking the real error.
+            factories_snapshot = dict(self._factories)
+            instances_snapshot = dict(self._instances)
+            metadata_snapshot = dict(self._metadata)
             self._initialized = True
             try:
                 self._initializer(self)  # type: ignore[misc]
             except Exception:
+                # Restore pre-init state (preserving dict identity) so a retry
+                # starts clean and surfaces the populator's real error.
+                self._factories.clear()
+                self._factories.update(factories_snapshot)
+                self._instances.clear()
+                self._instances.update(instances_snapshot)
+                self._metadata.clear()
+                self._metadata.update(metadata_snapshot)
                 self._initialized = False
                 raise
 

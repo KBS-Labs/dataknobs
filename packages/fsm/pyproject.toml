@@ -160,6 +160,15 @@ module = [
 ]
 ignore_missing_imports = true
 
+# numpy >= 2.5 ships stubs using PEP 695 `type` statements (3.12+ syntax);
+# with python_version = "3.10" mypy aborts on the present stub. Skip following
+# into numpy's stubs (treat as Any) — we do not type-check against its API.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100
