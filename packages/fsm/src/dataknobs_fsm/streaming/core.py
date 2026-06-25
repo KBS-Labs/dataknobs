@@ -692,7 +692,7 @@ class BasicStreamProcessor:
         # For now, just wrap sync processing
         # In a real implementation, this would use async iterators
         import asyncio
-        return await asyncio.get_event_loop().run_in_executor(None, self.process)
+        return await asyncio.get_running_loop().run_in_executor(None, self.process)
 
 
 class MemoryStreamSource:

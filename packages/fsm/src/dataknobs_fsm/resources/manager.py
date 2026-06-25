@@ -424,7 +424,7 @@ class ResourceManager:
         
         # Run sync cleanups in executor to avoid blocking
         if sync_providers:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             for name, provider in sync_providers:
                 try:
                     await loop.run_in_executor(None, self._close_provider, name, provider)

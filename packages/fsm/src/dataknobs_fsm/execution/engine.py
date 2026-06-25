@@ -963,6 +963,19 @@ class ExecutionEngine(BaseExecutionEngine):
         transform_functions, state_obj = self.prepare_state_transform(state_def, context)
 
         for transform_func in transform_functions:
+            # Skip running transforms on a record that already failed an
+            # upstream transform — don't mutate/persist indeterminate data
+            # (e.g. don't run the ETL load upsert after the transform raised).
+            # Traversal still continues so the record reaches a final state and
+            # is reported as a failure.
+            if self.record_has_failed(context):
+                logger.debug(
+                    "Skipping transform in state '%s': record already failed "
+                    "in %s",
+                    state_name,
+                    sorted(getattr(context, 'failed_states', set()) or set()),
+                )
+                break
             try:
                 # Create function context with resources and variables
                 func_context = FunctionContext(

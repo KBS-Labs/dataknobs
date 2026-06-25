@@ -233,6 +233,28 @@ class BaseExecutionEngine(ABC):
             context.failed_states = set()
         context.failed_states.add(state_name)
 
+    def record_has_failed(self, context: ExecutionContext) -> bool:
+        """Whether a prior state transform already failed for this record.
+
+        Once a state transform raises, :meth:`handle_transform_error` records
+        the offending state in ``context.failed_states`` and the record's data
+        is left in an indeterminate (pre-failure) state. Running *further* state
+        transforms against it is unsafe — e.g. an ETL ``load`` step would upsert
+        the stale, untransformed record into the target even though the run is
+        (correctly) reporting the record as a failure. Downstream transforms
+        must therefore be skipped once this returns True; only traversal (the
+        record still reaching a final state, for accounting) continues, so
+        :meth:`finalize_single_result` reports the failure rather than silently
+        persisting corrupt data.
+
+        Args:
+            context: Execution context for the in-flight record.
+
+        Returns:
+            True if any state has recorded a failure for this record.
+        """
+        return bool(getattr(context, 'failed_states', None))
+
     def finalize_single_result(
         self,
         context: ExecutionContext

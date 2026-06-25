@@ -145,7 +145,7 @@ class FunctionWrapper:
             result = await self.func(*args, **kwargs)
         else:
             # Run sync function in executor to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, self.func, *args, **kwargs)
 
         return result

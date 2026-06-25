@@ -1,6 +1,7 @@
 """Database resource adapter for dataknobs_data backends."""
 
 import asyncio
+import logging
 from contextlib import contextmanager
 from typing import Any, Dict, List
 
@@ -15,6 +16,8 @@ from dataknobs_fsm.resources.base import (
     ResourceHealth,
     ResourceStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseResourceAdapter(BaseResourceProvider):
@@ -190,9 +193,6 @@ class DatabaseResourceAdapter(BaseResourceProvider):
     
     def close(self) -> None:
         """Close the database resource and clean up."""
-        import logging
-        logger = logging.getLogger(__name__)
-        
         # Release all tracked resources first
         super().close()
         
@@ -549,9 +549,6 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
 
     async def aclose(self) -> None:
         """Flush and close the underlying async database."""
-        import logging
-
-        logger = logging.getLogger(__name__)
         if self._database is not None:
             try:
                 flush = getattr(self._database, "flush", None)
