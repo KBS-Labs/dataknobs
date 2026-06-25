@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-23T21:40:05Z",
+  "timestamp": "2026-06-25T19:33:12Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/173-pool-manager-shared-close",
-  "git_commit": "458963092f4123fc8143b49ad391e6d9f944d12f",
+  "git_branch": "sb/fsm-pattern-fsm-logic-not-wired-PR-A",
+  "git_commit": "e882cede77e9692b4752330dd3c59703f8f660e2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
