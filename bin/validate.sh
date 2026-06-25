@@ -508,7 +508,7 @@ elif [[ "$TODO_COUNT" -gt 0 ]]; then
                 trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
                 echo -e "${YELLOW}        Line $line_num: $trimmed${NC}"
             done || true
-            ((shown++))
+            shown=$((shown + 1))
         fi
     done
     if [[ ${#TODO_FILES[@]} -gt 10 ]]; then
