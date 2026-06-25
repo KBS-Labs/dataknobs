@@ -113,7 +113,7 @@ class TestETLPatternReal:
             assert len(overlap) >= 0  # Allow for different implementations
     
     def test_database_etl_resource_configuration(self):
-        """Test that DatabaseETL configures resources properly."""
+        """The built FSM declares the source/target (and enrichment) resources."""
         config = ETLConfig(
             source_db={'type': 'postgres', 'host': 'source-host'},
             target_db={'type': 'postgres', 'host': 'target-host'},
@@ -121,19 +121,20 @@ class TestETLPatternReal:
                 {'database': {'type': 'redis', 'host': 'cache-host'}}
             ]
         )
-        
+
         etl = DatabaseETL(config)
-        
-        # Test resource helper methods
-        transform_resources = etl._get_transform_resources()
-        enrichment_resources = etl._get_enrichment_resources()
-        
-        assert isinstance(transform_resources, list)
-        assert isinstance(enrichment_resources, list)
-        
-        # With enrichment sources, enrichment_resources should have content
-        if config.enrichment_sources:
-            assert len(enrichment_resources) >= 0
+
+        resources = set(etl._fsm.get_resources())
+        # source_db and target_db are always declared; target_db is the async
+        # adapter the DatabaseUpsert load step upserts through.
+        assert {'source_db', 'target_db'} <= resources
+        # A configured database enrichment source is declared at the FSM level.
+        assert 'enrichment_db_0' in resources
+
+        # The per-record transform and load steps are wired as registered
+        # functions (the proven custom_functions= idiom).
+        functions = etl._build_custom_functions()
+        assert set(functions) == {'transform', 'load'}
 
 
 class TestFileProcessingPatternReal:

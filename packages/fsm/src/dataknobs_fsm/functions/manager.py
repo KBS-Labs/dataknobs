@@ -60,6 +60,13 @@ class FunctionWrapper:
             source: Where the function came from
             interface: Optional interface the function should implement
         """
+        # Normalize FSM function-interface *instances* (e.g. a DatabaseUpsert
+        # ITransformFunction) to their bound interface method. The instance
+        # itself is typically not callable and carries no async signal, so
+        # wrapping it directly mis-detects async and cannot be invoked; the
+        # real (possibly-async) implementation lives on the interface method.
+        func = self._normalize_interface_callable(func)
+
         self.func = func
         self.name = name
         self.source = source
@@ -71,6 +78,27 @@ class FunctionWrapper:
         # Store original function metadata
         self.__name__ = getattr(func, '__name__', name)
         self.__doc__ = getattr(func, '__doc__', '')
+
+    @staticmethod
+    def _normalize_interface_callable(func: Callable) -> Callable:
+        """Return the bound interface method for an FSM function instance.
+
+        An object implementing one of the FSM function interfaces
+        (``ITransformFunction``/``IValidationFunction``/``IStateTestFunction``/
+        ``IEndStateTestFunction``) carries its logic on the named interface
+        method, not on ``__call__``. Target that bound method so async
+        detection and invocation are correct. Plain callables pass through
+        unchanged.
+        """
+        if isinstance(func, ITransformFunction):
+            return func.transform
+        if isinstance(func, IValidationFunction):
+            return func.validate
+        if isinstance(func, IStateTestFunction):
+            return func.test
+        if isinstance(func, IEndStateTestFunction):
+            return func.should_end
+        return func
 
     def _check_async(self, func: Callable) -> bool:
         """Check if a function is async.

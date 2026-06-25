@@ -466,6 +466,9 @@ class ExecutionContext:
         clone.metadata = self.metadata.copy()
         clone.variables = self.variables.copy()
         clone._initial_transforms_executed = self._initial_transforms_executed
+        # Preserve the resource manager so cloned contexts (batch items,
+        # COPY-mode per-record children) can still acquire state resources.
+        clone.resource_manager = self.resource_manager
 
         return clone
     

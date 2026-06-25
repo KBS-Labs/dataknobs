@@ -24,6 +24,7 @@ class ResourceType(str, Enum):
     """Available resource types."""
 
     DATABASE = "database"
+    ASYNC_DATABASE = "async_database"
     FILESYSTEM = "filesystem"
     HTTP = "http"
     LLM = "llm"

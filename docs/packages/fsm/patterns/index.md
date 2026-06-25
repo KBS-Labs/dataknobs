@@ -119,19 +119,12 @@ from dataknobs_fsm.patterns.etl import create_etl_pipeline, ETLMode
 
 # Create ETL pipeline using factory function
 etl = create_etl_pipeline(
-    source={
-        "type": "database",
-        "provider": "postgresql",
-        "connection": "postgresql://source_db"
-    },
-    target={
-        "type": "database",
-        "provider": "postgresql",
-        "connection": "postgresql://target_db"
-    },
+    # source/target are AsyncDatabase configs; "type" selects the backend.
+    source={"type": "postgres", "connection_string": "postgresql://localhost/source_db"},
+    target={"type": "postgres", "connection_string": "postgresql://localhost/target_db"},
     mode=ETLMode.INCREMENTAL,
     transformations=[
-        lambda row: {**row, "processed_at": datetime.now()}
+        lambda row: {**row, "processed": True}
     ]
 )
 

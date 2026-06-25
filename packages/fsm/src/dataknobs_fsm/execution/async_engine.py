@@ -614,58 +614,183 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     # Log but don't fail - validators are optional
                     pass
 
-        # Execute transform functions using base class helpers
-        if transform_functions:
-            logger.debug(f"Executing {len(transform_functions)} transform functions for state {state_name}")
-        for transform_func in transform_functions:
+        if not transform_functions:
+            return
+
+        logger.debug(
+            f"Executing {len(transform_functions)} transform functions for state {state_name}"
+        )
+
+        # Acquire the state's declared resources and inject them into the
+        # function context so resource-bearing transforms (e.g. DatabaseUpsert)
+        # can reach them via context.resources. Released in the finally block.
+        state_resources = self._acquire_state_resources(context, state)
+        try:
+            for transform_func in transform_functions:
+                try:
+                    func_context = FunctionContext(
+                        state_name=state_name,
+                        function_name=getattr(transform_func, '__name__', 'transform'),
+                        metadata={'state': state_name},
+                        resources=state_resources,
+                        variables=getattr(context, 'variables', {}) or {},
+                    )
+
+                    result = await self._invoke_state_transform(
+                        transform_func, context, func_context, state_obj
+                    )
+
+                    # Process result using base class logic
+                    self.process_transform_result(result, context, state_name)
+
+                except Exception as e:
+                    # Handle error using base class logic
+                    self.handle_transform_error(e, context, state_name)
+        finally:
+            self._release_state_resources(context, state, state_resources)
+
+    @staticmethod
+    def _is_interface_transform(transform_func: Any) -> bool:
+        """Whether a transform is an ITransformFunction (raw or wrapped).
+
+        Interface transforms take ``(data, context)`` and read resources off
+        ``context.resources``. They must be dispatched deterministically with
+        that signature — a ``state_obj``-first call would succeed (one
+        positional arg) and silently bypass resource injection.
+        """
+        from dataknobs_fsm.functions.base import ITransformFunction
+
+        return (
+            isinstance(transform_func, ITransformFunction)
+            or getattr(transform_func, 'interface', None) is ITransformFunction
+        )
+
+    async def _invoke_state_transform(
+        self,
+        transform_func: Any,
+        context: ExecutionContext,
+        func_context: FunctionContext,
+        state_obj: Any,
+    ) -> Any:
+        """Invoke a single state transform with the resource-bearing context.
+
+        Interface transforms (``ITransformFunction`` / ``InterfaceWrapper``)
+        are dispatched deterministically as ``(dict, func_context)`` so the
+        injected resources reach them. Non-interface callables (inline lambdas
+        expecting a state object) keep the historical ``state_obj``-first
+        dispatch with a ``(data, context)`` fallback for regression safety.
+        """
+        actual_func = transform_func
+        if hasattr(transform_func, 'transform'):
+            actual_func = transform_func.transform
+
+        # Detect async via the callable, its __call__, or a wrapper hint.
+        is_async = asyncio.iscoroutinefunction(actual_func)
+        if not is_async and callable(actual_func):
+            # A callable *object* may carry an async ``__call__``; inspect the
+            # type's bound slot (``callable()`` above guarantees it exists).
+            is_async = asyncio.iscoroutinefunction(type(actual_func).__call__)
+        if not is_async and getattr(transform_func, '_is_async', False):
+            is_async = True
+
+        if self._is_interface_transform(transform_func):
+            data = ensure_dict(context.data)
+            if is_async:
+                return await actual_func(data, func_context)
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, actual_func, data, func_context)
+
+        # Non-interface callable: state_obj first, fall back to (data, context).
+        if is_async:
             try:
-                # Create function context
-                func_context = FunctionContext(
-                    state_name=state_name,
-                    function_name=getattr(transform_func, '__name__', 'transform'),
-                    metadata={'state': state_name},
-                    resources={}
+                return await actual_func(state_obj)
+            except (TypeError, AttributeError):
+                return await actual_func(ensure_dict(context.data), func_context)
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, actual_func, state_obj)
+        except (TypeError, AttributeError):
+            return await loop.run_in_executor(
+                None, actual_func, ensure_dict(context.data), func_context
+            )
+
+    def _acquire_state_resources(
+        self,
+        context: ExecutionContext,
+        state: Any,
+    ) -> Dict[str, Any]:
+        """Acquire the resources a state declares, keyed by resource name.
+
+        Mirrors the sync engine's resource allocation so async state
+        transforms get the same resource-injection contract. The acquire is a
+        cheap in-process bookkeeping call (the async database resource opens
+        its transport lazily on first ``await``), so it does not block the
+        loop. Failures are logged (not swallowed silently) and skipped.
+
+        This helper is intentionally path-agnostic: the arc-transform path can
+        reuse it unchanged once it adopts resource injection (170-FU1).
+        """
+        resources: Dict[str, Any] = {}
+        requirements = getattr(state, 'resource_requirements', None)
+        if not requirements:
+            return resources
+
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return resources
+
+        owner_id = self._state_resource_owner(context, state)
+        for resource_config in requirements:
+            name = getattr(resource_config, 'name', None)
+            if not name or name in resources:
+                continue
+            try:
+                timeout = getattr(resource_config, 'timeout_seconds', None) or getattr(
+                    resource_config, 'timeout', None
+                )
+                resources[name] = resource_manager.acquire(
+                    name=name, owner_id=owner_id, timeout=timeout
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to acquire resource '%s' for state '%s': %s",
+                    name,
+                    getattr(state, 'name', '?'),
+                    e,
+                )
+        return resources
+
+    def _release_state_resources(
+        self,
+        context: ExecutionContext,
+        state: Any,
+        resources: Dict[str, Any],
+    ) -> None:
+        """Release resources acquired by :meth:`_acquire_state_resources`."""
+        if not resources:
+            return
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+        owner_id = self._state_resource_owner(context, state)
+        for name in resources:
+            try:
+                resource_manager.release(name, owner_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to release resource '%s' for state '%s': %s",
+                    name,
+                    getattr(state, 'name', '?'),
+                    e,
                 )
 
-                # Handle both async and sync transforms
-                # For InterfaceWrapper objects, use the transform method
-                actual_func = transform_func
-                if hasattr(transform_func, 'transform'):
-                    actual_func = transform_func.transform
+    @staticmethod
+    def _state_resource_owner(context: ExecutionContext, state: Any) -> str:
+        """Build the resource-ownership key for a state's acquisitions."""
+        state_name = getattr(state, 'name', 'unknown')
+        execution_id = getattr(context, 'execution_id', 'unknown')
+        return f"state_{state_name}_{execution_id}"
 
-                # Check if it's async - check both the function and its __call__ method
-                is_async = asyncio.iscoroutinefunction(actual_func)
-                if not is_async and callable(actual_func) and callable(actual_func):
-                    # Check if the __call__ method is async (for wrapped functions)
-                    is_async = asyncio.iscoroutinefunction(actual_func.__call__)
-
-                # Also check for _is_async attribute (for wrapped functions)
-                if not is_async and hasattr(transform_func, '_is_async'):
-                    is_async = transform_func._is_async
-
-                if is_async:
-                    # Try with state object first (for inline lambdas)
-                    try:
-                        result = await actual_func(state_obj)
-                    except (TypeError, AttributeError):
-                        # Fall back to standard signature
-                        result = await actual_func(ensure_dict(context.data), func_context)
-                else:
-                    # Run sync function in executor
-                    loop = asyncio.get_event_loop()
-                    try:
-                        result = await loop.run_in_executor(None, actual_func, state_obj)
-                    except (TypeError, AttributeError):
-                        # Fall back to standard signature
-                        result = await loop.run_in_executor(None, actual_func, ensure_dict(context.data), func_context)
-
-                # Process result using base class logic
-                self.process_transform_result(result, context, state_name)
-
-            except Exception as e:
-                # Handle error using base class logic
-                self.handle_transform_error(e, context, state_name)
-    
     async def _enter_initial_state(
         self, context: ExecutionContext
     ) -> tuple[bool, str | None]:

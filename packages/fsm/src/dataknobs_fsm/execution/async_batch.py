@@ -6,9 +6,9 @@ from typing import Any, Callable, Dict, List, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.batch import BatchResult, BatchProgress
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 
 
 class AsyncBatchExecutor:
@@ -28,26 +28,33 @@ class AsyncBatchExecutor:
         parallelism: int = 10,
         batch_size: int = 100,
         enable_transactions: bool = False,
-        progress_callback: Union[Callable, None] = None
+        progress_callback: Union[Callable, None] = None,
+        resource_manager: Any = None,
     ):
         """Initialize async batch executor.
-        
+
         Args:
             fsm: FSM to execute.
             parallelism: Maximum parallel executions.
             batch_size: Size of each batch.
             enable_transactions: Enable transaction support.
             progress_callback: Callback for progress updates.
+            resource_manager: Resource manager threaded into each item's
+                context so state transforms can acquire their resources.
         """
         self.fsm = fsm
         self.parallelism = parallelism
         self.batch_size = batch_size
         self.enable_transactions = enable_transactions
         self.progress_callback = progress_callback
-        
-        # Create execution engine
-        self.engine = ExecutionEngine(fsm)
-        
+        self.resource_manager = resource_manager
+
+        # Use the async execution engine so async state transforms (e.g. an
+        # async DatabaseUpsert) are actually awaited. Previously this ran the
+        # sync ExecutionEngine in a thread pool, which could not await async
+        # transforms — they leaked unawaited coroutines and never ran.
+        self.engine = AsyncExecutionEngine(fsm)
+
         # Semaphore for parallelism control
         self._semaphore = asyncio.Semaphore(parallelism)
     
@@ -122,6 +129,11 @@ class AsyncBatchExecutor:
             
             # Create context for this item
             context = context_template.clone()
+            # Thread the resource manager so state transforms can acquire
+            # their declared resources (clone() preserves it, but a bare
+            # template may not carry one).
+            if getattr(context, 'resource_manager', None) is None and self.resource_manager is not None:
+                context.resource_manager = self.resource_manager
             # Convert Record to dict if needed
             if hasattr(item, 'to_dict'):
                 context.data = item.to_dict()
@@ -146,14 +158,13 @@ class AsyncBatchExecutor:
                                 break
             
             try:
-                # Execute in thread pool to avoid blocking
-                loop = asyncio.get_event_loop()
-                success, result = await loop.run_in_executor(
-                    None,
-                    self.engine.execute,
+                # Drive the async engine directly so async state transforms
+                # are awaited (no thread pool — the async engine offloads any
+                # blocking I/O itself, and the semaphore bounds concurrency).
+                success, result = await self.engine.execute(
                     context,
                     None,  # Data is already in context
-                    max_transitions
+                    max_transitions,
                 )
                 
                 # Store final state and path in metadata

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- New `async_database` FSM resource type (backed by
+  `AsyncDatabaseResourceAdapter`) so a state transform can `await`
+  non-blocking `upsert` / `execute_query` against any `dataknobs-data`
+  `AsyncDatabase` backend.
+- The async execution engine now acquires a state's declared `resources`
+  into the transform `FunctionContext`, so registered async transforms
+  receive their injected resources (matching the synchronous engine).
+
+### Fixed
+
+- `DatabaseETL.run()` now persists records to the target database. Each
+  extracted record has its `field_mappings` and `transformations` applied
+  and is upserted into `target_db`, and `run()` flushes and closes the
+  target so the rows are durable. The returned metrics (`extracted` /
+  `transformed` / `loaded` / `errors`) reflect the records actually
+  processed. Previously records traversed skeleton states without a load
+  step, the user `transformations` callables were never applied, and the
+  metrics were hollow. (The `validate` and `enrich` stages remain
+  passthroughs pending their config contracts.)
+- `AsyncBatchExecutor` drives the async execution engine directly instead
+  of running the synchronous engine in a thread pool, so async state
+  transforms are awaited — they previously leaked unawaited coroutines and
+  never ran.
+- Registered interface functions (e.g. `ITransformFunction` instances)
+  supplied via `custom_functions=` are now detected as async and awaited
+  correctly, instead of being mistaken for synchronous callables.
+
 ## v0.2.3 - 2026-06-23
 
 ## v0.2.2 - 2026-06-22

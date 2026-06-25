@@ -5,6 +5,7 @@ including data extraction from source databases, transformation pipelines,
 and loading into target systems.
 """
 
+import inspect
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List, Union
@@ -14,13 +15,12 @@ from dataknobs_common.structured_config import (
     StructuredConfigConsumer,
 )
 
-from dataknobs_data import AsyncDatabase, Query, Record
+from dataknobs_data import AsyncDatabase, Query
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 from ..api.async_simple import AsyncSimpleFSM
-from ..functions.library.database import DatabaseFetch, DatabaseUpsert
-from ..functions.library.transformers import DataEnricher, FieldMapper
-from ..functions.library.validators import SchemaValidator
+from ..functions.base import ITransformFunction, TransformError
+from ..functions.library.database import DatabaseUpsert
 
 
 class ETLMode(Enum):
@@ -52,6 +52,51 @@ class ETLConfig(StructuredConfig):
     enrichment_sources: List[Dict[str, Any]] | None = None
 
 
+class _ETLTransform(ITransformFunction):
+    """Per-record transform step: apply field mappings then user callables.
+
+    Wired into the ETL FSM's ``transform`` state as a registered function (the
+    proven ``custom_functions=`` idiom). ``field_mappings`` rename keys; each
+    entry of ``transformations`` is then applied in order. A transformation may
+    be sync or async and is **map-style** — it receives the current record dict
+    and must return the transformed dict. A non-dict return (including ``None``)
+    is a configuration error and raises rather than silently corrupting the row.
+    """
+
+    def __init__(
+        self,
+        field_mappings: Dict[str, str] | None,
+        transformations: List[Callable] | None,
+    ) -> None:
+        self._field_mappings = field_mappings or {}
+        self._transformations = transformations or []
+
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
+        result = dict(data)
+        for old_name, new_name in self._field_mappings.items():
+            if old_name in result:
+                result[new_name] = result.pop(old_name)
+        for index, fn in enumerate(self._transformations):
+            out = fn(result)
+            if inspect.isawaitable(out):
+                out = await out
+            if not isinstance(out, dict):
+                raise TransformError(
+                    f"ETL transformation #{index} must return a dict, got "
+                    f"{type(out).__name__}"
+                )
+            result = out
+        return result
+
+    def get_transform_description(self) -> str:
+        return (
+            f"Apply {len(self._field_mappings)} field mapping(s) and "
+            f"{len(self._transformations)} transformation(s)"
+        )
+
+
 class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     """AsyncDatabase ETL pipeline using FSM pattern.
 
@@ -77,9 +122,14 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     def _build_fsm(self) -> AsyncSimpleFSM:
         """Build FSM for ETL pipeline."""
         # Build resources list
+        # target_db uses the async database resource so the DatabaseUpsert load
+        # transform's ``await resource.upsert(...)`` is real and non-blocking.
+        # source_db's resource is never acquired (the `extract` start state is a
+        # passthrough — extraction is owned by run()._extract_batches), so its
+        # type is immaterial here.
         resources = [
             {'name': 'source_db', 'type': 'database', 'config': self.config.source_db},
-            {'name': 'target_db', 'type': 'database', 'config': self.config.target_db}
+            {'name': 'target_db', 'type': 'async_database', 'config': self.config.target_db}
         ]
         
         # Add enrichment resources if configured
@@ -98,6 +148,12 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                         'config': source['api']
                     })
         
+        # Route through `enrich` only when enrichment is configured. `validate`
+        # and `enrich` are currently honest passthroughs (their config
+        # contracts — `validation_schema` / `enrichment_sources` — are
+        # underspecified for real per-record wiring; see _build_custom_functions).
+        post_transform = 'enrich' if self.config.enrichment_sources else 'load'
+
         # Create FSM configuration
         fsm_config = {
             'name': 'ETL_Pipeline',
@@ -115,15 +171,21 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 },
                 {
                     'name': 'transform',
-                    'resources': self._get_transform_resources()
+                    'resources': [],
+                    'functions': {
+                        'transform': {'type': 'registered', 'name': 'transform'}
+                    }
                 },
                 {
                     'name': 'enrich',
-                    'resources': self._get_enrichment_resources()
+                    'resources': []
                 },
                 {
                     'name': 'load',
-                    'resources': ['target_db']
+                    'resources': ['target_db'],
+                    'functions': {
+                        'transform': {'type': 'registered', 'name': 'load'}
+                    }
                 },
                 {
                     'name': 'complete',
@@ -135,189 +197,56 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 }
             ],
             'arcs': [
-                {
-                    'from': 'extract',
-                    'to': 'validate',
-                    'name': 'extracted'
-                },
-                {
-                    'from': 'validate',
-                    'to': 'transform',
-                    'name': 'valid',
-                    'pre_test': self._create_validation_test_reference()
-                },
-                {
-                    'from': 'validate',
-                    'to': 'error',
-                    'name': 'invalid'
-                },
-                {
-                    'from': 'transform',
-                    'to': 'enrich' if self.config.enrichment_sources else 'load',
-                    'name': 'transformed',
-                    'transform': self._create_transformer_reference()
-                },
-                {
-                    'from': 'enrich',
-                    'to': 'load',
-                    'name': 'enriched',
-                    'transform': self._create_enricher_reference()
-                },
-                {
-                    'from': 'load',
-                    'to': 'complete',
-                    'name': 'loaded'
-                }
+                {'from': 'extract', 'to': 'validate', 'name': 'extracted'},
+                {'from': 'validate', 'to': 'transform', 'name': 'valid'},
+                {'from': 'transform', 'to': post_transform, 'name': 'transformed'},
+                {'from': 'enrich', 'to': 'load', 'name': 'enriched'},
+                {'from': 'load', 'to': 'complete', 'name': 'loaded'},
             ]
         }
+
+        # Wire the per-record functions through the proven custom_functions
+        # idiom. The top-level config['functions'] dict is silently dropped by
+        # FSMConfig (it has no 'functions' field); functions must flow through
+        # AsyncSimpleFSM(config, custom_functions=...) and be referenced from a
+        # state's 'functions' block (see examples/database_etl.py).
+        return AsyncSimpleFSM(
+            fsm_config,
+            data_mode=DataHandlingMode.COPY,
+            custom_functions=self._build_custom_functions(),
+        )
         
-        # Add functions
-        self._register_functions(fsm_config)
-        
-        return AsyncSimpleFSM(fsm_config, data_mode=DataHandlingMode.COPY)
-        
-    def _get_transform_resources(self) -> List[str]:
-        """Get resources needed for transformation."""
-        resources = []
-        if self.config.enrichment_sources:
-            for i, source in enumerate(self.config.enrichment_sources):
-                if 'database' in source:
-                    resources.append(f'enrichment_db_{i}')
-        return resources
-        
-    def _get_enrichment_resources(self) -> List[str]:
-        """Get resources needed for enrichment."""
-        resources = []
-        if self.config.enrichment_sources:
-            for i, source in enumerate(self.config.enrichment_sources):
-                if 'api' in source:
-                    resources.append(f'enrichment_api_{i}')
-        return resources
-        
-    def _create_validation_test(self) -> Callable | None:
-        """Create validation test function."""
-        if not self.config.validation_schema:
-            return None
-            
-        validator = SchemaValidator(self.config.validation_schema)
-        return lambda state: validator.validate(Record(state.data))  # type: ignore
-        
-    def _create_validation_test_reference(self) -> Dict[str, Any] | None:
-        """Create validation test function reference for FSM config."""
-        if not self.config.validation_schema:
-            return None
-            
-        import json
-        # Build validation code based on schema
-        code_lines = [
-            "# Validate data against schema",
-            f"schema = {json.dumps(self.config.validation_schema)}",
-            "# Basic schema validation",
-            "if schema.get('type') == 'object':",
-            "    required = schema.get('required', [])",
-            "    for field in required:",
-            "        if field not in data:",
-            "            False",
-            "True"
-        ]
-        
+    def _build_custom_functions(self) -> Dict[str, Callable]:
+        """Build the registered functions the ETL FSM references by name.
+
+        Two per-record steps are wired as FSM transforms:
+
+        - ``transform`` (:class:`_ETLTransform`) applies ``field_mappings`` and
+          the user ``transformations`` callables.
+        - ``load`` (:class:`DatabaseUpsert`) upserts the record into the
+          ``target_db`` async-database resource.
+
+        Extraction is owned by ``run()._extract_batches`` (a per-record
+        ``DatabaseFetch`` 'fetch all' would be nonsensical), so
+        ``DatabaseFetch`` is repaired and exercised at the library layer
+        rather than wired here. The ``validate`` / ``enrich`` states are honest
+        passthroughs for now: ``validation_schema`` and ``enrichment_sources``
+        have underspecified config contracts (schema format / per-record
+        DB-API lookup) that need their own design before they can be wired
+        without silently doing the wrong thing. The returned instances are
+        passed via ``AsyncSimpleFSM(config, custom_functions=...)`` and
+        referenced from each state's ``functions`` block.
+        """
         return {
-            'type': 'inline',
-            'code': '\n'.join(code_lines)
-        }
-        
-    def _create_transformer(self) -> Callable:
-        """Create transformation function."""
-        transformers = []
-        
-        # Add field mapping
-        if self.config.field_mappings:
-            transformers.append(FieldMapper(self.config.field_mappings))
-            
-        # Add custom transformations
-        if self.config.transformations:
-            transformers.extend(self.config.transformations)  # type: ignore
-            
-        # Compose transformers
-        async def transform(data: Dict[str, Any]) -> Dict[str, Any]:
-            result = data
-            for transformer in transformers:
-                if hasattr(transformer, 'transform'):
-                    result = await transformer.transform(result)  # type: ignore
-                elif callable(transformer):
-                    result = transformer(result)
-            return result
-            
-        return transform
-        
-    def _create_enricher(self) -> Callable | None:
-        """Create enrichment function."""
-        if not self.config.enrichment_sources:
-            return None
-            
-        enricher = DataEnricher(self.config.enrichment_sources)  # type: ignore
-        return enricher.transform
-        
-    def _create_transformer_reference(self) -> Dict[str, Any] | None:
-        """Create transformation function reference for FSM config."""
-        if not self.config.field_mappings and not self.config.transformations:
-            return None
-            
-        # Build transformation code
-        code_lines = [
-            "# Apply transformations",
-            "result = data"
-        ]
-        
-        if self.config.field_mappings:
-            # Add field mapping code
-            for old_name, new_name in self.config.field_mappings.items():
-                code_lines.append(f"if '{old_name}' in result:")
-                code_lines.append(f"    result['{new_name}'] = result.pop('{old_name}')")
-        
-        # For custom transformations, we'll apply them as simple dict updates
-        if self.config.transformations:
-            code_lines.append("# Apply custom transformations")
-            code_lines.append("result['transformed'] = True")
-        
-        code_lines.append("result")
-        
-        return {
-            'type': 'inline',
-            'code': '\n'.join(code_lines)
-        }
-        
-    def _create_enricher_reference(self) -> Dict[str, Any] | None:
-        """Create enrichment function reference for FSM config."""
-        if not self.config.enrichment_sources:
-            return None
-            
-        # Build enrichment code
-        code_lines = [
-            "# Enrich data",
-            "result = data",
-            "result['enriched'] = True",
-            "result"
-        ]
-        
-        return {
-            'type': 'inline',
-            'code': '\n'.join(code_lines)
-        }
-        
-    def _register_functions(self, config: Dict[str, Any]) -> None:
-        """Register ETL-specific functions."""
-        # Register database functions
-        config['functions'] = {
-            'extract': DatabaseFetch(
-                resource_name='source_db',
-                query=self.config.source_query  # type: ignore
+            'transform': _ETLTransform(
+                self.config.field_mappings,
+                self.config.transformations,
             ),
             'load': DatabaseUpsert(
                 resource_name='target_db',
                 table=self.config.target_table,
-                key_columns=self.config.key_columns or ['id']
-            )
+                key_columns=self.config.key_columns or ['id'],
+            ),
         }
         
     async def run(
@@ -372,7 +301,10 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                     
         finally:
             await source_db.close()
-            
+            # Flush and close the FSM's resources (notably the async target_db
+            # adapter) so upserted rows are durably persisted.
+            await self._fsm.close()
+
         return self._metrics
         
     async def _extract_batches(
@@ -410,16 +342,22 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             return Query()
             
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
-        """Update execution metrics."""
+        """Update execution metrics.
+
+        A record reaching ``complete`` has traversed the transform stage and
+        been upserted by the ``load`` step, so it counts as both ``transformed``
+        and ``loaded`` (the load step is the real DatabaseUpsert, not a no-op).
+        """
         for result in results:
             if result['success']:
                 if result['final_state'] == 'complete':
+                    self._metrics['transformed'] += 1
                     self._metrics['loaded'] += 1
                 elif result['final_state'] == 'error':
                     self._metrics['errors'] += 1
             else:
                 self._metrics['errors'] += 1
-                
+
         self._metrics['extracted'] = self._metrics['loaded'] + self._metrics['errors']
         
     def _check_error_threshold(self) -> bool:
