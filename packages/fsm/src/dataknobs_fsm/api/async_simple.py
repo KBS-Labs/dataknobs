@@ -282,6 +282,7 @@ See Also:
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -297,6 +298,8 @@ from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.async_stream import AsyncStreamExecutor
 from ..resources.manager import ResourceManager
 from ..streaming.core import StreamConfig as CoreStreamConfig
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncSimpleFSM:
@@ -546,18 +549,23 @@ class AsyncSimpleFSM:
                 try:
                     resource = self._create_resource_provider(resource_config)
                     self._resource_manager.register_provider(resource_config.name, resource)
-                except Exception:
-                    # Continue if resource creation fails - this is for simplified API
-                    pass
+                except Exception as e:
+                    # Continue, but surface the failure — a silently-dropped
+                    # resource later fails with an opaque "Unknown resource"
+                    # when a state tries to acquire it.
+                    logger.warning(
+                        "Failed to register resource '%s': %s",
+                        getattr(resource_config, 'name', '?'),
+                        e,
+                    )
 
         # Register additional resources passed to constructor
         for name, resource_config in self._resources.items():
             try:
                 # Use ResourceManager factory method
                 self._resource_manager.register_from_dict(name, resource_config)
-            except Exception:
-                # Continue if resource creation fails
-                pass
+            except Exception as e:
+                logger.warning("Failed to register resource '%s': %s", name, e)
 
     def _create_resource_provider(self, resource_config):
         """Create a resource provider from ResourceConfig."""
@@ -627,7 +635,8 @@ class AsyncSimpleFSM:
             fsm=self._fsm,
             parallelism=max_workers,
             batch_size=batch_size,
-            progress_callback=on_progress
+            progress_callback=on_progress,
+            resource_manager=self._resource_manager,
         )
 
         # Convert to Records

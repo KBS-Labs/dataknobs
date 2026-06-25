@@ -430,10 +430,13 @@ class TestCustomFunctionErrors:
         )
         
         result = fsm.process({})
-        
-        # State transforms failing should not stop execution
-        # The FSM should continue and reach the end state
-        assert result["success"] is True
+
+        # A failing state transform does not halt traversal — the FSM still
+        # flows to the end state — but the failure is now surfaced as a record
+        # failure (success is False) rather than being silently swallowed and
+        # reported as a success. Swallowing it was the silent-data-loss bug:
+        # a record whose transform/load raised would be reported as processed.
+        assert result["success"] is False
         assert result["final_state"] == "end"
         # The transform_state should be in the path even though its transform failed
         assert "transform_state" in result["path"]

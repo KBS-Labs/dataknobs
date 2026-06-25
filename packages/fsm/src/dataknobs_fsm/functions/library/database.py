@@ -7,7 +7,40 @@ in FSM configurations, leveraging the dataknobs_data package.
 from typing import Any, Dict, List
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
-from dataknobs_fsm.resources.database import DatabaseResourceAdapter
+
+
+def _resources_from_context(context: Any) -> Dict[str, Any]:
+    """Extract the injected resources mapping from a function context.
+
+    The async engine passes a :class:`~dataknobs_fsm.functions.base.FunctionContext`
+    whose ``resources`` dict is populated from the state's declared resource
+    requirements. Tolerate a plain dict context (and ``None``) so these
+    functions are callable outside the engine too.
+    """
+    if context is None:
+        return {}
+    if isinstance(context, dict):
+        resources = context.get("resources", {})
+    else:
+        resources = getattr(context, "resources", {})
+    return resources or {}
+
+
+def _require_resource(resource_name: str, context: Any) -> Any:
+    """Return the named resource from ``context.resources`` or raise.
+
+    Resources are injected by the engine into ``FunctionContext.resources``
+    from the state's ``resources`` declaration — not smuggled through the data
+    payload. A missing resource is a wiring error (the state did not declare
+    the resource, or no provider is registered for it).
+    """
+    resource = _resources_from_context(context).get(resource_name)
+    if resource is None:
+        raise TransformError(
+            f"Database resource '{resource_name}' not found in "
+            f"context.resources (is it declared in the state's 'resources'?)"
+        )
+    return resource
 
 
 class DatabaseFetch(ITransformFunction):
@@ -36,7 +69,9 @@ class DatabaseFetch(ITransformFunction):
         self.fetch_one = fetch_one
         self.as_dict = as_dict
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by fetching from database.
         
         Args:
@@ -45,12 +80,8 @@ class DatabaseFetch(ITransformFunction):
         Returns:
             Data with database query results.
         """
-        # Get resource from context (injected during execution)
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         # Merge parameters
         query_params = {**self.params}
@@ -110,7 +141,9 @@ class DatabaseUpsert(ITransformFunction):
         self.value_columns = value_columns
         self.on_conflict = on_conflict
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by upserting to database.
         
         Args:
@@ -119,12 +152,8 @@ class DatabaseUpsert(ITransformFunction):
         Returns:
             Data with upsert result.
         """
-        # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         # Extract record(s) to upsert
         if "records" in data:
@@ -178,7 +207,9 @@ class BatchCommit(ITransformFunction):
         self.batch_size = batch_size
         self.use_transaction = use_transaction
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by committing batch to database.
         
         Args:
@@ -187,12 +218,8 @@ class BatchCommit(ITransformFunction):
         Returns:
             Data with commit result.
         """
-        # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         # Get batch from data
         batch = data.get("batch", [])
@@ -247,7 +274,9 @@ class DatabaseQuery(ITransformFunction):
         self.params_field = params_field
         self.result_field = result_field
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by executing dynamic query.
         
         Args:
@@ -256,12 +285,8 @@ class DatabaseQuery(ITransformFunction):
         Returns:
             Data with query results.
         """
-        # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         # Get query and parameters
         query = data.get(self.query_field)
@@ -307,7 +332,9 @@ class DatabaseTransaction(ITransformFunction):
         self.action = action
         self.savepoint = savepoint
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by managing transaction.
         
         Args:
@@ -316,12 +343,8 @@ class DatabaseTransaction(ITransformFunction):
         Returns:
             Data with transaction status.
         """
-        # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         try:
             if self.action == "begin":
@@ -389,7 +412,9 @@ class DatabaseBulkInsert(ITransformFunction):
         self.chunk_size = chunk_size
         self.on_duplicate = on_duplicate
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
         """Transform data by performing bulk insert.
         
         Args:
@@ -398,12 +423,8 @@ class DatabaseBulkInsert(ITransformFunction):
         Returns:
             Data with insert results.
         """
-        # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformError(
-                f"Database resource '{self.resource_name}' not found"
-            )
+        # Resource is injected by the engine into context.resources.
+        resource = _require_resource(self.resource_name, context)
         
         # Get records to insert
         records = data.get("records", [])

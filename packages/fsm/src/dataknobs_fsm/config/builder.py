@@ -198,6 +198,7 @@ class FSMBuilder:
         # Map resource types to classes
         resource_classes = {
             "database": "dataknobs_fsm.resources.database.DatabaseResourceAdapter",
+            "async_database": "dataknobs_fsm.resources.database.AsyncDatabaseResourceAdapter",
             "filesystem": "dataknobs_fsm.resources.filesystem.FileSystemResource",
             "http": "dataknobs_fsm.resources.http.HTTPServiceResource",
             "llm": "dataknobs_fsm.resources.llm.LLMResource",

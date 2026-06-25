@@ -219,7 +219,10 @@ class BaseExecutionEngine(ABC):
     ) -> None:
         """Handle transform error (common logic).
 
-        State transforms failing doesn't stop the FSM, but marks the state as failed.
+        A failing state transform does not halt FSM traversal (the record still
+        flows to a final state), but the failure is recorded in
+        ``context.failed_states`` so :meth:`finalize_single_result` can surface
+        it as a record-level failure rather than silently reporting success.
 
         Args:
             error: Exception that occurred.
@@ -229,6 +232,35 @@ class BaseExecutionEngine(ABC):
         if not hasattr(context, 'failed_states'):
             context.failed_states = set()
         context.failed_states.add(state_name)
+
+    def finalize_single_result(
+        self,
+        context: ExecutionContext
+    ) -> Tuple[bool, Any]:
+        """Build the ``(success, value)`` result for a record at a final state.
+
+        A record reaches a final state even when one of its state transforms
+        raised: :meth:`handle_transform_error` records the offending state in
+        ``context.failed_states`` but does not stop traversal. That failure
+        signal MUST surface in the execution result — otherwise a swallowed
+        transform or load error (e.g. a target-write failure in an ETL load
+        step) is reported as a successful record, which is silent data loss.
+
+        Returns ``(False, <message>)`` when any state recorded a failure during
+        this record's execution, otherwise ``(True, context.data)``.
+
+        Args:
+            context: Execution context for the completed record.
+
+        Returns:
+            Tuple of (success, result value or failure message).
+        """
+        failed = getattr(context, 'failed_states', None)
+        if failed:
+            return False, (
+                "State transform failed in: " + ", ".join(sorted(failed))
+            )
+        return True, context.data
 
     def evaluate_arc_condition_common(
         self,

@@ -528,12 +528,16 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_malformed_json_handling(self):
         """Test handling of malformed JSON in input files."""
-        # Create input file with some malformed JSON
+        # Create input file with some malformed JSON. The valid records must
+        # carry every field the FSM's transforms consume (the `enrich` step
+        # reads `category`) — otherwise they fail a transform and, under the
+        # corrected contract, are dropped as errors rather than written as
+        # partial/corrupt rows.
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as input_file:
             input_path = Path(input_file.name)
-            input_file.write('{"id": 0, "value": 100}\n')  # Valid
-            input_file.write('not valid json\n')           # Invalid
-            input_file.write('{"id": 2, "value": 300}\n')  # Valid
+            input_file.write('{"id": 0, "value": 100, "category": "a"}\n')  # Valid
+            input_file.write('not valid json\n')                           # Invalid
+            input_file.write('{"id": 2, "value": 300, "category": "b"}\n')  # Valid
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as output_file:
             output_path = Path(output_file.name)

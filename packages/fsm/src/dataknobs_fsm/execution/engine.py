@@ -144,8 +144,8 @@ class ExecutionEngine(BaseExecutionEngine):
         while transitions < max_transitions:
             # Check if in final state
             if self._is_final_state(context.current_state):
-                return True, context.data
-            
+                return self.finalize_single_result(context)
+
             # Check for stuck state (infinite loop protection)
             # Only consider it stuck if both state AND data haven't changed
             from dataknobs_fsm.utils.json_encoder import dumps
@@ -170,7 +170,7 @@ class ExecutionEngine(BaseExecutionEngine):
             if not transitions_available:
                 # No valid transitions - check if this is a final state
                 if self._is_final_state(context.current_state):
-                    return True, context.data
+                    return self.finalize_single_result(context)
 
                 # Check if we're in a subflow at a final state - if so, pop back
                 if context.network_stack:
