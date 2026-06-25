@@ -6,6 +6,7 @@ and loading into target systems.
 """
 
 import inspect
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List, Union
@@ -21,6 +22,8 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 from ..api.async_simple import AsyncSimpleFSM
 from ..functions.base import ITransformFunction, TransformError
 from ..functions.library.database import DatabaseUpsert
+
+logger = logging.getLogger(__name__)
 
 
 class ETLMode(Enum):
@@ -51,6 +54,34 @@ class ETLConfig(StructuredConfig):
     validation_schema: Dict[str, Any] | None = None
     enrichment_sources: List[Dict[str, Any]] | None = None
 
+    def __post_init__(self) -> None:
+        """Validate that field mappings don't rename a key column away.
+
+        ``field_mappings`` run in the ``transform`` stage, before ``load``
+        derives each row's storage id from ``key_columns`` (post-transform
+        names). If a mapping renames a key column's source to a different name,
+        that key column no longer exists under its original name when load
+        derives the id — every row would collapse onto a single ``"None"`` id,
+        silently overwriting the whole target with one record. Catch that
+        destructive config at construction; ``key_columns`` must reference the
+        post-transform field names.
+        """
+        key_columns = self.key_columns or []
+        mappings = self.field_mappings or {}
+        for col in key_columns:
+            new_name = mappings.get(col)
+            if new_name is not None and new_name != col:
+                from dataknobs_fsm.core.exceptions import (
+                    InvalidConfigurationError,
+                )
+
+                raise InvalidConfigurationError(
+                    f"field_mappings renames key column '{col}' to '{new_name}', "
+                    f"which would break load's id derivation (key_columns must "
+                    f"reference post-transform names). Set key_columns to the "
+                    f"renamed field, or map a non-key field instead."
+                )
+
 
 class _ETLTransform(ITransformFunction):
     """Per-record transform step: apply field mappings then user callables.
@@ -60,7 +91,10 @@ class _ETLTransform(ITransformFunction):
     entry of ``transformations`` is then applied in order. A transformation may
     be sync or async and is **map-style** — it receives the current record dict
     and must return the transformed dict. A non-dict return (including ``None``)
-    is a configuration error and raises rather than silently corrupting the row.
+    raises a :class:`TransformError` rather than writing a corrupt row: the
+    engine records the failed state and reports the record as a failure
+    (``success=False``), so it is counted as an ``error`` (not ``loaded``) and
+    counts against ``error_threshold``.
     """
 
     def __init__(
@@ -111,6 +145,14 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     def _setup(self) -> None:
         self._fsm = self._build_fsm()
         self._checkpoint_data = {}
+        self._reset_metrics()
+
+    def _reset_metrics(self) -> None:
+        """Reset per-run metrics to zero.
+
+        Called at the start of every ``run()`` so metrics do not accumulate
+        across successive runs of the same pipeline instance.
+        """
         self._metrics = {
             'extracted': 0,
             'transformed': 0,
@@ -118,17 +160,18 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             'errors': 0,
             'skipped': 0
         }
-        
+
     def _build_fsm(self) -> AsyncSimpleFSM:
         """Build FSM for ETL pipeline."""
-        # Build resources list
-        # target_db uses the async database resource so the DatabaseUpsert load
-        # transform's ``await resource.upsert(...)`` is real and non-blocking.
-        # source_db's resource is never acquired (the `extract` start state is a
-        # passthrough — extraction is owned by run()._extract_batches), so its
-        # type is immaterial here.
+        # Build resources list. Only ``target_db`` is wired as an FSM resource:
+        # it uses the async database resource so the DatabaseUpsert load
+        # transform's ``await resource.upsert(...)`` is real and non-blocking
+        # (the adapter opens its transport lazily on first use, not at
+        # construction). source_db is deliberately NOT registered — the
+        # ``extract`` start state is a passthrough and extraction is owned by
+        # run()._extract_batches, so a registered source resource would only
+        # eagerly open a (sync) backend at construction for no benefit.
         resources = [
-            {'name': 'source_db', 'type': 'database', 'config': self.config.source_db},
             {'name': 'target_db', 'type': 'async_database', 'config': self.config.target_db}
         ]
         
@@ -163,7 +206,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 {
                     'name': 'extract',
                     'is_start': True,
-                    'resources': ['source_db']
+                    'resources': []
                 },
                 {
                     'name': 'validate',
@@ -189,10 +232,6 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 },
                 {
                     'name': 'complete',
-                    'is_end': True
-                },
-                {
-                    'name': 'error',
                     'is_end': True
                 }
             ],
@@ -261,10 +300,17 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         Returns:
             ETL execution metrics
         """
-        # Resume from checkpoint if provided
+        # Rebuild the FSM and reset metrics so each run() is independent. run()'s
+        # finally closes the FSM, which clears its resource providers — reusing a
+        # closed FSM would leave the load step with no target_db to upsert into.
+        self._fsm = self._build_fsm()
+        self._reset_metrics()
+
+        # Resume from checkpoint if provided (after reset so checkpointed
+        # metrics are not zeroed out).
         if checkpoint_id:
             await self._load_checkpoint(checkpoint_id)
-            
+
         # Extract data
         source_db = await AsyncDatabase.from_backend(
             self.config.source_db['type'],
@@ -300,9 +346,14 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                     await self._save_checkpoint()
                     
         finally:
-            await source_db.close()
-            # Flush and close the FSM's resources (notably the async target_db
-            # adapter) so upserted rows are durably persisted.
+            # Close the source and the FSM independently so a failing source
+            # close still flushes and closes the FSM's async target_db adapter
+            # (durable persistence of upserted rows must not depend on the
+            # source closing cleanly).
+            try:
+                await source_db.close()
+            except Exception:
+                logger.exception("ETL: error closing source database")
             await self._fsm.close()
 
         return self._metrics
@@ -344,20 +395,25 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
         """Update execution metrics.
 
-        A record reaching ``complete`` has traversed the transform stage and
-        been upserted by the ``load`` step, so it counts as both ``transformed``
-        and ``loaded`` (the load step is the real DatabaseUpsert, not a no-op).
+        A record only counts as ``transformed`` + ``loaded`` when it reached
+        ``complete`` *and* the per-record execution reported success. A record
+        whose ``transform`` or ``load`` step raised is reported as a failure by
+        the engine (``success=False`` — see
+        ``BaseExecutionEngine.finalize_single_result``), so it counts as an
+        ``error`` and is NOT counted as loaded, even though it reached a final
+        state. This keeps ``error_threshold`` honest: a target-write outage
+        surfaces as errors rather than being silently reported as loaded.
         """
         for result in results:
-            if result['success']:
-                if result['final_state'] == 'complete':
-                    self._metrics['transformed'] += 1
-                    self._metrics['loaded'] += 1
-                elif result['final_state'] == 'error':
-                    self._metrics['errors'] += 1
+            if result['success'] and result['final_state'] == 'complete':
+                self._metrics['transformed'] += 1
+                self._metrics['loaded'] += 1
             else:
                 self._metrics['errors'] += 1
 
+        # ``extracted`` is the count of records actually processed this run
+        # (every record ends as either loaded or errored); it is recomputed
+        # from outcomes rather than counted at the source.
         self._metrics['extracted'] = self._metrics['loaded'] + self._metrics['errors']
         
     def _check_error_threshold(self) -> bool:

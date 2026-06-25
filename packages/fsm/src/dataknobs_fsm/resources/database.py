@@ -1,5 +1,6 @@
 """Database resource adapter for dataknobs_data backends."""
 
+import asyncio
 from contextlib import contextmanager
 from typing import Any, Dict, List
 
@@ -370,15 +371,27 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         self.backend = resolved
         self._backend_config = dict(backend_config)
         self._database: AsyncDatabase | None = None
+        # Serialize the cold lazy-open so concurrent first-use (e.g. several
+        # records of a batch hitting the shared adapter at once) opens exactly
+        # one backend. Without it, each racer would observe ``None``, each
+        # ``await from_backend(...)``, and all but the last instance would be
+        # orphaned and never closed — a connection/pool leak for pooled
+        # backends (postgres). 3.10+ ``asyncio.Lock`` binds to the running loop
+        # lazily, so constructing it here (outside any loop) is safe.
+        self._db_lock = asyncio.Lock()
 
     async def _ensure_db(self) -> AsyncDatabase:
-        """Lazily open the underlying ``AsyncDatabase``."""
-        if self._database is None:
-            self._database = await AsyncDatabase.from_backend(
-                self.backend,
-                {"type": self.backend, **self._backend_config},
-            )
-            self.status = ResourceStatus.ACTIVE
+        """Lazily open the underlying ``AsyncDatabase`` (once, race-safe)."""
+        if self._database is not None:
+            return self._database
+        async with self._db_lock:
+            # Double-checked: a racer may have opened it while we waited.
+            if self._database is None:
+                self._database = await AsyncDatabase.from_backend(
+                    self.backend,
+                    {"type": self.backend, **self._backend_config},
+                )
+                self.status = ResourceStatus.ACTIVE
         return self._database
 
     def acquire(self, **kwargs: Any) -> "AsyncDatabaseResourceAdapter":

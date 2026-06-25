@@ -113,7 +113,7 @@ class TestETLPatternReal:
             assert len(overlap) >= 0  # Allow for different implementations
     
     def test_database_etl_resource_configuration(self):
-        """The built FSM declares the source/target (and enrichment) resources."""
+        """The built FSM declares the target (and enrichment) resources."""
         config = ETLConfig(
             source_db={'type': 'postgres', 'host': 'source-host'},
             target_db={'type': 'postgres', 'host': 'target-host'},
@@ -125,9 +125,12 @@ class TestETLPatternReal:
         etl = DatabaseETL(config)
 
         resources = set(etl._fsm.get_resources())
-        # source_db and target_db are always declared; target_db is the async
-        # adapter the DatabaseUpsert load step upserts through.
-        assert {'source_db', 'target_db'} <= resources
+        # target_db is the async adapter the DatabaseUpsert load step upserts
+        # through. source_db is deliberately NOT registered — extraction is owned
+        # by run()._extract_batches, so a registered source resource would only
+        # eagerly open a backend at construction for no benefit.
+        assert 'target_db' in resources
+        assert 'source_db' not in resources
         # A configured database enrichment source is declared at the FSM level.
         assert 'enrichment_db_0' in resources
 

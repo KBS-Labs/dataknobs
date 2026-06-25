@@ -191,19 +191,19 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         while transitions < max_transitions:
             # Check if we're in a final state
             if await self._is_final_state(context.current_state):
-                return True, context.data
-            
+                return self.finalize_single_result(context)
+
             # Get available transitions
             transitions_available = await self._get_available_transitions(
                 context.current_state,
                 context,
                 arc_name
             )
-            
+
             if not transitions_available:
                 # No valid transitions - check if this is a final state
                 if await self._is_final_state(context.current_state):
-                    return True, context.data
+                    return self.finalize_single_result(context)
                 return False, f"No valid transitions from state: {context.current_state}"
             
             # Choose transition based on strategy
@@ -436,7 +436,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             result = await pre_test_func(context.data, context)
         else:
             # Run sync function in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
                 pre_test_func,
@@ -519,7 +519,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                                 context.data, context
                             )
                         else:
-                            loop = asyncio.get_event_loop()
+                            loop = asyncio.get_running_loop()
                             context.data = await loop.run_in_executor(
                                 None,
                                 transform_func,
@@ -600,7 +600,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                             result = await validator.validate(ensure_dict(context.data), context)
                     else:
                         # Run sync function in executor
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         try:
                             result = await loop.run_in_executor(None, validator.validate, state_obj)
                         except (TypeError, AttributeError):
@@ -697,7 +697,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             data = ensure_dict(context.data)
             if is_async:
                 return await actual_func(data, func_context)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, actual_func, data, func_context)
 
         # Non-interface callable: state_obj first, fall back to (data, context).
@@ -706,7 +706,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 return await actual_func(state_obj)
             except (TypeError, AttributeError):
                 return await actual_func(ensure_dict(context.data), func_context)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(None, actual_func, state_obj)
         except (TypeError, AttributeError):

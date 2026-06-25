@@ -110,7 +110,7 @@ config = ETLConfig(
     target_db={"type": "memory"},
     target_table="orders",
     key_columns=["id"],
-    field_mappings={"id": "order_id"},          # rename id → order_id
+    field_mappings={"name": "product_name"},     # rename a non-key field
     transformations=[
         lambda row: {**row, "total": row["qty"] * row["price"]},
         lambda row: {**row, "currency": "USD"},
@@ -120,6 +120,16 @@ config = ETLConfig(
 
 `field_mappings` are applied first (key renames), then the `transformations`
 callables in order.
+
+> **`key_columns` reference post-transform names.** The `load` step derives each
+> row's storage id from `key_columns` *after* the transform stage runs. If a
+> `field_mappings` entry renames a key column out from under load (e.g.
+> `field_mappings={"id": "order_id"}` with `key_columns=["id"]`), every row would
+> collapse onto a single id — so that combination is rejected at construction
+> with `InvalidConfigurationError`. Either map a non-key field, or set
+> `key_columns` to the renamed name (`key_columns=["order_id"]`). The same
+> applies to a `transformations` callable that drops a key column (not statically
+> checkable — author such callables to preserve the key fields).
 
 ## ETL modes
 
@@ -142,14 +152,22 @@ checkpoint).
 
 | Key | Meaning |
 |---|---|
-| `extracted` | `loaded + errors` |
-| `transformed` | Records that reached `complete` (transformed and loaded) |
+| `extracted` | Records actually processed this run, recomputed as `loaded + errors` |
+| `transformed` | Records that completed cleanly (transformed and loaded) |
 | `loaded` | Records upserted into the target |
-| `errors` | Records that failed processing |
+| `errors` | Records whose `transform` or `load` step raised |
 | `skipped` | Reserved (currently always `0`) |
 
-A record reaching `complete` has been transformed **and** upserted, so it counts
-toward both `transformed` and `loaded`.
+A record only counts toward `transformed` + `loaded` when it reached `complete`
+**and** the per-record execution reported success. A record whose `transform` or
+`load` step raised is reported as a failure by the engine and counted as an
+`error` — not as `loaded` — even though the FSM still traversed to a final state.
+This keeps `error_threshold` honest: a target-write outage surfaces as errors
+rather than being silently reported as loaded.
+
+Metrics are reset at the start of every `run()` (they do not accumulate across
+runs), and `run()` rebuilds the FSM each call, so a single `DatabaseETL`
+instance is safely re-runnable.
 
 ## Factory functions
 
@@ -195,8 +213,7 @@ pipelines = create_data_warehouse_load(
 ## Current limitations
 
 - **`validate`** is a passthrough. `validation_schema` is accepted but not yet
-  applied; no record is currently routed to the `error` state by validation
-  (errors are still counted when a record raises during processing).
+  applied — no record is routed away from the pipeline by validation.
 - **`enrich`** is a passthrough. `enrichment_sources` is accepted but the
   per-record database/API lookup is not yet implemented.
 
@@ -204,6 +221,14 @@ Both are honest no-ops today — they do not silently transform data incorrectly
 Wiring them requires settling their config contracts (a schema format for
 validation, and per-record lookup semantics for enrichment) and is tracked
 separately.
+
+- **Failure routing.** A record whose `transform` or `load` step raises is
+  counted as an `error` (and trips `error_threshold`), but it is **not** routed
+  to a dedicated error state — there is no conditional error arc. Because a
+  failing `transform` does not halt traversal, such a record may still reach the
+  `load` step and be upserted with its pre-failure data before the error is
+  surfaced in the metrics. Explicit on-failure routing (skip-load / dead-letter)
+  requires a conditional error-arc design and is tracked separately.
 
 ## Testing
 

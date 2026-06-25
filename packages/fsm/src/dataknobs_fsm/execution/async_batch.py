@@ -171,6 +171,12 @@ class AsyncBatchExecutor:
                 metadata = context.metadata.copy() if context.metadata else {}
                 metadata['final_state'] = context.current_state
                 metadata['path'] = context.history if hasattr(context, 'history') else []
+                # Surface per-record transform failures so consumers can
+                # distinguish a clean run from one that reached a final state
+                # with a swallowed transform/load error.
+                metadata['failed_states'] = sorted(
+                    getattr(context, 'failed_states', set()) or set()
+                )
                 
                 batch_result = BatchResult(
                     index=index,
@@ -283,5 +289,5 @@ class AsyncBatchExecutor:
             await self.progress_callback(progress)
         else:
             # Run sync callback in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore
