@@ -32,6 +32,31 @@ The resource wraps `AsyncDatabaseResourceAdapter`, so every operation
 (`upsert`, `bulk_insert`, `commit_batch`, `execute_query`) is a real coroutine
 that runs off the event loop.
 
+The same functions work when the resource is declared on an **arc** instead of
+a state — declare `resources` on the arc and reference the function from the
+arc's `transform`. Both the arc transform and an arc condition receive the
+arc's resources through `FunctionContext.resources`. See
+[Resources in FSM functions](resources.md#resources-in-fsm-functions-the-injection-contract)
+for the full injection contract, including name-based vs role-based access.
+
+```python
+config = {
+    "resources": [
+        {"name": "target_db", "type": "async_database",
+         "config": {"type": "file", "path": "/data/out.json"}},
+    ],
+    "states": [
+        {"name": "start", "is_start": True},
+        {"name": "done", "is_end": True},
+    ],
+    "arcs": [
+        {"from": "start", "to": "done", "name": "loaded",
+         "resources": ["target_db"],
+         "transform": {"type": "registered", "name": "load"}},
+    ],
+}
+```
+
 ## Record identity
 
 Three of the functions need to know a record's **identity** — the stable id it

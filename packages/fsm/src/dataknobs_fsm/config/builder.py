@@ -431,6 +431,22 @@ class FSMBuilder:
                     return fname
         return None
 
+    @staticmethod
+    def _normalize_arc_resources(
+        resources: list[str] | dict[str, str],
+    ) -> dict[str, str]:
+        """Normalize an arc's ``resources`` config into a ``{role: name}`` map.
+
+        Accepts either a list of resource names (``["db"]`` → identity
+        ``{"db": "db"}``, role==name) or an explicit ``{role: name}`` map
+        (``{"database": "primary_db"}``) so role-based access
+        (``FunctionContext.resource_for_role``) is reachable directly from YAML/
+        dict config, not only by hand-constructing ``required_resources``.
+        """
+        if isinstance(resources, dict):
+            return dict(resources)
+        return {name: name for name in resources}
+
     def _build_arc(
         self,
         arc_config: ArcConfig,
@@ -518,7 +534,7 @@ class FSMBuilder:
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
-            arc.required_resources = {r: r for r in arc_config.resources}
+            arc.required_resources = self._normalize_arc_resources(arc_config.resources)
             return arc
         else:
             arc = ArcDefinition(
@@ -529,7 +545,7 @@ class FSMBuilder:
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
-            arc.required_resources = {r: r for r in arc_config.resources}
+            arc.required_resources = self._normalize_arc_resources(arc_config.resources)
             return arc
 
     def _build_schema(self, schema_config: Dict[str, Any]) -> Any:

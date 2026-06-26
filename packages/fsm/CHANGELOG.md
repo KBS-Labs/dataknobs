@@ -45,9 +45,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback` is a quiet no-op. `on_unsupported` is validated against the data
   layer's exported `VALID_TRANSACTION_POLICIES`, and a reserved `savepoint=`
   argument warns on use.
+- Arc resource injection. An FSM arc may declare `resources`, and its transform
+  **and** its condition (pre-test) receive them through
+  `FunctionContext.resources` — on both the async and sync engines. A resource
+  is acquired once for the scope of the arc invocation (the sync engine acquires
+  before its retry loop and reuses the handles across attempts, matching the
+  async engine) and released afterward, with no acquire timeout (arc resources
+  carry no per-resource `timeout_seconds`). Condition delivery covers both the
+  callable and the `IStateTestFunction` (`test(data, context)`) interface forms.
+  `FunctionContext` gains `require_resource(name)` (name-based, raising a clear
+  error when the resource was not declared) and `resource_for_role(role)`
+  (role-based, resolving an arc's `{role: name}` map, also exposed at
+  `metadata["resource_roles"]`) so one function can be reused across arcs that
+  bind the same role to different resources. The built-in database function
+  library now works on arcs, not just states.
+- `ExecutionContext.transform_context_factory` is now honored on the async
+  engine's state and arc **transform** paths (it was previously applied only on
+  the synchronous arc path, so it was silently ignored for every transform run
+  through the async engine). Arc conditions receive resources and the role map
+  but keep the plain context (the factory's documented scope is transforms) —
+  uniformly on every condition path, both engines (async `_evaluate_arc`, sync
+  `_evaluate_pre_test`, and the sync `ArcExecution.can_execute` /
+  `can_execute_async` used by the network engine).
+- An arc's `resources` may be declared as a `{role: name}` map in config
+  (`resources: {database: primary_db}`), not only a list of names. This makes
+  role-based access (`FunctionContext.resource_for_role`) reachable directly
+  from YAML/dict config; a list (`resources: [primary_db]`) still produces the
+  identity `{name: name}` map.
 
 ### Fixed
 
+- Arc transforms that are `ITransformFunction` instances (such as the database
+  functions) now run on the async engine. The async arc path previously invoked
+  the function as a plain `(data, context)` callable against the raw
+  `ExecutionContext` — an interface transform is not directly callable and never
+  reached its resources, so an arc-referenced database function failed. Interface
+  transforms are now dispatched deterministically with the resource-bearing
+  context, and an `ExecutionResult` or `None` return is coalesced the same way as
+  on the synchronous arc path.
+- A resource declared on a network-level `{from, to}` arc is no longer dropped
+  during config normalization. The loader copied only a subset of arc fields to
+  the generated state-level arc and omitted `resources`, so an arc's declared
+  resources silently never reached it.
+- Sync arc conditions and transforms key their resources by **name**, matching
+  the async engine. `ArcExecution` previously keyed arc resources by the
+  role/type (the declaration key), so a function reading `resources["<name>"]`
+  missed on a hand-built `{role: name}` arc; `ArcExecution.can_execute` /
+  `can_execute_async` and the sync `ExecutionEngine._evaluate_pre_test` now also
+  acquire the arc's declared resources for the condition (they previously built a
+  resourceless context). The arc resource-release path now releases the
+  arc-acquired resources it actually tracks (it previously read an attribute that
+  was never populated, leaking the acquisitions).
+- A raising async arc condition now de-selects only that arc instead of failing
+  the whole FSM run, matching the synchronous engine. The async engine evaluates
+  arc conditions as concurrent tasks; a predicate that raised (for example,
+  `require_resource()` after a failed concurrent acquire) propagated out of the
+  evaluator and aborted the run. The condition evaluator now treats a raising
+  predicate as "arc unavailable", the same contract as the sync engine's
+  `_evaluate_pre_test`.
 - `DatabaseTransaction` now drives a real transaction. It previously called a
   `resource.begin_transaction()` method that no adapter implemented, so it
   raised `AttributeError` on first use; it now opens a buffered transaction

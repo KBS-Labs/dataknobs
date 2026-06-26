@@ -12,7 +12,11 @@ from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_data import VALID_TRANSACTION_POLICIES
 
-from dataknobs_fsm.functions.base import ITransformFunction, TransformError
+from dataknobs_fsm.functions.base import (
+    FunctionContext,
+    ITransformFunction,
+    TransformError,
+)
 from dataknobs_fsm.functions.library.identity import (
     RecordIdentity,
     resolve_identity,
@@ -42,15 +46,23 @@ def _require_resource(resource_name: str, context: Any) -> Any:
     """Return the named resource from ``context.resources`` or raise.
 
     Resources are injected by the engine into ``FunctionContext.resources``
-    from the state's ``resources`` declaration — not smuggled through the data
-    payload. A missing resource is a wiring error (the state did not declare
-    the resource, or no provider is registered for it).
+    from the state's or arc's ``resources`` declaration — not smuggled through
+    the data payload. A missing resource is a wiring error (the resource was not
+    declared, or no provider is registered for it).
+
+    When ``context`` is a :class:`~dataknobs_fsm.functions.base.FunctionContext`
+    this delegates to :meth:`FunctionContext.require_resource` so the error
+    contract is identical across the library, arc, and state paths. A plain
+    dict context (or ``None``) — used when calling these functions outside the
+    engine — keeps the tolerant lookup with the same message.
     """
+    if isinstance(context, FunctionContext):
+        return context.require_resource(resource_name)
     resource = _resources_from_context(context).get(resource_name)
     if resource is None:
         raise TransformError(
-            f"Database resource '{resource_name}' not found in "
-            f"context.resources (is it declared in the state's 'resources'?)"
+            f"Resource '{resource_name}' not found in context.resources "
+            f"(is it declared in the state's or arc's 'resources'?)"
         )
     return resource
 

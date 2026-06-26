@@ -427,21 +427,66 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
         if arc.pre_test not in functions:
             return False
-        
+
         # Execute pre-test function
         pre_test_func = functions[arc.pre_test]
 
-        # Check if it's async
-        if asyncio.iscoroutinefunction(pre_test_func):
-            result = await pre_test_func(context.data, context)
-        else:
-            # Run sync function in executor
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,
-                pre_test_func,
-                context.data,
-                context
+        # Acquire the arc's declared resources and inject them (plus the role
+        # map) into the condition's function context, so a resource-aware
+        # predicate can route on them. The factory stays transform-scoped
+        # (apply_factory=False) — its documented contract is for transforms.
+        role_bindings = getattr(arc, 'required_resources', None) or {}
+        owner_id = self._arc_resource_owner(context, arc)
+        arc_label = (
+            f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}' "
+            f"condition"
+        )
+        arc_resources = self._acquire_named_resources(
+            context, role_bindings.values(), owner_id, owner_label=arc_label
+        )
+        try:
+            func_context = self._build_function_context(
+                context,
+                state_name=getattr(context, 'current_state', '') or '',
+                function_name=arc.pre_test,
+                resources=arc_resources,
+                role_bindings=role_bindings,
+                base_metadata={
+                    'source_state': getattr(context, 'current_state', None),
+                    'target_state': arc.target_state,
+                    'arc_priority': arc.priority,
+                    # Conditions never stream; carried for shape-parity with the
+                    # sync condition context (core/arc.py _create_function_context).
+                    'stream_enabled': False,
+                },
+                apply_factory=False,
+            )
+
+            try:
+                # Check if it's async
+                if asyncio.iscoroutinefunction(pre_test_func):
+                    result = await pre_test_func(context.data, func_context)
+                else:
+                    # Run sync function in executor
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        pre_test_func,
+                        context.data,
+                        func_context,
+                    )
+            except Exception:
+                # A raising condition means the arc is simply unavailable — parity
+                # with the sync engine's _evaluate_pre_test, which returns False on
+                # condition exceptions. Critically, conditions are evaluated as
+                # unawaited tasks in _get_available_transitions; without this catch
+                # a raising predicate (e.g. require_resource() after a failed
+                # concurrent acquire) would propagate out and fail the whole FSM
+                # run instead of de-selecting the one arc.
+                return False
+        finally:
+            self._release_named_resources(
+                context, arc_resources, owner_id, owner_label=arc_label
             )
 
         # Handle tuple return from test functions (bool, reason)
@@ -488,81 +533,148 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # Fire pre-transition hooks
         await self._fire_hooks(self._pre_transition_hooks, context, arc)
 
-        retry_count = 0
-        while retry_count <= self.max_retries:
-            try:
-                # Execute arc transform if defined
-                if arc.transform:
-                    functions = self._get_merged_functions()
+        # Acquire the arc's declared resources once for this transition; they
+        # are injected (by name, plus a role map) into the transform's function
+        # context and released in the finally below. Acquired even before the
+        # retry loop so the same handles are reused across retries.
+        role_bindings = getattr(arc, 'required_resources', None) or {}
+        owner_id = self._arc_resource_owner(context, arc)
+        arc_label = (
+            f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}'"
+        )
+        # Acquire only when a transform will actually consume the resources — a
+        # resource-bearing arc with no transform has no consumer for the handles.
+        arc_resources = (
+            self._acquire_named_resources(
+                context, role_bindings.values(), owner_id, owner_label=arc_label
+            )
+            if arc.transform
+            else {}
+        )
+        try:
+            retry_count = 0
+            while retry_count <= self.max_retries:
+                try:
+                    # Execute arc transform if defined
+                    if arc.transform:
+                        functions = self._get_merged_functions()
 
-                    # Normalize to list for uniform handling
-                    transform_names = (
-                        arc.transform
-                        if isinstance(arc.transform, list)
-                        else [arc.transform]
+                        # Normalize to list for uniform handling
+                        transform_names = (
+                            arc.transform
+                            if isinstance(arc.transform, list)
+                            else [arc.transform]
+                        )
+
+                        # Build the resource-bearing function context once per
+                        # attempt — unconditionally, even for a resourceless arc,
+                        # so the context type is consistent and the
+                        # transform_context_factory is honored on the arc path.
+                        func_context = self._build_function_context(
+                            context,
+                            state_name=getattr(context, 'current_state', '') or '',
+                            function_name=(
+                                transform_names[0]
+                                if transform_names
+                                else arc.target_state
+                            ),
+                            resources=arc_resources,
+                            role_bindings=role_bindings,
+                            base_metadata={
+                                'source_state': getattr(
+                                    context, 'current_state', None
+                                ),
+                                'target_state': arc.target_state,
+                                'arc_priority': arc.priority,
+                                # Arc transforms run buffered (not streaming);
+                                # carried so the transform context shape matches
+                                # the condition path and the sync engine
+                                # (core/arc.py _create_function_context always
+                                # sets stream_enabled in metadata).
+                                'stream_enabled': False,
+                            },
+                        )
+
+                        for transform_name in transform_names:
+                            if transform_name not in functions:
+                                continue
+                            transform_func = functions[transform_name]
+
+                            # Resource-bearing interface transforms (and inline-
+                            # code wrappers, which carry interface=ITransformFunction)
+                            # must be dispatched deterministically as
+                            # (dict, func_context) so injected resources reach them.
+                            if self._is_interface_transform(transform_func):
+                                result = await self._invoke_state_transform(
+                                    transform_func, context, func_context, None
+                                )
+                            else:
+                                # Check if it's async
+                                is_async = asyncio.iscoroutinefunction(transform_func)
+                                if not is_async and callable(transform_func):
+                                    is_async = asyncio.iscoroutinefunction(
+                                        transform_func.__call__
+                                    )
+
+                                if is_async:
+                                    result = await transform_func(
+                                        context.data, func_context
+                                    )
+                                else:
+                                    loop = asyncio.get_running_loop()
+                                    result = await loop.run_in_executor(
+                                        None,
+                                        transform_func,
+                                        context.data,
+                                        func_context,
+                                    )
+
+                            context.data = self._coalesce_transform_result(
+                                result, context.data
+                            )
+
+                    # Update state (history is automatically tracked by set_state)
+                    context.set_state(arc.target_state)
+
+                    # Execute state transforms when entering the new state
+                    await self._execute_state_transforms(context)
+
+                    self._transition_count += 1
+
+                    # Fire post-transition hooks
+                    await self._fire_hooks(
+                        self._post_transition_hooks, context, arc
                     )
 
-                    for transform_name in transform_names:
-                        if transform_name not in functions:
-                            continue
-                        transform_func = functions[transform_name]
+                    return True
 
-                        # Check if it's async
-                        is_async = asyncio.iscoroutinefunction(transform_func)
-                        if not is_async and callable(transform_func):
-                            is_async = asyncio.iscoroutinefunction(
-                                transform_func.__call__
-                            )
-
-                        if is_async:
-                            context.data = await transform_func(
-                                context.data, context
-                            )
-                        else:
-                            loop = asyncio.get_running_loop()
-                            context.data = await loop.run_in_executor(
-                                None,
-                                transform_func,
-                                context.data,
-                                context,
-                            )
-
-                # Update state (history is automatically tracked by set_state)
-                context.set_state(arc.target_state)
-
-                # Execute state transforms when entering the new state
-                await self._execute_state_transforms(context)
-
-                self._transition_count += 1
-
-                # Fire post-transition hooks
-                await self._fire_hooks(self._post_transition_hooks, context, arc)
-
-                return True
-
-            except (TypeError, AttributeError, ValueError, SyntaxError) as e:
-                # Deterministic errors - don't retry
-                self._error_count += 1
-                await self._fire_hooks(self._error_hooks, context, arc, e)
-                return False
-
-            except FunctionError as e:
-                # Function failure - don't retry
-                self._error_count += 1
-                await self._fire_hooks(self._error_hooks, context, arc, e)
-                return False
-
-            except Exception as e:
-                # Potentially recoverable - retry with backoff
-                self._error_count += 1
-                await self._fire_hooks(self._error_hooks, context, arc, e)
-                retry_count += 1
-                if retry_count <= self.max_retries:
-                    await asyncio.sleep(self.retry_delay * retry_count)
-                else:
+                except (TypeError, AttributeError, ValueError, SyntaxError) as e:
+                    # Deterministic errors - don't retry
+                    self._error_count += 1
+                    await self._fire_hooks(self._error_hooks, context, arc, e)
                     return False
 
-        return False
+                except FunctionError as e:
+                    # Function failure - don't retry
+                    self._error_count += 1
+                    await self._fire_hooks(self._error_hooks, context, arc, e)
+                    return False
+
+                except Exception as e:
+                    # Potentially recoverable - retry with backoff
+                    self._error_count += 1
+                    await self._fire_hooks(self._error_hooks, context, arc, e)
+                    retry_count += 1
+                    if retry_count <= self.max_retries:
+                        await asyncio.sleep(self.retry_delay * retry_count)
+                    else:
+                        return False
+
+            return False
+        finally:
+            self._release_named_resources(
+                context, arc_resources, owner_id, owner_label=arc_label
+            )
     
     async def _execute_state_transforms(
         self,
@@ -643,12 +755,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     )
                     break
                 try:
-                    func_context = FunctionContext(
+                    func_context = self._build_function_context(
+                        context,
                         state_name=state_name,
                         function_name=getattr(transform_func, '__name__', 'transform'),
-                        metadata={'state': state_name},
                         resources=state_resources,
-                        variables=getattr(context, 'variables', {}) or {},
+                        base_metadata={'state': state_name},
                     )
 
                     result = await self._invoke_state_transform(
@@ -663,6 +775,26 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     self.handle_transform_error(e, context, state_name)
         finally:
             self._release_state_resources(context, state, state_resources)
+
+    @staticmethod
+    def _coalesce_transform_result(result: Any, current_data: Any) -> Any:
+        """Resolve an arc transform's return into the next ``context.data``.
+
+        Mirrors the sync ``ArcExecution._execute_single_transform`` contract:
+        unwrap an ``ExecutionResult`` (success → its data; failure → raise
+        ``FunctionError``), and treat a ``None`` return as an in-place mutation
+        (preserve the input data). Applied uniformly to interface and
+        non-interface arc transforms so both engines behave identically.
+        """
+        from dataknobs_fsm.functions.base import ExecutionResult
+
+        if isinstance(result, ExecutionResult):
+            if not result.success:
+                raise FunctionError(result.error or "Transform failed")
+            result = result.data
+        if result is None:
+            return current_data
+        return result
 
     @staticmethod
     def _is_interface_transform(transform_func: Any) -> bool:
@@ -729,6 +861,135 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 None, actual_func, ensure_dict(context.data), func_context
             )
 
+    def _build_function_context(
+        self,
+        context: ExecutionContext,
+        *,
+        state_name: str,
+        function_name: Any,
+        resources: Dict[str, Any] | None = None,
+        role_bindings: Dict[str, str] | None = None,
+        base_metadata: Dict[str, Any] | None = None,
+        apply_factory: bool = True,
+    ) -> Any:
+        """Build the per-invocation function context for state and arc paths.
+
+        Single builder shared by the state-transform, arc-transform, and
+        arc-condition paths so they carry an identical context shape:
+        name-keyed ``resources``, a ``resource_roles`` role map, the shared
+        ``variables``, and the current ``network_name``.
+
+        When ``apply_factory`` is True (transform paths) and the
+        ``ExecutionContext`` carries a ``transform_context_factory``, the built
+        ``FunctionContext`` is passed through the factory so a consumer's
+        roll-your-own context wraps it — honoring that documented hook on the
+        async engine for the first time. Arc *condition* (pre-test) contexts
+        pass ``apply_factory=False``: they receive resources + roles but the
+        factory stays transform-scoped (its documented contract).
+
+        Args:
+            context: The owning execution context.
+            state_name: State the function runs in (source state for arcs).
+            function_name: Representative function name for the context.
+            resources: Name-keyed resources to inject.
+            role_bindings: ``{role: name}`` map exposed as
+                ``metadata['resource_roles']``.
+            base_metadata: Path-specific metadata merged into the context.
+            apply_factory: Whether to run ``transform_context_factory``.
+
+        Returns:
+            A ``FunctionContext`` (default) or the factory's output.
+        """
+        metadata = dict(base_metadata or {})
+        metadata['resource_roles'] = dict(role_bindings or {})
+        network_stack = getattr(context, 'network_stack', None)
+        func_context = FunctionContext(
+            state_name=state_name,
+            function_name=function_name,
+            metadata=metadata,
+            resources=resources or {},
+            variables=getattr(context, 'variables', {}) or {},
+            network_name=network_stack[-1][0] if network_stack else None,
+        )
+        factory = getattr(context, 'transform_context_factory', None)
+        if apply_factory and factory:
+            return factory(func_context)
+        return func_context
+
+    def _acquire_named_resources(
+        self,
+        context: ExecutionContext,
+        names: Any,
+        owner_id: str,
+        *,
+        timeouts: Dict[str, Any] | None = None,
+        owner_label: str = "owner",
+    ) -> Dict[str, Any]:
+        """Acquire resources by name into a ``{name: resource}`` mapping.
+
+        Path-agnostic core shared by the state path (state
+        ``resource_requirements``) and the arc path (arc
+        ``required_resources.values()``). The acquire is a cheap in-process
+        bookkeeping call (the async database resource opens its transport
+        lazily on first ``await``), so it does not block the loop. Failures are
+        logged (not swallowed silently) and skipped.
+
+        Args:
+            context: The owning execution context.
+            names: Iterable of resource names to acquire.
+            owner_id: Ownership key for the acquisitions.
+            timeouts: Optional per-name acquire timeouts.
+            owner_label: Human-readable owner descriptor for log context.
+
+        Returns:
+            ``{name: resource}`` for every name acquired.
+        """
+        resources: Dict[str, Any] = {}
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return resources
+        timeouts = timeouts or {}
+        for name in names:
+            if not name or name in resources:
+                continue
+            try:
+                resources[name] = resource_manager.acquire(
+                    name=name, owner_id=owner_id, timeout=timeouts.get(name)
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to acquire resource '%s' for %s: %s",
+                    name,
+                    owner_label,
+                    e,
+                )
+        return resources
+
+    def _release_named_resources(
+        self,
+        context: ExecutionContext,
+        resources: Dict[str, Any],
+        owner_id: str,
+        *,
+        owner_label: str = "owner",
+    ) -> None:
+        """Release resources acquired by :meth:`_acquire_named_resources`."""
+        if not resources:
+            return
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+        for name in resources:
+            try:
+                resource_manager.release(name, owner_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to release resource '%s' for %s: %s",
+                    name,
+                    owner_label,
+                    e,
+                )
+
     def _acquire_state_resources(
         self,
         context: ExecutionContext,
@@ -737,43 +998,29 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         """Acquire the resources a state declares, keyed by resource name.
 
         Mirrors the sync engine's resource allocation so async state
-        transforms get the same resource-injection contract. The acquire is a
-        cheap in-process bookkeeping call (the async database resource opens
-        its transport lazily on first ``await``), so it does not block the
-        loop. Failures are logged (not swallowed silently) and skipped.
-
-        This helper is intentionally path-agnostic: the arc-transform path can
-        reuse it unchanged once it adopts resource injection (170-FU1).
+        transforms get the same resource-injection contract. Delegates the
+        acquire loop to :meth:`_acquire_named_resources`.
         """
-        resources: Dict[str, Any] = {}
         requirements = getattr(state, 'resource_requirements', None)
         if not requirements:
-            return resources
-
-        resource_manager = getattr(context, 'resource_manager', None)
-        if not resource_manager:
-            return resources
-
-        owner_id = self._state_resource_owner(context, state)
+            return {}
+        names: list[str] = []
+        timeouts: Dict[str, Any] = {}
         for resource_config in requirements:
             name = getattr(resource_config, 'name', None)
-            if not name or name in resources:
+            if not name:
                 continue
-            try:
-                timeout = getattr(resource_config, 'timeout_seconds', None) or getattr(
-                    resource_config, 'timeout', None
-                )
-                resources[name] = resource_manager.acquire(
-                    name=name, owner_id=owner_id, timeout=timeout
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to acquire resource '%s' for state '%s': %s",
-                    name,
-                    getattr(state, 'name', '?'),
-                    e,
-                )
-        return resources
+            names.append(name)
+            timeouts[name] = getattr(resource_config, 'timeout_seconds', None) or getattr(
+                resource_config, 'timeout', None
+            )
+        return self._acquire_named_resources(
+            context,
+            names,
+            self._state_resource_owner(context, state),
+            timeouts=timeouts,
+            owner_label=f"state '{getattr(state, 'name', '?')}'",
+        )
 
     def _release_state_resources(
         self,
@@ -782,22 +1029,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         resources: Dict[str, Any],
     ) -> None:
         """Release resources acquired by :meth:`_acquire_state_resources`."""
-        if not resources:
-            return
-        resource_manager = getattr(context, 'resource_manager', None)
-        if not resource_manager:
-            return
-        owner_id = self._state_resource_owner(context, state)
-        for name in resources:
-            try:
-                resource_manager.release(name, owner_id)
-            except Exception as e:
-                logger.warning(
-                    "Failed to release resource '%s' for state '%s': %s",
-                    name,
-                    getattr(state, 'name', '?'),
-                    e,
-                )
+        self._release_named_resources(
+            context,
+            resources,
+            self._state_resource_owner(context, state),
+            owner_label=f"state '{getattr(state, 'name', '?')}'",
+        )
 
     @staticmethod
     def _state_resource_owner(context: ExecutionContext, state: Any) -> str:
@@ -805,6 +1042,20 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         state_name = getattr(state, 'name', 'unknown')
         execution_id = getattr(context, 'execution_id', 'unknown')
         return f"state_{state_name}_{execution_id}"
+
+    @staticmethod
+    def _arc_resource_owner(context: ExecutionContext, arc: ArcDefinition) -> str:
+        """Build the resource-ownership key for an arc's acquisitions.
+
+        Mirrors the sync ``ArcExecution`` owner-id shape so the two engines key
+        arc acquisitions the same way.
+        """
+        source = getattr(arc, 'source_state', None) or getattr(
+            context, 'current_state', 'unknown'
+        )
+        arc_identifier = f"{source}_to_{arc.target_state}"
+        execution_id = getattr(context, 'execution_id', 'unknown')
+        return f"arc_{arc_identifier}_{execution_id}"
 
     async def _enter_initial_state(
         self, context: ExecutionContext

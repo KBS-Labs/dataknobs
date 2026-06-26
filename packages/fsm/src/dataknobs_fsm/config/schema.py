@@ -114,7 +114,11 @@ class ArcConfig(BaseModel):
     target: str
     condition: FunctionReference | None = None
     transform: FunctionReference | list[FunctionReference] | None = None
-    resources: List[str] = Field(default_factory=list)
+    #: Resources the arc's transform/condition require. Either a list of
+    #: resource names (``["db"]`` → role==name) or a ``{role: name}`` map
+    #: (``{"database": "primary_db"}``) to bind a logical role to a concrete
+    #: resource for role-based access via ``FunctionContext.resource_for_role``.
+    resources: List[str] | Dict[str, str] = Field(default_factory=list)
     priority: int = Field(default=0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

@@ -433,92 +433,115 @@ class ExecutionEngine(BaseExecutionEngine):
             for hook in self._pre_transition_hooks:
                 hook(context, arc)
         
-        retry_count = 0
-        while retry_count <= self.max_retries:
-            try:
-                # Validate data before processing
-                if context.data is None:
-                    # Skip processing for None data
-                    return False
-                
-                # Build merged function registry
-                function_registry = getattr(self.fsm, 'function_registry', {})
-                if hasattr(function_registry, 'functions'):
-                    functions = dict(function_registry.functions)
-                else:
-                    functions = dict(function_registry)
-                functions.update(self._custom_functions)
+        # Validate data before processing — nothing to transition on None data.
+        if context.data is None:
+            return False
 
-                # Create arc execution (pass current state as source)
-                arc_exec = ArcExecution(
-                    arc,
-                    source_state=context.current_state or "",
-                    function_registry=functions
-                )
-                
-                # Execute with resource context
-                result = arc_exec.execute(context, context.data)
+        # Build the merged function registry and arc executor once: neither
+        # changes across retries.
+        function_registry = getattr(self.fsm, 'function_registry', {})
+        if hasattr(function_registry, 'functions'):
+            functions = dict(function_registry.functions)
+        else:
+            functions = dict(function_registry)
+        functions.update(self._custom_functions)
 
-                # If no exception was thrown, the arc execution succeeded
-                # Update data with result
-                if result is not None:
-                    context.data = result
-                
-                # Use the common state entry method
-                if not self.enter_state(context, arc.target_state):
+        # Create arc execution (pass current state as source)
+        arc_exec = ArcExecution(
+            arc,
+            source_state=context.current_state or "",
+            function_registry=functions
+        )
+
+        # Acquire the arc's resources once, before the retry loop, so the same
+        # handles are reused across attempts (parity with the async engine's
+        # _execute_transition) rather than re-acquired — and the transform
+        # re-run — on every retry. A resource-acquisition failure is a
+        # definitive failure (no retry), the same disposition the transform
+        # path gives a wrapped FunctionError.
+        state_resources = getattr(context, 'current_state_resources', None)
+        try:
+            arc_resources = arc_exec._allocate_resources(context, state_resources)
+        except Exception as e:
+            self._error_count += 1
+            if self.enable_hooks:
+                for hook in self._error_hooks:
+                    hook(context, arc, e)
+            return False
+
+        try:
+            retry_count = 0
+            while retry_count <= self.max_retries:
+                try:
+                    # Execute with the pre-acquired, engine-owned resources.
+                    result = arc_exec.execute(
+                        context, context.data, arc_resources=arc_resources
+                    )
+
+                    # If no exception was thrown, the arc execution succeeded
+                    # Update data with result
+                    if result is not None:
+                        context.data = result
+
+                    # Use the common state entry method
+                    if not self.enter_state(context, arc.target_state):
+                        return False
+
+                    self._transition_count += 1
+
+                    # Fire post-transition hooks
+                    if self.enable_hooks:
+                        for hook in self._post_transition_hooks:
+                            hook(context, arc)
+
+                    return True
+
+                except (TypeError, AttributeError, ValueError, SyntaxError) as e:
+                    # Deterministic errors (code errors, type errors) - don't retry
+                    self._error_count += 1
+
+                    # Fire error hooks
+                    if self.enable_hooks:
+                        for hook in self._error_hooks:
+                            hook(context, arc, e)
+
+                    # Return false immediately for deterministic errors
                     return False
 
-                self._transition_count += 1
-                
-                # Fire post-transition hooks
-                if self.enable_hooks:
-                    for hook in self._post_transition_hooks:
-                        hook(context, arc)
-                
-                return True
-                
-            except (TypeError, AttributeError, ValueError, SyntaxError) as e:
-                # Deterministic errors (code errors, type errors) - don't retry
-                self._error_count += 1
-                
-                # Fire error hooks
-                if self.enable_hooks:
-                    for hook in self._error_hooks:
-                        hook(context, arc, e)
-                
-                # Return false immediately for deterministic errors
-                return False
-                
-            except FunctionError as e:
-                # Arc transform or pre-test failed - this is a definitive failure
-                self._error_count += 1
-                
-                # Fire error hooks
-                if self.enable_hooks:
-                    for hook in self._error_hooks:
-                        hook(context, arc, e)
-                
-                # Arc failed, no retry for function errors
-                return False
-                
-            except Exception as e:
-                # Other exceptions - may be recoverable (network, resources, etc.)
-                self._error_count += 1
-                
-                # Fire error hooks
-                if self.enable_hooks:
-                    for hook in self._error_hooks:
-                        hook(context, arc, e)
-                
-                # Only retry for potentially recoverable errors
-                retry_count += 1
-                if retry_count <= self.max_retries:
-                    time.sleep(self.retry_delay * retry_count)
-                else:
-                    # Don't raise, just return False to allow graceful failure
+                except FunctionError as e:
+                    # Arc transform or pre-test failed - this is a definitive failure
+                    self._error_count += 1
+
+                    # Fire error hooks
+                    if self.enable_hooks:
+                        for hook in self._error_hooks:
+                            hook(context, arc, e)
+
+                    # Arc failed, no retry for function errors
                     return False
-        
-        return False
+
+                except Exception as e:
+                    # Other exceptions - may be recoverable (network, resources, etc.)
+                    self._error_count += 1
+
+                    # Fire error hooks
+                    if self.enable_hooks:
+                        for hook in self._error_hooks:
+                            hook(context, arc, e)
+
+                    # Only retry for potentially recoverable errors
+                    retry_count += 1
+                    if retry_count <= self.max_retries:
+                        time.sleep(self.retry_delay * retry_count)
+                    else:
+                        # Don't raise, just return False to allow graceful failure
+                        return False
+
+            return False
+        finally:
+            # Release exactly once — the engine owns the lifecycle of the
+            # resources it pre-acquired above.
+            arc_exec._release_resources(context)
 
     def _execute_push_arc(
         self,
@@ -852,30 +875,33 @@ class ExecutionEngine(BaseExecutionEngine):
         Returns:
             Dictionary of allocated resources.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"_allocate_state_resources called for state: {state_name}")
+        logger.debug("_allocate_state_resources called for state: %s", state_name)
 
         # Start with parent state resources if in subnetwork
         parent_resources = getattr(context, 'parent_state_resources', None)
         if parent_resources:
             resources = dict(parent_resources)  # Copy parent resources
-            logger.debug(f"Starting with parent resources: {list(parent_resources.keys())}")
+            logger.debug(
+                "Starting with parent resources: %s", list(parent_resources.keys())
+            )
         else:
             resources = {}
             logger.debug("No parent resources")
 
         state_def = self.fsm.get_state(state_name)
-        logger.debug(f"State def found: {state_def is not None}")
+        logger.debug("State def found: %s", state_def is not None)
         if state_def:
-            logger.debug(f"State has resource_requirements: {state_def.resource_requirements if hasattr(state_def, 'resource_requirements') else 'NO ATTRIBUTE'}")
+            logger.debug(
+                "State has resource_requirements: %s",
+                getattr(state_def, 'resource_requirements', 'NO ATTRIBUTE'),
+            )
 
         if not state_def or not state_def.resource_requirements:
             logger.debug("Returning early - no state def or no requirements")
             return resources
 
         resource_manager = getattr(context, 'resource_manager', None)
-        logger.debug(f"Resource manager available: {resource_manager is not None}")
+        logger.debug("Resource manager available: %s", resource_manager is not None)
         if not resource_manager:
             logger.debug("No resource manager - returning empty")
             return resources
@@ -886,7 +912,9 @@ class ExecutionEngine(BaseExecutionEngine):
         for resource_config in state_def.resource_requirements:
             # Skip if resource already inherited from parent
             if resource_config.name in resources:
-                logger.info(f"Resource '{resource_config.name}' inherited from parent state")
+                logger.info(
+                    "Resource '%s' inherited from parent state", resource_config.name
+                )
                 continue
 
             try:
@@ -900,7 +928,9 @@ class ExecutionEngine(BaseExecutionEngine):
                 resources[resource_config.name] = resource
             except Exception as e:
                 # Log error but continue with other resources
-                logger.error(f"Failed to acquire resource {resource_config.name}: {e}")
+                logger.error(
+                    "Failed to acquire resource %s: %s", resource_config.name, e
+                )
 
         return resources
 
@@ -929,14 +959,16 @@ class ExecutionEngine(BaseExecutionEngine):
         for resource_name in resources.keys():
             # Skip releasing if this is a parent-inherited resource
             if resource_name in parent_resources:
-                logger.info(f"Skipping release of inherited resource '{resource_name}'")
+                logger.info(
+                    "Skipping release of inherited resource '%s'", resource_name
+                )
                 continue
 
             try:
                 resource_manager.release(resource_name, owner_id)
             except Exception as e:
                 # Log error but continue
-                logger.error(f"Failed to release resource {resource_name}: {e}")
+                logger.error("Failed to release resource %s: %s", resource_name, e)
 
     def _execute_state_transforms(
         self,
@@ -1128,40 +1160,109 @@ class ExecutionEngine(BaseExecutionEngine):
         """
         if not arc.pre_test:
             return True
-        
+
         # Get pre-test function
         func = self.fsm.function_registry.get_function(arc.pre_test)
         if not func:
             return False
-        
-        # Create function context
-        func_context = FunctionContext(
-            state_name=context.current_state or "",
-            function_name=arc.pre_test,
-            metadata=context.metadata
+
+        # Acquire the arc's declared resources and inject them (plus the role
+        # map) into the condition's function context, so a resource-bearing
+        # arc condition can route on them — parity with the async engine.
+        role_bindings = getattr(arc, 'required_resources', None) or {}
+        arc_resources, owner_id = self._acquire_arc_resources(
+            context, arc, role_bindings
         )
-        
         try:
-            # Call the function appropriately based on its interface
-            if hasattr(func, 'test'):
-                # IStateTestFunction - create state-like object
-                from types import SimpleNamespace
-                state = SimpleNamespace(data=context.data)
-                result = func.test(state)
-            elif hasattr(func, 'execute'):
-                # Legacy function with execute method
-                result = func.execute(context.data, func_context)
-            elif callable(func):
-                # Direct callable
-                result = func(context.data, func_context)
-            else:
+            # Create function context (copy metadata so adding the role map does
+            # not mutate the shared context.metadata).
+            func_context = FunctionContext(
+                state_name=context.current_state or "",
+                function_name=arc.pre_test,
+                metadata={**context.metadata, "resource_roles": dict(role_bindings)},
+                resources=arc_resources,
+            )
+
+            try:
+                # Call the function appropriately based on its interface
+                if hasattr(func, 'test'):
+                    # IStateTestFunction.test(data, context): pass the
+                    # resource-bearing func_context as the declared context arg
+                    # so a test-interface arc condition can reach its injected
+                    # arc resources (context.require_resource / resource_for_role)
+                    # — parity with the execute/callable branches below, which
+                    # already receive func_context.
+                    result = func.test(context.data, func_context)
+                elif hasattr(func, 'execute'):
+                    # Legacy function with execute method
+                    result = func.execute(context.data, func_context)
+                elif callable(func):
+                    # Direct callable
+                    result = func(context.data, func_context)
+                else:
+                    return False
+                # Handle tuple return from test functions (bool, reason)
+                if isinstance(result, tuple):
+                    return bool(result[0])
+                return bool(result)
+            except Exception:
                 return False
-            # Handle tuple return from test functions (bool, reason)
-            if isinstance(result, tuple):
-                return bool(result[0])
-            return bool(result)
-        except Exception:
-            return False
+        finally:
+            self._release_arc_resources(context, arc_resources, owner_id)
+
+    def _acquire_arc_resources(
+        self,
+        context: ExecutionContext,
+        arc: ArcDefinition,
+        role_bindings: Dict[str, str],
+    ) -> tuple[Dict[str, Any], str | None]:
+        """Acquire an arc's declared resources, keyed by name.
+
+        Mirrors the async engine's arc acquisition so a resource-bearing arc
+        condition behaves the same on both engines. Returns the resources and
+        the owner id used to acquire them (``None`` when nothing was acquired).
+        """
+        resources: Dict[str, Any] = {}
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager or not role_bindings:
+            return resources, None
+        source = context.current_state or 'unknown'
+        owner_id = (
+            f"arc_{source}_to_{arc.target_state}_"
+            f"{getattr(context, 'execution_id', 'unknown')}"
+        )
+        for name in role_bindings.values():
+            if not name or name in resources:
+                continue
+            try:
+                resources[name] = resource_manager.acquire(
+                    name=name, owner_id=owner_id, timeout=None
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to acquire arc resource '%s' for condition: %s", name, e
+                )
+        return resources, owner_id
+
+    def _release_arc_resources(
+        self,
+        context: ExecutionContext,
+        resources: Dict[str, Any],
+        owner_id: str | None,
+    ) -> None:
+        """Release resources acquired by :meth:`_acquire_arc_resources`."""
+        if not resources or owner_id is None:
+            return
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+        for name in resources:
+            try:
+                resource_manager.release(name, owner_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to release arc resource '%s' for condition: %s", name, e
+                )
     
     def _choose_transition(
         self,
