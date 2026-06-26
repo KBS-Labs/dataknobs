@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AsyncDatabaseResourceAdapter`) so a state transform can `await`
   non-blocking `upsert` / `execute_query` against any `dataknobs-data`
   `AsyncDatabase` backend.
+- Record-identity strategy for the database function library
+  (`dataknobs_fsm.functions.library.identity`): a `RecordIdentity` protocol
+  with `KeyColumnsIdentity` (collision-safe unit-separator join) and
+  `CallableIdentity` reference implementations. `DatabaseUpsert`,
+  `DatabaseBulkInsert`, and `BatchCommit` accept `key_columns=` / `id_fn=` /
+  `identity=` to control how a row maps to its storage id.
+- `BatchCommit` gains an `atomicity` policy (`"best_effort"` / `"require"`).
+  `"require"` raises `CapabilityNotSupportedError` on a backend that cannot
+  guarantee an all-or-nothing batch instead of writing a partial batch under a
+  false promise. The legacy `use_transaction=` flag is now an alias
+  (`True` → `"require"`).
+
+### Fixed
+
+- `DatabaseBulkInsert.on_duplicate` is now honored. Previously the adapter
+  always created records and ignored the parameter; `"error"` / `"ignore"` /
+  `"update"` now take effect against the configured record identity, and a
+  duplicate-detecting policy (`"ignore"` / `"update"`) with no identity raises
+  `ConfigurationError` rather than silently degrading to create-only.
+- `BatchCommit` now persists its batch through the real `commit_batch` atomic
+  primitive. It previously called a `resource.transaction()` method that no
+  adapter implemented, so it raised `AttributeError` on first use.
 - The async execution engine now acquires a state's declared `resources`
   into the transform `FunctionContext`, so registered async transforms
   receive their injected resources (matching the synchronous engine).

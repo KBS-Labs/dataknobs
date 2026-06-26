@@ -154,6 +154,7 @@ nav:
         - packages/fsm/guides/subflows.md
         - packages/fsm/guides/data-modes.md
         - packages/fsm/guides/resources.md
+        - packages/fsm/guides/database-functions.md
         - packages/fsm/guides/streaming.md
         - packages/fsm/guides/cli.md
       - Patterns:
