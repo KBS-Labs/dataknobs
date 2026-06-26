@@ -17,11 +17,10 @@ from dataknobs_common.structured_config import (
     StructuredConfigConsumer,
 )
 
-from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 from ..api.async_simple import AsyncSimpleFSM
-from ..functions.library.validators import SchemaValidator
+from ..functions.base import ITransformFunction, TransformError
 
 
 class FileFormat(Enum):
@@ -66,6 +65,138 @@ class FileProcessingConfig(StructuredConfig):
     # Format-specific configs
     json_config: Dict[str, Any] = field(default_factory=dict)
     log_config: Dict[str, Any] = field(default_factory=dict)
+
+
+_VALIDATION_TYPE_MAP: Dict[str, type] = {
+    "str": str, "string": str, "int": int, "integer": int,
+    "float": float, "number": float, "bool": bool, "boolean": bool,
+    "list": list, "array": list, "dict": dict, "object": dict,
+}
+
+
+# Map a resolved :class:`FileFormat` to the streaming reader/writer's
+# format token. STREAM mode is line-oriented, so JSON means line-delimited
+# JSONL (one record per line) — distinct from BATCH/WHOLE, which read/write a
+# whole-file JSON array. Formats the streaming reader/writer cannot express
+# (XML/PARQUET/BINARY) fall back to ``'auto'`` (extension-derived).
+_STREAM_FORMAT_TOKENS: Dict[FileFormat, str] = {
+    FileFormat.JSON: "jsonl",
+    FileFormat.CSV: "csv",
+    FileFormat.TEXT: "text",
+}
+
+
+class _FileTransform(ITransformFunction):
+    """Per-record transform: apply each configured transformation in order.
+
+    Wired into the FileProcessor FSM's ``transform`` state as a registered
+    function (the proven ``custom_functions=`` idiom). Each transformation is a
+    **map-style** callable ``record -> record``; they run in order. The step is
+    synchronous so it executes identically on the async (batch/whole) and
+    streaming execution paths. A non-dict return raises :class:`TransformError`
+    rather than writing a corrupt record (the engine then reports the record as
+    a failure, so it is counted as an error rather than written).
+    """
+
+    def __init__(self, transformations: List[Callable]) -> None:
+        self._transformations = transformations or []
+
+    def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
+        result = data
+        for index, fn in enumerate(self._transformations):
+            out = fn(result)
+            if not isinstance(out, dict):
+                raise TransformError(
+                    f"File transformation #{index} must return a dict, got "
+                    f"{type(out).__name__}"
+                )
+            result = out
+        return result
+
+    def get_transform_description(self) -> str:
+        return f"Apply {len(self._transformations)} transformation(s)"
+
+
+class _FileAggregator(ITransformFunction):
+    """Per-record aggregation: reduce a record into a summary dict.
+
+    Each entry of ``aggregations`` maps a result key to a callable
+    ``record -> value`` (e.g. ``lambda r: sum(r["values"])``). The record is
+    replaced by ``{name: fn(record) for name, fn in aggregations.items()}``.
+    Aggregation here is per-record (a map producing a summary), not a
+    cross-record reduce.
+    """
+
+    def __init__(self, aggregations: Dict[str, Callable]) -> None:
+        self._aggregations = aggregations or {}
+
+    def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
+        return {name: fn(data) for name, fn in self._aggregations.items()}
+
+    def get_transform_description(self) -> str:
+        return f"Apply {len(self._aggregations)} aggregation(s)"
+
+
+def _make_filter(filters: List[Callable]) -> Callable[..., bool]:
+    """Build the ``filter`` arc condition: a record passes iff all filters pass.
+
+    The returned callable takes ``(data, context=None)`` so the engine invokes
+    it with the raw record dict — a one-argument callable would be treated as
+    expecting a wrapped state object. Each user filter is a ``record -> bool``
+    predicate.
+    """
+
+    def filter_pass(data: Dict[str, Any], context: Any = None) -> bool:
+        return all(predicate(data) for predicate in filters)
+
+    return filter_pass
+
+
+def _make_validator(schema: Dict[str, Any]) -> Callable[..., bool]:
+    """Build the ``validate`` arc condition from a validation schema.
+
+    A record is valid iff it satisfies every field constraint. Supported
+    per-field constraints: ``required``, ``type`` (mapped to a Python type for
+    an ``isinstance`` check), ``min`` / ``max`` (inclusive numeric bounds), and
+    ``pattern`` (regex). A field whose constraint is the literal ``True`` is
+    treated as simply required.
+    """
+
+    def validate_check(data: Dict[str, Any], context: Any = None) -> bool:
+        for field_name, constraints in schema.items():
+            if constraints is True:
+                if field_name not in data:
+                    return False
+                continue
+            if not isinstance(constraints, dict):
+                continue
+            if constraints.get("required") and field_name not in data:
+                return False
+            if "type" in constraints:
+                expected = _VALIDATION_TYPE_MAP.get(constraints["type"])
+                if expected is not None and not isinstance(
+                    data.get(field_name), expected
+                ):
+                    return False
+            if "min" in constraints and not (
+                data.get(field_name, 0) >= constraints["min"]
+            ):
+                return False
+            if "max" in constraints and not (
+                data.get(field_name, 0) <= constraints["max"]
+            ):
+                return False
+            if "pattern" in constraints and not re.match(
+                constraints["pattern"], str(data.get(field_name, ""))
+            ):
+                return False
+        return True
+
+    return validate_check
 
 
 class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
@@ -145,7 +276,18 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         return self._output_format
 
     def _build_fsm(self) -> AsyncSimpleFSM:
-        """Build FSM for file processing."""
+        """Build the FSM for file processing.
+
+        Only the *enabled* stages (parse always; validate iff a schema; filter
+        iff filters; transform iff transformations; aggregate iff aggregations;
+        write always) are wired into a single connected chain to
+        ``write -> complete``, so no stage is ever a dead-end (a passthrough
+        config flows ``read -> parse -> write -> complete``). Per-record
+        functions reach the FSM through the ``custom_functions=`` channel and
+        are referenced from state ``functions`` blocks / arc conditions — the
+        top-level ``config['functions']`` dict is silently dropped by
+        ``FSMConfig`` (it has no ``functions`` field).
+        """
         # Determine data mode based on processing mode
         if self.config.mode == ProcessingMode.STREAM:
             data_mode = DataHandlingMode.REFERENCE  # Use reference for streaming
@@ -153,324 +295,150 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
             data_mode = DataHandlingMode.COPY  # Use copy for batch isolation
         else:
             data_mode = DataHandlingMode.DIRECT  # Use direct for whole file
-            
-        # Create FSM configuration
+
+        active = self._active_stages()
         fsm_config = {
             'name': 'File_Processor',
             'data_mode': data_mode.value,
-            'states': [
-                {
-                    'name': 'read',
-                    'is_start': True
-                },
-                {
-                    'name': 'parse',
-                },
-                {
-                    'name': 'validate',
-                },
-                {
-                    'name': 'filter',
-                },
-                {
-                    'name': 'transform',
-                },
-                {
-                    'name': 'aggregate',
-                },
-                {
-                    'name': 'write',
-                },
-                {
-                    'name': 'complete',
-                    'is_end': True
-                },
-                {
-                    'name': 'error',
-                    'is_end': True
-                }
-            ],
-            'arcs': self._build_arcs(),
-            'functions': self._build_functions()
+            'states': self._build_states(active),
+            'arcs': self._build_arcs(active),
         }
-        
-        return AsyncSimpleFSM(fsm_config, data_mode=data_mode)
-        
-    def _build_arcs(self) -> List[Dict[str, Any]]:
-        """Build FSM arcs based on configuration."""
-        arcs = [
-            {
-                'from': 'read',
-                'to': 'parse',
-                'name': 'read_line'
-            },
-            {
-                'from': 'parse',
-                'to': 'validate' if self.config.validation_schema else 'filter',
-                'name': 'parsed',
-                'transform': {'type': 'inline', 'code': self._get_parser_code()}
-            }
-        ]
-        
-        # Add validation arc if schema provided
+
+        return AsyncSimpleFSM(
+            fsm_config,
+            data_mode=data_mode,
+            custom_functions=self._build_custom_functions(),
+        )
+
+    def _active_stages(self) -> List[str]:
+        """Ordered list of enabled pipeline stages from ``parse`` to ``write``.
+
+        ``parse`` and ``write`` are always present; the middle stages appear
+        only when their config section is set. Consecutive entries are wired
+        directly to one another in :meth:`_build_arcs`, so a disabled stage is
+        simply absent from the chain (never a dead-end).
+        """
+        stages = ['parse']
         if self.config.validation_schema:
-            arcs.extend([
-                {
-                    'from': 'validate',
-                    'to': 'filter' if self.config.filters else 'transform',
-                    'name': 'valid',
-                    'condition': {'type': 'inline', 'code': self._get_validator_code()}
-                },
-                {
-                    'from': 'validate',
-                    'to': 'error',
-                    'name': 'invalid'
-                }
-            ])
-            
-        # Add filter arc if filters provided
+            stages.append('validate')
         if self.config.filters:
-            arcs.extend([
-                {
-                    'from': 'filter',
-                    'to': 'transform' if self.config.transformations else 'aggregate',
-                    'name': 'passed',
-                    'condition': {'type': 'inline', 'code': self._get_filter_code()}
-                },
-                {
-                    'from': 'filter',
-                    'to': 'complete',
-                    'name': 'filtered_out'
-                }
-            ])
-            
-        # Add transformation arc if transformations provided
+            stages.append('filter')
         if self.config.transformations:
-            next_state = 'aggregate' if self.config.aggregations else 'write'
-            arcs.append({
-                'from': 'transform',
-                'to': next_state,
-                'name': 'transformed',
-                'transform': {'type': 'inline', 'code': self._get_transformer_code()}
-            })
-            
-        # Add aggregation arc if aggregations provided
+            stages.append('transform')
         if self.config.aggregations:
-            arcs.append({
-                'from': 'aggregate',
-                'to': 'write',
-                'name': 'aggregated',
-                'transform': {'type': 'inline', 'code': self._get_aggregator_code()}
-            })
-            
-        # Add write arc
-        arcs.extend([
-            {
-                'from': 'write',
-                'to': 'complete',
-                'name': 'written'
-            }
-        ])
+            stages.append('aggregate')
+        stages.append('write')
+        return stages
+
+    def _build_states(self, active: List[str]) -> List[Dict[str, Any]]:
+        """Build the state list for the enabled stages.
+
+        ``transform`` / ``aggregate`` carry a registered ``ITransformFunction``
+        via a ``functions`` block. ``complete`` emits output; the ``filtered``
+        and ``error`` terminals (present only when filtering / validation is
+        enabled) set ``emit_output=False`` so the records they hold are kept out
+        of the output in every mode.
+        """
+        states: List[Dict[str, Any]] = [{'name': 'read', 'is_start': True}]
+        for stage in active:
+            if stage == 'transform':
+                states.append({
+                    'name': 'transform',
+                    'functions': {
+                        'transform': {'type': 'registered', 'name': 'transform'}
+                    },
+                })
+            elif stage == 'aggregate':
+                states.append({
+                    'name': 'aggregate',
+                    'functions': {
+                        'transform': {'type': 'registered', 'name': 'aggregate'}
+                    },
+                })
+            else:
+                states.append({'name': stage})
+        states.append({'name': 'complete', 'is_end': True})
+        if 'filter' in active:
+            states.append(
+                {'name': 'filtered', 'is_end': True, 'emit_output': False}
+            )
+        if 'validate' in active:
+            states.append(
+                {'name': 'error', 'is_end': True, 'emit_output': False}
+            )
+        return states
         
-        return arcs  # type: ignore
+    def _build_arcs(self, active: List[str]) -> List[Dict[str, Any]]:
+        """Connect the enabled stages into one chain to ``write -> complete``.
+
+        Each enabled stage transitions to the next enabled stage (``write``
+        falls through to ``complete``). ``validate`` and ``filter`` are gates:
+        a registered condition routes passing records onward while the
+        fall-through arc diverts the rest to ``error`` / ``filtered`` (both
+        non-emitting terminals). The conditional gate arc is given a higher
+        ``priority`` than its unconditional fall-through so a passing record is
+        routed deterministically — the engine sorts available transitions by
+        priority (higher first), so routing no longer depends on arc
+        declaration order. ``transform`` / ``aggregate`` apply their registered
+        state transform on entry, then take a plain forward arc.
+        """
+        arcs: List[Dict[str, Any]] = [
+            {'from': 'read', 'to': active[0], 'name': 'read_line'}
+        ]
+        for index, stage in enumerate(active):
+            nxt = active[index + 1] if index + 1 < len(active) else 'complete'
+            if stage == 'validate':
+                arcs.append({
+                    'from': 'validate', 'to': nxt, 'name': 'valid',
+                    'condition': {'type': 'registered', 'name': 'validate_check'},
+                    'priority': 10,
+                })
+                arcs.append(
+                    {'from': 'validate', 'to': 'error', 'name': 'invalid'}
+                )
+            elif stage == 'filter':
+                arcs.append({
+                    'from': 'filter', 'to': nxt, 'name': 'passed',
+                    'condition': {'type': 'registered', 'name': 'filter_pass'},
+                    'priority': 10,
+                })
+                arcs.append(
+                    {'from': 'filter', 'to': 'filtered', 'name': 'filtered_out'}
+                )
+            else:
+                arcs.append(
+                    {'from': stage, 'to': nxt, 'name': f'{stage}_done'}
+                )
+        return arcs
     
-    def _build_functions(self) -> Dict[str, Any]:
-        """Build functions registry for FSM."""
-        functions = {}
-        
-        # Register filter functions
-        if self.config.filters:
-            for i, filter_func in enumerate(self.config.filters):
-                functions[f'filter_{i}'] = filter_func
-        
-        # Register transformation functions  
+    def _build_custom_functions(self) -> Dict[str, Any]:
+        """Build the registered functions the FSM references by name.
+
+        Only functions for configured stages are returned, so a state never
+        references a missing function:
+
+        - ``transform`` (:class:`_FileTransform`) applies the configured
+          transformations in order; referenced by the ``transform`` state.
+        - ``aggregate`` (:class:`_FileAggregator`) reduces each record to a
+          summary dict; referenced by the ``aggregate`` state.
+        - ``filter_pass`` is the ``filter`` arc condition (all filters pass).
+        - ``validate_check`` is the ``validate`` arc condition (schema holds).
+
+        Routed through ``AsyncSimpleFSM(config, custom_functions=...)`` and
+        referenced from each state's ``functions`` block / arc condition.
+        """
+        functions: Dict[str, Any] = {}
         if self.config.transformations:
-            for i, transform_func in enumerate(self.config.transformations):
-                functions[f'transform_{i}'] = transform_func
-        
-        # Register aggregation functions
+            functions['transform'] = _FileTransform(self.config.transformations)
         if self.config.aggregations:
-            for agg_name, agg_func in self.config.aggregations.items():
-                functions[f'agg_{agg_name}'] = agg_func
-        
-        # Register parser function
-        functions['parser'] = self._create_parser()
-        
+            functions['aggregate'] = _FileAggregator(self.config.aggregations)
+        if self.config.filters:
+            functions['filter_pass'] = _make_filter(self.config.filters)
+        if self.config.validation_schema:
+            functions['validate_check'] = _make_validator(
+                self.config.validation_schema
+            )
         return functions
-        
-    def _get_parser_code(self) -> str:
-        """Get parser code for file format."""
-        if self._format == FileFormat.JSON:
-            return "import json; json.loads(data) if isinstance(data, str) else data"
-        elif self._format == FileFormat.CSV:
-            return """
-import csv
-from io import StringIO
-if isinstance(data, str):
-    reader = csv.DictReader(StringIO(data))
-    rows = list(reader)
-    data = rows[0] if rows else {}
-data
-"""
-        elif self._format == FileFormat.XML:
-            return """
-import xml.etree.ElementTree as ET
-if isinstance(data, str):
-    root = ET.fromstring(data)
-    data = {child.tag: child.text for child in root}
-data
-"""
-        else:
-            return "data"
-    
-    def _get_validator_code(self) -> str:
-        """Get validator code."""
-        if not self.config.validation_schema:
-            return "True"
-        
-        # Generate validation code based on schema
-        validations = []
-        for field_name, constraints in self.config.validation_schema.items():
-            if isinstance(constraints, dict):
-                if constraints.get('required'):
-                    validations.append(f"'{field_name}' in data")
-                if 'type' in constraints:
-                    python_type = constraints['type']
-                    validations.append(f"isinstance(data.get('{field_name}'), {python_type})")
-                if 'min' in constraints:
-                    validations.append(f"data.get('{field_name}', 0) >= {constraints['min']}")
-                if 'max' in constraints:
-                    validations.append(f"data.get('{field_name}', 0) <= {constraints['max']}")
-                if 'pattern' in constraints:
-                    validations.append(f"re.match(r'{constraints['pattern']}', str(data.get('{field_name}', '')))")
-            elif constraints is True:  # Required field
-                validations.append(f"'{field_name}' in data")
-        
-        return " and ".join(validations) if validations else "True"
-    
-    def _get_filter_code(self) -> str:
-        """Get filter code."""
-        if not self.config.filters:
-            return "True"
-        
-        # Apply all filters in sequence - data must pass all filters
-        filter_conditions = []
-        for i, _filter_func in enumerate(self.config.filters):
-            # Use registered function name
-            filter_conditions.append(f"filter_{i}(data)")
-        
-        return " and ".join(filter_conditions) if filter_conditions else "True"
-    
-    def _get_transformer_code(self) -> str:
-        """Get transformer code."""
-        if not self.config.transformations:
-            return "data"
-        
-        # Apply transformations in sequence
-        result_code = "data"
-        for i, _transform_func in enumerate(self.config.transformations):
-            # Each transformation receives the result of the previous one
-            result_code = f"transform_{i}({result_code})"
-        
-        return result_code
-    
-    def _get_aggregator_code(self) -> str:
-        """Get aggregator code."""
-        if not self.config.aggregations:
-            return "data"
-        
-        # Apply aggregations to create summary data
-        aggregation_results = []
-        for agg_name in self.config.aggregations.keys():
-            aggregation_results.append(f"'{agg_name}': agg_{agg_name}(data)")
-        
-        if aggregation_results:
-            return "{" + ", ".join(aggregation_results) + "}"
-        else:
-            return "data"
-    
-    def _create_parser(self) -> Callable:
-        """Create parser for file format."""
-        if self._format == FileFormat.JSON:
-            import json
-            return lambda data: json.loads(data) if isinstance(data, str) else data
-        elif self._format == FileFormat.CSV:
-            import csv
-            from io import StringIO
-            
-            def parse_csv(data):
-                if isinstance(data, str):
-                    reader = csv.DictReader(StringIO(data))
-                    return next(iter(reader)) if reader else {}
-                return data
-            return parse_csv
-        elif self._format == FileFormat.XML:
-            import xml.etree.ElementTree as ET
-            
-            def parse_xml(data):
-                if isinstance(data, str):
-                    root = ET.fromstring(data)
-                    return {child.tag: child.text for child in root}
-                return data
-            return parse_xml
-        else:
-            return lambda data: data
-            
-    def _create_validator(self) -> Callable | None:
-        """Create validator function."""
-        if not self.config.validation_schema:
-            return None
-            
-        validator = SchemaValidator(self.config.validation_schema)
-        return lambda state: validator.validate(Record(state.data))  # type: ignore
-        
-    def _create_filter(self) -> Callable | None:
-        """Create filter function."""
-        if not self.config.filters:
-            return None
-            
-        def apply_filters(state):
-            return all(filter_func(state.data) for filter_func in self.config.filters)
-            
-        return apply_filters
-        
-    def _create_transformer(self) -> Callable | None:
-        """Create transformation function."""
-        if not self.config.transformations:
-            return None
-            
-        async def transform(data: Dict[str, Any]) -> Dict[str, Any]:
-            result = data
-            for transformer in self.config.transformations:
-                if hasattr(transformer, 'transform'):
-                    result = await transformer.transform(result)
-                elif callable(transformer):
-                    result = transformer(result)
-            return result
-            
-        return transform
-        
-    def _create_aggregator(self) -> Callable | None:
-        """Create aggregation function."""
-        if not self.config.aggregations:
-            return None
-            
-        # Store aggregation state
-        agg_state = {key: [] for key in self.config.aggregations}
-        
-        def aggregate(data: Dict[str, Any]) -> Dict[str, Any]:
-            # Accumulate values
-            for key in self.config.aggregations:
-                if key in data:
-                    agg_state[key].append(data[key])
-                    
-            # Return aggregated results
-            return {
-                key: self.config.aggregations[key](values)  # type: ignore
-                for key, values in agg_state.items()
-            }
-            
-        return aggregate
         
     async def process(self) -> Dict[str, Any]:
         """Process the file.
@@ -504,45 +472,151 @@ data
         """Process file as stream.
 
         Awaits the async FSM's streaming executor directly (no sync-bridge
-        loop blocking). The executor opens the input/output paths itself and
-        auto-detects the format from the extension, so the input/output
-        paths are passed as strings rather than wrapped stream objects.
+        loop blocking). The executor opens the input/output paths itself, so
+        the paths are passed as strings rather than wrapped stream objects.
+
+        An explicitly configured ``format`` / ``output_format`` is honored
+        (mapped to the streaming reader/writer's line-oriented token via
+        :data:`_STREAM_FORMAT_TOKENS`); when unset, ``'auto'`` lets the
+        reader/writer derive the format from the file extension. The stream
+        stats are mapped onto the same metrics keys the batch/whole paths
+        populate, so every mode returns the same shape.
         """
+        input_format = (
+            _STREAM_FORMAT_TOKENS.get(self._format, 'auto')
+            if self.config.format
+            else 'auto'
+        )
+        output_format = (
+            _STREAM_FORMAT_TOKENS.get(self._output_format, 'auto')
+            if self.config.output_format
+            else 'auto'
+        )
+
         result = await self._fsm.process_stream(
             source=self.config.input_path,
             sink=self.config.output_path,
             chunk_size=self.config.chunk_size,
-            input_format='auto',
+            input_format=input_format,
+            output_format=output_format,
         )
 
-        self._metrics.update(result)
+        # Map the stream stats onto the unified metrics keys, applying the
+        # *same* per-terminal classification :meth:`_account_result` applies in
+        # batch/whole so every mode reports identical metrics. ``records_written``
+        # is the count that passed the emit_output gate (``emitted``). The
+        # executor reports clean non-emitting records bucketed by terminal name
+        # (``excluded_by_state``); records that reached the error terminal are
+        # counted as ``errors`` (alongside transform failures), every other
+        # non-emitting terminal (e.g. ``filtered``) is counted as ``skipped``.
+        # ``records_processed`` counts clean terminals only (written + skipped),
+        # excluding both failures and rejections — the same as
+        # ``_account_result``. ``lines_read`` is not tracked on the streaming
+        # path (the executor reads internally) and stays 0.
+        failed = result.get('failed', 0)
+        written = result.get('emitted', 0)
+        excluded_by_state: Dict[str, int] = result.get('excluded_by_state', {})
+        rejected = sum(
+            count
+            for state, count in excluded_by_state.items()
+            if self._is_error_terminal(state)
+        )
+        skipped = sum(
+            count
+            for state, count in excluded_by_state.items()
+            if not self._is_error_terminal(state)
+        )
+        self._metrics['records_written'] = written
+        self._metrics['skipped'] = skipped
+        self._metrics['errors'] = failed + rejected
+        self._metrics['records_processed'] = written + skipped
         return self._metrics
         
     async def _process_batch(self) -> Dict[str, Any]:
-        """Process file in batches."""
-        # Read file in batches
-        batches = []
-        async for batch in self._read_batches():
-            batches.append(batch)
-            
-        # Process batches
+        """Process the file in batches.
+
+        Each record is driven through the FSM and accounted through the shared
+        :meth:`_account_result` path: records that reach an emitting terminal
+        (``emit_output=True``) are written to the output (once, after all
+        batches — the writer truncates), records that reach the error terminal
+        or fail a transform are counted as errors, and records that reach any
+        other non-emitting terminal (e.g. ``filtered``) are counted as skipped.
+        """
+        batches = [batch async for batch in self._read_batches()]
+
+        emitted: List[Dict[str, Any]] = []
         for batch in batches:
             results = await self._fsm.process_batch(
                 data=batch,  # type: ignore
                 batch_size=self.config.chunk_size,
-                max_workers=self.config.parallel_chunks
+                max_workers=self.config.parallel_chunks,
             )
-            
-            # Update metrics
             for result in results:
-                if result['success']:
-                    self._metrics['records_processed'] += 1
-                    if result['final_state'] == 'complete':
-                        self._metrics['records_written'] += 1
-                else:
-                    self._metrics['errors'] += 1
-                    
+                self._account_result(result, emitted)
+
+        if self.config.output_path and emitted:
+            await self._write_output(emitted)
+
         return self._metrics
+
+    #: Name of the non-emitting terminal that means "rejected" (records routed
+    #: here are counted as errors, not skipped). The default FSM builds this
+    #: terminal for the ``validate`` stage; a subclass building a different FSM
+    #: can override it. Single source of truth shared by the batch/whole
+    #: (:meth:`_account_result`) and streaming (:meth:`_process_stream`)
+    #: accounting paths so they classify non-emitting terminals identically.
+    _ERROR_TERMINAL_STATE: ClassVar[str] = 'error'
+
+    def _is_error_terminal(self, final_state: str | None) -> bool:
+        """Whether a non-emitting ``final_state`` counts as an error (vs skipped)."""
+        return final_state == self._ERROR_TERMINAL_STATE
+
+    def _should_emit(self, final_state: str | None) -> bool:
+        """Whether a record finishing in ``final_state`` contributes to output.
+
+        Resolves the state's ``emit_output`` flag from the FSM (default
+        ``True``) — the single source of truth the streaming executor also
+        consults (:meth:`AsyncStreamExecutor._should_emit`). Driving the
+        batch/whole emission decision off this flag rather than a hardcoded
+        ``complete`` name means all three modes share one exclusion policy: a
+        consumer terminal marked ``emit_output=False`` is excluded everywhere,
+        and a custom emitting terminal (not named ``complete``) is written
+        everywhere.
+        """
+        if not final_state:
+            return True
+        state_def = self._fsm.get_state(final_state)
+        return getattr(state_def, "emit_output", True) if state_def else True
+
+    def _account_result(
+        self, result: Dict[str, Any], emitted: List[Dict[str, Any]]
+    ) -> None:
+        """Update metrics for one FSM result and collect emitted records.
+
+        Emission is decided by the final state's ``emit_output`` flag (via
+        :meth:`_should_emit`), so a record reaching an emitting terminal is
+        written and one reaching a non-emitting terminal is excluded — the same
+        policy the streaming path applies. A non-emitting record is categorized
+        as an error when it reached the ``error`` (validation-reject) terminal,
+        otherwise as skipped (e.g. ``filtered``). A record whose transform
+        raised (``success=False``) is always an error. ``emitted`` accumulates
+        the results to write so the output is produced in a single pass (the
+        writer truncates).
+        """
+        if not result['success']:
+            self._metrics['errors'] += 1
+            return
+        final_state = result.get('final_state')
+        if self._should_emit(final_state):
+            self._metrics['records_processed'] += 1
+            self._metrics['records_written'] += 1
+            emitted.append(result)
+        elif self._is_error_terminal(final_state):
+            self._metrics['errors'] += 1
+        else:
+            # Non-emitting terminal (e.g. ``filtered``): processed, not written.
+            self._metrics['records_processed'] += 1
+            self._metrics['skipped'] += 1
         
     async def _process_whole(self) -> Dict[str, Any]:
         """Process entire file at once."""
@@ -566,15 +640,15 @@ data
             results = await self._fsm.process_batch(data)
         else:
             results = [await self._fsm.process(data)]
-            
-        # Write output if specified
-        if self.config.output_path and results:
-            await self._write_output(results)
-            
-        self._metrics['records_processed'] = len(results)
-        self._metrics['records_written'] = sum(
-            1 for r in results if r['success']
-        )
+
+        # Account each result through the shared accounting path so whole-file
+        # and batch modes apply one identical emission/skip/error policy
+        # (emission decided by the final state's ``emit_output`` flag).
+        emitted: List[Dict[str, Any]] = []
+        for result in results:
+            self._account_result(result, emitted)
+        if self.config.output_path and emitted:
+            await self._write_output(emitted)
 
         return self._metrics
 
@@ -867,7 +941,7 @@ def create_batch_file_processor(
         output_path=output_path,
         format=FileFormat.TEXT,
         mode=ProcessingMode.BATCH,
-        batch_size=batch_size
+        chunk_size=batch_size,
     )
-    
+
     return FileProcessor(config)

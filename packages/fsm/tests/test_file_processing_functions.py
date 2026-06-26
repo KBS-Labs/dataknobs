@@ -1,334 +1,186 @@
-"""Tests for file processing function implementations."""
+"""Unit tests for the FileProcessor function adapters and wiring.
+
+These cover the registered functions the pattern wires into its FSM — the
+``_FileTransform`` / ``_FileAggregator`` state transforms and the
+``_make_filter`` / ``_make_validator`` arc conditions — plus
+``_build_custom_functions`` (which only exposes functions for configured
+stages). End-to-end behavior across processing modes lives in
+``test_file_processing_flow.py``; this file isolates the building blocks.
+
+They replace the former code-generation tests, which asserted the inline
+``_get_*_code`` string generators — that design never executed (the
+generated code referenced registered functions by bare name, which the
+inline ``eval`` scope could not resolve), so those methods were removed in
+favor of real registered ``ITransformFunction`` transforms and
+``(data, context)`` condition callables.
+"""
+
+from __future__ import annotations
 
 import pytest
-from dataknobs_fsm.patterns.file_processing import FileProcessingConfig, FileProcessor
+
+from dataknobs_fsm.functions.base import TransformError
+from dataknobs_fsm.patterns.file_processing import (
+    FileProcessingConfig,
+    FileProcessor,
+    _FileAggregator,
+    _FileTransform,
+    _make_filter,
+    _make_validator,
+)
 
 
-class TestFileProcessingFunctions:
-    """Test file processing function code generation and execution."""
+# --------------------------------------------------------------------------
+# _FileTransform — applies map-style transformations in order.
+# --------------------------------------------------------------------------
 
-    def test_validation_schema_code_generation(self):
-        """Test validation schema code generation."""
-        # Test empty schema
-        config = FileProcessingConfig(input_path="test.json")
-        processor = FileProcessor(config)
-        assert processor._get_validator_code() == "True"
-        
-        # Test complex schema
-        config = FileProcessingConfig(
-            input_path="test.json",
-            validation_schema={
-                'name': {'required': True, 'type': 'str'},
-                'age': {'required': True, 'type': 'int', 'min': 0, 'max': 120},
-                'email': {'pattern': r'^[^@]+@[^@]+\.[^@]+$'},
-                'active': True  # Simple required field
-            }
-        )
-        processor = FileProcessor(config)
-        validator_code = processor._get_validator_code()
-        
-        # Check that all validations are included
-        assert "'name' in data" in validator_code
-        assert "isinstance(data.get('name'), str)" in validator_code
-        assert "'age' in data" in validator_code
-        assert "isinstance(data.get('age'), int)" in validator_code
-        assert "data.get('age', 0) >= 0" in validator_code
-        assert "data.get('age', 0) <= 120" in validator_code
-        assert "re.match(r'^[^@]+@[^@]+\\.[^@]+$'" in validator_code
-        assert "'active' in data" in validator_code
-        assert " and " in validator_code  # Conditions joined with 'and'
 
-    def test_filter_code_generation(self):
-        """Test filter code generation."""
-        # Test no filters
-        config = FileProcessingConfig(input_path="test.json")
-        processor = FileProcessor(config)
-        assert processor._get_filter_code() == "True"
-        
-        # Test with filters
-        def filter1(data): return data.get('value', 0) > 10
-        def filter2(data): return data.get('status') == 'active'
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            filters=[filter1, filter2]
-        )
-        processor = FileProcessor(config)
-        filter_code = processor._get_filter_code()
-        
-        assert filter_code == "filter_0(data) and filter_1(data)"
-
-    def test_transformer_code_generation(self):
-        """Test transformer code generation."""
-        # Test no transformations
-        config = FileProcessingConfig(input_path="test.json")
-        processor = FileProcessor(config)
-        assert processor._get_transformer_code() == "data"
-        
-        # Test with transformations
-        def transform1(data): return {**data, 'step1': True}
-        def transform2(data): return {**data, 'step2': True}
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            transformations=[transform1, transform2]
-        )
-        processor = FileProcessor(config)
-        transformer_code = processor._get_transformer_code()
-        
-        assert transformer_code == "transform_1(transform_0(data))"
-
-    def test_aggregator_code_generation(self):
-        """Test aggregator code generation."""
-        # Test no aggregations
-        config = FileProcessingConfig(input_path="test.json")
-        processor = FileProcessor(config)
-        assert processor._get_aggregator_code() == "data"
-        
-        # Test with aggregations
-        def sum_values(data): return sum(data.get('values', []))
-        def count_items(data): return len(data.get('items', []))
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            aggregations={
-                'total': sum_values,
-                'count': count_items
-            }
-        )
-        processor = FileProcessor(config)
-        aggregator_code = processor._get_aggregator_code()
-        
-        # Should generate a dictionary with aggregation results
-        assert "'total': agg_total(data)" in aggregator_code
-        assert "'count': agg_count(data)" in aggregator_code
-        assert aggregator_code.startswith("{")
-        assert aggregator_code.endswith("}")
-
-    def test_functions_registry_building(self):
-        """Test that functions are properly registered."""
-        def test_filter(data): return data.get('value', 0) > 10
-        def test_transform(data): return {**data, 'processed': True}
-        def test_sum(data): return sum(data.get('values', []))
-        def test_count(data): return len(data.get('items', []))
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            filters=[test_filter],
-            transformations=[test_transform],
-            aggregations={
-                'total': test_sum,
-                'count': test_count
-            }
-        )
-        processor = FileProcessor(config)
-        functions = processor._build_functions()
-        
-        # Check all functions are registered with correct names
-        assert 'filter_0' in functions
-        assert 'transform_0' in functions
-        assert 'agg_total' in functions
-        assert 'agg_count' in functions
-        assert 'parser' in functions
-        
-        # Check functions are callable
-        assert callable(functions['filter_0'])
-        assert callable(functions['transform_0'])
-        assert callable(functions['agg_total'])
-        assert callable(functions['agg_count'])
-        assert callable(functions['parser'])
-
-    def test_filter_function_execution(self):
-        """Test that registered filter functions work correctly."""
-        def positive_values(data): 
-            return data.get('value', 0) > 0
-        
-        def active_status(data): 
-            return data.get('status') == 'active'
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            filters=[positive_values, active_status]
-        )
-        processor = FileProcessor(config)
-        functions = processor._build_functions()
-        
-        # Test individual filters
-        test_data1 = {'value': 5, 'status': 'active'}
-        assert functions['filter_0'](test_data1) == True  # value > 0
-        assert functions['filter_1'](test_data1) == True  # status == 'active'
-        
-        test_data2 = {'value': -1, 'status': 'inactive'}
-        assert functions['filter_0'](test_data2) == False  # value <= 0
-        assert functions['filter_1'](test_data2) == False  # status != 'active'
-
-    def test_transformation_function_execution(self):
-        """Test that registered transformation functions work correctly."""
-        def add_timestamp(data):
-            return {**data, 'timestamp': '2024-01-01'}
-        
-        def add_processed_flag(data):
-            return {**data, 'processed': True}
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            transformations=[add_timestamp, add_processed_flag]
-        )
-        processor = FileProcessor(config)
-        functions = processor._build_functions()
-        
-        # Test transformation chain
-        original_data = {'value': 42}
-        
-        # Apply first transformation
-        step1_result = functions['transform_0'](original_data)
-        assert step1_result['value'] == 42
-        assert step1_result['timestamp'] == '2024-01-01'
-        
-        # Apply second transformation
-        step2_result = functions['transform_1'](step1_result)
-        assert step2_result['value'] == 42
-        assert step2_result['timestamp'] == '2024-01-01'
-        assert step2_result['processed'] == True
-
-    def test_aggregation_function_execution(self):
-        """Test that registered aggregation functions work correctly."""
-        def sum_values(data):
-            return sum(data.get('values', []))
-        
-        def count_items(data):
-            return len(data.get('items', []))
-        
-        def average_score(data):
-            scores = data.get('scores', [])
-            return sum(scores) / len(scores) if scores else 0
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            aggregations={
-                'total': sum_values,
-                'count': count_items,
-                'avg_score': average_score
-            }
-        )
-        processor = FileProcessor(config)
-        functions = processor._build_functions()
-        
-        # Test aggregation functions
-        test_data = {
-            'values': [1, 2, 3, 4, 5],
-            'items': ['a', 'b', 'c'],
-            'scores': [85, 90, 78, 92]
-        }
-        
-        assert functions['agg_total'](test_data) == 15  # sum of values
-        assert functions['agg_count'](test_data) == 3   # count of items
-        assert functions['agg_avg_score'](test_data) == 86.25  # average score
-
-    def test_complex_validation_schema(self):
-        """Test complex validation scenarios."""
-        config = FileProcessingConfig(
-            input_path="test.json",
-            validation_schema={
-                'user_id': {'required': True, 'type': 'int', 'min': 1},
-                'username': {'required': True, 'type': 'str'},
-                'email': {'pattern': r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'},
-                'age': {'type': 'int', 'min': 13, 'max': 99},
-                'is_premium': True  # Simple required boolean
-            }
-        )
-        processor = FileProcessor(config)
-        validator_code = processor._get_validator_code()
-        
-        # Verify all constraints are included
-        expected_parts = [
-            "'user_id' in data",
-            "isinstance(data.get('user_id'), int)",
-            "data.get('user_id', 0) >= 1",
-            "'username' in data", 
-            "isinstance(data.get('username'), str)",
-            "re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'",
-            "isinstance(data.get('age'), int)",
-            "data.get('age', 0) >= 13",
-            "data.get('age', 0) <= 99",
-            "'is_premium' in data"
+def test_file_transform_applies_in_order() -> None:
+    transform = _FileTransform(
+        [
+            lambda r: {**r, "step1": True},
+            lambda r: {**r, "step2": r["step1"]},
         ]
-        
-        for part in expected_parts:
-            assert part in validator_code
+    )
+    out = transform.transform({"value": 1})
+    assert out == {"value": 1, "step1": True, "step2": True}
 
-    def test_empty_configurations(self):
-        """Test that empty configurations generate appropriate default code."""
-        config = FileProcessingConfig(input_path="test.json")
-        processor = FileProcessor(config)
-        
-        # All should return safe defaults
-        assert processor._get_validator_code() == "True"
-        assert processor._get_filter_code() == "True"
-        assert processor._get_transformer_code() == "data"
-        assert processor._get_aggregator_code() == "data"
-        
-        # Functions registry should only contain parser
-        functions = processor._build_functions()
-        assert len(functions) == 1
-        assert 'parser' in functions
 
-    def test_multiple_filters_and_transformations(self):
-        """Test scenarios with multiple filters and transformations."""
-        def filter_positive(data): return data.get('value', 0) > 0
-        def filter_even(data): return data.get('value', 0) % 2 == 0
-        def filter_small(data): return data.get('value', 0) < 100
-        
-        def transform_double(data): return {**data, 'value': data.get('value', 0) * 2}
-        def transform_add_flag(data): return {**data, 'doubled': True}
-        def transform_add_category(data): 
-            value = data.get('value', 0)
-            category = 'large' if value > 50 else 'small'
-            return {**data, 'category': category}
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            filters=[filter_positive, filter_even, filter_small],
-            transformations=[transform_double, transform_add_flag, transform_add_category]
+def test_file_transform_empty_is_identity() -> None:
+    assert _FileTransform([]).transform({"a": 1}) == {"a": 1}
+
+
+def test_file_transform_non_dict_return_raises() -> None:
+    transform = _FileTransform([lambda r: None])
+    with pytest.raises(TransformError, match="must return a dict"):
+        transform.transform({"a": 1})
+
+
+# --------------------------------------------------------------------------
+# _FileAggregator — reduces a record into a per-record summary dict.
+# --------------------------------------------------------------------------
+
+
+def test_file_aggregator_builds_summary() -> None:
+    aggregator = _FileAggregator(
+        {
+            "total": lambda r: sum(r.get("values", [])),
+            "count": lambda r: len(r.get("items", [])),
+        }
+    )
+    out = aggregator.transform({"values": [1, 2, 3], "items": ["a", "b"]})
+    assert out == {"total": 6, "count": 2}
+
+
+# --------------------------------------------------------------------------
+# _make_filter — arc condition; record passes iff all filters pass. The
+# callable must accept (data, context) so the engine feeds it the raw dict.
+# --------------------------------------------------------------------------
+
+
+def test_make_filter_requires_all_predicates() -> None:
+    filter_pass = _make_filter(
+        [lambda r: r["value"] > 0, lambda r: r["status"] == "active"]
+    )
+    assert filter_pass({"value": 5, "status": "active"}, None) is True
+    assert filter_pass({"value": 5, "status": "inactive"}, None) is False
+    assert filter_pass({"value": -1, "status": "active"}, None) is False
+
+
+def test_make_filter_accepts_context_kwarg() -> None:
+    # The engine invokes arc conditions as (data, context); a one-arg
+    # callable would be mis-detected as expecting a wrapped state object.
+    filter_pass = _make_filter([lambda r: True])
+    assert filter_pass({"x": 1}) is True  # context defaulted
+
+
+# --------------------------------------------------------------------------
+# _make_validator — arc condition built from a validation schema.
+# --------------------------------------------------------------------------
+
+
+def test_make_validator_required_and_type() -> None:
+    check = _make_validator(
+        {"name": {"required": True, "type": "str"}, "active": True}
+    )
+    assert check({"name": "alice", "active": True}, None) is True
+    assert check({"active": True}, None) is False  # missing required name
+    assert check({"name": 5, "active": True}, None) is False  # wrong type
+    assert check({"name": "alice"}, None) is False  # missing required 'active'
+
+
+def test_make_validator_min_max_pattern() -> None:
+    check = _make_validator(
+        {
+            "age": {"type": "int", "min": 0, "max": 120},
+            "email": {"pattern": r"^[^@]+@[^@]+\.[^@]+$"},
+        }
+    )
+    assert check({"age": 30, "email": "a@b.co"}, None) is True
+    assert check({"age": -1, "email": "a@b.co"}, None) is False
+    assert check({"age": 200, "email": "a@b.co"}, None) is False
+    assert check({"age": 30, "email": "not-an-email"}, None) is False
+
+
+# --------------------------------------------------------------------------
+# _build_custom_functions — only configured stages are exposed by name.
+# --------------------------------------------------------------------------
+
+
+def test_custom_functions_passthrough_is_empty() -> None:
+    proc = FileProcessor(FileProcessingConfig(input_path="x.json"))
+    assert proc._build_custom_functions() == {}
+
+
+def test_custom_functions_only_configured_stages() -> None:
+    proc = FileProcessor(
+        FileProcessingConfig(
+            input_path="x.json",
+            filters=[lambda r: True],
+            transformations=[lambda r: r],
+            aggregations={"n": lambda r: 1},
+            validation_schema={"name": True},
         )
-        processor = FileProcessor(config)
-        
-        # Test filter code generation
-        filter_code = processor._get_filter_code()
-        expected_filter = "filter_0(data) and filter_1(data) and filter_2(data)"
-        assert filter_code == expected_filter
-        
-        # Test transformer code generation  
-        transformer_code = processor._get_transformer_code()
-        expected_transformer = "transform_2(transform_1(transform_0(data)))"
-        assert transformer_code == expected_transformer
-        
-        # Test functions are registered
-        functions = processor._build_functions()
-        assert all(f'filter_{i}' in functions for i in range(3))
-        assert all(f'transform_{i}' in functions for i in range(3))
+    )
+    funcs = proc._build_custom_functions()
+    assert set(funcs) == {"transform", "aggregate", "filter_pass", "validate_check"}
+    assert isinstance(funcs["transform"], _FileTransform)
+    assert isinstance(funcs["aggregate"], _FileAggregator)
+    assert callable(funcs["filter_pass"])
+    assert callable(funcs["validate_check"])
 
-    def test_fsm_configuration_integration(self):
-        """Test that the complete FSM configuration is built correctly."""
-        def simple_filter(data): return data.get('valid', True)
-        def simple_transform(data): return {**data, 'processed': True}
-        def simple_aggregator(data): return len(data.get('items', []))
-        
-        config = FileProcessingConfig(
-            input_path="test.json",
-            validation_schema={'name': True},
-            filters=[simple_filter],
-            transformations=[simple_transform],
-            aggregations={'count': simple_aggregator}
+
+# --------------------------------------------------------------------------
+# FSM wiring — the configured functions reach the built FSM's registry.
+# --------------------------------------------------------------------------
+
+
+def _registry_names(proc: FileProcessor) -> list[str]:
+    return proc._fsm._fsm.function_registry.list_functions()
+
+
+def test_fsm_registers_configured_functions() -> None:
+    proc = FileProcessor(
+        FileProcessingConfig(
+            input_path="x.json",
+            filters=[lambda r: True],
+            transformations=[lambda r: r],
+            validation_schema={"name": True},
         )
-        
-        processor = FileProcessor(config)
-        
-        # Test that FSM can be built without errors
-        fsm = processor._fsm
-        assert fsm is not None
-        
-        # Test that functions section exists in config
-        functions = processor._build_functions()
-        assert len(functions) == 4  # filter_0, transform_0, agg_count, parser
-        assert all(key in functions for key in ['filter_0', 'transform_0', 'agg_count', 'parser'])
+    )
+    names = _registry_names(proc)
+    assert "transform" in names
+    assert "filter_pass" in names
+    assert "validate_check" in names
+
+
+def test_passthrough_fsm_builds_without_function_refs() -> None:
+    # A passthrough config registers none of the pattern's own functions and
+    # still builds a valid FSM (no state references a missing function). The
+    # registry still carries the FSM's builtins, so assert the pattern's custom
+    # names are absent rather than that the registry is empty.
+    proc = FileProcessor(FileProcessingConfig(input_path="x.json"))
+    assert proc._fsm is not None
+    names = _registry_names(proc)
+    for custom in ("transform", "aggregate", "filter_pass", "validate_check"):
+        assert custom not in names

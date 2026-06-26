@@ -31,6 +31,8 @@ class StreamProgress:
     """Progress tracking for stream processing."""
     chunks_processed: int = 0
     records_processed: int = 0
+    records_emitted: int = 0
+    excluded_by_state: Dict[str, int] = field(default_factory=dict)
     bytes_processed: int = 0
     errors: List[Tuple[int, Exception]] = field(default_factory=list)
     start_time: float = field(default_factory=time.time)

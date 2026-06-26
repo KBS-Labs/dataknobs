@@ -76,6 +76,7 @@ States are the nodes in your FSM graph. Each state has a name and metadata that 
     "resources": ["db", "api"],          # Optional: Required resource names
     "data_mode": "copy",                 # Optional: Override data mode for this state
     "run_on_failure": True,              # Optional: Run transforms despite a prior failure (default: False)
+    "emit_output": False,                # Optional: End state whose records are excluded from output (default: True)
     "metadata": {...}                    # Optional: Additional metadata
 }
 ```
@@ -89,6 +90,16 @@ traverses to a final state and is reported as a failure. Set
 after an upstream failure. Use it for recovery / compensation / cleanup /
 dead-letter states. It re-enables the transforms only; the record is still
 reported as a failure (`execute()` returns `success=False`).
+
+**`emit_output`** — Defaults to `true`. Set `emit_output: false` on an **end**
+state whose records should be excluded from the output (e.g. a `filtered`
+terminal for dropped records, or an `error` terminal for rejected records). The
+flag is consulted by output writers — the streaming sink and pattern writers
+like `FileProcessor` — which apply the same exclusion in every processing mode.
+Result-returning APIs (`process` / `process_batch`) do not drop records: they
+return every result with its terminal state, so a caller can apply the flag
+itself. (The `FileProcessor` pattern uses it for its `filtered` / `error`
+states across STREAM, BATCH, and WHOLE.)
 
 ### State Types
 

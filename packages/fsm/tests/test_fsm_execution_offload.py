@@ -108,7 +108,9 @@ async def test_stream_mode_does_not_block(tmp_path: Path) -> None:
     proc = _processor(path, out, ProcessingMode.STREAM)
     with assert_no_blocking():
         metrics = await proc.process()
-    assert metrics["total_processed"] == 3
+    # STREAM now reports the unified metrics shape (records_processed), the
+    # same keys as BATCH/WHOLE.
+    assert metrics["records_processed"] == 3
 
 
 # --------------------------------------------------------------------------
@@ -141,7 +143,10 @@ async def test_stream_mode_processes_all_records(tmp_path: Path) -> None:
     out = tmp_path / "out.jsonl"
     proc = _processor(path, out, ProcessingMode.STREAM)
     metrics = await proc.process()
-    assert metrics["total_processed"] == 3
+    # STREAM reports the unified metrics shape (records_processed /
+    # records_written), the same keys as BATCH/WHOLE.
+    assert metrics["records_processed"] == 3
+    assert metrics["records_written"] == 3
 
 
 # --------------------------------------------------------------------------

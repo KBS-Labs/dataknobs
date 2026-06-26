@@ -34,6 +34,7 @@ States are the nodes in your FSM:
     "name": "state_name",
     "is_start": True,         # Initial state flag
     "is_end": True,          # Final state flag
+    "emit_output": False,    # End state whose records are excluded from output (see below)
     "run_on_failure": True,  # Run transforms despite a prior failure (see below)
     "functions": {           # State functions
         "transform": {...},  # Data transformation
@@ -42,6 +43,21 @@ States are the nodes in your FSM:
     "schema": {...}          # JSON schema for validation
 }
 ```
+
+#### Output emission (`emit_output`) {#output-emission-emit_output}
+
+`emit_output` (default `True`) marks an **end** state whose records should be
+left out of the output. By default every terminal a record reaches contributes
+its data to the sink/output. Set `emit_output: False` on a terminal that means
+"processed but intentionally not part of the output" — for example a `filtered`
+state for records a filter dropped, or an `error` state for records a validator
+rejected. The flag is consulted by **output writers** — the streaming sink and
+pattern writers like `FileProcessor` — which apply the *same* exclusion in
+every processing mode (the streaming sink and the batch/whole writers all skip
+non-emitting terminals). Result-returning APIs (`process` / `process_batch`)
+do **not** drop records: they return every result together with its terminal
+state, so a caller can apply the flag itself. (The `FileProcessor` pattern uses
+this for its `filtered` / `error` states across STREAM, BATCH, and WHOLE.)
 
 #### Failure handling (`run_on_failure`) {#failure-handling-run_on_failure}
 

@@ -525,6 +525,24 @@ class StateDefinition:
     :meth:`finalize_single_result`; this flag only re-enables the transforms.
     """
 
+    # Output emission
+    emit_output: bool = True
+    """Whether a record finishing in this end state should be emitted to output.
+
+    Defaults to ``True`` so every terminal a record reaches contributes its
+    data to the sink/output (backward-compatible). Set ``False`` on a terminal
+    that represents "processed but intentionally not part of the output" — e.g.
+    a ``filtered`` state for records a filter dropped, or an ``error`` state for
+    records a validator rejected — so the streaming sink (and any output writer
+    that consults it) skips them. Only meaningful on end states; ignored
+    elsewhere. The flag is consulted by output writers — the streaming sink and
+    pattern writers like ``FileProcessor`` — which apply the *same* exclusion in
+    every processing mode (batch, whole-file, and streaming). Result-returning
+    APIs (``process`` / ``process_batch``) do NOT drop records: they return
+    every result with its terminal state, leaving the emission decision to the
+    caller (or to a writer that consults this flag).
+    """
+
     def is_start_state(self) -> bool:
         """Check if this is a start state.
         

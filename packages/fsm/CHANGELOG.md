@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed — the per-state opt-out for recovery / compensation / cleanup /
   dead-letter states that must execute despite a prior failure. It re-enables
   the transforms only; the record is still reported as a failure.
+- States gain an `emit_output` flag (`StateDefinition.emit_output`, and the
+  `emit_output:` state config key, default `True`). An **end** state marked
+  `emit_output=False` has its records excluded from the output in every
+  processing mode — the streaming sink skips non-emitting terminals just as the
+  batch/whole writers only write records that reach an emitting terminal. Used
+  to keep "processed but not part of the output" records (e.g. filtered or
+  rejected) out of the result.
+- `AsyncSimpleFSM.process_stream` gains an `output_format` parameter (default
+  `'auto'`, deriving the format from the sink extension) so a caller can pin
+  the streaming output format independently of the sink filename.
+- `AsyncSimpleFSM.get_state(name)` exposes a state definition by name, so
+  consumers can inspect a state's attributes (e.g. `emit_output`) without
+  reaching into the private FSM handle.
 
 ### Changed
 
@@ -45,6 +58,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it gates the parent's downstream-transform skip and persistence decision too —
   an isolated sub-network whose transform raised no longer reports the parent
   record as a success.
+- `FileProcessor` streaming mode now runs on the same async execution engine as
+  its batch and whole-file modes (`AsyncStreamExecutor` drives the async engine
+  directly instead of running the synchronous engine in a thread pool). All
+  three modes share one execution path, so filters, validators, and transforms
+  behave identically regardless of mode, and async state transforms are awaited
+  in streaming mode.
+- `FileProcessor.process()` returns the same metrics shape — with the same
+  per-terminal classification — in every mode. STREAM mode now populates
+  `records_processed` / `records_written` / `skipped` / `errors` (it previously
+  exposed only the streaming executor's `total_processed` / `successful` /
+  `failed` and left the unified keys at 0), and classifies each non-emitting
+  terminal identically to BATCH/WHOLE: validation rejections (the `error`
+  terminal) count as `errors`, filtered records count as `skipped`. (Previously
+  STREAM inferred `skipped` as a `total - failed - written` remainder, which
+  swept validation rejections into `skipped` and left `errors` at 0.)
+  `records_processed` counts clean terminals only (written + skipped) across all
+  modes; `lines_read` remains tracked on the BATCH read path only. The async
+  streaming executor reports clean non-emitting records bucketed by terminal
+  name via a new `excluded_by_state` field on its result / `process_stream`
+  return, so any consumer can apply its own per-terminal accounting.
+- A terminal's `emit_output` flag is now the single source of truth for output
+  emission in the batch and whole-file modes too — both writers resolve
+  `emit_output` from the final state rather than matching a hardcoded `complete`
+  name, so they apply exactly the policy the streaming sink already used.
 
 ### Fixed
 
@@ -73,6 +110,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Registered interface functions (e.g. `ITransformFunction` instances)
   supplied via `custom_functions=` are now detected as async and awaited
   correctly, instead of being mistaken for synchronous callables.
+- `FileProcessor` now processes records end-to-end. Previously every record
+  dead-ended at the `filter` state and was reported as errored/failed even for
+  a pure passthrough config, and batch mode never wrote its output. The FSM now
+  connects only the *enabled* stages into a single chain to `write → complete`
+  (so no stage dead-ends), batch mode writes its output, and configured
+  `filters` / `transformations` / `aggregations` / `validation_schema` actually
+  execute — they are wired through the FSM's `custom_functions=` channel and
+  referenced from state `functions` blocks (transform / aggregate) and arc
+  conditions (filter / validate) instead of unresolvable inline-code names.
+  Filtered records are excluded from the output and counted as `skipped`;
+  records that fail validation or a transform are excluded and counted as
+  `errors`.
+- `FileProcessor` STREAM mode now honors an explicitly configured `format` /
+  `output_format` instead of always auto-detecting from the file extension, so
+  (for example) a `.log`-extensioned file declared as `format=JSON` has its
+  lines parsed as JSON rather than wrapped as `{'text': line}`.
+- `FileProcessor`'s `validate` / `filter` gates route passing records
+  deterministically: the conditional arc is given a higher `priority` than its
+  unconditional fall-through, so routing no longer depends on arc declaration
+  order.
+- `create_batch_file_processor` no longer raises `TypeError` on construction —
+  it passed a non-existent `batch_size` field to `FileProcessingConfig`; the
+  batch size is now applied to the config's `chunk_size`.
 
 ## v0.2.3 - 2026-06-23
 

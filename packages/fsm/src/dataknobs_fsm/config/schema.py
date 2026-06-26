@@ -140,6 +140,7 @@ class StateConfig(BaseModel):
     data_mode: DataHandlingMode | None = None
     is_start: bool = False
     is_end: bool = False
+    emit_output: bool = True
     run_on_failure: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
