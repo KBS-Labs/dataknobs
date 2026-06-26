@@ -176,9 +176,19 @@ Stages writes across FSM states and commits or rolls them back as a unit. The
 `begin` action opens a buffered transaction (via
 `AsyncDatabase.begin_transaction()`) and stows the handle on
 `data["_transaction"]`; later states stage writes on the handle, and `commit`
-flushes them (atomically on a transactional backend) while `rollback` discards
-them. Because writes are buffered, a failure *before* `commit` persists nothing
-on any backend.
+flushes them (returning `committed_count`) while `rollback` discards them.
+Because writes are buffered, a failure *before* `commit` persists nothing on any
+backend.
+
+Commit atomicity follows the buffered transaction's `is_atomic` flag: a single
+same-kind batch (all creates, or all deletes) is all-or-nothing on a
+transactional backend, but a **mixed** create/delete or **upsert**-containing
+buffer commits as a sequence of independent batches and can partially persist if
+one fails mid-flush (see the data package's
+[Transactions](../../data/transactions.md) guide). A `commit` reaching a state
+with no active handle — a missing or failed prior `begin` — is logged at WARNING
+and commits nothing, rather than reporting a phantom success; a handle-less
+`rollback` is a quiet no-op.
 
 ```python
 DatabaseTransaction(

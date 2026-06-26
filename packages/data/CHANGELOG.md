@@ -16,19 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tx.create` / `tx.create_batch` / `tx.upsert` / `tx.delete`) until commit.
   Two guarantees: an exception before commit persists nothing on *any* backend
   (universal rollback), and on backends whose batch operations run inside a
-  backend transaction — SQLite, Postgres, DuckDB — the commit flush is
-  all-or-nothing (it replays the buffer through the atomic `create_batch` /
-  `delete_batch` primitives, coalescing consecutive same-kind operations). A
-  new `db.supports_transactions()` flag reports which backends give that atomic
-  guarantee; the three transactional backends return `True`, the rest
-  (`memory`, `file`, `s3`, `elasticsearch`) return `False`. The `policy`
-  argument chooses what happens on a non-transactional backend: `"strict"`
-  (default, fail-closed) raises `CapabilityNotSupportedError`; `"emulate"`
-  proceeds with best-effort buffer-and-flush. The handle does **not** provide
-  in-transaction isolation or read-your-writes — buffered writes are invisible
-  to reads until commit; consumers needing connection-scoped isolation should
-  branch on `supports_transactions()` and use a backend-native transaction.
-  The new `BufferedTransaction` type is exported from `dataknobs_data`.
+  backend transaction — SQLite, Postgres, DuckDB — a commit whose staged ops
+  reduce to a single coalesced same-kind batch (all creates, or all deletes,
+  with no upserts) is all-or-nothing. A **mixed** create/delete or
+  **upsert**-containing buffer commits as a *sequence* of independent batches
+  and can partially persist if one fails mid-flush; the `tx.is_atomic` property
+  reports — from the currently staged ops — which case applies, so a consumer
+  needing cross-operation atomicity can branch on it. A new
+  `db.supports_transactions()` flag reports which backends wrap a coalesced
+  batch in a backend transaction; the three transactional backends return
+  `True`, the rest (`memory`, `file`, `s3`, `elasticsearch`) return `False`.
+  The `policy` argument chooses what happens on a non-transactional backend:
+  `"strict"` (default, fail-closed) raises `CapabilityNotSupportedError`;
+  `"emulate"` proceeds with best-effort buffer-and-flush. The handle does
+  **not** provide in-transaction isolation or read-your-writes — buffered
+  writes are invisible to reads until commit; consumers needing connection-
+  scoped isolation should branch on `supports_transactions()` and use a
+  backend-native transaction. The new `BufferedTransaction` type and the
+  `VALID_TRANSACTION_POLICIES` tuple are exported from `dataknobs_data`.
 
 ## v0.5.3 - 2026-06-23
 

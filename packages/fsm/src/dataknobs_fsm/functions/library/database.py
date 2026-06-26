@@ -4,17 +4,21 @@ This module provides database-related functions that can be referenced
 in FSM configurations, leveraging the dataknobs_data package.
 """
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any, Dict, List
 
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, ValidationError
+from dataknobs_data import VALID_TRANSACTION_POLICIES
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 from dataknobs_fsm.functions.library.identity import (
     RecordIdentity,
     resolve_identity,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _resources_from_context(context: Any) -> Dict[str, Any]:
@@ -429,9 +433,18 @@ class DatabaseTransaction(ITransformFunction):
     The ``begin`` action opens a
     :class:`~dataknobs_data.BufferedTransaction` (via the resource adapter) and
     stows the handle on ``data["_transaction"]``; ``commit`` flushes the staged
-    writes atomically (on a transactional backend), ``rollback`` discards them.
+    writes (returning ``committed_count``) and ``rollback`` discards them.
     Writes are staged on the handle — defer-until-commit means a failure before
     ``commit`` persists nothing on any backend.
+
+    Commit atomicity follows
+    :attr:`~dataknobs_data.BufferedTransaction.is_atomic`: a single same-kind
+    batch is all-or-nothing on a transactional backend, but a mixed-operation
+    or upsert-containing buffer commits as a sequence of independent batches and
+    can partially persist on a mid-flush failure (see the ``BufferedTransaction``
+    docs). A ``commit`` reaching a state with no active handle (a missing or
+    failed prior ``begin``) is logged at WARNING and commits nothing rather than
+    reporting a phantom success; a handle-less ``rollback`` is a benign no-op.
     """
 
     def __init__(
@@ -465,10 +478,19 @@ class DatabaseTransaction(ITransformFunction):
                 f"Unknown transaction action '{action}' "
                 "(expected 'begin', 'commit', or 'rollback')"
             )
-        if on_unsupported not in ("strict", "emulate"):
+        # Validate against the data layer's single source of truth so the FSM
+        # gate cannot drift from AsyncDatabase.begin_transaction's allowlist.
+        if on_unsupported not in VALID_TRANSACTION_POLICIES:
             raise ConfigurationError(
                 f"Unknown on_unsupported policy '{on_unsupported}' "
-                "(expected 'strict' or 'emulate')"
+                f"(expected one of {VALID_TRANSACTION_POLICIES})"
+            )
+        if savepoint is not None:
+            logger.warning(
+                "DatabaseTransaction savepoint=%r is reserved and not yet "
+                "honored by the buffered-transaction backend; it will be "
+                "ignored (no nested-transaction semantics are applied).",
+                savepoint,
             )
         self.resource_name = resource_name
         self.action = action
@@ -484,7 +506,8 @@ class DatabaseTransaction(ITransformFunction):
             data: Input data (carries ``_transaction`` for commit/rollback).
 
         Returns:
-            Data with transaction status.
+            Data with transaction status: ``transaction_active`` (bool) on every
+            action, plus ``committed_count`` (rows flushed) on ``commit``.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
@@ -494,6 +517,9 @@ class DatabaseTransaction(ITransformFunction):
                 tx = await resource.begin_transaction(
                     on_unsupported=self.on_unsupported
                 )
+                # committed_count is not surfaced here — it is only meaningful on
+                # 'commit'. Any stale value carried in `data` from a prior commit
+                # leg passes through unchanged via the spread.
                 return {
                     **data,
                     "_transaction": tx,
@@ -502,18 +528,43 @@ class DatabaseTransaction(ITransformFunction):
 
             elif self.action == "commit":
                 tx = data.get("_transaction")
-                if tx:
-                    await tx.commit()
+                if tx is None:
+                    # A commit with no active handle means ``begin`` never ran
+                    # (or failed under strict) — almost always a misordered FSM.
+                    # Surface it loudly rather than reporting a phantom success.
+                    logger.warning(
+                        "DatabaseTransaction commit on resource '%s' found no "
+                        "active transaction (data['_transaction'] is missing) — "
+                        "a prior 'begin' is missing or failed. Committing "
+                        "nothing.",
+                        self.resource_name,
+                    )
+                    committed = 0
+                else:
+                    result = await tx.commit()
+                    committed = result.get("affected_rows", 0)
                 return {
                     **data,
                     "_transaction": None,
                     "transaction_active": False,
+                    "committed_count": committed,
                 }
 
             else:  # self.action == "rollback" (validated in __init__)
                 tx = data.get("_transaction")
-                if tx:
+                if tx is None:
+                    # Rolling back with no active handle is a benign no-op
+                    # (e.g. an error-routing state reached before 'begin'), so
+                    # DEBUG rather than WARN — nothing was staged to discard.
+                    logger.debug(
+                        "DatabaseTransaction rollback on resource '%s' found no "
+                        "active transaction; nothing to discard.",
+                        self.resource_name,
+                    )
+                else:
                     await tx.rollback()
+                # committed_count is not surfaced here — it is only meaningful on
+                # 'commit' (a rollback discards rather than persists).
                 return {
                     **data,
                     "_transaction": None,

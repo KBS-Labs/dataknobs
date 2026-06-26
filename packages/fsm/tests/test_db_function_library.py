@@ -25,6 +25,7 @@ persistence independently of the writing adapter.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -673,3 +674,80 @@ def test_database_transaction_unknown_action_is_configuration_error() -> None:
 def test_database_transaction_unknown_on_unsupported_is_configuration_error() -> None:
     with pytest.raises(ConfigurationError):
         DatabaseTransaction("r", "begin", on_unsupported="bogus")
+
+
+# ---------------------------------------------------------------------------
+# W4 — DatabaseTransaction commit contract: committed_count + loud honesty on a
+# missing handle. Reproduce-first: before the fix the commit branch discarded
+# the flush result (no committed_count surfaced) and a handle-less commit
+# returned a success-shaped result silently rather than flagging the misorder.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_commit_surfaces_committed_count(
+    tmp_path: Path,
+) -> None:
+    adapter = _file_adapter(tmp_path, "dtcc")
+    begin = DatabaseTransaction("target_db", "begin", on_unsupported="emulate")
+    commit = DatabaseTransaction("target_db", "commit")
+    ctx = _ctx("target_db", adapter)
+    try:
+        data = await begin.transform({}, ctx)
+        await data["_transaction"].create(Record({"v": "a"}))
+        await data["_transaction"].create(Record({"v": "b"}))
+        out = await commit.transform(data, ctx)
+        assert out["committed_count"] == 2
+        assert out["transaction_active"] is False
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_commit_without_handle_warns_and_commits_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A commit reaching a state with no active handle (a missing or failed
+    prior ``begin``) is logged at WARNING and commits nothing — not a phantom
+    success."""
+    adapter = _file_adapter(tmp_path, "dtnh")
+    commit = DatabaseTransaction("target_db", "commit")
+    ctx = _ctx("target_db", adapter)
+    try:
+        with caplog.at_level(logging.WARNING):
+            out = await commit.transform({}, ctx)  # no _transaction in data
+        assert out["committed_count"] == 0
+        assert out["transaction_active"] is False
+        assert out["_transaction"] is None
+        assert any(
+            "no active transaction" in r.getMessage().lower()
+            for r in caplog.records
+        )
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_rollback_without_handle_is_noop(
+    tmp_path: Path,
+) -> None:
+    """A rollback with no active handle is a benign no-op (e.g. an error-routing
+    state reached before ``begin``) — it must not raise."""
+    adapter = _file_adapter(tmp_path, "dtrn")
+    rollback = DatabaseTransaction("target_db", "rollback")
+    try:
+        out = await rollback.transform({}, _ctx("target_db", adapter))
+        assert out["transaction_active"] is False
+        assert out["_transaction"] is None
+    finally:
+        await adapter.aclose()
+
+
+def test_database_transaction_savepoint_warns_on_use(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The reserved ``savepoint=`` argument is not yet honored; using it warns
+    rather than silently no-op'ing."""
+    with caplog.at_level(logging.WARNING):
+        DatabaseTransaction("r", "begin", savepoint="sp1")
+    assert any("savepoint" in r.getMessage().lower() for r in caplog.records)

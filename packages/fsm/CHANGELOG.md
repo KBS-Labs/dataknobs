@@ -36,7 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer-and-flush. `AsyncDatabaseResourceAdapter.begin_transaction()` opens a
   buffered transaction on the backing `AsyncDatabase` (its `commit` / `rollback`
   flush / discard the staged writes), so an FSM can stage writes in one state
-  and commit/roll-back in another.
+  and commit/roll-back in another. `commit` returns the flushed row count as
+  `committed_count`; commit atomicity follows the handle's `is_atomic` flag (a
+  single same-kind batch is all-or-nothing on a transactional backend, a mixed
+  or upsert buffer commits as independent batches). A `commit` reaching a state
+  with no active handle (a missing or failed prior `begin`) is logged at WARNING
+  and commits nothing instead of reporting a phantom success; a handle-less
+  `rollback` is a quiet no-op. `on_unsupported` is validated against the data
+  layer's exported `VALID_TRANSACTION_POLICIES`, and a reserved `savepoint=`
+  argument warns on use.
 
 ### Fixed
 

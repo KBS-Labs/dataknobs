@@ -156,6 +156,77 @@ async def test_sqlite_exception_rolls_back():
         await db.close()
 
 
+# ---- is_atomic reflects the staged-op composition ------------------------
+#
+# Reproduce-first for the over-claim: ``is_atomic`` previously returned the
+# backend capability unconditionally, so a mixed-operation or upsert buffer on
+# sqlite reported ``True`` while its commit was, in fact, a sequence of
+# independent batches that can partially persist. These pin the honest boundary.
+
+
+async def test_is_atomic_reflects_op_composition_on_transactional_backend():
+    db = await _sqlite_db()
+    try:
+        tx = await db.begin_transaction()  # strict ok on sqlite
+        assert tx.is_atomic is True  # empty buffer: trivially atomic
+        await tx.create(Record({"name": "a"}))
+        await tx.create(Record({"name": "b"}))
+        assert tx.is_atomic is True  # all creates → one coalesced create_batch
+        await tx.delete("x")
+        assert tx.is_atomic is False  # create + delete → two independent batches
+        await tx.rollback()
+
+        tx2 = await db.begin_transaction()
+        await tx2.upsert("id", Record({"name": "u"}))
+        assert tx2.is_atomic is False  # any upsert → applied row-by-row
+        await tx2.rollback()
+    finally:
+        await db.close()
+
+
+async def test_is_atomic_false_on_non_transactional_backend():
+    db = await _memory_db()
+    try:
+        tx = await db.begin_transaction(policy="emulate")
+        await tx.create(Record({"name": "a"}))
+        assert tx.is_atomic is False  # memory never wraps the flush in a txn
+        await tx.rollback()
+    finally:
+        await db.close()
+
+
+class _MidFlushDeleteFailure(AsyncSQLiteDatabase):
+    """Real sqlite backend subclass that injects a mid-flush ``delete_batch`` failure.
+
+    A real ``AsyncSQLiteDatabase`` (not a mock) with only ``delete_batch``
+    overridden to raise, so a commit can fail *between* batches — after an earlier
+    ``create_batch`` has already committed — proving a mixed buffer is not
+    all-or-nothing.
+    """
+
+    async def delete_batch(self, ids):  # type: ignore[override]
+        raise RuntimeError("delete batch failed mid-flush")
+
+
+async def test_mixed_buffer_partially_persists_on_midflush_failure():
+    db = _MidFlushDeleteFailure({"path": ":memory:"})
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()  # strict; sqlite supports it
+        await tx.create(Record({"name": "early"}))  # batch 1: create_batch
+        await tx.delete("whatever")  # batch 2: delete_batch → raises
+        await tx.create(Record({"name": "late"}))  # batch 3: never reached
+        # A mixed create+delete buffer correctly reports non-atomic...
+        assert tx.is_atomic is False
+        # ...and the partial persistence it warns about is real: the first
+        # create_batch commits before the delete_batch fails.
+        with pytest.raises(RuntimeError, match="mid-flush"):
+            await tx.commit()
+        assert await db.count() == 1  # "early" persisted; "late" never flushed
+    finally:
+        await db.close()
+
+
 # ---- mixed operations + buffer lifecycle --------------------------------
 
 
