@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-26T22:43:15Z",
+  "timestamp": "2026-06-26T23:50:34Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/arc-transform-resource-injection",
-  "git_commit": "224606742d683d97d86975ae5dd3aea244c51f57",
+  "git_commit": "ed96515f4f8fc471ff91eee9721c4297505d7946",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
