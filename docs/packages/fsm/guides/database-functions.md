@@ -166,6 +166,50 @@ The legacy `use_transaction=` flag is a back-compat alias:
 > `CapabilityNotSupportedError`. Use create-mode (`require`, no identity) for
 > all-or-nothing batch writes today.
 
+The `require` capability check is sourced from the data layer's
+`AsyncDatabase.supports_transactions()` flag — `True` on `sqlite`, `postgres`,
+and `duckdb`; `False` on `memory`, `file`, `s3`, and `elasticsearch`.
+
+## `DatabaseTransaction`
+
+Stages writes across FSM states and commits or rolls them back as a unit. The
+`begin` action opens a buffered transaction (via
+`AsyncDatabase.begin_transaction()`) and stows the handle on
+`data["_transaction"]`; later states stage writes on the handle, and `commit`
+flushes them (atomically on a transactional backend) while `rollback` discards
+them. Because writes are buffered, a failure *before* `commit` persists nothing
+on any backend.
+
+```python
+DatabaseTransaction(
+    resource_name="target_db",
+    action="begin",            # "begin" | "commit" | "rollback"
+    on_unsupported="strict",   # "strict" | "emulate"
+)
+```
+
+`on_unsupported` is the isolation policy for `begin` on a backend that cannot
+guarantee atomic commit (`supports_transactions()` is `False`):
+
+- `strict` (default, fail-closed) — raise `CapabilityNotSupportedError` rather
+  than imply atomicity the backend cannot give.
+- `emulate` — proceed with best-effort buffer-and-flush (writes still deferred,
+  so a pre-commit failure persists nothing, but the flush is not crash-safe
+  atomic).
+
+The buffered transaction defers all writes until commit; it does **not** provide
+in-transaction isolation or read-your-writes (staged writes are invisible to
+reads until commit). For connection-scoped isolation, branch on
+`supports_transactions()` and use a backend-native transaction directly.
+
+> **The `transaction:` config block is not a database-atomicity knob.** A
+> `transaction: {strategy: batch|manual, ...}` block configures an in-memory
+> `TransactionManager` (commit-trigger / batching coordination) that the
+> execution engines do **not** consult to drive database commit/rollback —
+> configuring it logs a warning at build time. For database atomicity use
+> `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
+> `AsyncDatabase.transaction()` primitive directly.
+
 ## Read functions
 
 `DatabaseFetch` and `DatabaseQuery` read records through the resource's

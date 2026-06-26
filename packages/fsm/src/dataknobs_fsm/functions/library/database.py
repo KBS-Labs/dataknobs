@@ -424,48 +424,82 @@ class DatabaseQuery(ITransformFunction):
 
 
 class DatabaseTransaction(ITransformFunction):
-    """Manage database transactions."""
+    """Manage a buffered database transaction across FSM states.
+
+    The ``begin`` action opens a
+    :class:`~dataknobs_data.BufferedTransaction` (via the resource adapter) and
+    stows the handle on ``data["_transaction"]``; ``commit`` flushes the staged
+    writes atomically (on a transactional backend), ``rollback`` discards them.
+    Writes are staged on the handle — defer-until-commit means a failure before
+    ``commit`` persists nothing on any backend.
+    """
 
     def __init__(
         self,
         resource_name: str,
         action: str = "begin",  # "begin", "commit", "rollback"
         savepoint: str | None = None,
+        *,
+        on_unsupported: str = "strict",
     ):
         """Initialize the database transaction function.
-        
+
         Args:
             resource_name: Name of the database resource to use.
-            action: Transaction action to perform.
-            savepoint: Optional savepoint name.
+            action: Transaction action to perform (``begin`` / ``commit`` /
+                ``rollback``).
+            savepoint: Optional savepoint name (reserved; not yet honored by the
+                buffered-transaction backend).
+            on_unsupported: Isolation policy for the ``begin`` action on a
+                backend that cannot guarantee atomic commit
+                (``supports_transactions()`` is ``False``): ``"strict"``
+                (default, fail-closed) raises
+                :class:`~dataknobs_common.CapabilityNotSupportedError`;
+                ``"emulate"`` proceeds with best-effort buffer-and-flush.
+
+        Raises:
+            ConfigurationError: Unknown ``action`` or ``on_unsupported`` value.
         """
+        if action not in ("begin", "commit", "rollback"):
+            raise ConfigurationError(
+                f"Unknown transaction action '{action}' "
+                "(expected 'begin', 'commit', or 'rollback')"
+            )
+        if on_unsupported not in ("strict", "emulate"):
+            raise ConfigurationError(
+                f"Unknown on_unsupported policy '{on_unsupported}' "
+                "(expected 'strict' or 'emulate')"
+            )
         self.resource_name = resource_name
         self.action = action
         self.savepoint = savepoint
+        self.on_unsupported = on_unsupported
 
     async def transform(
         self, data: Dict[str, Any], context: Any = None
     ) -> Dict[str, Any]:
-        """Transform data by managing transaction.
-        
+        """Transform data by managing the transaction.
+
         Args:
-            data: Input data.
-            
+            data: Input data (carries ``_transaction`` for commit/rollback).
+
         Returns:
             Data with transaction status.
         """
         # Resource is injected by the engine into context.resources.
         resource = _require_resource(self.resource_name, context)
-        
+
         try:
             if self.action == "begin":
-                tx = await resource.begin_transaction()
+                tx = await resource.begin_transaction(
+                    on_unsupported=self.on_unsupported
+                )
                 return {
                     **data,
                     "_transaction": tx,
                     "transaction_active": True,
                 }
-            
+
             elif self.action == "commit":
                 tx = data.get("_transaction")
                 if tx:
@@ -475,8 +509,8 @@ class DatabaseTransaction(ITransformFunction):
                     "_transaction": None,
                     "transaction_active": False,
                 }
-            
-            elif self.action == "rollback":
+
+            else:  # self.action == "rollback" (validated in __init__)
                 tx = data.get("_transaction")
                 if tx:
                     await tx.rollback()
@@ -485,13 +519,20 @@ class DatabaseTransaction(ITransformFunction):
                     "_transaction": None,
                     "transaction_active": False,
                 }
-            
-            else:
-                raise TransformError(f"Unknown action: {self.action}")
-        
+
+        except (
+            TransformError,
+            CapabilityNotSupportedError,
+            ConfigurationError,
+            ValidationError,
+        ):
+            # Consumer-actionable signals (strict policy on a non-transactional
+            # backend, misconfig) surface with their own type rather than being
+            # masked as a generic TransformError.
+            raise
         except Exception as e:
             raise TransformError(f"Transaction {self.action} failed: {e}") from e
-    
+
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
         return f"Database transaction: {self.action}"

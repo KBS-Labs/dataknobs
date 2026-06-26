@@ -312,19 +312,31 @@ class DatabaseStreamSink(IStreamSink):
             return False
     
     def _commit_transaction(self) -> None:
-        """Commit current transaction if supported."""
-        try:
-            # Check if database supports transactions
-            if hasattr(self.database, 'commit'):
-                self.database.commit()
-            
-            self._transaction_count += 1
-            self._current_transaction_size = 0
-            
-        except Exception:
-            # Not all backends support transactions
-            pass
-    
+        """Advance the in-memory transaction-batch bookkeeping.
+
+        The streaming DB sink writes each record individually in
+        :meth:`write_chunk`; there is no batch-transaction wrapping on this
+        synchronous path. Real all-or-nothing batch commits are available via
+        the async :meth:`AsyncDatabase.transaction` primitive / the
+        ``BatchCommit`` function — not this per-record sink. This method
+        therefore only advances the transaction-batch counters; it no longer
+        calls a non-existent ``self.database.commit()`` (no dataknobs database
+        exposes a bare ``commit`` — atomicity lives on the transaction handle),
+        so the former silent ``except Exception: pass`` that masked that miss is
+        gone.
+        """
+        supports = getattr(self.database, "supports_transactions", None)
+        if callable(supports) and supports():
+            logger.debug(
+                "DatabaseStreamSink: database '%s' supports transactions, but "
+                "this per-record sink does not wrap writes in a batch "
+                "transaction; use the BatchCommit function / db.transaction() "
+                "for atomic batches.",
+                type(self.database).__name__,
+            )
+        self._transaction_count += 1
+        self._current_transaction_size = 0
+
     def flush(self) -> None:
         """Flush any buffered records."""
         if self._buffer:

@@ -1,5 +1,6 @@
 """Execution context for FSM state machines."""
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -10,6 +11,8 @@ from dataknobs_data.database import AsyncDatabase, SyncDatabase
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.streaming.core import StreamChunk, StreamContext
+
+logger = logging.getLogger(__name__)
 
 
 class ResourceStatus(Enum):
@@ -241,49 +244,71 @@ class ExecutionContext:
             mode=self.transaction_mode,
             started_at=time.time()
         )
-        
-        # Start database transaction if available
-        if self.database and hasattr(self.database, 'begin_transaction'):
-            self.database.begin_transaction()
-        
+
+        self._note_db_transaction_decoupled("start_transaction")
         return True
-    
+
+    def _note_db_transaction_decoupled(self, action: str) -> None:
+        """DEBUG-log that DB atomicity is not driven from this sync context.
+
+        ``start/commit/rollback_transaction`` maintain in-memory *logical*
+        transaction bookkeeping only. Real database-level atomicity is driven
+        through the async :meth:`AsyncDatabase.transaction` primitive (and the
+        ``DatabaseTransaction`` FSM function) — a synchronous context cannot
+        drive the async transaction context manager.
+
+        This replaces the former ``hasattr``-guarded ``self.database.<action>()``
+        calls, which silently no-op'd on backends without the method and, once
+        the async transaction primitive landed, would have invoked an
+        un-awaited coroutine on an ``AsyncDatabase`` (``begin_transaction`` is
+        now async) — a silent miss, not a real commit. No dataknobs database
+        exposes a bare sync ``commit``/``rollback``; atomicity lives on the
+        transaction handle.
+        """
+        if self.database is None:
+            return
+        supports = getattr(self.database, "supports_transactions", None)
+        supported = bool(supports()) if callable(supports) else False
+        logger.debug(
+            "ExecutionContext.%s: logical transaction tracked in-memory only; "
+            "DB-level atomicity (%s on %s) is driven via the async "
+            "db.transaction() primitive / DatabaseTransaction function, not this "
+            "synchronous context.",
+            action,
+            "supported" if supported else "unsupported",
+            type(self.database).__name__,
+        )
+
     def commit_transaction(self) -> bool:
         """Commit the current transaction.
-        
+
         Returns:
             True if commit successful.
         """
         if not self.current_transaction:
             return False
-        
-        # Commit database transaction
-        if self.database and hasattr(self.database, 'commit'):
-            self.database.commit()
-        
+
+        self._note_db_transaction_decoupled("commit_transaction")
         self.current_transaction.is_committed = True
         self.transaction_history.append(self.current_transaction)
         self.current_transaction = None
-        
+
         return True
-    
+
     def rollback_transaction(self) -> bool:
         """Rollback the current transaction.
-        
+
         Returns:
             True if rollback successful.
         """
         if not self.current_transaction:
             return False
-        
-        # Rollback database transaction
-        if self.database and hasattr(self.database, 'rollback'):
-            self.database.rollback()
-        
+
+        self._note_db_transaction_decoupled("rollback_transaction")
         self.current_transaction.is_rolled_back = True
         self.transaction_history.append(self.current_transaction)
         self.current_transaction = None
-        
+
         return True
     
     def log_operation(self, operation: str, details: Dict[str, Any]) -> None:

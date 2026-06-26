@@ -284,9 +284,13 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             result = await cursor.fetchone()
             return result[0] if result else 0
 
+    def supports_transactions(self) -> bool:
+        """SQLite batch ops run inside an explicit ``BEGIN``/``COMMIT``."""
+        return True
+
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
-        
+
         Uses multi-value INSERT for better performance.
         """
         if not records:

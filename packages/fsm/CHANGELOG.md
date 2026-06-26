@@ -29,9 +29,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`True` → `"require"`). `batch_size` bounds the rows per commit under
   `best_effort`; under `require` the batch is committed as a single
   all-or-nothing unit (chunking would defeat the atomicity guarantee).
+- `DatabaseTransaction` gains an `on_unsupported` isolation policy
+  (`"strict"` / `"emulate"`) for the `begin` action: on a non-transactional
+  backend `"strict"` (default, fail-closed) raises
+  `CapabilityNotSupportedError` and `"emulate"` proceeds with best-effort
+  buffer-and-flush. `AsyncDatabaseResourceAdapter.begin_transaction()` opens a
+  buffered transaction on the backing `AsyncDatabase` (its `commit` / `rollback`
+  flush / discard the staged writes), so an FSM can stage writes in one state
+  and commit/roll-back in another.
 
 ### Fixed
 
+- `DatabaseTransaction` now drives a real transaction. It previously called a
+  `resource.begin_transaction()` method that no adapter implemented, so it
+  raised `AttributeError` on first use; it now opens a buffered transaction
+  through the new `AsyncDatabase.transaction()` capability. Construction
+  validates `action` and `on_unsupported`, and `CapabilityNotSupportedError`
+  surfaces unwrapped (not masked as a generic `TransformError`).
+- `BatchCommit` / `commit_batch` now source their atomicity guarantee from the
+  data-layer `AsyncDatabase.supports_transactions()` flag, replacing the interim
+  per-backend allowlist with the canonical capability.
+- The formerly silent transaction no-op sites are reconciled.
+  `ExecutionContext.{start,commit,rollback}_transaction` no longer call a
+  `hasattr`-guarded `self.database.<method>()` — which silently no-op'd on
+  backends without the method and, once `AsyncDatabase.begin_transaction` became
+  an async coroutine, would have invoked it un-awaited (a silent miss). They
+  keep their in-memory logical bookkeeping and DEBUG-log the decoupling.
+  `DatabaseStreamSink._commit_transaction` likewise drops its broken
+  `self.database.commit()` call and the `except Exception: pass` that masked it.
+- A non-default `transaction.strategy` (`batch` / `manual`) now logs a warning
+  at build time. The in-memory `TransactionManager` it configures is not
+  consulted by the execution engines to drive database commit/rollback, so the
+  knob would otherwise silently fail to deliver database atomicity. Use the
+  `DatabaseTransaction` function, `BatchCommit(atomicity="require")`, or
+  `AsyncDatabase.transaction()` for database atomicity.
 - `DatabaseBulkInsert.on_duplicate` is now honored. Previously the adapter
   always created records and ignored the parameter; `"error"` / `"ignore"` /
   `"update"` now take effect against the configured record identity, and a
