@@ -120,6 +120,7 @@ from .records import Record
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import StreamConfig, StreamProcessor, StreamResult
+from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 __version__ = "0.5.3"
 
@@ -155,6 +156,9 @@ __all__ = [
     "StreamConfig",
     "StreamResult",
     "StreamProcessor",
+    # Transactions
+    "BufferedTransaction",
+    "VALID_TRANSACTION_POLICIES",
     # Factory
     "DatabaseFactory",
     "AsyncDatabaseFactory",

@@ -25,6 +25,7 @@ persistence independently of the writing adapter.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -33,13 +34,14 @@ import pytest
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.testing import assert_no_blocking
-from dataknobs_data import AsyncDatabase
+from dataknobs_data import AsyncDatabase, Record
 from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.functions.library.database import (
     BatchCommit,
     DatabaseBulkInsert,
+    DatabaseTransaction,
     DatabaseUpsert,
 )
 from dataknobs_fsm.functions.library.identity import (
@@ -547,3 +549,205 @@ async def test_bulk_insert_through_fsm_persists(tmp_path: Path) -> None:
     finally:
         await fsm.close()
     assert await _count_file(tmp_path / "fsm_bulk.json") == 2
+
+
+# --------------------------------------------------------------------------- #
+# W3 — DatabaseTransaction + adapter.begin_transaction (D3/D7)
+#
+# Previously a dead seam: ``BatchCommit`` and ``DatabaseTransaction`` called
+# ``resource.transaction()`` / ``resource.begin_transaction()`` — methods no
+# adapter implemented, so they crashed with ``AttributeError`` on first use.
+# ``begin_transaction`` now delegates to the real
+# ``AsyncDatabase.begin_transaction`` buffered-transaction primitive.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_adapter_begin_transaction_commit_persists(tmp_path: Path) -> None:
+    adapter = _file_adapter(tmp_path, "txc")
+    try:
+        tx = await adapter.begin_transaction(on_unsupported="emulate")
+        await tx.create(Record({"v": "a"}))
+        await tx.create(Record({"v": "b"}))
+        res = await tx.commit()
+        assert res["affected_rows"] == 2
+    finally:
+        await adapter.aclose()
+    assert await _count_file(tmp_path / "txc.json") == 2
+
+
+@pytest.mark.asyncio
+async def test_adapter_begin_transaction_rollback_persists_nothing(
+    tmp_path: Path,
+) -> None:
+    adapter = _file_adapter(tmp_path, "txr")
+    try:
+        tx = await adapter.begin_transaction(on_unsupported="emulate")
+        await tx.create(Record({"v": "a"}))
+        await tx.rollback()
+    finally:
+        await adapter.aclose()
+    assert await _count_file(tmp_path / "txr.json") == 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_begin_transaction_strict_raises_on_non_transactional(
+    tmp_path: Path,
+) -> None:
+    adapter = _file_adapter(tmp_path, "txs")
+    try:
+        with pytest.raises(CapabilityNotSupportedError):
+            await adapter.begin_transaction(on_unsupported="strict")
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_adapter_begin_transaction_strict_succeeds_on_sqlite(
+    tmp_path: Path,
+) -> None:
+    adapter = _sqlite_adapter(tmp_path, "txsq")
+    try:
+        with assert_no_blocking():
+            tx = await adapter.begin_transaction(on_unsupported="strict")
+            assert tx.is_atomic is True
+            await tx.create(Record({"v": "a"}))
+            res = await tx.commit()
+        assert res["affected_rows"] == 1
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_begin_commit_persists(tmp_path: Path) -> None:
+    adapter = _file_adapter(tmp_path, "dtc")
+    begin = DatabaseTransaction("target_db", "begin", on_unsupported="emulate")
+    commit = DatabaseTransaction("target_db", "commit")
+    ctx = _ctx("target_db", adapter)
+    try:
+        data = await begin.transform({}, ctx)
+        assert data["transaction_active"] is True
+        await data["_transaction"].create(Record({"v": "a"}))
+        out = await commit.transform(data, ctx)
+        assert out["transaction_active"] is False
+        assert out["_transaction"] is None
+    finally:
+        await adapter.aclose()
+    assert await _count_file(tmp_path / "dtc.json") == 1
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_rollback_persists_nothing(tmp_path: Path) -> None:
+    adapter = _file_adapter(tmp_path, "dtr")
+    begin = DatabaseTransaction("target_db", "begin", on_unsupported="emulate")
+    rollback = DatabaseTransaction("target_db", "rollback")
+    ctx = _ctx("target_db", adapter)
+    try:
+        data = await begin.transform({}, ctx)
+        await data["_transaction"].create(Record({"v": "a"}))
+        out = await rollback.transform(data, ctx)
+        assert out["transaction_active"] is False
+    finally:
+        await adapter.aclose()
+    assert await _count_file(tmp_path / "dtr.json") == 0
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_begin_strict_surfaces_capability_error(
+    tmp_path: Path,
+) -> None:
+    """A strict ``begin`` on a non-transactional backend surfaces
+    ``CapabilityNotSupportedError`` unwrapped — not masked as ``TransformError``.
+    """
+    adapter = _file_adapter(tmp_path, "dts")
+    begin = DatabaseTransaction("target_db", "begin", on_unsupported="strict")
+    try:
+        with pytest.raises(CapabilityNotSupportedError):
+            await begin.transform({}, _ctx("target_db", adapter))
+    finally:
+        await adapter.aclose()
+
+
+def test_database_transaction_unknown_action_is_configuration_error() -> None:
+    with pytest.raises(ConfigurationError):
+        DatabaseTransaction("r", "bogus")
+
+
+def test_database_transaction_unknown_on_unsupported_is_configuration_error() -> None:
+    with pytest.raises(ConfigurationError):
+        DatabaseTransaction("r", "begin", on_unsupported="bogus")
+
+
+# ---------------------------------------------------------------------------
+# W4 — DatabaseTransaction commit contract: committed_count + loud honesty on a
+# missing handle. Reproduce-first: before the fix the commit branch discarded
+# the flush result (no committed_count surfaced) and a handle-less commit
+# returned a success-shaped result silently rather than flagging the misorder.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_commit_surfaces_committed_count(
+    tmp_path: Path,
+) -> None:
+    adapter = _file_adapter(tmp_path, "dtcc")
+    begin = DatabaseTransaction("target_db", "begin", on_unsupported="emulate")
+    commit = DatabaseTransaction("target_db", "commit")
+    ctx = _ctx("target_db", adapter)
+    try:
+        data = await begin.transform({}, ctx)
+        await data["_transaction"].create(Record({"v": "a"}))
+        await data["_transaction"].create(Record({"v": "b"}))
+        out = await commit.transform(data, ctx)
+        assert out["committed_count"] == 2
+        assert out["transaction_active"] is False
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_commit_without_handle_warns_and_commits_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A commit reaching a state with no active handle (a missing or failed
+    prior ``begin``) is logged at WARNING and commits nothing — not a phantom
+    success."""
+    adapter = _file_adapter(tmp_path, "dtnh")
+    commit = DatabaseTransaction("target_db", "commit")
+    ctx = _ctx("target_db", adapter)
+    try:
+        with caplog.at_level(logging.WARNING):
+            out = await commit.transform({}, ctx)  # no _transaction in data
+        assert out["committed_count"] == 0
+        assert out["transaction_active"] is False
+        assert out["_transaction"] is None
+        assert any(
+            "no active transaction" in r.getMessage().lower()
+            for r in caplog.records
+        )
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_database_transaction_rollback_without_handle_is_noop(
+    tmp_path: Path,
+) -> None:
+    """A rollback with no active handle is a benign no-op (e.g. an error-routing
+    state reached before ``begin``) — it must not raise."""
+    adapter = _file_adapter(tmp_path, "dtrn")
+    rollback = DatabaseTransaction("target_db", "rollback")
+    try:
+        out = await rollback.transform({}, _ctx("target_db", adapter))
+        assert out["transaction_active"] is False
+        assert out["_transaction"] is None
+    finally:
+        await adapter.aclose()
+
+
+def test_database_transaction_savepoint_warns_on_use(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The reserved ``savepoint=`` argument is not yet honored; using it warns
+    rather than silently no-op'ing."""
+    with caplog.at_level(logging.WARNING):
+        DatabaseTransaction("r", "begin", savepoint="sp1")
+    assert any("savepoint" in r.getMessage().lower() for r in caplog.records)

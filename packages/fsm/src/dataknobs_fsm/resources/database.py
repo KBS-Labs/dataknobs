@@ -11,6 +11,7 @@ from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
+from dataknobs_data.transactions import BufferedTransaction
 
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.functions.library.identity import (
@@ -428,21 +429,36 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         """Validate the acquired resource is this adapter."""
         return resource is self
 
-    #: Backend keys whose ``*_batch`` operations are wrapped in a backend-level
-    #: transaction, so ``create_batch`` is all-or-nothing. Interim source of
-    #: truth for :meth:`_supports_atomic_batch`; superseded by the data-layer
-    #: ``AsyncDatabase`` transaction capability when it lands. At that point the
-    #: ``CapabilityNotSupportedError`` raises below should migrate to a real
-    #: ``Capability`` member checked via ``require_capability`` (the raises
-    #: currently pass an ad-hoc capability string because this adapter does not
-    #: yet implement ``CapabilityContract``).
-    _ATOMIC_BATCH_BACKENDS = frozenset(
-        {"sqlite", "sqlite3", "postgres", "postgresql", "pg", "duckdb"}
-    )
+    async def begin_transaction(
+        self, *, on_unsupported: str = "strict"
+    ) -> BufferedTransaction:
+        """Open a buffered transaction on the backing async database.
 
-    def _supports_atomic_batch(self) -> bool:
-        """Whether the backing backend gives all-or-nothing ``create_batch``."""
-        return self.backend in self._ATOMIC_BATCH_BACKENDS
+        Delegates to :meth:`dataknobs_data.AsyncDatabase.begin_transaction`.
+        The returned handle stages writes (``create`` / ``upsert`` / ``delete``)
+        and flushes them on :meth:`~dataknobs_data.BufferedTransaction.commit`
+        (discarded on :meth:`~dataknobs_data.BufferedTransaction.rollback`), so
+        an FSM can stage writes in one state and commit/roll-back in another via
+        the :class:`~dataknobs_fsm.functions.library.database.DatabaseTransaction`
+        function carrying the handle through the data payload.
+
+        Args:
+            on_unsupported: Policy on a backend that cannot guarantee atomic
+                commit (``supports_transactions()`` is ``False``): ``"strict"``
+                (default, fail-closed) raises
+                :class:`~dataknobs_common.CapabilityNotSupportedError`;
+                ``"emulate"`` proceeds with best-effort buffer-and-flush.
+
+        Returns:
+            A :class:`~dataknobs_data.BufferedTransaction`.
+
+        Raises:
+            CapabilityNotSupportedError: ``on_unsupported="strict"`` on a
+                non-transactional backend.
+            ConfigurationError: Unknown ``on_unsupported`` policy.
+        """
+        db = await self._ensure_db()
+        return await db.begin_transaction(policy=on_unsupported)
 
     @staticmethod
     def _resolve_identity(
@@ -601,9 +617,10 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             atomicity: ``"best_effort"`` (default) proceeds on any backend,
                 logging at DEBUG when the backend cannot guarantee
                 all-or-nothing; ``"require"`` raises
-                :class:`CapabilityNotSupportedError` on a non-transactional
-                backend (and on the idempotent-upsert path, which is not
-                batch-atomic without the transaction capability).
+                :class:`CapabilityNotSupportedError` on a backend whose
+                :meth:`~dataknobs_data.AsyncDatabase.supports_transactions` is
+                ``False`` (and on the idempotent-upsert path, which is not
+                batch-atomic without connection-scoped isolation).
 
         Returns:
             ``{"affected_rows": <count>}``.
@@ -622,7 +639,10 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         if not records:
             return {"affected_rows": 0}
 
-        atomic = self._supports_atomic_batch()
+        # Source the atomicity guarantee from the data-layer capability flag,
+        # so this adapter and the AsyncDatabase agree on which backends commit
+        # atomically (the interim per-backend allowlist this replaced is gone).
+        atomic = db.supports_transactions()
         if atomicity == "require" and not atomic:
             raise CapabilityNotSupportedError("atomic batch commit", self)
         if not atomic:

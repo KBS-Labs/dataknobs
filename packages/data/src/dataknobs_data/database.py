@@ -8,13 +8,17 @@ different backend database implementations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common import CapabilityNotSupportedError
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
 from .query import Query
 from .schema import DatabaseSchema, FieldSchema
+from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
@@ -502,6 +506,89 @@ class AsyncDatabase(ABC):
             Number of records deleted
         """
         raise NotImplementedError
+
+    def supports_transactions(self) -> bool:
+        """Whether a buffered :meth:`transaction` commits atomically here.
+
+        Default ``False``. Backends whose batch operations are wrapped in a
+        backend-level transaction — ``sqlite_async``, ``postgres``, ``duckdb`` —
+        override this to ``True``. For those, the commit flush of a
+        :class:`~dataknobs_data.transactions.BufferedTransaction` is
+        all-or-nothing; for the rest (``memory``, ``file``, ``s3``,
+        ``elasticsearch``) a transaction still defers writes (so an exception
+        before commit persists nothing) but the commit flush is best-effort,
+        not crash-safe atomic.
+
+        Use this to branch a consumer that *requires* atomicity::
+
+            if db.supports_transactions():
+                async with db.transaction():
+                    ...
+            else:
+                ...  # roll your own, or accept best-effort
+        """
+        return False
+
+    async def begin_transaction(
+        self, *, policy: str = "strict"
+    ) -> BufferedTransaction:
+        """Open a buffered transaction; the caller must ``commit``/``rollback``.
+
+        Prefer :meth:`transaction` (the context-manager form) unless the
+        begin and commit must happen in separate call sites (e.g. an FSM that
+        stages writes across states).
+
+        Args:
+            policy: Behavior on a backend that cannot guarantee atomic commit
+                (``supports_transactions()`` is ``False``). ``"strict"``
+                (default, fail-closed) raises
+                :class:`~dataknobs_common.CapabilityNotSupportedError`;
+                ``"emulate"`` proceeds with best-effort buffer-and-flush
+                (writes still deferred, but the flush is not crash-safe atomic).
+
+        Returns:
+            A :class:`~dataknobs_data.transactions.BufferedTransaction`.
+
+        Raises:
+            ConfigurationError: Unknown ``policy``.
+            CapabilityNotSupportedError: ``policy="strict"`` on a
+                non-transactional backend.
+        """
+        if policy not in VALID_TRANSACTION_POLICIES:
+            raise ConfigurationError(
+                f"Unknown transaction policy '{policy}' "
+                f"(expected one of {VALID_TRANSACTION_POLICIES})"
+            )
+        if policy == "strict" and not self.supports_transactions():
+            raise CapabilityNotSupportedError("transactions", self)
+        return BufferedTransaction(self, policy=policy)
+
+    @asynccontextmanager
+    async def transaction(
+        self, *, policy: str = "strict"
+    ) -> AsyncIterator[BufferedTransaction]:
+        """Buffered transaction context manager.
+
+        Writes staged on the yielded handle are flushed atomically on clean
+        exit and discarded if the block raises::
+
+            async with db.transaction() as tx:
+                await tx.create(record_a)
+                await tx.upsert(id_b, record_b)
+            # both applied together on exit; if the block raised, neither
+
+        See :meth:`begin_transaction` for the ``policy`` semantics and
+        :class:`~dataknobs_data.transactions.BufferedTransaction` for the
+        atomicity / isolation guarantees.
+        """
+        tx = await self.begin_transaction(policy=policy)
+        try:
+            yield tx
+        except BaseException:
+            await tx.rollback()
+            raise
+        else:
+            await tx.commit()
 
     async def connect(self) -> None:  # noqa: B027
         """Connect to the database. Override in subclasses if needed."""

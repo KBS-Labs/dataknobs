@@ -429,6 +429,10 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             result = self.conn.execute(sql_query, params).fetchone()
         return result[0] if result else 0
 
+    def supports_transactions(self) -> bool:
+        """DuckDB batch ops run inside an explicit ``begin``/``commit``."""
+        return True
+
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently.
 

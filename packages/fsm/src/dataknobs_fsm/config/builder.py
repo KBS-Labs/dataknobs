@@ -12,9 +12,9 @@ raw configuration with optional custom functions.
 """
 
 import importlib
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
-
 
 from dataknobs_fsm.config.schema import (
     ArcConfig,
@@ -50,6 +50,8 @@ from dataknobs_fsm.functions.manager import (
     FunctionManager,
     FunctionSource
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FSMBuilder:
@@ -237,7 +239,7 @@ class FSMBuilder:
 
     def _init_transaction_manager(self, config: Any) -> None:
         """Initialize transaction manager.
-        
+
         Args:
             config: Transaction configuration.
         """
@@ -252,6 +254,26 @@ class FSMBuilder:
         else:
             # Default to single transaction
             self._transaction_manager = SingleTransactionManager()
+
+        # Honesty guard: the ``transaction:`` config builds an in-memory
+        # commit-coordination ``TransactionManager``, but the execution engines
+        # (sync and async) do not currently consult it to drive database
+        # commit/rollback. A consumer who configures a non-default strategy to
+        # get database atomicity gets none from this knob — so say so loudly
+        # rather than silently. Real database atomicity is available through the
+        # ``DatabaseTransaction`` function, ``BatchCommit(atomicity="require")``,
+        # or the ``AsyncDatabase.transaction()`` primitive directly. SINGLE (the
+        # default present on every config) is left quiet to avoid noise.
+        if config.strategy != TransactionStrategy.SINGLE:
+            logger.warning(
+                "transaction.strategy=%s configures an in-memory "
+                "TransactionManager that the execution engines do not use to "
+                "drive database commit/rollback; it will not make database "
+                "writes atomic. For database atomicity use the "
+                "DatabaseTransaction function, BatchCommit(atomicity='require'), "
+                "or AsyncDatabase.transaction() directly.",
+                getattr(config.strategy, "value", config.strategy),
+            )
 
     def _build_network(self, network_config: NetworkConfig, fsm_config: FSMConfig) -> StateNetwork:
         """Build a state network from configuration.

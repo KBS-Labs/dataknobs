@@ -1442,9 +1442,13 @@ class AsyncPostgresDatabase(
 
         return count
 
+    def supports_transactions(self) -> bool:
+        """Postgres batch ops are atomic (single multi-row DML statement)."""
+        return True
+
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
-        
+
         Uses multi-value INSERT with RETURNING for better performance.
         
         Args:
