@@ -100,13 +100,78 @@ class ExecutionResult:
 
 @dataclass
 class FunctionContext:
-    """Context passed to functions during execution."""
+    """Context passed to functions during execution.
+
+    Resources a state or arc declares are injected into ``resources`` keyed by
+    resource **name**. When the declaration is role-based (an arc's
+    ``{role: name}`` map), that map is also exposed via
+    ``metadata['resource_roles']`` so a role-bound function reusable across arcs
+    can resolve its logical role. The :meth:`require_resource` /
+    :meth:`resource_for_role` accessors cover both models without hand-rolling
+    dict plumbing.
+    """
     state_name: str
     function_name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     resources: Dict[str, Any] = field(default_factory=dict)
     variables: Dict[str, Any] = field(default_factory=dict)  # Shared variables
     network_name: str | None = None  # Current network for scoping
+
+    def require_resource(self, name: str) -> Any:
+        """Return the injected resource named ``name`` or raise.
+
+        Resources are injected by the engine from the state's or arc's
+        ``resources`` declaration — never smuggled through the data payload. A
+        missing resource is a wiring error (the resource was not declared, or no
+        provider is registered for it). This is the single error contract shared
+        by the database function library, so the message is identical whether
+        the lookup happens from a library function, an arc function, or a state
+        function.
+
+        Args:
+            name: The declared resource name.
+
+        Returns:
+            The injected resource.
+
+        Raises:
+            TransformError: If no resource is registered under ``name``.
+        """
+        resource = self.resources.get(name)
+        if resource is None:
+            raise TransformError(
+                f"Resource '{name}' not found in context.resources "
+                f"(is it declared in the state's or arc's 'resources'?)"
+            )
+        return resource
+
+    def resource_for_role(self, role: str) -> Any:
+        """Resolve a logical ``role`` to its bound resource.
+
+        Uses the arc's ``{role: name}`` map (exposed via
+        ``metadata['resource_roles']``) to resolve the role to a resource name,
+        then returns the injected resource under that name. This lets a single
+        function be reused across arcs that bind the same role to different
+        concrete resources.
+
+        Args:
+            role: The logical role name (e.g. ``"database"``).
+
+        Returns:
+            The injected resource bound to ``role``.
+
+        Raises:
+            TransformError: If the role is not bound, or the bound resource is
+                not injected.
+        """
+        roles = self.metadata.get("resource_roles") or {}
+        name = roles.get(role)
+        if name is None:
+            raise TransformError(
+                f"Role '{role}' is not bound to a resource "
+                f"(declare it in the arc's 'resources', e.g. {{'{role}': '<name>'}})"
+            )
+        return self.require_resource(name)
 
 
 class IValidationFunction(ABC):

@@ -508,7 +508,7 @@ class ConfigLoader:
                                     state_arc['condition'] = self._convert_to_function_reference(pre_test)
                             
                             # Copy optional fields
-                            for field in ['name', 'condition', 'transform', 'priority', 'metadata']:
+                            for field in ['name', 'condition', 'transform', 'priority', 'metadata', 'resources']:
                                 if field in arc:
                                     if field == 'name':
                                         # Store arc name in metadata

@@ -300,6 +300,93 @@ requirements = [
 resources = manager.configure_from_requirements(requirements, owner_id="state_123")
 ```
 
+## Resources in FSM functions (the injection contract)
+
+A function never acquires its own resource. The engine acquires every resource
+a **state** or **arc** declares and injects it into the function's
+`FunctionContext.resources`, keyed by resource **name**. A resource-bearing
+function reads it from there:
+
+```python
+from dataknobs_fsm.functions.base import ITransformFunction, ExecutionResult
+
+class WriteRow(ITransformFunction):
+    def __init__(self, resource_name: str) -> None:
+        self.resource_name = resource_name
+
+    async def transform(self, data, context):
+        db = context.require_resource(self.resource_name)   # raises if not declared
+        await db.upsert(table="rows", records=[data], key_columns=["id"])
+        return data
+
+    def get_transform_description(self) -> str:
+        return "write a row"
+```
+
+`context.require_resource(name)` returns the injected resource or raises a
+clear `TransformError` naming the resource — the same error contract the
+built-in [database functions](database-functions.md) use. (You can also read
+`context.resources[name]` directly.)
+
+### State vs arc declaration
+
+The same function works whether the resource is declared on a **state** or on
+an **arc**. On the async engine both the arc **transform** and the arc
+**condition** (pre-test) receive the arc's resources; resources are acquired
+for the scope of the invocation and released afterward.
+
+```yaml
+resources:
+  - name: target_db
+    type: async_database
+    config: {type: file, path: /data/out.json}
+states:
+  - name: start
+    is_start: true
+  - name: done
+    is_end: true
+arcs:
+  # Declare resources on the arc — the transform (and a condition, if any)
+  # receives target_db in context.resources.
+  - from: start
+    to: done
+    resources: [target_db]
+    transform: {type: registered, name: write_row}
+```
+
+### Name-based vs role-based access
+
+Two access models, both supported, neither forced:
+
+- **Name-based** (the default; config arcs declare `resources: [<names>]`):
+  read the resource by its declared name —
+  `context.require_resource("target_db")`.
+- **Role-based** (a programmatic arc declaring `required_resources` as a
+  `{role: name}` map, e.g. `{"database": "target_db"}`): resolve the logical
+  role to its bound resource — `context.resource_for_role("database")`. This
+  lets one function be reused across arcs that bind the same role to different
+  concrete resources. The `{role: name}` map is also available at
+  `context.metadata["resource_roles"]`.
+
+```python
+class RoleWriter(ITransformFunction):
+    async def transform(self, data, context):
+        db = context.resource_for_role("database")   # role -> name -> resource
+        await db.upsert(table="rows", records=[data], key_columns=["id"])
+        return data
+```
+
+### Custom context: `transform_context_factory`
+
+`ExecutionContext.transform_context_factory` lets you wrap the built
+`FunctionContext` in an application-specific context before it reaches a
+transform. It is honored on **both** the async engine's state and arc transform
+paths (arc *conditions* keep the plain resource-bearing context):
+
+```python
+context.transform_context_factory = lambda fc: MyAppContext(fc)
+```
+
 ## Resource Lifecycle
 
 ### Acquisition and Release Flow

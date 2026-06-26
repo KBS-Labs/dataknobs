@@ -179,10 +179,14 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
         
+        resources: Dict[str, Any] = {}
         try:
-
-            # Create function context with resources
-            func_context = self._create_function_context(context)
+            # Allocate the arc's declared resources (merging state resources) so
+            # a resource-bearing pre-test condition can reach them, then build
+            # the function context carrying them (+ the role map).
+            state_resources = getattr(context, 'current_state_resources', None)
+            resources = self._allocate_resources(context, state_resources)
+            func_context = self._create_function_context(context, resources)
 
             # Execute pre-test
             result = pre_test_func(data, func_context)
@@ -191,14 +195,16 @@ class ArcExecution:
             if isinstance(result, tuple) and len(result) == 2:
                 return bool(result[0])
             return bool(result)
-            
+
         except Exception as e:
             raise FunctionError(
                 f"Pre-test execution failed: {e}",
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state
             ) from e
-    
+        finally:
+            self._release_resources(context, resources)
+
     def execute(
         self,
         context: "ExecutionContext",
@@ -382,9 +388,14 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
 
+        resources: Dict[str, Any] = {}
         try:
-            # Create function context with resources
-            func_context = self._create_function_context(context)
+            # Allocate the arc's declared resources (merging state resources) so
+            # a resource-bearing pre-test condition can reach them, then build
+            # the function context carrying them (+ the role map).
+            state_resources = getattr(context, 'current_state_resources', None)
+            resources = self._allocate_resources(context, state_resources)
+            func_context = self._create_function_context(context, resources)
 
             # Execute pre-test
             result = pre_test_func(data, func_context)
@@ -402,6 +413,8 @@ class ArcExecution:
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state
             ) from e
+        finally:
+            self._release_resources(context, resources)
 
     async def execute_async(
         self,
@@ -686,7 +699,10 @@ class ArcExecution:
                 'source_state': self.source_state,
                 'target_state': self.arc_def.target_state,
                 'arc_priority': self.arc_def.priority,
-                'stream_enabled': stream_enabled
+                'stream_enabled': stream_enabled,
+                # {role: name} map for role-based access via
+                # FunctionContext.resource_for_role(role).
+                'resource_roles': dict(self.arc_def.required_resources),
             },
             resources=resources or {},
             variables=exec_context.variables,
@@ -729,11 +745,15 @@ class ArcExecution:
         arc_identifier = f"{self.source_state}_to_{self.arc_def.target_state}"
         owner_id = f"arc_{arc_identifier}_{getattr(context, 'execution_id', 'unknown')}"
 
-        for resource_type, resource_name in self.arc_def.required_resources.items():
-            # Skip if already have this resource from state
-            if resource_type in resources:
+        for _resource_role, resource_name in self.arc_def.required_resources.items():
+            # Key by resource NAME (not the role/type key) so a function reads
+            # context.resources['<name>'] identically on the sync and async
+            # engines. The {role: name} map is surfaced separately via
+            # FunctionContext.metadata['resource_roles'] for role-based access.
+            # Skip if already have this resource from state.
+            if resource_name in resources:
                 self._log_warning(
-                    f"Arc resource '{resource_type}' already allocated by state, skipping"
+                    f"Arc resource '{resource_name}' already allocated by state, skipping"
                 )
                 continue
 
@@ -744,7 +764,7 @@ class ArcExecution:
                     owner_id=owner_id,
                     timeout=30.0  # 30 second timeout
                 )
-                resources[resource_type] = resource
+                resources[resource_name] = resource
 
                 # Track for cleanup (only arc-specific resources)
                 if not hasattr(context, '_arc_acquired_resources'):
@@ -795,38 +815,23 @@ class ArcExecution:
         context: "ExecutionContext",
         resources: Dict[str, Any]
     ) -> None:
-        """Release allocated resources.
-        
+        """Release the arc-specific resources allocated by this arc.
+
+        Releases only the resources :meth:`_allocate_resources` acquired for
+        this arc (tracked in ``context._arc_acquired_resources``) — never the
+        state resources merged in, which the engine's state path owns and
+        releases. ``resources`` is accepted for signature symmetry; the
+        authoritative set is the arc-acquired tracking map.
+
         Args:
             context: Execution context.
-            resources: Resources to release.
+            resources: Merged resources (state + arc); not used directly.
         """
-        # Get resource manager from context
-        resource_manager = getattr(context, 'resource_manager', None)
-        if not resource_manager:
+        arc_acquired = getattr(context, '_arc_acquired_resources', None)
+        if not arc_acquired:
             return
-        
-        # Get acquired resources from context if available
-        acquired_resources = getattr(context, '_acquired_resources', {})
-        
-        # Release each resource
-        for resource_type in resources.keys():
-            # Find the resource name for this resource type
-            resource_name = None
-            for rtype, rname in self.arc_def.required_resources.items():
-                if rtype == resource_type:
-                    resource_name = rname
-                    break
-            
-            if resource_name and resource_name in acquired_resources:
-                owner_id = acquired_resources[resource_name]
-                try:
-                    resource_manager.release(resource_name, owner_id)
-                    # Remove from tracking
-                    del acquired_resources[resource_name]
-                except Exception:
-                    # Best effort cleanup - don't propagate release errors
-                    pass
+        # _release_arc_resources releases by (name, owner_id) and clears the map.
+        self._release_arc_resources(context, dict(arc_acquired))
     
     def _execute_streaming(
         self,

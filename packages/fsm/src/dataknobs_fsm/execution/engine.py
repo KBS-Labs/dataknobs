@@ -1128,40 +1128,106 @@ class ExecutionEngine(BaseExecutionEngine):
         """
         if not arc.pre_test:
             return True
-        
+
         # Get pre-test function
         func = self.fsm.function_registry.get_function(arc.pre_test)
         if not func:
             return False
-        
-        # Create function context
-        func_context = FunctionContext(
-            state_name=context.current_state or "",
-            function_name=arc.pre_test,
-            metadata=context.metadata
+
+        # Acquire the arc's declared resources and inject them (plus the role
+        # map) into the condition's function context, so a resource-bearing
+        # arc condition can route on them — parity with the async engine.
+        role_bindings = getattr(arc, 'required_resources', None) or {}
+        arc_resources, owner_id = self._acquire_arc_resources(
+            context, arc, role_bindings
         )
-        
         try:
-            # Call the function appropriately based on its interface
-            if hasattr(func, 'test'):
-                # IStateTestFunction - create state-like object
-                from types import SimpleNamespace
-                state = SimpleNamespace(data=context.data)
-                result = func.test(state)
-            elif hasattr(func, 'execute'):
-                # Legacy function with execute method
-                result = func.execute(context.data, func_context)
-            elif callable(func):
-                # Direct callable
-                result = func(context.data, func_context)
-            else:
+            # Create function context (copy metadata so adding the role map does
+            # not mutate the shared context.metadata).
+            func_context = FunctionContext(
+                state_name=context.current_state or "",
+                function_name=arc.pre_test,
+                metadata={**context.metadata, "resource_roles": dict(role_bindings)},
+                resources=arc_resources,
+            )
+
+            try:
+                # Call the function appropriately based on its interface
+                if hasattr(func, 'test'):
+                    # IStateTestFunction - create state-like object
+                    from types import SimpleNamespace
+                    state = SimpleNamespace(data=context.data)
+                    result = func.test(state)
+                elif hasattr(func, 'execute'):
+                    # Legacy function with execute method
+                    result = func.execute(context.data, func_context)
+                elif callable(func):
+                    # Direct callable
+                    result = func(context.data, func_context)
+                else:
+                    return False
+                # Handle tuple return from test functions (bool, reason)
+                if isinstance(result, tuple):
+                    return bool(result[0])
+                return bool(result)
+            except Exception:
                 return False
-            # Handle tuple return from test functions (bool, reason)
-            if isinstance(result, tuple):
-                return bool(result[0])
-            return bool(result)
-        except Exception:
-            return False
+        finally:
+            self._release_arc_resources(context, arc_resources, owner_id)
+
+    def _acquire_arc_resources(
+        self,
+        context: ExecutionContext,
+        arc: ArcDefinition,
+        role_bindings: Dict[str, str],
+    ) -> tuple[Dict[str, Any], str | None]:
+        """Acquire an arc's declared resources, keyed by name.
+
+        Mirrors the async engine's arc acquisition so a resource-bearing arc
+        condition behaves the same on both engines. Returns the resources and
+        the owner id used to acquire them (``None`` when nothing was acquired).
+        """
+        resources: Dict[str, Any] = {}
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager or not role_bindings:
+            return resources, None
+        source = context.current_state or 'unknown'
+        owner_id = (
+            f"arc_{source}_to_{arc.target_state}_"
+            f"{getattr(context, 'execution_id', 'unknown')}"
+        )
+        for name in role_bindings.values():
+            if not name or name in resources:
+                continue
+            try:
+                resources[name] = resource_manager.acquire(
+                    name=name, owner_id=owner_id, timeout=None
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to acquire arc resource '%s' for condition: %s", name, e
+                )
+        return resources, owner_id
+
+    def _release_arc_resources(
+        self,
+        context: ExecutionContext,
+        resources: Dict[str, Any],
+        owner_id: str | None,
+    ) -> None:
+        """Release resources acquired by :meth:`_acquire_arc_resources`."""
+        if not resources or owner_id is None:
+            return
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+        for name in resources:
+            try:
+                resource_manager.release(name, owner_id)
+            except Exception as e:
+                logger.warning(
+                    "Failed to release arc resource '%s' for condition: %s", name, e
+                )
     
     def _choose_transition(
         self,
