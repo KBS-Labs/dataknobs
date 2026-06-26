@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Dict, List
 
 from dataknobs_common import CapabilityNotSupportedError
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 from dataknobs_fsm.functions.library.identity import (
@@ -150,15 +150,38 @@ class DatabaseUpsert(ITransformFunction):
             id_fn: Sugar for a :class:`CallableIdentity` deriving each row's id.
             identity: An explicit :class:`RecordIdentity`. Specify at most one of
                 ``key_columns`` / ``id_fn`` / ``identity``.
+
+        Raises:
+            ConfigurationError: Unknown ``on_conflict`` value, or a
+                duplicate-detecting policy (``error`` / ``ignore``) with no
+                identity configured.
         """
+        # Validate fully before any ``self.*`` mutation, mirroring
+        # DatabaseBulkInsert.__init__.
+        if on_conflict not in ("update", "ignore", "error"):
+            raise ConfigurationError(
+                f"Unknown on_conflict value '{on_conflict}' "
+                "(expected 'update', 'ignore', or 'error')"
+            )
+        identity = resolve_identity(
+            identity=identity, key_columns=key_columns, id_fn=id_fn
+        )
+        # ``update`` (the default) with no identity is a legitimate plain
+        # create. ``error`` / ``ignore`` are explicit conflict policies that
+        # need an id to detect the conflict against — without one they would
+        # silently degrade to create-only (the exact advertised-but-dead knob
+        # this library is closing). Fail closed, mirroring DatabaseBulkInsert.
+        if on_conflict in ("error", "ignore") and identity is None:
+            raise ConfigurationError(
+                f"on_conflict='{on_conflict}' needs an identity to detect the "
+                "conflict; pass key_columns=, id_fn=, or identity="
+            )
         self.resource_name = resource_name
         self.table = table
         self.key_columns = key_columns
         self.value_columns = value_columns
         self.on_conflict = on_conflict
-        self.identity = resolve_identity(
-            identity=identity, key_columns=key_columns, id_fn=id_fn
-        )
+        self.identity = identity
 
     async def transform(
         self, data: Dict[str, Any], context: Any = None
@@ -194,11 +217,18 @@ class DatabaseUpsert(ITransformFunction):
                 identity=self.identity,
             )
             
+            # Overrides last: ``**data`` is the passthrough, then the fresh
+            # count wins over any stale ``upserted_count`` from a prior step.
             return {
-                "upserted_count": result.get("affected_rows", 0),
                 **data,
+                "upserted_count": result.get("affected_rows", 0),
             }
-        
+
+        except (TransformError, ValidationError):
+            # A row whose key columns are missing/None raises ValidationError
+            # from identity derivation — surface it with its own consumer-
+            # actionable type rather than masking it as a generic TransformError.
+            raise
         except Exception as e:
             raise TransformError(f"Database upsert failed: {e}") from e
     
@@ -240,6 +270,10 @@ class BatchCommit(ITransformFunction):
                 :class:`CapabilityNotSupportedError` when the backend cannot
                 guarantee all-or-nothing).
         """
+        if batch_size <= 0:
+            raise ConfigurationError(
+                f"batch_size must be a positive integer (got {batch_size})"
+            )
         self.resource_name = resource_name
         self.batch_size = batch_size
         if use_transaction is not None:
@@ -274,23 +308,51 @@ class BatchCommit(ITransformFunction):
             return data
 
         try:
-            result = await resource.commit_batch(
-                batch,
-                identity=self.identity,
-                atomicity=self.atomicity,
-            )
-            committed = result.get("affected_rows", 0)
+            if self.atomicity == "require":
+                # A required-atomic commit must be issued as a single
+                # all-or-nothing batch — chunking it would only make each chunk
+                # atomic, not the whole. ``batch_size`` (a throughput knob)
+                # therefore does not apply under "require": the consumer asked
+                # for whole-batch atomicity, which is the unit that wins.
+                result = await resource.commit_batch(
+                    batch,
+                    identity=self.identity,
+                    atomicity=self.atomicity,
+                )
+                committed = result.get("affected_rows", 0)
+            else:
+                # best_effort: bound each commit to ``batch_size`` rows so very
+                # large batches do not have to be held/sent as one unit. Each
+                # chunk is committed independently (best_effort makes no
+                # all-or-nothing promise across them).
+                committed = 0
+                for start in range(0, len(batch), self.batch_size):
+                    chunk = batch[start:start + self.batch_size]
+                    result = await resource.commit_batch(
+                        chunk,
+                        identity=self.identity,
+                        atomicity=self.atomicity,
+                    )
+                    committed += result.get("affected_rows", 0)
 
+            # Overrides last: ``**data`` is the passthrough, then the commit
+            # outcome wins (``data`` still carries the original, now-committed
+            # ``batch`` — and possibly a stale ``committed_count``).
             return {
+                **data,
                 "committed_count": committed,
                 "batch": [],  # Clear batch after commit
-                **data,
             }
 
-        except (TransformError, CapabilityNotSupportedError, ConfigurationError):
-            # Consumer-actionable signals (atomicity policy, misconfig) surface
-            # with their own type rather than being masked as a generic
-            # TransformError.
+        except (
+            TransformError,
+            CapabilityNotSupportedError,
+            ConfigurationError,
+            ValidationError,
+        ):
+            # Consumer-actionable signals (atomicity policy, misconfig, a row
+            # whose key columns are missing/None) surface with their own type
+            # rather than being masked as a generic TransformError.
             raise
         except Exception as e:
             raise TransformError(f"Batch commit failed: {e}") from e
@@ -476,6 +538,10 @@ class DatabaseBulkInsert(ITransformFunction):
                 f"Unknown on_duplicate value '{on_duplicate}' "
                 "(expected 'error', 'ignore', or 'update')"
             )
+        if chunk_size <= 0:
+            raise ConfigurationError(
+                f"chunk_size must be a positive integer (got {chunk_size})"
+            )
         self.resource_name = resource_name
         self.table = table
         self.columns = columns
@@ -532,7 +598,12 @@ class DatabaseBulkInsert(ITransformFunction):
                 **data,
                 "inserted_count": total_inserted,
             }
-        
+
+        except (TransformError, ValidationError):
+            # A row whose key columns are missing/None raises ValidationError
+            # from identity derivation — surface it with its own consumer-
+            # actionable type rather than masking it as a generic TransformError.
+            raise
         except Exception as e:
             raise TransformError(f"Bulk insert failed: {e}") from e
     

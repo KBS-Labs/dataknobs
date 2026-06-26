@@ -429,9 +429,13 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         return resource is self
 
     #: Backend keys whose ``*_batch`` operations are wrapped in a backend-level
-    #: transaction, so ``create_batch`` is all-or-nothing. PR-A interim source
-    #: of truth for :meth:`_supports_atomic_batch`; superseded by the data-layer
-    #: ``AsyncDatabase`` transaction capability when it lands.
+    #: transaction, so ``create_batch`` is all-or-nothing. Interim source of
+    #: truth for :meth:`_supports_atomic_batch`; superseded by the data-layer
+    #: ``AsyncDatabase`` transaction capability when it lands. At that point the
+    #: ``CapabilityNotSupportedError`` raises below should migrate to a real
+    #: ``Capability`` member checked via ``require_capability`` (the raises
+    #: currently pass an ad-hoc capability string because this adapter does not
+    #: yet implement ``CapabilityContract``).
     _ATOMIC_BATCH_BACKENDS = frozenset(
         {"sqlite", "sqlite3", "postgres", "postgresql", "pg", "duckdb"}
     )
@@ -444,7 +448,23 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
     def _resolve_identity(
         identity: RecordIdentity | None, key_columns: List[str] | None
     ) -> RecordIdentity | None:
-        """Pick the identity strategy: explicit ``identity`` wins, else key columns."""
+        """Pick the identity strategy: explicit ``identity`` wins, else key columns.
+
+        This is the *lenient* resolver for the adapter's directly-callable
+        methods (``upsert``), which legitimately receive **both** an already
+        resolved ``identity`` *and* ``key_columns`` — the latter does double
+        duty there as the ``value_columns`` projection scope. It deliberately
+        differs from the authoritative
+        :func:`~dataknobs_fsm.functions.library.identity.resolve_identity`
+        (used by the function layer), which is *strict*: it enforces mutual
+        exclusion across ``identity`` / ``key_columns`` / ``id_fn`` and
+        validates the protocol, because those are the consumer-facing
+        constructor sugar where supplying two is a mistake to catch.
+
+        Keep the two in sync conceptually but NOT merged — folding this into
+        the strict resolver would reject the dual ``identity`` + ``key_columns``
+        call the function layer already makes here.
+        """
         if identity is not None:
             return identity
         if key_columns:

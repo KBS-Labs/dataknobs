@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 
 #: ASCII unit separator (U+001F). Used as the default join separator for
 #: :class:`KeyColumnsIdentity` because it cannot appear in normal field text,
@@ -60,6 +60,13 @@ class KeyColumnsIdentity:
             :data:`DEFAULT_KEY_SEP` (ASCII unit separator), which is
             collision-safe for composite keys. Override only when the storage
             id must follow a specific printable format.
+
+    A key column that is **absent from the row or ``None``** has no
+    well-defined value, so :meth:`derive` raises :class:`ValidationError`
+    rather than rendering it as the literal string ``"None"`` — otherwise a row
+    missing a key component would collide with a row whose component genuinely
+    equals ``"None"`` (and every other row missing the same component). Use
+    :class:`CallableIdentity` for null-tolerant or sparse composite keys.
     """
 
     def __init__(
@@ -71,7 +78,17 @@ class KeyColumnsIdentity:
     def derive(self, row: Mapping[str, Any]) -> str | None:
         if not self.key_columns:
             return None
-        return self.sep.join(str(row.get(col)) for col in self.key_columns)
+        parts: list[str] = []
+        for col in self.key_columns:
+            if col not in row or row[col] is None:
+                raise ValidationError(
+                    f"KeyColumnsIdentity: key column '{col}' is missing or "
+                    "None; a composite key with an absent component has no "
+                    "well-defined identity (use CallableIdentity for "
+                    "null-tolerant keys)"
+                )
+            parts.append(str(row[col]))
+        return self.sep.join(parts)
 
 
 class CallableIdentity:

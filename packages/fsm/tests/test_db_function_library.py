@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 
 from dataknobs_common import CapabilityNotSupportedError
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.testing import assert_no_blocking
 from dataknobs_data import AsyncDatabase
 from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
@@ -40,6 +40,7 @@ from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.functions.library.database import (
     BatchCommit,
     DatabaseBulkInsert,
+    DatabaseUpsert,
 )
 from dataknobs_fsm.functions.library.identity import (
     CallableIdentity,
@@ -84,6 +85,28 @@ def _sqlite_adapter(tmp_path: Path, name: str) -> AsyncDatabaseResourceAdapter:
     return AsyncDatabaseResourceAdapter(
         name=name, backend="sqlite", path=str(tmp_path / f"{name}.db")
     )
+
+
+class _CountingAdapter(AsyncDatabaseResourceAdapter):
+    """Real adapter that also counts ``commit_batch`` invocations.
+
+    A behaviour-preserving subclass (not a mock) so a test can prove
+    ``BatchCommit.batch_size`` actually chunks — outcome assertions alone can't
+    distinguish one big commit from several small ones.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.commit_batch_calls = 0
+
+    async def commit_batch(self, records, **kwargs):  # type: ignore[override]
+        self.commit_batch_calls += 1
+        return await super().commit_batch(records, **kwargs)
+
+
+def _ctx(resource_name: str, adapter: AsyncDatabaseResourceAdapter) -> dict:
+    """A plain-dict FunctionContext stand-in carrying the injected resource."""
+    return {"resources": {resource_name: adapter}}
 
 
 async def _read_file(path: Path, record_id: str) -> Any:
@@ -137,6 +160,21 @@ def test_resolve_identity_picks_one_strategy() -> None:
 
 def test_empty_key_columns_yields_no_identity() -> None:
     assert KeyColumnsIdentity([]).derive({"a": 1}) is None
+
+
+def test_key_columns_identity_missing_or_none_column_raises() -> None:
+    """A key column absent from the row, or present-but-``None``, has no
+    well-defined value — deriving an id from it would let every such row
+    collide (with each other and with a genuine ``"None"`` value). Fail closed
+    instead of silently rendering ``"None"``.
+    """
+    ident = KeyColumnsIdentity(["k1", "k2"])
+    with pytest.raises(ValidationError):
+        ident.derive({"k1": "a"})  # k2 absent
+    with pytest.raises(ValidationError):
+        ident.derive({"k1": "a", "k2": None})  # k2 present but None
+    # A row with all components present still derives fine.
+    assert ident.derive({"k1": "a", "k2": "b"}) == "a\x1fb"
 
 
 # --------------------------------------------------------------------------- #
@@ -219,6 +257,86 @@ def test_bulk_insert_dedup_without_identity_is_configuration_error() -> None:
         DatabaseBulkInsert("r", "t", on_duplicate="bogus")
 
 
+def test_bulk_insert_nonpositive_chunk_size_is_configuration_error() -> None:
+    with pytest.raises(ConfigurationError):
+        DatabaseBulkInsert("r", "t", chunk_size=0)
+    with pytest.raises(ConfigurationError):
+        DatabaseBulkInsert("r", "t", chunk_size=-5)
+
+
+# --------------------------------------------------------------------------- #
+# W1b — DatabaseUpsert.on_conflict (sibling of the on_duplicate dead-knob)
+# --------------------------------------------------------------------------- #
+def test_upsert_conflict_without_identity_is_configuration_error() -> None:
+    """``error`` / ``ignore`` need an id to detect the conflict against; with no
+    identity they would silently degrade to create-only — the same dead knob
+    DatabaseBulkInsert fails closed on.
+    """
+    with pytest.raises(ConfigurationError):
+        DatabaseUpsert("r", "t", on_conflict="error")
+    with pytest.raises(ConfigurationError):
+        DatabaseUpsert("r", "t", on_conflict="ignore")
+    with pytest.raises(ConfigurationError):
+        DatabaseUpsert("r", "t", on_conflict="bogus")
+
+
+def test_upsert_update_without_identity_is_allowed() -> None:
+    """The default ``update`` with no identity is a legitimate plain create —
+    it must NOT be guarded (would break the no-key upsert use case).
+    """
+    fn = DatabaseUpsert("r", "t")  # on_conflict="update", no identity
+    assert fn.identity is None
+    # An identity-bearing conflict policy is likewise fine.
+    DatabaseUpsert("r", "t", key_columns=["id"], on_conflict="error")
+
+
+# --------------------------------------------------------------------------- #
+# W1c — identity ValidationError must surface through .transform() with its own
+#       type, not get masked as a generic TransformError (sibling of the
+#       BatchCommit passthrough fix)
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_upsert_transform_surfaces_validation_error(tmp_path: Path) -> None:
+    """A row missing a key column raises ``ValidationError`` during identity
+    derivation inside ``resource.upsert``. ``DatabaseUpsert.transform`` must let
+    it propagate as ``ValidationError`` — masking it as ``TransformError`` would
+    hide a consumer-actionable signal (the exact gap the BatchCommit passthrough
+    closes for batch commits).
+    """
+    adapter = _file_adapter(tmp_path, "upv")
+    fn = DatabaseUpsert("target_db", "t", key_columns=["id"])
+    try:
+        with pytest.raises(ValidationError):
+            await fn.transform(
+                {"record": {"v": "a"}},  # no "id" → identity derivation fails
+                _ctx("target_db", adapter),
+            )
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bulk_insert_transform_surfaces_validation_error(
+    tmp_path: Path,
+) -> None:
+    """Sibling of the upsert case: a row missing a key column must surface
+    ``ValidationError`` through ``DatabaseBulkInsert.transform`` rather than the
+    generic ``TransformError`` wrapper.
+    """
+    adapter = _file_adapter(tmp_path, "biv")
+    fn = DatabaseBulkInsert(
+        "target_db", "t", key_columns=["id"], on_duplicate="update"
+    )
+    try:
+        with pytest.raises(ValidationError):
+            await fn.transform(
+                {"records": [{"v": "a"}]},  # no "id"
+                _ctx("target_db", adapter),
+            )
+    finally:
+        await adapter.aclose()
+
+
 # --------------------------------------------------------------------------- #
 # W2 — BatchCommit reshape + atomicity policy
 # --------------------------------------------------------------------------- #
@@ -289,6 +407,86 @@ async def test_commit_batch_unknown_atomicity_is_configuration_error(
             await adapter.commit_batch([{"v": "a"}], atomicity="bogus")
     finally:
         await adapter.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# W2b — BatchCommit.transform: batch is cleared, committed_count wins, and
+#       batch_size actually chunks
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_batch_commit_transform_clears_batch_and_overrides_count(
+    tmp_path: Path,
+) -> None:
+    """The documented post-condition: after a commit ``batch`` is emptied and
+    ``committed_count`` reflects this commit. Reproduces the override-ordering
+    bug where ``**data`` (spread last) clobbered both back to their inputs.
+    """
+    adapter = _file_adapter(tmp_path, "clear")
+    fn = BatchCommit("target_db")
+    try:
+        result = await fn.transform(
+            {
+                "batch": [{"v": "a"}, {"v": "b"}],
+                "committed_count": 999,  # stale value from a prior step
+                "other": "keep-me",
+            },
+            _ctx("target_db", adapter),
+        )
+    finally:
+        await adapter.aclose()
+    assert result["batch"] == []  # cleared (was the original 2-row batch)
+    assert result["committed_count"] == 2  # new outcome, not the stale 999
+    assert result["other"] == "keep-me"  # unrelated passthrough preserved
+    assert await _count_file(tmp_path / "clear.json") == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_commit_batch_size_chunks_best_effort(tmp_path: Path) -> None:
+    """``batch_size`` bounds each best_effort commit: 5 rows at batch_size=2
+    must reach the adapter as 3 ``commit_batch`` calls (not silently inert).
+    """
+    adapter = _CountingAdapter(
+        name="chunk", backend="file", path=str(tmp_path / "chunk.json")
+    )
+    fn = BatchCommit("target_db", batch_size=2)
+    batch = [{"v": str(i)} for i in range(5)]
+    try:
+        result = await fn.transform({"batch": batch}, _ctx("target_db", adapter))
+    finally:
+        await adapter.aclose()
+    assert adapter.commit_batch_calls == 3  # ceil(5 / 2)
+    assert result["committed_count"] == 5
+    assert result["batch"] == []
+    assert await _count_file(tmp_path / "chunk.json") == 5
+
+
+@pytest.mark.asyncio
+async def test_batch_commit_require_issues_single_atomic_batch(
+    tmp_path: Path,
+) -> None:
+    """Under ``atomicity="require"`` the commit must be one all-or-nothing
+    batch — ``batch_size`` does not chunk it, so a 5-row batch at batch_size=2
+    is a SINGLE ``commit_batch`` call (whole-batch atomicity wins).
+    """
+    adapter = _CountingAdapter(
+        name="atomic", backend="sqlite", path=str(tmp_path / "atomic.db")
+    )
+    fn = BatchCommit("target_db", batch_size=2, atomicity="require")
+    batch = [{"v": str(i)} for i in range(5)]
+    try:
+        result = await fn.transform({"batch": batch}, _ctx("target_db", adapter))
+    finally:
+        await adapter.aclose()
+    assert adapter.commit_batch_calls == 1  # NOT chunked under "require"
+    assert result["committed_count"] == 5
+    assert result["batch"] == []
+
+
+def test_batch_commit_nonpositive_batch_size_is_configuration_error() -> None:
+    with pytest.raises(ConfigurationError):
+        BatchCommit("r", batch_size=0)
+    with pytest.raises(ConfigurationError):
+        BatchCommit("r", batch_size=-1)
 
 
 # --------------------------------------------------------------------------- #

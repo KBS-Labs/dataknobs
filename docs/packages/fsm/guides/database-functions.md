@@ -54,6 +54,12 @@ the way a `"_"` join lets them (`{"a": "x_y", "b": "z"}` and
 `{"a": "x", "b": "y_z"}` derive **distinct** ids). Override `sep=` only when the
 storage id must follow a specific printable format.
 
+A key column that is **missing from the row or `None`** raises
+`ValidationError` — an absent component has no well-defined value, and
+rendering it as the literal `"None"` would let every such row collide. Use
+`CallableIdentity` if your composite key legitimately has nullable or sparse
+components.
+
 ```python
 from dataknobs_fsm.functions.library.identity import (
     KeyColumnsIdentity, CallableIdentity,
@@ -80,6 +86,12 @@ DatabaseUpsert(
 
 `on_conflict` controls behaviour when the derived id already exists: `update`
 (write through), `ignore` (skip), `error` (raise).
+
+`ignore` and `error` **require** an identity (`key_columns` / `id_fn` /
+`identity`) — without an id there is no conflict to detect, so the constructor
+raises `ConfigurationError` rather than silently degrading to create-only. The
+default `update` with no identity is a legitimate plain create (rows get
+backend-assigned ids).
 
 ## `DatabaseBulkInsert`
 
@@ -118,11 +130,18 @@ idempotent.
 ```python
 BatchCommit(
     resource_name="target_db",
-    batch_size=1000,
+    batch_size=1000,               # max rows per commit under best_effort
     key_columns=["id"],            # optional → idempotent re-commit
     atomicity="best_effort",       # "best_effort" | "require"
 )
 ```
+
+`batch_size` bounds how many rows are sent per `commit_batch` call under
+`best_effort`, so a very large batch need not be held or transmitted as a
+single unit (it must be a positive integer). It is **not applied under
+`require`**: a required-atomic commit is issued as one all-or-nothing batch
+(chunking would only make each chunk atomic, not the whole), so the whole batch
+is committed in a single call regardless of `batch_size`.
 
 ### Atomicity policy
 

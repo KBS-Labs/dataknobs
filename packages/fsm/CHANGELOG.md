@@ -18,12 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `KeyColumnsIdentity` (collision-safe unit-separator join) and
   `CallableIdentity` reference implementations. `DatabaseUpsert`,
   `DatabaseBulkInsert`, and `BatchCommit` accept `key_columns=` / `id_fn=` /
-  `identity=` to control how a row maps to its storage id.
+  `identity=` to control how a row maps to its storage id. `KeyColumnsIdentity`
+  raises `ValidationError` for a key column that is missing or `None` rather
+  than rendering it as the literal `"None"` (which would let sparse rows
+  collide).
 - `BatchCommit` gains an `atomicity` policy (`"best_effort"` / `"require"`).
   `"require"` raises `CapabilityNotSupportedError` on a backend that cannot
   guarantee an all-or-nothing batch instead of writing a partial batch under a
   false promise. The legacy `use_transaction=` flag is now an alias
-  (`True` → `"require"`).
+  (`True` → `"require"`). `batch_size` bounds the rows per commit under
+  `best_effort`; under `require` the batch is committed as a single
+  all-or-nothing unit (chunking would defeat the atomicity guarantee).
 
 ### Fixed
 
@@ -32,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"update"` now take effect against the configured record identity, and a
   duplicate-detecting policy (`"ignore"` / `"update"`) with no identity raises
   `ConfigurationError` rather than silently degrading to create-only.
+- `DatabaseUpsert.on_conflict` is fail-closed in the same way: `"error"` /
+  `"ignore"` with no identity, and an unknown `on_conflict` value, now raise
+  `ConfigurationError` instead of silently behaving like create-only / update.
+  The default `"update"` with no identity remains a plain create.
 - `BatchCommit` now persists its batch through the real `commit_batch` atomic
   primitive. It previously called a `resource.transaction()` method that no
   adapter implemented, so it raised `AttributeError` on first use.
