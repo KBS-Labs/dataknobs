@@ -84,8 +84,7 @@ processor = FileProcessor(config)
 import asyncio
 results = asyncio.run(processor.process())
 
-# BATCH / WHOLE report these keys; STREAM reports total_processed /
-# successful / failed instead (see Metrics).
+# All modes report the same metrics keys (see Metrics).
 print(f"Records processed: {results['records_processed']}")
 print(f"Records written: {results['records_written']}")
 print(f"Errors: {results['errors']}")
@@ -362,11 +361,12 @@ the chain (never a dead-end).
 
 The `filtered` and `error` terminals set `emit_output=False`
 (`StateDefinition.emit_output`, the `emit_output:` state-config key). That flag
-drives the *same* exclusion decision in every processing mode: the streaming
-sink skips non-emitting terminals just as the batch/whole writers only write
-records that reached `complete`. So filtering and validation behave identically
-whether a record flows through the batch, whole-file, or streaming path —
-**all three modes execute on the same async engine.**
+is the single source of truth for the exclusion decision in every processing
+mode: the streaming sink, the batch writer, and the whole-file writer all
+resolve `emit_output` from the terminal state (rather than matching a hardcoded
+`complete` name) and skip non-emitting terminals. So filtering and validation
+behave identically whether a record flows through the batch, whole-file, or
+streaming path — **all three modes execute on the same async engine.**
 
 The per-record functions are wired through the FSM's `custom_functions=`
 channel and referenced from each state's `functions` block (transform /
@@ -405,9 +405,9 @@ async def process_csv_to_json():
         record["processed_at"] = datetime.now().isoformat()
         return record
 
-    # Create configuration. BATCH (or WHOLE) mode populates the
-    # records_processed / records_written / skipped / errors metrics; STREAM
-    # mode reports total_processed / successful / failed instead (see Metrics).
+    # Create configuration. Every mode populates the same
+    # records_processed / records_written / skipped / errors metrics
+    # (see Metrics). ``lines_read`` is tracked on the BATCH path only.
     config = FileProcessingConfig(
         input_path="users.csv",
         output_path="users.json",
@@ -515,36 +515,25 @@ asyncio.run(batch_process_files())
 
 ## Metrics
 
-`process()` returns a metrics dict. The keys it populates depend on the mode:
-
-**BATCH and WHOLE:**
+`process()` returns the same metrics dict shape in every mode (STREAM, BATCH,
+WHOLE):
 
 ```python
 metrics = {
-    'lines_read': 0,         # Total lines read (BATCH only; WHOLE reads at once)
-    'records_processed': 0,  # Records that reached a clean terminal (complete or filtered)
-    'records_written': 0,    # Records that reached `complete` (in the output)
+    'lines_read': 0,         # Lines read (BATCH only; STREAM/WHOLE read internally)
+    'records_processed': 0,  # Clean terminals only — records_written + skipped
+    'records_written': 0,    # Records emitted to the output (emit_output terminal)
     'errors': 0,             # Invalid (validation `error`) + failed-transform records
-    'skipped': 0,            # Filtered records (reached the `filtered` terminal)
+    'skipped': 0,            # Filtered records (non-emitting `filtered` terminal)
 }
 ```
 
-**STREAM** merges the streaming executor's statistics instead:
-
-```python
-metrics = {
-    'lines_read': 0,        # (unused in stream mode)
-    'total_processed': 0,   # Records pulled through the stream
-    'successful': 0,        # Records that finished without error (includes filtered)
-    'failed': 0,            # Records that errored
-    'duration': 0.0,        # Wall-clock seconds
-    'throughput': 0.0,      # Records per second
-    ...                     # plus the initial BATCH-style keys, left at 0
-}
-```
-
-In every mode, only records that reach `complete` are written to the output;
-filtered and invalid records are excluded (see [FSM Structure](#fsm-structure)).
+Emission is decided by the terminal state's `emit_output` flag (see
+[FSM Structure](#fsm-structure)), so filtered and invalid records are excluded
+from the output identically in every mode. `records_processed` counts clean
+terminals only (written + skipped); failed records are counted in `errors`, not
+`records_processed`. `lines_read` is the one mode-specific key — it is tracked
+on the BATCH read path only and stays 0 for STREAM and WHOLE.
 
 ## Error Handling
 

@@ -74,6 +74,18 @@ _VALIDATION_TYPE_MAP: Dict[str, type] = {
 }
 
 
+# Map a resolved :class:`FileFormat` to the streaming reader/writer's
+# format token. STREAM mode is line-oriented, so JSON means line-delimited
+# JSONL (one record per line) — distinct from BATCH/WHOLE, which read/write a
+# whole-file JSON array. Formats the streaming reader/writer cannot express
+# (XML/PARQUET/BINARY) fall back to ``'auto'`` (extension-derived).
+_STREAM_FORMAT_TOKENS: Dict[FileFormat, str] = {
+    FileFormat.JSON: "jsonl",
+    FileFormat.CSV: "csv",
+    FileFormat.TEXT: "text",
+}
+
+
 class _FileTransform(ITransformFunction):
     """Per-record transform: apply each configured transformation in order.
 
@@ -363,8 +375,12 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         falls through to ``complete``). ``validate`` and ``filter`` are gates:
         a registered condition routes passing records onward while the
         fall-through arc diverts the rest to ``error`` / ``filtered`` (both
-        non-emitting terminals). ``transform`` / ``aggregate`` apply their
-        registered state transform on entry, then take a plain forward arc.
+        non-emitting terminals). The conditional gate arc is given a higher
+        ``priority`` than its unconditional fall-through so a passing record is
+        routed deterministically — the engine sorts available transitions by
+        priority (higher first), so routing no longer depends on arc
+        declaration order. ``transform`` / ``aggregate`` apply their registered
+        state transform on entry, then take a plain forward arc.
         """
         arcs: List[Dict[str, Any]] = [
             {'from': 'read', 'to': active[0], 'name': 'read_line'}
@@ -375,6 +391,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
                 arcs.append({
                     'from': 'validate', 'to': nxt, 'name': 'valid',
                     'condition': {'type': 'registered', 'name': 'validate_check'},
+                    'priority': 10,
                 })
                 arcs.append(
                     {'from': 'validate', 'to': 'error', 'name': 'invalid'}
@@ -383,6 +400,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
                 arcs.append({
                     'from': 'filter', 'to': nxt, 'name': 'passed',
                     'condition': {'type': 'registered', 'name': 'filter_pass'},
+                    'priority': 10,
                 })
                 arcs.append(
                     {'from': 'filter', 'to': 'filtered', 'name': 'filtered_out'}
@@ -454,27 +472,75 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         """Process file as stream.
 
         Awaits the async FSM's streaming executor directly (no sync-bridge
-        loop blocking). The executor opens the input/output paths itself and
-        auto-detects the format from the extension, so the input/output
-        paths are passed as strings rather than wrapped stream objects.
+        loop blocking). The executor opens the input/output paths itself, so
+        the paths are passed as strings rather than wrapped stream objects.
+
+        An explicitly configured ``format`` / ``output_format`` is honored
+        (mapped to the streaming reader/writer's line-oriented token via
+        :data:`_STREAM_FORMAT_TOKENS`); when unset, ``'auto'`` lets the
+        reader/writer derive the format from the file extension. The stream
+        stats are mapped onto the same metrics keys the batch/whole paths
+        populate, so every mode returns the same shape.
         """
+        input_format = (
+            _STREAM_FORMAT_TOKENS.get(self._format, 'auto')
+            if self.config.format
+            else 'auto'
+        )
+        output_format = (
+            _STREAM_FORMAT_TOKENS.get(self._output_format, 'auto')
+            if self.config.output_format
+            else 'auto'
+        )
+
         result = await self._fsm.process_stream(
             source=self.config.input_path,
             sink=self.config.output_path,
             chunk_size=self.config.chunk_size,
-            input_format='auto',
+            input_format=input_format,
+            output_format=output_format,
         )
 
-        self._metrics.update(result)
+        # Map the stream stats onto the unified metrics keys, applying the
+        # *same* per-terminal classification :meth:`_account_result` applies in
+        # batch/whole so every mode reports identical metrics. ``records_written``
+        # is the count that passed the emit_output gate (``emitted``). The
+        # executor reports clean non-emitting records bucketed by terminal name
+        # (``excluded_by_state``); records that reached the error terminal are
+        # counted as ``errors`` (alongside transform failures), every other
+        # non-emitting terminal (e.g. ``filtered``) is counted as ``skipped``.
+        # ``records_processed`` counts clean terminals only (written + skipped),
+        # excluding both failures and rejections — the same as
+        # ``_account_result``. ``lines_read`` is not tracked on the streaming
+        # path (the executor reads internally) and stays 0.
+        failed = result.get('failed', 0)
+        written = result.get('emitted', 0)
+        excluded_by_state: Dict[str, int] = result.get('excluded_by_state', {})
+        rejected = sum(
+            count
+            for state, count in excluded_by_state.items()
+            if self._is_error_terminal(state)
+        )
+        skipped = sum(
+            count
+            for state, count in excluded_by_state.items()
+            if not self._is_error_terminal(state)
+        )
+        self._metrics['records_written'] = written
+        self._metrics['skipped'] = skipped
+        self._metrics['errors'] = failed + rejected
+        self._metrics['records_processed'] = written + skipped
         return self._metrics
         
     async def _process_batch(self) -> Dict[str, Any]:
         """Process the file in batches.
 
-        Each record is driven through the FSM; records that reach ``complete``
-        are written to the output (once, after all batches — the writer
-        truncates), records that reach ``filtered`` are counted as skipped, and
-        records that reach ``error`` or fail a transform are counted as errors.
+        Each record is driven through the FSM and accounted through the shared
+        :meth:`_account_result` path: records that reach an emitting terminal
+        (``emit_output=True``) are written to the output (once, after all
+        batches — the writer truncates), records that reach the error terminal
+        or fail a transform are counted as errors, and records that reach any
+        other non-emitting terminal (e.g. ``filtered``) are counted as skipped.
         """
         batches = [batch async for batch in self._read_batches()]
 
@@ -493,32 +559,64 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
 
         return self._metrics
 
+    #: Name of the non-emitting terminal that means "rejected" (records routed
+    #: here are counted as errors, not skipped). The default FSM builds this
+    #: terminal for the ``validate`` stage; a subclass building a different FSM
+    #: can override it. Single source of truth shared by the batch/whole
+    #: (:meth:`_account_result`) and streaming (:meth:`_process_stream`)
+    #: accounting paths so they classify non-emitting terminals identically.
+    _ERROR_TERMINAL_STATE: ClassVar[str] = 'error'
+
+    def _is_error_terminal(self, final_state: str | None) -> bool:
+        """Whether a non-emitting ``final_state`` counts as an error (vs skipped)."""
+        return final_state == self._ERROR_TERMINAL_STATE
+
+    def _should_emit(self, final_state: str | None) -> bool:
+        """Whether a record finishing in ``final_state`` contributes to output.
+
+        Resolves the state's ``emit_output`` flag from the FSM (default
+        ``True``) — the single source of truth the streaming executor also
+        consults (:meth:`AsyncStreamExecutor._should_emit`). Driving the
+        batch/whole emission decision off this flag rather than a hardcoded
+        ``complete`` name means all three modes share one exclusion policy: a
+        consumer terminal marked ``emit_output=False`` is excluded everywhere,
+        and a custom emitting terminal (not named ``complete``) is written
+        everywhere.
+        """
+        if not final_state:
+            return True
+        state_def = self._fsm.get_state(final_state)
+        return getattr(state_def, "emit_output", True) if state_def else True
+
     def _account_result(
         self, result: Dict[str, Any], emitted: List[Dict[str, Any]]
     ) -> None:
         """Update metrics for one FSM result and collect emitted records.
 
-        A record reaching ``complete`` is written; one reaching ``filtered`` is
-        skipped; one reaching ``error`` (validation reject) or failing a
-        transform is an error. ``emitted`` accumulates the results to write so
-        the output is produced in a single pass (the writer truncates).
+        Emission is decided by the final state's ``emit_output`` flag (via
+        :meth:`_should_emit`), so a record reaching an emitting terminal is
+        written and one reaching a non-emitting terminal is excluded — the same
+        policy the streaming path applies. A non-emitting record is categorized
+        as an error when it reached the ``error`` (validation-reject) terminal,
+        otherwise as skipped (e.g. ``filtered``). A record whose transform
+        raised (``success=False``) is always an error. ``emitted`` accumulates
+        the results to write so the output is produced in a single pass (the
+        writer truncates).
         """
         if not result['success']:
             self._metrics['errors'] += 1
             return
         final_state = result.get('final_state')
-        if final_state == 'complete':
+        if self._should_emit(final_state):
             self._metrics['records_processed'] += 1
             self._metrics['records_written'] += 1
             emitted.append(result)
-        elif final_state == 'filtered':
-            self._metrics['records_processed'] += 1
-            self._metrics['skipped'] += 1
-        elif final_state == 'error':
+        elif self._is_error_terminal(final_state):
             self._metrics['errors'] += 1
         else:
-            # Reached some other terminal cleanly; count it as processed.
+            # Non-emitting terminal (e.g. ``filtered``): processed, not written.
             self._metrics['records_processed'] += 1
+            self._metrics['skipped'] += 1
         
     async def _process_whole(self) -> Dict[str, Any]:
         """Process entire file at once."""
@@ -542,26 +640,15 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
             results = await self._fsm.process_batch(data)
         else:
             results = [await self._fsm.process(data)]
-            
-        # Only records that reached `complete` are part of the output;
-        # filtered/invalid records are excluded (consistent with batch/stream).
-        emitted = [
-            r for r in results
-            if r['success'] and r.get('final_state') == 'complete'
-        ]
+
+        # Account each result through the shared accounting path so whole-file
+        # and batch modes apply one identical emission/skip/error policy
+        # (emission decided by the final state's ``emit_output`` flag).
+        emitted: List[Dict[str, Any]] = []
+        for result in results:
+            self._account_result(result, emitted)
         if self.config.output_path and emitted:
             await self._write_output(emitted)
-
-        self._metrics['records_processed'] = len(results)
-        self._metrics['records_written'] = len(emitted)
-        self._metrics['skipped'] = sum(
-            1 for r in results
-            if r['success'] and r.get('final_state') == 'filtered'
-        )
-        self._metrics['errors'] = sum(
-            1 for r in results
-            if not r['success'] or r.get('final_state') == 'error'
-        )
 
         return self._metrics
 
@@ -854,7 +941,7 @@ def create_batch_file_processor(
         output_path=output_path,
         format=FileFormat.TEXT,
         mode=ProcessingMode.BATCH,
-        batch_size=batch_size
+        chunk_size=batch_size,
     )
-    
+
     return FileProcessor(config)

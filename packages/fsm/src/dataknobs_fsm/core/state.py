@@ -535,9 +535,12 @@ class StateDefinition:
     a ``filtered`` state for records a filter dropped, or an ``error`` state for
     records a validator rejected — so the streaming sink (and any output writer
     that consults it) skips them. Only meaningful on end states; ignored
-    elsewhere. The flag drives the *same* exclusion decision in every
-    processing mode, so filtering/validation behave identically whether a
-    record flows through the batch, whole-file, or streaming path.
+    elsewhere. The flag is consulted by output writers — the streaming sink and
+    pattern writers like ``FileProcessor`` — which apply the *same* exclusion in
+    every processing mode (batch, whole-file, and streaming). Result-returning
+    APIs (``process`` / ``process_batch``) do NOT drop records: they return
+    every result with its terminal state, leaving the emission decision to the
+    caller (or to a writer that consults this flag).
     """
 
     def is_start_state(self) -> bool:

@@ -94,10 +94,12 @@ reported as a failure (`execute()` returns `success=False`).
 **`emit_output`** — Defaults to `true`. Set `emit_output: false` on an **end**
 state whose records should be excluded from the output (e.g. a `filtered`
 terminal for dropped records, or an `error` terminal for rejected records). The
-flag drives the same exclusion in every processing mode: the streaming sink
-skips non-emitting terminals just as batch/whole writers only write records that
-reach an emitting terminal. (The `FileProcessor` pattern uses it for its
-`filtered` / `error` states.)
+flag is consulted by output writers — the streaming sink and pattern writers
+like `FileProcessor` — which apply the same exclusion in every processing mode.
+Result-returning APIs (`process` / `process_batch`) do not drop records: they
+return every result with its terminal state, so a caller can apply the flag
+itself. (The `FileProcessor` pattern uses it for its `filtered` / `error`
+states across STREAM, BATCH, and WHOLE.)
 
 ### State Types
 

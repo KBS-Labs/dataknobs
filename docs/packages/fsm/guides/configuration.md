@@ -51,10 +51,13 @@ left out of the output. By default every terminal a record reaches contributes
 its data to the sink/output. Set `emit_output: False` on a terminal that means
 "processed but intentionally not part of the output" — for example a `filtered`
 state for records a filter dropped, or an `error` state for records a validator
-rejected. The flag drives the *same* exclusion in every processing mode: the
-streaming sink skips non-emitting terminals just as a batch/whole writer only
-writes records that reached an emitting terminal. (The `FileProcessor` pattern
-uses this for its `filtered` / `error` states.)
+rejected. The flag is consulted by **output writers** — the streaming sink and
+pattern writers like `FileProcessor` — which apply the *same* exclusion in
+every processing mode (the streaming sink and the batch/whole writers all skip
+non-emitting terminals). Result-returning APIs (`process` / `process_batch`)
+do **not** drop records: they return every result together with its terminal
+state, so a caller can apply the flag itself. (The `FileProcessor` pattern uses
+this for its `filtered` / `error` states across STREAM, BATCH, and WHOLE.)
 
 #### Failure handling (`run_on_failure`) {#failure-handling-run_on_failure}
 

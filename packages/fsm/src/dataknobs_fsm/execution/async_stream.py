@@ -3,7 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, List, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -21,6 +21,8 @@ class AsyncStreamResult:
     failed: int
     duration: float
     throughput: float
+    emitted: int = 0
+    excluded_by_state: Dict[str, int] = field(default_factory=dict)
     error_details: List[Any] = field(default_factory=list)
 
 
@@ -168,6 +170,8 @@ class AsyncStreamExecutor:
             failed=len(progress.errors),
             duration=duration,
             throughput=progress.records_processed / duration if duration > 0 else 0,
+            emitted=progress.records_emitted,
+            excluded_by_state=dict(progress.excluded_by_state),
             error_details=progress.errors[:10]  # First 10 errors
         )
     
@@ -215,18 +219,33 @@ class AsyncStreamExecutor:
                 if isinstance(result, Exception):
                     progress.errors.append((progress.records_processed + i, result))
                 else:
-                    # Result is a tuple[bool, Any, bool] (success, value, emit).
-                    success, value, emit = result  # type: ignore
+                    # Result is a tuple[bool, Any, bool, str | None]
+                    # (success, value, emit, final_state).
+                    success, value, emit, final_state = result  # type: ignore
                     if success:
                         # A record that finished in a non-emitting terminal
                         # (e.g. a `filtered`/`error` state) is processed
                         # cleanly but excluded from the sink — same exclusion
-                        # the batch/whole writers apply by final state.
+                        # the batch/whole writers apply by final state. Bucket
+                        # the exclusions by their final-state name so a consumer
+                        # can apply its own per-terminal accounting policy
+                        # (e.g. error-vs-skipped) symmetric with the per-result
+                        # ``final_state`` the batch/whole paths inspect.
                         if emit:
                             successful_results.append(value)
+                        else:
+                            key = final_state or ''
+                            progress.excluded_by_state[key] = (
+                                progress.excluded_by_state.get(key, 0) + 1
+                            )
                     else:
                         progress.errors.append((progress.records_processed + i, Exception(value)))
             
+            # Count records that contribute to the output (passed the
+            # emit_output gate) so the caller can report records_written for
+            # the streaming path, symmetric with batch/whole.
+            progress.records_emitted += len(successful_results)
+
             # Send to sink if provided
             if sink and successful_results:
                 if asyncio.iscoroutinefunction(sink):
@@ -254,7 +273,7 @@ class AsyncStreamExecutor:
         index: int,
         context_template: ExecutionContext,
         max_transitions: int
-    ) -> Tuple[bool, Any, bool]:
+    ) -> Tuple[bool, Any, bool, str | None]:
         """Process a single item.
 
         Args:
@@ -264,8 +283,10 @@ class AsyncStreamExecutor:
             max_transitions: Maximum transitions.
 
         Returns:
-            Tuple of (success, result, emit) where ``emit`` is whether the
-            record's final state contributes to the output sink.
+            Tuple of (success, result, emit, final_state) where ``emit`` is
+            whether the record's final state contributes to the output sink and
+            ``final_state`` is the name of the terminal the record reached (so a
+            consumer can bucket non-emitting records by terminal).
         """
         async with self._semaphore:  # Control parallelism
             # Create context
@@ -284,8 +305,9 @@ class AsyncStreamExecutor:
                 item,
                 max_transitions,
             )
-            emit = self._should_emit(context.current_state)
-            return success, value, emit
+            final_state = context.current_state
+            emit = self._should_emit(final_state)
+            return success, value, emit, final_state
 
     def _should_emit(self, state_name: str | None) -> bool:
         """Whether a record finishing in ``state_name`` contributes to output.

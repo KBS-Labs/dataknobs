@@ -679,6 +679,7 @@ class AsyncSimpleFSM:
         chunk_size: int = 100,
         on_progress: Callable | None = None,
         input_format: str = 'auto',
+        output_format: str = 'auto',
         text_field_name: str = 'text',
         csv_delimiter: str = ',',
         csv_has_header: bool = True,
@@ -693,6 +694,8 @@ class AsyncSimpleFSM:
             chunk_size: Size of processing chunks
             on_progress: Optional progress callback
             input_format: Input file format ('auto', 'jsonl', 'json', 'csv', 'text')
+            output_format: Output file format ('auto', 'jsonl', 'json', 'csv',
+                'text'); 'auto' derives it from the sink file extension
             text_field_name: Field name for text lines when converting to dict
             csv_delimiter: CSV delimiter character
             csv_has_header: Whether CSV file has header row
@@ -700,7 +703,12 @@ class AsyncSimpleFSM:
             use_streaming: Use memory-efficient streaming for large files
 
         Returns:
-            Dict containing stream processing statistics
+            Dict of stream processing statistics: ``total_processed``,
+            ``successful``, ``failed``, ``emitted`` (records that passed the
+            ``emit_output`` gate), ``excluded_by_state`` (a ``{final_state:
+            count}`` breakdown of clean records that reached a non-emitting
+            terminal, so a consumer can apply its own per-terminal accounting),
+            ``duration`` and ``throughput``.
         """
         # Configure streaming
         stream_config = CoreStreamConfig(
@@ -734,13 +742,16 @@ class AsyncSimpleFSM:
                 skip_empty_lines=skip_empty_lines
             )
 
-            # Handle sink for streaming mode
+            # Handle sink for streaming mode. 'auto' lets the writer derive the
+            # format from the sink extension (its None default).
+            writer_format = None if output_format == 'auto' else output_format
             sink_func = None
             cleanup_func = None
             if sink:
                 sink_func, cleanup_func = await create_streaming_file_writer(
                     file_path=sink,
-                    config=stream_config
+                    config=stream_config,
+                    output_format=writer_format,
                 )
         else:
             # Use regular mode (loads full chunks into memory)
@@ -760,11 +771,15 @@ class AsyncSimpleFSM:
                 # Already an async iterator
                 stream_source = source
 
-            # Handle sink for regular mode
+            # Handle sink for regular mode. 'auto' maps to the writer's None
+            # default (derive the format from the sink extension).
+            writer_format = None if output_format == 'auto' else output_format
             sink_func = None
             cleanup_func = None
             if sink:
-                sink_func, cleanup_func = create_file_writer(sink)
+                sink_func, cleanup_func = create_file_writer(
+                    sink, output_format=writer_format
+                )
 
         try:
             # Execute stream using async executor
@@ -778,6 +793,8 @@ class AsyncSimpleFSM:
                 'total_processed': result.total_processed,
                 'successful': result.successful,
                 'failed': result.failed,
+                'emitted': result.emitted,
+                'excluded_by_state': result.excluded_by_state,
                 'duration': result.duration,
                 'throughput': result.throughput
             }
@@ -822,6 +839,15 @@ class AsyncSimpleFSM:
                 'valid': True,
                 'errors': []
             }
+
+    def get_state(self, name: str) -> Any:
+        """Get a state definition by name (or ``None`` if absent).
+
+        Public accessor over the underlying FSM so consumers can inspect a
+        state's attributes (e.g. ``emit_output``) without reaching into the
+        private ``_fsm`` handle.
+        """
+        return self._fsm.get_state(name)
 
     def get_states(self) -> list[str]:
         """Get list of all state names in the FSM."""

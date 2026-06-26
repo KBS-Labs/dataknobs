@@ -29,6 +29,8 @@ from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 from dataknobs_fsm.patterns.file_processing import (
     FileProcessingConfig,
     FileProcessor,
+    ProcessingMode,
+    create_batch_file_processor,
 )
 
 
@@ -154,3 +156,48 @@ def test_fileprocessor_filtered_terminal_is_non_emitting() -> None:
     assert filtered.emit_output is False, (
         "filtered records must be excluded from output (emit_output=False)"
     )
+
+
+def test_fileprocessor_emission_decided_by_emit_output_flag() -> None:
+    """Batch/whole emission is resolved from the FSM's ``emit_output`` flag.
+
+    The batch/whole accounting previously decided emission by a hardcoded
+    ``final_state == 'complete'`` name comparison, diverging from the streaming
+    path (which honors ``emit_output``). They now share one source of truth:
+    ``FileProcessor._should_emit`` resolves the flag from the FSM, so all three
+    modes apply the same exclusion policy. This FAILS pre-fix (``_should_emit``
+    did not exist on ``FileProcessor``) and locks the unified mechanism using
+    the real built FSM (no mock).
+    """
+    fp = _fp(
+        filters=[lambda r: True],
+        validation_schema={"id": {"required": True}},
+    )
+    assert fp._should_emit("complete") is True
+    assert fp._should_emit("filtered") is False, (
+        "the non-emitting 'filtered' terminal must be excluded via emit_output"
+    )
+    assert fp._should_emit("error") is False, (
+        "the non-emitting 'error' terminal must be excluded via emit_output"
+    )
+    # An unknown / missing state defaults to emitting, matching the streaming
+    # gate's fail-open default.
+    assert fp._should_emit("nonexistent") is True
+    assert fp._should_emit(None) is True
+
+
+def test_create_batch_file_processor_constructs() -> None:
+    """Pre-existing crash: the factory passed a non-existent ``batch_size``
+    field to the frozen ``FileProcessingConfig`` (the field is ``chunk_size``),
+    raising ``TypeError`` on every call. Constructing must succeed and the
+    batch size must land on ``chunk_size``.
+    """
+    proc = create_batch_file_processor(
+        input_paths=["a.txt"],
+        output_path="out.txt",
+        patterns=["*.txt"],
+        batch_size=25,
+    )
+    assert isinstance(proc, FileProcessor)
+    assert proc.config.chunk_size == 25
+    assert proc.config.mode is ProcessingMode.BATCH
