@@ -24,6 +24,11 @@ This section contains comprehensive guides for using the DataKnobs FSM package e
   - Built-in providers: Database, HTTP, LLM, FileSystem
   - Resource lifecycle and health monitoring
 
+- **[Database Functions Guide](database-functions.md)** - Reading and writing databases from a state:
+  - The `async_database` resource and the built-in DB functions
+  - Record identity (key columns, callable, custom) and `on_duplicate`
+  - `BatchCommit` atomicity policy (`best_effort` / `require`)
+
 - **[Streaming Guide](streaming.md)** - Efficient large dataset processing:
   - Stream processing with backpressure handling
   - Memory-efficient data pipelines

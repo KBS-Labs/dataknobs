@@ -5,12 +5,18 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Dict, List
 
+from dataknobs_common import CapabilityNotSupportedError
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 
 from dataknobs_fsm.functions.base import ResourceError
+from dataknobs_fsm.functions.library.identity import (
+    KeyColumnsIdentity,
+    RecordIdentity,
+)
 from dataknobs_fsm.resources.base import (
     BaseResourceProvider,
     ResourceHealth,
@@ -422,19 +428,57 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         """Validate the acquired resource is this adapter."""
         return resource is self
 
-    def _derive_id(self, row: Dict[str, Any], key_columns: List[str]) -> str | None:
-        """Derive the storage id from the row's key columns."""
-        if not key_columns:
-            return None
-        return "_".join(str(row.get(col)) for col in key_columns)
+    #: Backend keys whose ``*_batch`` operations are wrapped in a backend-level
+    #: transaction, so ``create_batch`` is all-or-nothing. Interim source of
+    #: truth for :meth:`_supports_atomic_batch`; superseded by the data-layer
+    #: ``AsyncDatabase`` transaction capability when it lands. At that point the
+    #: ``CapabilityNotSupportedError`` raises below should migrate to a real
+    #: ``Capability`` member checked via ``require_capability`` (the raises
+    #: currently pass an ad-hoc capability string because this adapter does not
+    #: yet implement ``CapabilityContract``).
+    _ATOMIC_BATCH_BACKENDS = frozenset(
+        {"sqlite", "sqlite3", "postgres", "postgresql", "pg", "duckdb"}
+    )
+
+    def _supports_atomic_batch(self) -> bool:
+        """Whether the backing backend gives all-or-nothing ``create_batch``."""
+        return self.backend in self._ATOMIC_BATCH_BACKENDS
+
+    @staticmethod
+    def _resolve_identity(
+        identity: RecordIdentity | None, key_columns: List[str] | None
+    ) -> RecordIdentity | None:
+        """Pick the identity strategy: explicit ``identity`` wins, else key columns.
+
+        This is the *lenient* resolver for the adapter's directly-callable
+        methods (``upsert``), which legitimately receive **both** an already
+        resolved ``identity`` *and* ``key_columns`` — the latter does double
+        duty there as the ``value_columns`` projection scope. It deliberately
+        differs from the authoritative
+        :func:`~dataknobs_fsm.functions.library.identity.resolve_identity`
+        (used by the function layer), which is *strict*: it enforces mutual
+        exclusion across ``identity`` / ``key_columns`` / ``id_fn`` and
+        validates the protocol, because those are the consumer-facing
+        constructor sugar where supplying two is a mistake to catch.
+
+        Keep the two in sync conceptually but NOT merged — folding this into
+        the strict resolver would reject the dual ``identity`` + ``key_columns``
+        call the function layer already makes here.
+        """
+        if identity is not None:
+            return identity
+        if key_columns:
+            return KeyColumnsIdentity(key_columns)
+        return None
 
     async def upsert(
         self,
         table: str,
         records: List[Dict[str, Any]],
-        key_columns: List[str],
+        key_columns: List[str] | None = None,
         value_columns: List[str] | None = None,
         on_conflict: str = "update",
+        identity: RecordIdentity | None = None,
     ) -> Dict[str, Any]:
         """Upsert rows into the backing async database.
 
@@ -442,21 +486,28 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             table: Logical table name (informational for backends without
                 tables; the records are keyed by their derived id).
             records: Row dicts to upsert.
-            key_columns: Columns forming the unique key (derive the storage id).
+            key_columns: Columns forming the unique key. Used both to derive the
+                storage id (when ``identity`` is not supplied) and to scope the
+                ``value_columns`` projection.
             value_columns: Columns to persist (if ``None``, persist the whole
                 row).
             on_conflict: ``"update"`` (default, write-through), ``"ignore"``
                 (skip existing ids), or ``"error"`` (raise on an existing id).
+            identity: Explicit :class:`RecordIdentity`; overrides ``key_columns``
+                for id derivation. When neither is supplied, ids are
+                backend-assigned.
 
         Returns:
             ``{"affected_rows": <count>}``.
         """
         db = await self._ensure_db()
+        ident = self._resolve_identity(identity, key_columns)
         affected = 0
         for row in records:
-            record_id = self._derive_id(row, key_columns)
+            record_id = ident.derive(row) if ident is not None else None
             if value_columns is not None:
-                payload = {col: row.get(col) for col in key_columns + value_columns}
+                cols = (key_columns or []) + value_columns
+                payload = {col: row.get(col) for col in cols}
             else:
                 payload = dict(row)
 
@@ -484,17 +535,25 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         records: List[Dict[str, Any]],
         columns: List[str] | None = None,
         on_duplicate: str = "error",
+        identity: RecordIdentity | None = None,
     ) -> Dict[str, Any]:
-        """Insert rows into the backing async database.
+        """Insert rows into the backing async database, honoring ``on_duplicate``.
 
         Args:
             table: Logical table name (informational).
             records: Row dicts to insert.
             columns: Columns to persist (if ``None``, persist the whole row).
-            on_duplicate: Unused for create semantics; reserved for parity.
+            on_duplicate: Conflict policy when ``identity`` resolves a row to an
+                id that already exists: ``"error"`` (raise), ``"ignore"`` (skip
+                the row), or ``"update"`` (overwrite). Evaluated only when an
+                ``identity`` is supplied — without one, rows are created with
+                backend-assigned ids and no duplicate detection occurs.
+            identity: :class:`RecordIdentity` deriving each row's id, enabling
+                duplicate detection. ``None`` → pure create.
 
         Returns:
-            ``{"affected_rows": <count>}``.
+            ``{"affected_rows": <count>}`` (skipped ``ignore`` rows are not
+            counted).
         """
         db = await self._ensure_db()
         affected = 0
@@ -502,7 +561,95 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             payload = (
                 {col: row.get(col) for col in columns} if columns else dict(row)
             )
-            await db.create(Record(payload))
+            record_id = identity.derive(row) if identity is not None else None
+
+            if record_id is not None:
+                if await db.exists(record_id):
+                    if on_duplicate == "error":
+                        raise ResourceError(
+                            f"Record '{record_id}' already exists in '{table}'",
+                            resource_name=self.name,
+                            operation="bulk_insert",
+                        )
+                    if on_duplicate == "ignore":
+                        continue
+                    # on_duplicate == "update": fall through and overwrite.
+                await db.upsert(record_id, Record(payload))
+            else:
+                await db.create(Record(payload))
+            affected += 1
+        return {"affected_rows": affected}
+
+    async def commit_batch(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        identity: RecordIdentity | None = None,
+        atomicity: str = "best_effort",
+    ) -> Dict[str, Any]:
+        """Persist a batch of records, atomically where the backend allows.
+
+        Without ``identity`` the batch is written via ``create_batch`` — which
+        is all-or-nothing on transactional backends (postgres/sqlite/duckdb).
+        With ``identity`` each row is upserted under its derived id, so a
+        re-commit of the same batch is idempotent.
+
+        Args:
+            records: Row dicts to persist.
+            identity: Optional :class:`RecordIdentity`. ``None`` → create_batch
+                (backend-assigned ids); set → idempotent per-row upsert.
+            atomicity: ``"best_effort"`` (default) proceeds on any backend,
+                logging at DEBUG when the backend cannot guarantee
+                all-or-nothing; ``"require"`` raises
+                :class:`CapabilityNotSupportedError` on a non-transactional
+                backend (and on the idempotent-upsert path, which is not
+                batch-atomic without the transaction capability).
+
+        Returns:
+            ``{"affected_rows": <count>}``.
+
+        Raises:
+            ConfigurationError: Unknown ``atomicity`` policy.
+            CapabilityNotSupportedError: ``atomicity="require"`` on a backend
+                that cannot provide an atomic batch.
+        """
+        if atomicity not in ("best_effort", "require"):
+            raise ConfigurationError(
+                f"Unknown atomicity policy '{atomicity}' "
+                "(expected 'best_effort' or 'require')"
+            )
+        db = await self._ensure_db()
+        if not records:
+            return {"affected_rows": 0}
+
+        atomic = self._supports_atomic_batch()
+        if atomicity == "require" and not atomic:
+            raise CapabilityNotSupportedError("atomic batch commit", self)
+        if not atomic:
+            logger.debug(
+                "commit_batch on non-transactional backend '%s' is not "
+                "all-or-nothing (atomicity=best_effort)",
+                self.backend,
+            )
+
+        if identity is None:
+            ids = await db.create_batch([Record(dict(row)) for row in records])
+            return {"affected_rows": len(ids)}
+
+        # Idempotent per-row upsert. The loop is not batch-atomic without the
+        # transaction capability, so "require" cannot be honored here.
+        if atomicity == "require":
+            raise CapabilityNotSupportedError(
+                "atomic idempotent batch commit", self
+            )
+        affected = 0
+        for row in records:
+            record_id = identity.derive(row)
+            record = Record(dict(row))
+            if record_id is not None:
+                await db.upsert(record_id, record)
+            else:
+                await db.upsert(record)
             affected += 1
         return {"affected_rows": affected}
 
