@@ -373,6 +373,7 @@ class FSMBuilder:
         else:
             state_def.type = StateType.NORMAL
         state_def.run_on_failure = state_config.run_on_failure
+        state_def.emit_output = state_config.emit_output
         state_def.metadata = state_config.metadata
 
         return state_def

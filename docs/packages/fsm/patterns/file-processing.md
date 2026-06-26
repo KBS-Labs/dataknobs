@@ -74,7 +74,7 @@ from dataknobs_fsm.patterns.file_processing import FileProcessor, FileProcessing
 config = FileProcessingConfig(
     input_path="data.csv",
     output_path="processed.json",
-    mode=ProcessingMode.STREAM
+    mode=ProcessingMode.BATCH
 )
 
 # Create processor
@@ -84,6 +84,8 @@ processor = FileProcessor(config)
 import asyncio
 results = asyncio.run(processor.process())
 
+# BATCH / WHOLE report these keys; STREAM reports total_processed /
+# successful / failed instead (see Metrics).
 print(f"Records processed: {results['records_processed']}")
 print(f"Records written: {results['records_written']}")
 print(f"Errors: {results['errors']}")
@@ -144,29 +146,29 @@ results = asyncio.run(processor.process())
 ```python
 from dataknobs_fsm.patterns.file_processing import create_log_analyzer
 
-# Define patterns to extract
+# Define patterns to extract. Each pattern's named groups are merged into the
+# record (a transformation step), so a matching line gains `timestamp`,
+# `level`, and `message` fields.
 patterns = [
     r'(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',
     r'(?P<level>ERROR|WARNING|INFO)',
     r'(?P<message>.*)'
 ]
 
-# Define aggregations
-aggregations = {
-    "error_count": lambda errors: len([e for e in errors if e == "ERROR"]),
-    "warning_count": lambda warnings: len([w for w in warnings if w == "WARNING"])
-}
-
-# Create log analyzer
+# Create log analyzer (pattern extraction runs as a per-record transform).
 processor = create_log_analyzer(
     log_file="app.log",
     output_file="analysis.json",
     patterns=patterns,
-    aggregations=aggregations
 )
 
 results = asyncio.run(processor.process())
 ```
+
+> `create_log_analyzer` also accepts `aggregations=`, but remember aggregation
+> is **per-record** (see [Aggregations](#aggregations)) — each function receives
+> a single record, not a collection across lines. Cross-line roll-ups (e.g. a
+> total error count for the whole file) are not provided by this pattern.
 
 ## Validation
 
@@ -265,27 +267,30 @@ config = FileProcessingConfig(
 
 ### Aggregation Functions
 
-Aggregate data during processing:
+Aggregation here is **per-record**: each aggregation callable receives the
+current record dict and returns a value, and the record is replaced by
+`{name: fn(record) for name, fn in aggregations.items()}`. It is a map that
+produces a summary dict from each record's own fields — not a cross-record
+reduce (the FSM processes records independently, so true cross-record
+aggregation is not provided by this pattern).
 
 ```python
-def sum_values(values):
-    return sum(float(v) for v in values if v)
+def total(record):
+    # Reduce over a list field on the record.
+    return sum(float(v) for v in record.get("values", []))
 
-def average(values):
-    nums = [float(v) for v in values if v]
-    return sum(nums) / len(nums) if nums else 0
-
-def count_unique(values):
-    return len(set(values))
+def item_count(record):
+    return len(record.get("items", []))
 
 config = FileProcessingConfig(
     input_path="data.csv",
     aggregations={
-        "total": sum_values,
-        "average": average,
-        "unique_count": count_unique
+        "total": total,
+        "item_count": item_count,
     }
 )
+# A record {"values": [1, 2, 3], "items": ["a", "b"]} becomes
+# {"total": 6.0, "item_count": 2}.
 ```
 
 ## Processing Modes
@@ -332,17 +337,41 @@ config = FileProcessingConfig(
 
 ## FSM Structure
 
-The file processor creates an FSM with the following states:
+The processor wires an FSM from only the **enabled** stages, connected into a
+single chain that always reaches `write → complete` — so a record never
+dead-ends. The always-present stages are `read` (start), `parse`, `write`, and
+`complete` (end); the middle stages appear only when their config section is
+set:
 
-1. **read** (start) - Read input file
-2. **parse** - Parse file format
-3. **validate** - Validate against schema (optional)
-4. **filter** - Apply filters (optional)
-5. **transform** - Apply transformations (optional)
-6. **aggregate** - Perform aggregations (optional)
-7. **write** - Write output
-8. **complete** (end) - Processing complete
-9. **error** (end) - Error state
+| Stage | Present when | Role |
+|---|---|---|
+| `read` | always (start) | Entry point |
+| `parse` | always | Pass-through (the reader/stream executor already parses lines into records) |
+| `validate` | `validation_schema` set | Gate: valid records continue; invalid route to `error` |
+| `filter` | `filters` set | Gate: passing records continue; the rest route to `filtered` |
+| `transform` | `transformations` set | Apply the transformations in order |
+| `aggregate` | `aggregations` set | Reduce each record to a summary dict |
+| `write` | always | Records here are emitted to the output |
+| `complete` | always (end) | Emitting terminal — record is part of the output |
+| `filtered` | `filters` set (end) | **Non-emitting** terminal — filtered records are excluded from the output |
+| `error` | `validation_schema` set (end) | **Non-emitting** terminal — invalid records are excluded from the output |
+
+A pure passthrough config therefore flows `read → parse → write → complete`,
+and every record reaches the output. Disabled stages are simply absent from
+the chain (never a dead-end).
+
+The `filtered` and `error` terminals set `emit_output=False`
+(`StateDefinition.emit_output`, the `emit_output:` state-config key). That flag
+drives the *same* exclusion decision in every processing mode: the streaming
+sink skips non-emitting terminals just as the batch/whole writers only write
+records that reached `complete`. So filtering and validation behave identically
+whether a record flows through the batch, whole-file, or streaming path —
+**all three modes execute on the same async engine.**
+
+The per-record functions are wired through the FSM's `custom_functions=`
+channel and referenced from each state's `functions` block (transform /
+aggregate) or arc `condition` (filter / validate) — the supported idiom; a
+top-level `config['functions']` dict is silently dropped by `FSMConfig`.
 
 ## Complete Examples
 
@@ -376,13 +405,15 @@ async def process_csv_to_json():
         record["processed_at"] = datetime.now().isoformat()
         return record
 
-    # Create configuration
+    # Create configuration. BATCH (or WHOLE) mode populates the
+    # records_processed / records_written / skipped / errors metrics; STREAM
+    # mode reports total_processed / successful / failed instead (see Metrics).
     config = FileProcessingConfig(
         input_path="users.csv",
         output_path="users.json",
         format=FileFormat.CSV,
         output_format=FileFormat.JSON,
-        mode=ProcessingMode.STREAM,
+        mode=ProcessingMode.BATCH,
         validation_schema=schema,
         transformations=[clean_data, add_timestamp],
         filters=[lambda r: r.get("active") == "true"]
@@ -392,12 +423,12 @@ async def process_csv_to_json():
     processor = FileProcessor(config)
     results = await processor.process()
 
-    print(f"Processing complete:")
+    print("Processing complete:")
     print(f"  Records read: {results['lines_read']}")
     print(f"  Records processed: {results['records_processed']}")
-    print(f"  Records written: {results['records_written']}")
-    print(f"  Errors: {results['errors']}")
-    print(f"  Skipped: {results['skipped']}")
+    print(f"  Records written: {results['records_written']}")  # reached `complete`
+    print(f"  Errors: {results['errors']}")                    # invalid records
+    print(f"  Skipped: {results['skipped']}")                  # filtered records
 
     return results
 
@@ -405,15 +436,17 @@ async def process_csv_to_json():
 asyncio.run(process_csv_to_json())
 ```
 
-### Example 2: Log Analysis with Aggregation
+### Example 2: Log Analysis (pattern extraction)
+
+`create_log_analyzer` extracts named regex groups into each record as a
+per-record transformation, so every matching line becomes a structured record.
 
 ```python
 import asyncio
-import re
 from dataknobs_fsm.patterns.file_processing import create_log_analyzer
 
 async def analyze_logs():
-    # Define patterns for log parsing
+    # Each pattern's named groups are merged into the record.
     patterns = [
         r'(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})',
         r'\[(?P<level>\w+)\]',
@@ -421,25 +454,14 @@ async def analyze_logs():
         r'(?P<message>.*)'
     ]
 
-    # Define aggregation functions
-    def count_by_level(levels):
-        from collections import Counter
-        return dict(Counter(levels))
-
-    def extract_errors(messages):
-        return [msg for msg in messages if "error" in msg.lower()]
-
-    aggregations = {
-        "level_counts": count_by_level,
-        "error_messages": extract_errors
-    }
-
-    # Create and run analyzer
+    # Create and run analyzer. The output contains one structured record per
+    # matching line, e.g. {"timestamp": ..., "level": "ERROR", "module": ...,
+    # "message": ...}. (Aggregation is per-record; cross-line roll-ups such as
+    # a total error count are not provided by this pattern.)
     analyzer = create_log_analyzer(
         log_file="application.log",
         output_file="log_analysis.json",
         patterns=patterns,
-        aggregations=aggregations
     )
 
     results = await analyzer.process()
@@ -493,27 +515,51 @@ asyncio.run(batch_process_files())
 
 ## Metrics
 
-The processor tracks the following metrics:
+`process()` returns a metrics dict. The keys it populates depend on the mode:
+
+**BATCH and WHOLE:**
 
 ```python
 metrics = {
-    'lines_read': 0,        # Total lines read from file
-    'records_processed': 0,  # Records successfully processed
-    'records_written': 0,    # Records written to output
-    'errors': 0,            # Processing errors
-    'skipped': 0            # Records skipped (filtered out)
+    'lines_read': 0,         # Total lines read (BATCH only; WHOLE reads at once)
+    'records_processed': 0,  # Records that reached a clean terminal (complete or filtered)
+    'records_written': 0,    # Records that reached `complete` (in the output)
+    'errors': 0,             # Invalid (validation `error`) + failed-transform records
+    'skipped': 0,            # Filtered records (reached the `filtered` terminal)
 }
 ```
 
+**STREAM** merges the streaming executor's statistics instead:
+
+```python
+metrics = {
+    'lines_read': 0,        # (unused in stream mode)
+    'total_processed': 0,   # Records pulled through the stream
+    'successful': 0,        # Records that finished without error (includes filtered)
+    'failed': 0,            # Records that errored
+    'duration': 0.0,        # Wall-clock seconds
+    'throughput': 0.0,      # Records per second
+    ...                     # plus the initial BATCH-style keys, left at 0
+}
+```
+
+In every mode, only records that reach `complete` are written to the output;
+filtered and invalid records are excluded (see [FSM Structure](#fsm-structure)).
+
 ## Error Handling
 
-The file processor handles errors at multiple levels:
+The file processor routes records by outcome:
 
-1. **Parse Errors**: Records that fail parsing are counted in errors
-2. **Validation Errors**: Invalid records go to error state
-3. **Filter Rejections**: Filtered records are counted as skipped
-4. **Transform Errors**: Transformation failures are logged
-5. **Write Errors**: Output errors are tracked
+1. **Parse errors** (malformed JSON lines while reading) are counted in `errors`
+   during the read step.
+2. **Validation failures** route the record to the non-emitting `error`
+   terminal — excluded from the output and counted in `errors`.
+3. **Filter rejections** route the record to the non-emitting `filtered`
+   terminal — excluded from the output and counted in `skipped`.
+4. **Transform errors** (a transformation raising, or returning a non-dict)
+   mark the record as failed; it is not written and is counted in `errors`.
+5. **Compressed output** is rejected up front with `NotImplementedError` (no
+   execution path writes compressed output).
 
 ## Performance Considerations
 

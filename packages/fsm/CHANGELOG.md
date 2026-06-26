@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed — the per-state opt-out for recovery / compensation / cleanup /
   dead-letter states that must execute despite a prior failure. It re-enables
   the transforms only; the record is still reported as a failure.
+- States gain an `emit_output` flag (`StateDefinition.emit_output`, and the
+  `emit_output:` state config key, default `True`). An **end** state marked
+  `emit_output=False` has its records excluded from the output in every
+  processing mode — the streaming sink skips non-emitting terminals just as the
+  batch/whole writers only write records that reach an emitting terminal. Used
+  to keep "processed but not part of the output" records (e.g. filtered or
+  rejected) out of the result.
 
 ### Changed
 
@@ -45,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it gates the parent's downstream-transform skip and persistence decision too —
   an isolated sub-network whose transform raised no longer reports the parent
   record as a success.
+- `FileProcessor` streaming mode now runs on the same async execution engine as
+  its batch and whole-file modes (`AsyncStreamExecutor` drives the async engine
+  directly instead of running the synchronous engine in a thread pool). All
+  three modes share one execution path, so filters, validators, and transforms
+  behave identically regardless of mode, and async state transforms are awaited
+  in streaming mode.
 
 ### Fixed
 
@@ -73,6 +86,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Registered interface functions (e.g. `ITransformFunction` instances)
   supplied via `custom_functions=` are now detected as async and awaited
   correctly, instead of being mistaken for synchronous callables.
+- `FileProcessor` now processes records end-to-end. Previously every record
+  dead-ended at the `filter` state and was reported as errored/failed even for
+  a pure passthrough config, and batch mode never wrote its output. The FSM now
+  connects only the *enabled* stages into a single chain to `write → complete`
+  (so no stage dead-ends), batch mode writes its output, and configured
+  `filters` / `transformations` / `aggregations` / `validation_schema` actually
+  execute — they are wired through the FSM's `custom_functions=` channel and
+  referenced from state `functions` blocks (transform / aggregate) and arc
+  conditions (filter / validate) instead of unresolvable inline-code names.
+  Filtered records are excluded from the output and counted as `skipped`;
+  records that fail validation or a transform are excluded and counted as
+  `errors`.
 
 ## v0.2.3 - 2026-06-23
 

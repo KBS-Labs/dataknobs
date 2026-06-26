@@ -26,6 +26,10 @@ from typing import Any
 from dataknobs_fsm.core.fsm import FSM as CoreFSM
 from dataknobs_fsm.core.state import StateDefinition
 from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
+from dataknobs_fsm.patterns.file_processing import (
+    FileProcessingConfig,
+    FileProcessor,
+)
 
 
 def _core_fsm(pattern: Any) -> CoreFSM:
@@ -93,4 +97,60 @@ def test_etl_does_not_wire_fetch_as_per_record_step() -> None:
     assert not extract_state.transform_functions, (
         "the ETL `extract` state should be a passthrough — DatabaseFetch is "
         "repaired at the library layer, not wired as a per-record step"
+    )
+
+
+# --------------------------------------------------------------------------
+# FileProcessor — enabled stages connect with no dead-ends; transforms are
+# wired to their state; filtered records terminate in a non-emitting state.
+# --------------------------------------------------------------------------
+
+
+def _all_states(core: CoreFSM) -> dict[str, StateDefinition]:
+    states: dict[str, StateDefinition] = {}
+    for network in core.networks.values():
+        states.update(network.states)
+    return states
+
+
+def _fp(**kwargs: Any) -> FileProcessor:
+    return FileProcessor(FileProcessingConfig(input_path="x.json", **kwargs))
+
+
+def test_fileprocessor_passthrough_has_no_dead_end() -> None:
+    """A passthrough config flows read -> parse -> write -> complete.
+
+    The dead-end bug: disabled stages (e.g. `filter`) were still on the path
+    and had no outgoing arc, so every record stalled before `write`/`complete`.
+    Now only enabled stages are wired, and no non-end state is a dead-end.
+    """
+    states = _all_states(_core_fsm(_fp()))
+    assert set(states) == {"read", "parse", "write", "complete"}
+    for name, state in states.items():
+        if state.is_end_state():
+            continue
+        assert state.outgoing_arcs, (
+            f"non-end state {name!r} has no outgoing arc (dead-end)"
+        )
+
+
+def test_fileprocessor_transform_state_references_function() -> None:
+    """The `transform` state must reference the transform to run it."""
+    transform_state = _state(_core_fsm(_fp(transformations=[lambda r: r])), "transform")
+    assert transform_state.transform_functions, (
+        "the FileProcessor `transform` state declares no transform — the "
+        "configured transformation is not wired and would not run"
+    )
+
+
+def test_fileprocessor_filtered_terminal_is_non_emitting() -> None:
+    """Filtered records terminate in a non-emitting end state.
+
+    ``emit_output=False`` is what keeps filtered records out of the output in
+    every mode (the streaming sink and the batch/whole writers both honor it).
+    """
+    filtered = _state(_core_fsm(_fp(filters=[lambda r: True])), "filtered")
+    assert filtered.is_end_state()
+    assert filtered.emit_output is False, (
+        "filtered records must be excluded from output (emit_output=False)"
     )

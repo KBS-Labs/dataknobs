@@ -7,8 +7,8 @@ from typing import Any, AsyncIterator, Callable, List, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.execution.stream import StreamProgress
 from dataknobs_fsm.streaming.core import StreamConfig
 
@@ -54,9 +54,13 @@ class AsyncStreamExecutor:
         self.stream_config = stream_config or StreamConfig()
         self.enable_backpressure = enable_backpressure
         self.progress_callback = progress_callback
-        
-        # Create execution engine
-        self.engine = ExecutionEngine(fsm)
+
+        # Create execution engine. Use the async engine (the same one
+        # AsyncBatchExecutor drives) so streaming shares one functional code
+        # path with batch/whole: async state transforms are awaited (the sync
+        # engine returned un-awaited coroutines for them) and the engine
+        # offloads its own blocking I/O instead of being parked in a thread.
+        self.engine = AsyncExecutionEngine(fsm)
         
         # Backpressure management
         self._pending_chunks = 0
@@ -211,10 +215,15 @@ class AsyncStreamExecutor:
                 if isinstance(result, Exception):
                     progress.errors.append((progress.records_processed + i, result))
                 else:
-                    # Result is a tuple[bool, Any] at this point
-                    success, value = result  # type: ignore
-                    if success:  # success
-                        successful_results.append(value)
+                    # Result is a tuple[bool, Any, bool] (success, value, emit).
+                    success, value, emit = result  # type: ignore
+                    if success:
+                        # A record that finished in a non-emitting terminal
+                        # (e.g. a `filtered`/`error` state) is processed
+                        # cleanly but excluded from the sink — same exclusion
+                        # the batch/whole writers apply by final state.
+                        if emit:
+                            successful_results.append(value)
                     else:
                         progress.errors.append((progress.records_processed + i, Exception(value)))
             
@@ -245,37 +254,52 @@ class AsyncStreamExecutor:
         index: int,
         context_template: ExecutionContext,
         max_transitions: int
-    ) -> Tuple[bool, Any]:
+    ) -> Tuple[bool, Any, bool]:
         """Process a single item.
-        
+
         Args:
             item: Item to process.
             index: Item index.
             context_template: Template context.
             max_transitions: Maximum transitions.
-            
+
         Returns:
-            Tuple of (success, result).
+            Tuple of (success, result, emit) where ``emit`` is whether the
+            record's final state contributes to the output sink.
         """
         async with self._semaphore:  # Control parallelism
             # Create context
             context = context_template.clone()
             context.data = item
-            
+
             # Reset to initial state
             initial_state = self._find_initial_state()
             if initial_state:
                 context.set_state(initial_state)
-            
-            # Execute in thread pool
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None,
-                self.engine.execute,
+
+            # Drive the async engine directly (no thread pool): it awaits async
+            # state transforms and offloads its own blocking I/O.
+            success, value = await self.engine.execute(
                 context,
                 item,
-                max_transitions
+                max_transitions,
             )
+            emit = self._should_emit(context.current_state)
+            return success, value, emit
+
+    def _should_emit(self, state_name: str | None) -> bool:
+        """Whether a record finishing in ``state_name`` contributes to output.
+
+        Honors the state's ``emit_output`` flag (default ``True``), so a
+        terminal marked ``emit_output=False`` (e.g. a ``filtered``/``error``
+        state) opts its records out of the sink — the streaming-mode
+        counterpart of the batch/whole writers excluding non-``complete``
+        records.
+        """
+        if not state_name:
+            return True
+        state_def = self.fsm.get_state(state_name)
+        return getattr(state_def, "emit_output", True) if state_def else True
     
     async def _sync_to_async_iter(self, sync_iter):
         """Convert sync iterator to async iterator.
