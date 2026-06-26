@@ -108,6 +108,87 @@ async def test_run_until_breakpoint_stops_on_state_transform_failure() -> None:
     assert result.failed_states == ["middle"]
 
 
+def test_step_run_on_failure_state_runs_and_surfaces_accumulated_failure() -> None:
+    """Step-driver: a run_on_failure state runs despite a prior failure, and the
+    step reports success=True while still carrying the accumulated failed_states.
+
+    This locks two parts of the contract on the step path specifically:
+
+    * the ``run_on_failure`` exemption is honored by ``execute_step_sync`` (the
+      step path has its own guard, separate from the engine drive loop); and
+    * the documented manual-stepping trap — a step that enters a *clean*
+      downstream state after an upstream failure reports ``success=True`` (that
+      state did not itself fail) but still surfaces the accumulated
+      ``failed_states``, so a consumer must check ``failed_states``, not
+      ``success`` alone.
+    """
+    calls: list[str] = []
+
+    def _spy_cleanup(*args, **_kwargs):
+        calls.append("cleanup")
+        state = args[0]
+        data = getattr(state, "data", state)
+        return dict(data) if isinstance(data, dict) else {}
+
+    config = {
+        "name": "StepRecoveryFSM",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {"name": "start", "is_start": True},
+                    {
+                        "name": "fail",
+                        "functions": {
+                            "transform": {"type": "registered", "name": "boom_state"}
+                        },
+                    },
+                    {
+                        "name": "cleanup",
+                        "run_on_failure": True,
+                        "functions": {
+                            "transform": {"type": "registered", "name": "spy_cleanup"}
+                        },
+                    },
+                    {"name": "done", "is_end": True},
+                ],
+                "arcs": [
+                    {"from": "start", "to": "fail"},
+                    {"from": "fail", "to": "cleanup"},
+                    {"from": "cleanup", "to": "done"},
+                ],
+            }
+        ],
+    }
+    advanced = create_advanced_fsm(
+        config,
+        custom_functions={"boom_state": _boom_state, "spy_cleanup": _spy_cleanup},
+    )
+    context = advanced.create_context({"id": "1"})
+
+    # Step 1: start -> fail, whose transform raises.
+    step1 = advanced.execute_step_sync(context)
+    assert step1.to_state == "fail"
+    assert step1.success is False
+    assert step1.failed_states == ["fail"]
+
+    # Step 2: fail -> cleanup. cleanup is run_on_failure, so its transform RUNS
+    # despite the prior failure; the step succeeds (cleanup did not itself fail)
+    # but still surfaces the accumulated failure.
+    step2 = advanced.execute_step_sync(context)
+    assert step2.to_state == "cleanup"
+    assert "cleanup" in calls, (
+        "a run_on_failure state's transform must run in the step-driver path too"
+    )
+    assert step2.success is True, (
+        "the step into a clean run_on_failure state should report success=True"
+    )
+    assert step2.failed_states == ["fail"], (
+        "the accumulated upstream failure must still surface on a success=True step"
+    )
+
+
 def test_clean_state_transform_still_succeeds() -> None:
     """Guard: a non-raising state transform keeps success=True / no failed_states."""
 

@@ -310,6 +310,21 @@ class NetworkExecutor:
         if context.network_stack and context.network_stack[-1][0] == network_name:
             context.pop_network()
 
+        # Propagate transform failures from the (possibly isolated) sub-network
+        # back into the parent. failed_states is load-bearing for data integrity:
+        # it gates downstream transform persistence (should_skip_state_transforms)
+        # and the parent's finalize_single_result. COPY isolation (the default)
+        # gives the sub-network a fresh context, and PARTIAL isolation clones it,
+        # so neither carries failures back on its own; for the no-isolation branch
+        # sub_context IS context, making the union a harmless no-op. Union here,
+        # before entering arc.return_state, so the return state and every later
+        # parent state see the failure and skip their transforms. Union regardless
+        # of `success`: a failed transform does not halt traversal, so the
+        # sub-network can reach a final state (success=True) while still having
+        # recorded a failure.
+        if sub_context is not context:
+            context.failed_states |= getattr(sub_context, 'failed_states', set())
+
         if success:
             # Update main context with result
             context.data = result

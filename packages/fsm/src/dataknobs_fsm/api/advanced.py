@@ -1226,9 +1226,8 @@ class AdvancedFSM:
             # Mark if it's an end state
             context.metadata['is_end_state'] = state_def.is_end
 
-    @staticmethod
     def _step_transform_failure(
-        context: ExecutionContext, state_name: str
+        self, context: ExecutionContext, state_name: str
     ) -> tuple[bool, str | None, list[str] | None]:
         """Compute the step's outcome from any recorded transform failure.
 
@@ -1250,7 +1249,7 @@ class AdvancedFSM:
         failed = getattr(context, 'failed_states', None)
         if not failed:
             return True, None, None
-        failed_list = sorted(failed)
+        failed_list = self._engine.failed_states_sorted(context)
         if state_name in failed:
             return (
                 False,

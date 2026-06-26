@@ -40,9 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persisting a record whose transform already failed, while traversal still
   continues so the record is accounted as an error. States that must run
   despite a prior failure (recovery / compensation / cleanup / dead-letter)
-  opt out with `run_on_failure=True`. A transform failure on a parallel /
-  subnetwork sub-path is propagated to the parent context on merge, so it gates
-  the parent's persistence decision too.
+  opt out with `run_on_failure=True`. A transform failure on a parallel, batch,
+  or (isolated) sub-network sub-path is propagated back to the parent context, so
+  it gates the parent's downstream-transform skip and persistence decision too —
+  an isolated sub-network whose transform raised no longer reports the parent
+  record as a success.
 
 ### Fixed
 

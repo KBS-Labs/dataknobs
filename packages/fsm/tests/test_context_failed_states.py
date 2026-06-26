@@ -12,8 +12,11 @@ exact:
 * ``create_child_context()`` does NOT carry it (a parallel sub-path starts
   clean);
 * ``merge_child_context()`` unions the child's failures back into the parent, so
-  a failure on a parallel / subnetwork sub-path is not lost from the parent's
-  result.
+  a failure on a parallel / batch sub-path is not lost from the parent's result.
+
+(Isolated sub-network/push-arc failures cross a separate isolation boundary and
+are merged back in ``NetworkExecutor._handle_push_arc`` — covered by
+``test_state_transform_skip_on_failure.py``, not here.)
 
 The merge assertion is reproduce-first: before the union was added,
 ``merge_child_context`` dropped the child's ``failed_states`` and the parent

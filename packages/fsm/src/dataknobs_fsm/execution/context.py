@@ -384,8 +384,10 @@ class ExecutionContext:
 
         # Propagate transform failures from the child sub-path. failed_states is
         # load-bearing for data integrity (it gates persistence and the parent's
-        # finalize_single_result), so a failure on a parallel/subnetwork path
-        # must surface in the parent's result rather than being lost on merge.
+        # finalize_single_result), so a failure on a parallel/batch path must
+        # surface in the parent's result rather than being lost on merge.
+        # (Sub-network/push-arc failures use a separate isolation boundary and
+        # are merged back in NetworkExecutor._handle_push_arc, not here.)
         self.failed_states |= getattr(child, 'failed_states', set())
 
         # Merge metadata
