@@ -224,11 +224,23 @@ separately.
 
 - **Failure routing.** A record whose `transform` or `load` step raises is
   counted as an `error` (and trips `error_threshold`), but it is **not** routed
-  to a dedicated error state — there is no conditional error arc. Because a
-  failing `transform` does not halt traversal, such a record may still reach the
-  `load` step and be upserted with its pre-failure data before the error is
-  surfaced in the metrics. Explicit on-failure routing (skip-load / dead-letter)
-  requires a conditional error-arc design and is tracked separately.
+  to a dedicated error state — there is no conditional error arc. Once a record
+  fails a state transform, the engine skips its remaining/downstream transforms,
+  so a record whose `transform` raised is **not** upserted at `load` (no stale
+  or untransformed write reaches the target). The record still traverses to the
+  final state for accounting; it is simply reported as a failure rather than
+  loaded. What is not yet implemented is explicit on-failure *routing* — sending
+  the failed record to a dead-letter sink or a distinct error state for
+  inspection — which requires a conditional error-arc design and is tracked
+  separately.
+
+  If you build a custom FSM (rather than using `DatabaseETL`) and need a
+  recovery / cleanup / dead-letter state whose transforms must run despite an
+  upstream failure, mark that state `run_on_failure: true` — the engine's
+  post-failure transform skip does not apply to it (see
+  [Failure handling](../guides/configuration.md#failure-handling-run_on_failure)).
+  It re-enables the state's transforms only; the record is still reported as a
+  failure.
 
 ## Testing
 

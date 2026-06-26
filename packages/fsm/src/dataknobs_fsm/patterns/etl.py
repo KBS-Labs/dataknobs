@@ -18,6 +18,7 @@ from dataknobs_common.structured_config import (
 
 from dataknobs_data import AsyncDatabase, Query
 from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_fsm.core.exceptions import ETLError, InvalidConfigurationError
 
 from ..api.async_simple import AsyncSimpleFSM
 from ..functions.base import ITransformFunction, TransformError
@@ -65,16 +66,18 @@ class ETLConfig(StructuredConfig):
         silently overwriting the whole target with one record. Catch that
         destructive config at construction; ``key_columns`` must reference the
         post-transform field names.
+
+        This check is deliberately conservative: it rejects renaming a key
+        column's *source* name even when another mapping would recreate the key
+        under its original name (e.g. ``{"a": "id", "id": "b"}`` with
+        ``key_columns=["id"]``). Mapping order makes that combination fragile,
+        so it is rejected rather than reasoned about.
         """
         key_columns = self.key_columns or []
         mappings = self.field_mappings or {}
         for col in key_columns:
             new_name = mappings.get(col)
             if new_name is not None and new_name != col:
-                from dataknobs_fsm.core.exceptions import (
-                    InvalidConfigurationError,
-                )
-
                 raise InvalidConfigurationError(
                     f"field_mappings renames key column '{col}' to '{new_name}', "
                     f"which would break load's id derivation (key_columns must "
@@ -306,18 +309,21 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         self._fsm = self._build_fsm()
         self._reset_metrics()
 
-        # Resume from checkpoint if provided (after reset so checkpointed
-        # metrics are not zeroed out).
-        if checkpoint_id:
-            await self._load_checkpoint(checkpoint_id)
-
-        # Extract data
-        source_db = await AsyncDatabase.from_backend(
-            self.config.source_db['type'],
-            self.config.source_db  # type: ignore
-        )
-        
+        # Everything that could fail after the FSM is built runs inside the try
+        # so the finally always closes the freshly-rebuilt FSM — including a
+        # checkpoint-load failure or source-open failure.
+        source_db: AsyncDatabase | None = None
         try:
+            # Resume from checkpoint if provided (after reset so checkpointed
+            # metrics are not zeroed out).
+            if checkpoint_id:
+                await self._load_checkpoint(checkpoint_id)
+
+            source_db = await AsyncDatabase.from_backend(
+                self.config.source_db['type'],
+                self.config.source_db  # type: ignore
+            )
+
             # Determine extraction strategy
             if self.config.mode == ETLMode.INCREMENTAL:
                 query = self._get_incremental_query()
@@ -338,7 +344,6 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 
                 # Check error threshold
                 if self._check_error_threshold():
-                    from ..core.exceptions import ETLError
                     raise ETLError(f"Error threshold exceeded: {self._metrics['errors']} errors")
                     
                 # Checkpoint if needed
@@ -350,10 +355,11 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             # close still flushes and closes the FSM's async target_db adapter
             # (durable persistence of upserted rows must not depend on the
             # source closing cleanly).
-            try:
-                await source_db.close()
-            except Exception:
-                logger.exception("ETL: error closing source database")
+            if source_db is not None:
+                try:
+                    await source_db.close()
+                except Exception:
+                    logger.exception("ETL: error closing source database")
             await self._fsm.close()
 
         return self._metrics

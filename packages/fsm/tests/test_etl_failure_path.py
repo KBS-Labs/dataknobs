@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_data import AsyncDatabase, Record
+from dataknobs_data import AsyncDatabase, Query, Record
 from dataknobs_fsm.core.exceptions import ETLError
 from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 
@@ -33,6 +33,18 @@ async def _seed_source(path: str, rows: list[dict]) -> None:
     try:
         for row in rows:
             await db.upsert(row["id"], Record(dict(row)))
+    finally:
+        await db.close()
+
+
+async def _read_target(path: str) -> dict[str, dict]:
+    """Reopen the target and return its rows keyed by id."""
+    db = await AsyncDatabase.from_backend("file", {"type": "file", "path": path})
+    try:
+        return {
+            r.to_dict()["id"]: r.to_dict()
+            async for r in db.stream_read(Query())
+        }
     finally:
         await db.close()
 
@@ -135,3 +147,108 @@ async def test_error_threshold_trips_on_transform_failures(tmp_path: Path) -> No
 
     with pytest.raises(ETLError):
         await etl.run()
+
+
+@pytest.mark.asyncio
+async def test_failed_transform_record_not_loaded_to_target(tmp_path: Path) -> None:
+    """A record whose transform raises must NOT be upserted to the target.
+
+    Reproduce-first for the "loaded untransformed" divergence: before the
+    engine skipped downstream transforms on a failed record, a raising
+    transform still let traversal reach the ``load`` state, which upserted the
+    *original, untransformed* record into the target. The record was counted as
+    an ``error`` (not ``loaded``) — so a consumer trusting ``loaded`` believed
+    the row was absent while the target actually held a stale copy.
+
+    This test FAILS against that behavior (id ``2`` present in the target) and
+    PASSES once the load step is skipped for the failed record (id ``2``
+    absent; only the two clean, transformed rows persisted).
+    """
+    src = str(tmp_path / "source.json")
+    tgt = str(tmp_path / "target.json")
+    await _seed_source(
+        src,
+        [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}, {"id": "3", "name": "C"}],
+    )
+
+    etl = DatabaseETL(
+        ETLConfig(
+            source_db={"type": "file", "path": src},
+            target_db={"type": "file", "path": tgt},
+            source_query=None,
+            target_table="records",
+            key_columns=["id"],
+            mode=ETLMode.FULL_REFRESH,
+            error_threshold=1.0,
+            transformations=[_raise_on_id("2")],
+        )
+    )
+
+    metrics = await etl.run()
+    assert metrics["loaded"] == 2
+    assert metrics["errors"] == 1
+
+    target = await _read_target(tgt)
+    assert "2" not in target, (
+        "the failed record was upserted to the target instead of being "
+        f"skipped: {target}"
+    )
+    assert set(target) == {"1", "3"}, f"only the clean rows should persist: {target}"
+    # The persisted rows must carry the transform's output, not raw source data.
+    assert target["1"]["tag"] == "ok"
+    assert target["3"]["tag"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_load_failure_still_closes_fsm(tmp_path: Path) -> None:
+    """A checkpoint-load failure must not leak the freshly-built FSM.
+
+    ``run()`` rebuilds the FSM and then resumes from a checkpoint. The rebuild
+    happens before the ``try`` whose ``finally`` closes the FSM; the
+    checkpoint-load must run *inside* that ``try`` so a checkpoint-store outage
+    still tears the FSM down.
+
+    Reproduce-first: with ``_load_checkpoint`` outside the ``try`` the FSM is
+    never closed when it raises (``closed == []``); once it runs inside the
+    ``try`` the ``finally`` closes the FSM (``closed == [True]``). Real
+    constructs only — a real ``DatabaseETL`` / ``AsyncSimpleFSM`` / file backend;
+    only the external checkpoint load is forced to fail.
+    """
+    src = str(tmp_path / "source.json")
+    tgt = str(tmp_path / "target.json")
+    await _seed_source(src, [{"id": "1", "name": "A"}])
+
+    closed: list[bool] = []
+
+    class _LeakProbeETL(DatabaseETL):
+        def _build_fsm(self):  # type: ignore[override]
+            fsm = super()._build_fsm()
+            original_close = fsm.close
+
+            async def _tracked_close() -> None:
+                closed.append(True)
+                await original_close()
+
+            fsm.close = _tracked_close  # type: ignore[method-assign]
+            return fsm
+
+        async def _load_checkpoint(self, checkpoint_id: str) -> None:
+            raise RuntimeError("checkpoint store unavailable")
+
+    etl = _LeakProbeETL(
+        ETLConfig(
+            source_db={"type": "file", "path": src},
+            target_db={"type": "file", "path": tgt},
+            source_query=None,
+            target_table="records",
+            key_columns=["id"],
+            mode=ETLMode.FULL_REFRESH,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="checkpoint store unavailable"):
+        await etl.run(checkpoint_id="missing")
+
+    assert closed == [True], (
+        "a checkpoint-load failure leaked the freshly-built FSM (close not called)"
+    )

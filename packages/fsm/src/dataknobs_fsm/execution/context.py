@@ -131,6 +131,16 @@ class ExecutionContext:
         # AdvancedFSM sync/async entry points call _execute_state_transforms
         # directly (bypassing the engine's own enter_state logic).
         self._initial_transforms_executed: bool = False
+
+        # State transforms that raised for this record. Populated by
+        # BaseExecutionEngine.handle_transform_error; gates downstream transform
+        # execution (record_has_failed / should_skip_state_transforms) and the
+        # record-level success of finalize_single_result. This is per-record
+        # data-integrity state, NOT shared across records: clone() and
+        # create_child_context() deliberately do NOT copy it (each record /
+        # parallel sub-path starts clean), while merge_child_context() unions a
+        # child's failures back into the parent.
+        self.failed_states: set[str] = set()
     
     def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.
@@ -347,7 +357,9 @@ class ExecutionContext:
         child.is_child_context = True
         child.parent_context = self
         child.variables = self.variables.copy()
-        
+        # failed_states deliberately NOT copied — a parallel sub-path starts
+        # clean; its failures are unioned back via merge_child_context().
+
         self.parallel_paths[path_id] = child
         return child
     
@@ -369,7 +381,15 @@ class ExecutionContext:
         if self.data_mode == ProcessingMode.BATCH:
             self.batch_results.extend(child.batch_results)
             self.batch_errors.extend(child.batch_errors)
-        
+
+        # Propagate transform failures from the child sub-path. failed_states is
+        # load-bearing for data integrity (it gates persistence and the parent's
+        # finalize_single_result), so a failure on a parallel/batch path must
+        # surface in the parent's result rather than being lost on merge.
+        # (Sub-network/push-arc failures use a separate isolation boundary and
+        # are merged back in NetworkExecutor._handle_push_arc, not here.)
+        self.failed_states |= getattr(child, 'failed_states', set())
+
         # Merge metadata
         self.metadata.update(child.metadata)
         
@@ -469,6 +489,9 @@ class ExecutionContext:
         # Preserve the resource manager so cloned contexts (batch items,
         # COPY-mode per-record children) can still acquire state resources.
         clone.resource_manager = self.resource_manager
+        # failed_states deliberately NOT copied — a clone (batch item /
+        # per-record child) starts clean so one record's transform failure does
+        # not taint the next record's persistence decision.
 
         return clone
     

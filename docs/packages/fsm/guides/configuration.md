@@ -32,15 +32,43 @@ States are the nodes in your FSM:
 ```python
 {
     "name": "state_name",
-    "is_start": True,        # Initial state flag
-    "is_end": True,         # Final state flag
-    "functions": {          # State functions
+    "is_start": True,         # Initial state flag
+    "is_end": True,          # Final state flag
+    "run_on_failure": True,  # Run transforms despite a prior failure (see below)
+    "functions": {           # State functions
         "transform": {...},  # Data transformation
-        "validate": {...}   # Data validation
+        "validate": {...}    # Data validation
     },
-    "schema": {...}         # JSON schema for validation
+    "schema": {...}          # JSON schema for validation
 }
 ```
+
+#### Failure handling (`run_on_failure`) {#failure-handling-run_on_failure}
+
+When a state transform raises, the execution engines record the failure and
+**skip the transforms of every subsequent state** (and any remaining transforms
+in the failing state) for that record — so indeterminate, pre-failure data is
+not mutated or persisted (for example, a downstream `load`/upsert state is not
+run). The record still traverses to a final state for accounting and is reported
+as a failure.
+
+Set `run_on_failure: True` on a state to opt that state out of the skip: its
+transforms run even after an upstream failure. Use it for
+recovery / compensation / cleanup / dead-letter states that must execute their
+side effects (rollback, notification, dead-letter write) despite the failure.
+
+```python
+{
+    "name": "dead_letter",
+    "run_on_failure": True,
+    "functions": {"transform": "write_to_dead_letter"},
+}
+```
+
+`run_on_failure` re-enables the state's transforms only — it does **not** clear
+the record's failure status. The record is still reported as a failure by the
+engine (`execute()` returns `success=False`); recovery transforms run for their
+side effects, not to "rescue" the record.
 
 ### Arc (Transition) Definition
 

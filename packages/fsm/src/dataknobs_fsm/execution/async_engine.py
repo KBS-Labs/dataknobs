@@ -627,6 +627,21 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         state_resources = self._acquire_state_resources(context, state)
         try:
             for transform_func in transform_functions:
+                # Skip running transforms on a record that already failed an
+                # upstream transform — don't mutate/persist indeterminate data
+                # (e.g. don't run the ETL load upsert after the transform
+                # raised). Traversal still continues so the record reaches a
+                # final state and is reported as a failure. A state declared
+                # run_on_failure=True (recovery/cleanup/dead-letter) is exempt
+                # and runs regardless.
+                if self.should_skip_state_transforms(context, state):
+                    logger.debug(
+                        "Skipping transform in state '%s': record already "
+                        "failed in %s",
+                        state_name,
+                        self.failed_states_sorted(context),
+                    )
+                    break
                 try:
                     func_context = FunctionContext(
                         state_name=state_name,

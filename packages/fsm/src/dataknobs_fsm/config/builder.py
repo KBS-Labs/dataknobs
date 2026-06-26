@@ -372,8 +372,9 @@ class FSMBuilder:
             state_def.type = StateType.END
         else:
             state_def.type = StateType.NORMAL
+        state_def.run_on_failure = state_config.run_on_failure
         state_def.metadata = state_config.metadata
-        
+
         return state_def
 
     def _get_function_name(self, func: Any) -> str | None:

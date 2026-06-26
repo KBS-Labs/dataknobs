@@ -140,8 +140,9 @@ class StateConfig(BaseModel):
     data_mode: DataHandlingMode | None = None
     is_start: bool = False
     is_end: bool = False
+    run_on_failure: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
+
     model_config = {"populate_by_name": True}  # Allow both 'schema' and 'data_schema'
 
     @classmethod

@@ -358,6 +358,20 @@ class StepResult:
     error: str | None = None
     at_breakpoint: bool = False
     is_complete: bool = False
+    # States whose transform raised during this record's execution. A step that
+    # enters a state whose transform failed reports success=False and surfaces
+    # the offending state name(s) here, mirroring the execution engines'
+    # finalize_single_result contract (a swallowed transform failure must not
+    # be reported as a successful step).
+    #
+    # NOTE for manual step-driving: `success` reflects only THIS step's target
+    # state. Once a record has failed in an earlier state, subsequent steps
+    # (whose transforms are skipped) report success=True while still carrying
+    # the accumulated `failed_states`. A consumer driving the FSM step-by-step
+    # past a failure must therefore check `failed_states`, not `success` alone,
+    # to detect that the record failed upstream. (run_until_breakpoint already
+    # stops at the first success=False step, so it is unaffected.)
+    failed_states: list[str] | None = None
 
 
 class AdvancedFSM:
@@ -1212,6 +1226,40 @@ class AdvancedFSM:
             # Mark if it's an end state
             context.metadata['is_end_state'] = state_def.is_end
 
+    def _step_transform_failure(
+        self, context: ExecutionContext, state_name: str
+    ) -> tuple[bool, str | None, list[str] | None]:
+        """Compute the step's outcome from any recorded transform failure.
+
+        After a step runs the target state's transforms, a transform that
+        raised is recorded in ``context.failed_states`` by the engine's
+        ``handle_transform_error``. A step that entered such a state must report
+        ``success=False`` rather than silently succeeding (the same silent
+        data-loss class the engines' ``finalize_single_result`` closed).
+
+        Args:
+            context: Execution context after running the state's transforms.
+            state_name: The state this step entered (``arc.target_state``).
+
+        Returns:
+            ``(success, error, failed_states)`` — ``success`` is False when
+            ``state_name`` recorded a failure; ``failed_states`` is the sorted
+            list of all states that failed for this record (or None if none).
+        """
+        failed = getattr(context, 'failed_states', None)
+        if not failed:
+            return True, None, None
+        failed_list = self._engine.failed_states_sorted(context)
+        if state_name in failed:
+            return (
+                False,
+                f"State transform failed in: {state_name}",
+                failed_list,
+            )
+        # A prior step failed but this step's state did not — surface the
+        # accumulated failure list without overriding this step's success.
+        return True, None, failed_list
+
     def _is_at_end_state(self, context: ExecutionContext) -> bool:
         """Check if context is at an end state (shared logic).
 
@@ -1420,6 +1468,19 @@ class AdvancedFSM:
         transform_functions, state_obj = self._engine.prepare_state_transform(state_def, context)
 
         for transform_func in transform_functions:
+            # Skip running transforms on a record that already failed an
+            # upstream transform — mirrors the engine's behavior so a stepped
+            # record is not mutated/persisted after a transform raised. A state
+            # declared run_on_failure=True (recovery/cleanup/dead-letter) is
+            # exempt and runs regardless.
+            if self._engine.should_skip_state_transforms(context, state_def):
+                logger.debug(
+                    "Skipping transform in state '%s': record already failed "
+                    "in %s",
+                    state_name,
+                    self._engine.failed_states_sorted(context),
+                )
+                break
             try:
                 # Create function context
                 func_context = FunctionContext(
@@ -1512,14 +1573,19 @@ class AdvancedFSM:
             self._call_hook_sync('on_state_exit', from_state)
             self._call_hook_sync('on_state_enter', arc.target_state)
 
+            success, error, failed_states = self._step_transform_failure(
+                context, arc.target_state
+            )
             return StepResult(
                 from_state=from_state, to_state=arc.target_state,
                 transition=arc.name or f"{from_state}->{arc.target_state}",
                 data_before=data_before,
                 data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time, success=True,
+                duration=time.time() - start_time, success=success,
+                error=error,
                 at_breakpoint=at_breakpoint,
                 is_complete=self._is_at_end_state(context),
+                failed_states=failed_states,
             )
 
         except Exception as e:
@@ -1585,14 +1651,19 @@ class AdvancedFSM:
             await self._call_hook_async('on_state_exit', from_state)
             await self._call_hook_async('on_state_enter', arc.target_state)
 
+            success, error, failed_states = self._step_transform_failure(
+                context, arc.target_state
+            )
             return StepResult(
                 from_state=from_state, to_state=arc.target_state,
                 transition=arc.name or f"{from_state}->{arc.target_state}",
                 data_before=data_before,
                 data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time, success=True,
+                duration=time.time() - start_time, success=success,
+                error=error,
                 at_breakpoint=at_breakpoint,
                 is_complete=self._is_at_end_state(context),
+                failed_states=failed_states,
             )
 
         except Exception as e:

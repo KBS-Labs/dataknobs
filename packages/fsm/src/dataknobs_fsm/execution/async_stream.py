@@ -224,7 +224,7 @@ class AsyncStreamExecutor:
                     await sink(successful_results)
                 else:
                     # Run sync sink in executor
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, sink, successful_results)
             
             # Update progress
@@ -268,7 +268,7 @@ class AsyncStreamExecutor:
                 context.set_state(initial_state)
             
             # Execute in thread pool
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 self.engine.execute,
@@ -324,5 +324,5 @@ class AsyncStreamExecutor:
             await self.progress_callback(progress)
         else:
             # Run sync callback in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore

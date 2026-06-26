@@ -16,9 +16,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The async execution engine now acquires a state's declared `resources`
   into the transform `FunctionContext`, so registered async transforms
   receive their injected resources (matching the synchronous engine).
+- `StepResult` (advanced API) gains a `failed_states` field listing the
+  states whose transform raised during a stepped record's execution.
+- States gain a `run_on_failure` flag (`StateDefinition.run_on_failure`, and the
+  `run_on_failure:` state config key). A state declared with
+  `run_on_failure=True` runs its transforms even after an upstream transform
+  failed — the per-state opt-out for recovery / compensation / cleanup /
+  dead-letter states that must execute despite a prior failure. It re-enables
+  the transforms only; the record is still reported as a failure.
+
+### Changed
+
+- A record whose **state transform raises** is now reported as a failed
+  record by the execution engines: it still traverses to a final state, but
+  `execute()` returns `success=False` (the failure is recorded in
+  `context.failed_states` and surfaced by
+  `BaseExecutionEngine.finalize_single_result`). Previously such a record was
+  reported as `success=True`. This is a cross-cutting behavioral change that
+  affects **every** execution-engine consumer (sync and async), not only ETL.
+- Once a record has failed a state transform, its remaining and downstream
+  state transforms are **skipped** rather than run against the indeterminate
+  pre-failure data. This stops a later state (e.g. an ETL `load` upsert) from
+  persisting a record whose transform already failed, while traversal still
+  continues so the record is accounted as an error. States that must run
+  despite a prior failure (recovery / compensation / cleanup / dead-letter)
+  opt out with `run_on_failure=True`. A transform failure on a parallel, batch,
+  or (isolated) sub-network sub-path is propagated back to the parent context, so
+  it gates the parent's downstream-transform skip and persistence decision too —
+  an isolated sub-network whose transform raised no longer reports the parent
+  record as a success.
 
 ### Fixed
 
+- `AdvancedFSM.execute_step_sync` / `execute_step_async` now report
+  `success=False` (with the offending state in `StepResult.failed_states`)
+  when a step enters a state whose transform raised, instead of reporting a
+  successful step. `run_until_breakpoint` / `run_until_breakpoint_sync` stop
+  on such a step. Previously the step-driver API silently reported success at
+  a final state even when a state transform had failed.
+- `DatabaseETL` no longer upserts a record whose `transform` step raised: the
+  failed record is counted as an `error` and skipped at `load`, rather than
+  being written to the target with its pre-failure (untransformed) data.
 - `DatabaseETL.run()` now persists records to the target database. Each
   extracted record has its `field_mappings` and `transformations` applied
   and is upserted into `target_db`, and `run()` flushes and closes the
