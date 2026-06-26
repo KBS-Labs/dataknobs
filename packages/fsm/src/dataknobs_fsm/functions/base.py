@@ -204,12 +204,19 @@ class ITransformFunction(ABC):
     """Interface for transform functions."""
     
     @abstractmethod
-    def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
+    def transform(
+        self,
+        data: Any,
+        context: "FunctionContext | Dict[str, Any] | None" = None,
+    ) -> ExecutionResult:
         """Transform data according to function logic.
-        
+
         Args:
             data: The data to transform.
-            context: Optional execution context.
+            context: Optional execution context. The FSM engines always pass a
+                ``FunctionContext`` (carrying injected ``resources`` and the
+                ``resource_roles`` map); a plain ``dict`` is accepted for
+                lightweight/standalone invocation.
             
         Returns:
             ExecutionResult with transformed data.
@@ -230,12 +237,19 @@ class IStateTestFunction(ABC):
     """Interface for state test functions."""
     
     @abstractmethod
-    def test(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
+    def test(
+        self,
+        data: Any,
+        context: "FunctionContext | Dict[str, Any] | None" = None,
+    ) -> Tuple[bool, str | None]:
         """Test if a condition is met for state transition.
-        
+
         Args:
             data: The data to test.
-            context: Optional execution context.
+            context: Optional execution context. The FSM engines always pass a
+                ``FunctionContext`` (carrying injected ``resources`` and the
+                ``resource_roles`` map); a plain ``dict`` is accepted for
+                lightweight/standalone invocation.
             
         Returns:
             Tuple of (test_passed, reason).

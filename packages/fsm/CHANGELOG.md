@@ -48,7 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Arc resource injection. An FSM arc may declare `resources`, and its transform
   **and** its condition (pre-test) receive them through
   `FunctionContext.resources` — on both the async and sync engines. A resource
-  is acquired for the scope of the arc invocation and released afterward.
+  is acquired once for the scope of the arc invocation (the sync engine acquires
+  before its retry loop and reuses the handles across attempts, matching the
+  async engine) and released afterward, with no acquire timeout (arc resources
+  carry no per-resource `timeout_seconds`). Condition delivery covers both the
+  callable and the `IStateTestFunction` (`test(data, context)`) interface forms.
   `FunctionContext` gains `require_resource(name)` (name-based, raising a clear
   error when the resource was not declared) and `resource_for_role(role)`
   (role-based, resolving an arc's `{role: name}` map, also exposed at
@@ -59,7 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine's state and arc **transform** paths (it was previously applied only on
   the synchronous arc path, so it was silently ignored for every transform run
   through the async engine). Arc conditions receive resources and the role map
-  but keep the plain context (the factory's documented scope is transforms).
+  but keep the plain context (the factory's documented scope is transforms) —
+  uniformly on every condition path, both engines (async `_evaluate_arc`, sync
+  `_evaluate_pre_test`, and the sync `ArcExecution.can_execute` /
+  `can_execute_async` used by the network engine).
+- An arc's `resources` may be declared as a `{role: name}` map in config
+  (`resources: {database: primary_db}`), not only a list of names. This makes
+  role-based access (`FunctionContext.resource_for_role`) reachable directly
+  from YAML/dict config; a list (`resources: [primary_db]`) still produces the
+  identity `{name: name}` map.
 
 ### Fixed
 
@@ -84,6 +96,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resourceless context). The arc resource-release path now releases the
   arc-acquired resources it actually tracks (it previously read an attribute that
   was never populated, leaking the acquisitions).
+- A raising async arc condition now de-selects only that arc instead of failing
+  the whole FSM run, matching the synchronous engine. The async engine evaluates
+  arc conditions as concurrent tasks; a predicate that raised (for example,
+  `require_resource()` after a failed concurrent acquire) propagated out of the
+  evaluator and aborted the run. The condition evaluator now treats a raising
+  predicate as "arc unavailable", the same contract as the sync engine's
+  `_evaluate_pre_test`.
 - `DatabaseTransaction` now drives a real transaction. It previously called a
   `resource.begin_transaction()` method that no adapter implemented, so it
   raised `AttributeError` on first use; it now opens a buffered transaction

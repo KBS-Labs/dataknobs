@@ -186,7 +186,9 @@ class ArcExecution:
             # the function context carrying them (+ the role map).
             state_resources = getattr(context, 'current_state_resources', None)
             resources = self._allocate_resources(context, state_resources)
-            func_context = self._create_function_context(context, resources)
+            func_context = self._create_function_context(
+                context, resources, apply_factory=False
+            )
 
             # Execute pre-test
             result = pre_test_func(data, func_context)
@@ -203,37 +205,52 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             ) from e
         finally:
-            self._release_resources(context, resources)
+            self._release_resources(context)
 
     def execute(
         self,
         context: "ExecutionContext",
         data: Any = None,
-        stream_enabled: bool = False
+        stream_enabled: bool = False,
+        *,
+        arc_resources: Dict[str, Any] | None = None,
     ) -> Any:
         """Execute the arc transition.
-        
+
         This runs the transform function if defined and
         manages resource allocation.
-        
+
         Args:
             context: Execution context.
             data: Current data.
             stream_enabled: Whether streaming is enabled.
-            
+            arc_resources: Pre-acquired, caller-owned resources. When provided
+                (the engine acquires once before its retry loop and reuses the
+                same handles across attempts — parity with the async engine),
+                this method neither acquires nor releases resources; the caller
+                owns their lifecycle. When ``None`` (the default, e.g. the
+                standalone ``ArcExecution`` API), this method allocates and
+                releases them itself.
+
         Returns:
             Transformed data.
         """
         import time
         start_time = time.time()
-        
-        try:
-            # Get state resources from context if available
-            state_resources = getattr(context, 'current_state_resources', None)
 
-            # Allocate required resources (merging with state resources)
-            resources = self._allocate_resources(context, state_resources)
-            
+        # When the caller hands in pre-acquired resources it owns their
+        # lifecycle; we must not allocate or release them here.
+        owns_resources = arc_resources is None
+
+        try:
+            if owns_resources:
+                # Get state resources from context if available
+                state_resources = getattr(context, 'current_state_resources', None)
+                # Allocate required resources (merging with state resources)
+                resources = self._allocate_resources(context, state_resources)
+            else:
+                resources = arc_resources
+
             # Execute transform(s) if defined
             if self.arc_def.transform:
                 # Normalize to list for uniform handling
@@ -280,9 +297,10 @@ class ArcExecution:
             elapsed = time.time() - start_time
             self.total_execution_time += elapsed
 
-            # Release resources
-            if 'resources' in locals():
-                self._release_resources(context, resources)
+            # Release only resources we allocated; caller-owned (pre-acquired)
+            # resources are released by the caller.
+            if owns_resources and 'resources' in locals():
+                self._release_resources(context)
 
     def _execute_single_transform(
         self,
@@ -395,7 +413,9 @@ class ArcExecution:
             # the function context carrying them (+ the role map).
             state_resources = getattr(context, 'current_state_resources', None)
             resources = self._allocate_resources(context, state_resources)
-            func_context = self._create_function_context(context, resources)
+            func_context = self._create_function_context(
+                context, resources, apply_factory=False
+            )
 
             # Execute pre-test
             result = pre_test_func(data, func_context)
@@ -414,13 +434,15 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             ) from e
         finally:
-            self._release_resources(context, resources)
+            self._release_resources(context)
 
     async def execute_async(
         self,
         context: "ExecutionContext",
         data: Any = None,
-        stream_enabled: bool = False
+        stream_enabled: bool = False,
+        *,
+        arc_resources: Dict[str, Any] | None = None,
     ) -> Any:
         """Execute the arc transition, awaiting async transforms.
 
@@ -431,6 +453,10 @@ class ArcExecution:
             context: Execution context.
             data: Current data.
             stream_enabled: Whether streaming is enabled.
+            arc_resources: Pre-acquired, caller-owned resources. When provided,
+                this method neither acquires nor releases resources (the caller
+                owns their lifecycle); when ``None`` it allocates and releases
+                them itself. Mirrors :meth:`execute`.
 
         Returns:
             Transformed data.
@@ -438,12 +464,18 @@ class ArcExecution:
         import time
         start_time = time.time()
 
-        try:
-            # Get state resources from context if available
-            state_resources = getattr(context, 'current_state_resources', None)
+        # When the caller hands in pre-acquired resources it owns their
+        # lifecycle; we must not allocate or release them here.
+        owns_resources = arc_resources is None
 
-            # Allocate required resources (merging with state resources)
-            resources = self._allocate_resources(context, state_resources)
+        try:
+            if owns_resources:
+                # Get state resources from context if available
+                state_resources = getattr(context, 'current_state_resources', None)
+                # Allocate required resources (merging with state resources)
+                resources = self._allocate_resources(context, state_resources)
+            else:
+                resources = arc_resources
 
             # Execute transform(s) if defined
             if self.arc_def.transform:
@@ -491,9 +523,10 @@ class ArcExecution:
             elapsed = time.time() - start_time
             self.total_execution_time += elapsed
 
-            # Release resources
-            if 'resources' in locals():
-                self._release_resources(context, resources)
+            # Release only resources we allocated; caller-owned (pre-acquired)
+            # resources are released by the caller.
+            if owns_resources and 'resources' in locals():
+                self._release_resources(context)
 
     async def _execute_single_transform_async(
         self,
@@ -668,19 +701,31 @@ class ArcExecution:
         self,
         exec_context: "ExecutionContext",
         resources: Dict[str, Any] | None = None,
-        stream_enabled: bool = False
+        stream_enabled: bool = False,
+        *,
+        apply_factory: bool = True,
     ) -> Any:
         """Create function context for execution.
 
-        Builds a :class:`FunctionContext` and, if the ``ExecutionContext`` has
-        a ``transform_context_factory``, passes it through the factory so that
-        application-level context (e.g. ``TransformContext``) can be composed
-        on top of the FSM-level context.
+        Builds a :class:`FunctionContext` and, when ``apply_factory`` is True and
+        the ``ExecutionContext`` has a ``transform_context_factory``, passes it
+        through the factory so that application-level context (e.g.
+        ``TransformContext``) can be composed on top of the FSM-level context.
+
+        Arc *condition* (pre-test) paths pass ``apply_factory=False``: the factory's
+        documented scope is transforms, so a condition receives the plain
+        resource-bearing context — matching the async engine (``apply_factory=False``
+        in ``_evaluate_arc``) and the sync engine's main-loop condition path
+        (``_evaluate_pre_test``). Without this gate the factory would wrap arc
+        conditions only on the sync ``can_execute`` path (network engine), a silent
+        cross-engine divergence.
 
         Args:
             exec_context: Execution context.
             resources: Allocated resources.
             stream_enabled: Whether streaming is enabled.
+            apply_factory: Whether to run ``transform_context_factory`` (True on
+                transform paths, False on condition paths).
 
         Returns:
             ``FunctionContext`` (default) or factory output.
@@ -713,7 +758,7 @@ class ArcExecution:
             ),
         )
 
-        if exec_context.transform_context_factory:
+        if apply_factory and exec_context.transform_context_factory:
             return exec_context.transform_context_factory(func_context)
         return func_context
     
@@ -758,11 +803,18 @@ class ArcExecution:
                 continue
 
             try:
-                # Acquire arc-specific resource
+                # Acquire arc-specific resource. No acquire timeout — arc
+                # resources are declared by name only (no per-resource
+                # timeout_seconds), and acquisition is a cheap in-process
+                # bookkeeping call. This matches the async engine
+                # (_acquire_named_resources) and the sync condition path
+                # (_acquire_arc_resources), which both acquire with timeout=None;
+                # a hard-coded value here was the lone cross-engine drift.
+                # State-declared resources still honor their own timeout_seconds.
                 resource = resource_manager.acquire(
                     name=resource_name,
                     owner_id=owner_id,
-                    timeout=30.0  # 30 second timeout
+                    timeout=None,
                 )
                 resources[resource_name] = resource
 
@@ -813,19 +865,19 @@ class ArcExecution:
     def _release_resources(
         self,
         context: "ExecutionContext",
-        resources: Dict[str, Any]
     ) -> None:
         """Release the arc-specific resources allocated by this arc.
 
         Releases only the resources :meth:`_allocate_resources` acquired for
         this arc (tracked in ``context._arc_acquired_resources``) — never the
         state resources merged in, which the engine's state path owns and
-        releases. ``resources`` is accepted for signature symmetry; the
-        authoritative set is the arc-acquired tracking map.
+        releases. The authoritative release set is the arc-acquired tracking
+        map (name → owner_id), not the merged name → handle dict; the latter
+        lacks the owner ids needed to release, so it is deliberately not a
+        parameter here.
 
         Args:
             context: Execution context.
-            resources: Merged resources (state + arc); not used directly.
         """
         arc_acquired = getattr(context, '_arc_acquired_resources', None)
         if not arc_acquired:

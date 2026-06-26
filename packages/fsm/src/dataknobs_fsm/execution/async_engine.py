@@ -455,22 +455,35 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     'source_state': getattr(context, 'current_state', None),
                     'target_state': arc.target_state,
                     'arc_priority': arc.priority,
+                    # Conditions never stream; carried for shape-parity with the
+                    # sync condition context (core/arc.py _create_function_context).
+                    'stream_enabled': False,
                 },
                 apply_factory=False,
             )
 
-            # Check if it's async
-            if asyncio.iscoroutinefunction(pre_test_func):
-                result = await pre_test_func(context.data, func_context)
-            else:
-                # Run sync function in executor
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    pre_test_func,
-                    context.data,
-                    func_context,
-                )
+            try:
+                # Check if it's async
+                if asyncio.iscoroutinefunction(pre_test_func):
+                    result = await pre_test_func(context.data, func_context)
+                else:
+                    # Run sync function in executor
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        pre_test_func,
+                        context.data,
+                        func_context,
+                    )
+            except Exception:
+                # A raising condition means the arc is simply unavailable — parity
+                # with the sync engine's _evaluate_pre_test, which returns False on
+                # condition exceptions. Critically, conditions are evaluated as
+                # unawaited tasks in _get_available_transitions; without this catch
+                # a raising predicate (e.g. require_resource() after a failed
+                # concurrent acquire) would propagate out and fail the whole FSM
+                # run instead of de-selecting the one arc.
+                return False
         finally:
             self._release_named_resources(
                 context, arc_resources, owner_id, owner_label=arc_label
@@ -529,8 +542,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         arc_label = (
             f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}'"
         )
-        arc_resources = self._acquire_named_resources(
-            context, role_bindings.values(), owner_id, owner_label=arc_label
+        # Acquire only when a transform will actually consume the resources — a
+        # resource-bearing arc with no transform has no consumer for the handles.
+        arc_resources = (
+            self._acquire_named_resources(
+                context, role_bindings.values(), owner_id, owner_label=arc_label
+            )
+            if arc.transform
+            else {}
         )
         try:
             retry_count = 0
@@ -567,6 +586,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                                 ),
                                 'target_state': arc.target_state,
                                 'arc_priority': arc.priority,
+                                # Arc transforms run buffered (not streaming);
+                                # carried so the transform context shape matches
+                                # the condition path and the sync engine
+                                # (core/arc.py _create_function_context always
+                                # sets stream_enabled in metadata).
+                                'stream_enabled': False,
                             },
                         )
 

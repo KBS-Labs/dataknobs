@@ -331,9 +331,10 @@ built-in [database functions](database-functions.md) use. (You can also read
 ### State vs arc declaration
 
 The same function works whether the resource is declared on a **state** or on
-an **arc**. On the async engine both the arc **transform** and the arc
-**condition** (pre-test) receive the arc's resources; resources are acquired
-for the scope of the invocation and released afterward.
+an **arc**. On both engines the arc **transform** and the arc **condition**
+(pre-test) receive the arc's resources; resources are acquired once for the
+scope of the invocation (the sync engine acquires before its retry loop and
+reuses the handles across attempts) and released afterward.
 
 ```yaml
 resources:
@@ -358,15 +359,23 @@ arcs:
 
 Two access models, both supported, neither forced:
 
-- **Name-based** (the default; config arcs declare `resources: [<names>]`):
+- **Name-based** (declare `resources` as a list of names, `resources: [<names>]`):
   read the resource by its declared name —
   `context.require_resource("target_db")`.
-- **Role-based** (a programmatic arc declaring `required_resources` as a
-  `{role: name}` map, e.g. `{"database": "target_db"}`): resolve the logical
-  role to its bound resource — `context.resource_for_role("database")`. This
-  lets one function be reused across arcs that bind the same role to different
-  concrete resources. The `{role: name}` map is also available at
-  `context.metadata["resource_roles"]`.
+- **Role-based** (declare `resources` as a `{role: name}` map): resolve the
+  logical role to its bound resource — `context.resource_for_role("database")`.
+  This lets one function be reused across arcs that bind the same role to
+  different concrete resources. The `{role: name}` map is also available at
+  `context.metadata["resource_roles"]`. Both shapes are reachable from config:
+
+```yaml
+arcs:
+  - from: start
+    to: done
+    # Bind a logical role to a concrete resource — role-based access.
+    resources: {database: target_db}
+    transform: {type: registered, name: role_writer}
+```
 
 ```python
 class RoleWriter(ITransformFunction):
@@ -376,12 +385,16 @@ class RoleWriter(ITransformFunction):
         return data
 ```
 
+(Equivalently, a programmatic arc may set `arc.required_resources =
+{"database": "target_db"}` directly.)
+
 ### Custom context: `transform_context_factory`
 
 `ExecutionContext.transform_context_factory` lets you wrap the built
 `FunctionContext` in an application-specific context before it reaches a
-transform. It is honored on **both** the async engine's state and arc transform
-paths (arc *conditions* keep the plain resource-bearing context):
+transform. It is honored on the state and arc **transform** paths of both
+engines. Arc **conditions** (pre-tests) keep the plain resource-bearing context
+on every path — the factory's scope is transforms only:
 
 ```python
 context.transform_context_factory = lambda fc: MyAppContext(fc)

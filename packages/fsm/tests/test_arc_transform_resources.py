@@ -574,3 +574,387 @@ async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
         "sync arc transform did not persist on a {type: name} arc — resources "
         "were keyed by type, not name, so DatabaseUpsert('target_db') missed"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 10: transform_context_factory is transform-scoped — sync condition skips it
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_sync_arc_condition_skips_transform_context_factory(
+    tmp_path: Path,
+) -> None:
+    """A sync arc *condition* gets the plain context; a transform gets the factory.
+
+    Fails today: ArcExecution._create_function_context applies
+    transform_context_factory unconditionally, so the sync ``can_execute``
+    (network-engine) condition path wraps conditions too — a silent divergence
+    from the async engine (``_evaluate_arc``, ``apply_factory=False``) and the
+    sync main-loop condition path (``_evaluate_pre_test``, which builds a plain
+    context). The factory's documented scope is transforms.
+    """
+    from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
+
+    condition_contexts: list[Any] = []
+    transform_contexts: list[Any] = []
+
+    def factory(fc: Any) -> Any:
+        # Stamp every context the factory wraps so misapplication is detectable.
+        fc.metadata["factory_applied"] = True
+        return fc
+
+    def cond(_data: Any, ctx: Any) -> bool:
+        condition_contexts.append(ctx)
+        return True
+
+    def xf(data: Any, ctx: Any) -> Any:
+        transform_contexts.append(ctx)
+        return data
+
+    helper = AsyncSimpleFSM(
+        {
+            "name": "factory_sync_cond",
+            "data_mode": DataHandlingMode.COPY.value,
+            "states": [
+                {"name": "start", "is_start": True},
+                {"name": "done", "is_end": True},
+            ],
+        },
+        data_mode=DataHandlingMode.COPY,
+    )
+    try:
+        fsm = helper._fsm
+        arc_def = ArcDefinition(target_state="done", pre_test="cond", transform="xf")
+        arc_exec = ArcExecution(
+            arc_def=arc_def,
+            source_state="start",
+            function_registry={"cond": cond, "xf": xf},
+        )
+        ctx = ContextFactory.create_context(
+            fsm=fsm,
+            data=Record({"id": "1"}),
+            data_mode=ProcessingMode.SINGLE,
+            resource_manager=helper._resource_manager,
+        )
+        ctx.set_state("start")
+        ctx.transform_context_factory = factory
+
+        # Condition path: factory must NOT be applied.
+        assert arc_exec.can_execute(ctx, ctx.data) is True
+        assert condition_contexts, "condition function did not run"
+        assert not condition_contexts[0].metadata.get("factory_applied"), (
+            "transform_context_factory was applied to an arc CONDITION on the "
+            "sync can_execute path — it is transform-scoped"
+        )
+
+        # Transform path on the same context: factory SHOULD be applied,
+        # proving the factory is actually wired (not merely absent everywhere).
+        arc_exec.execute(ctx, ctx.data)
+        assert transform_contexts, "transform function did not run"
+        assert transform_contexts[0].metadata.get("factory_applied"), (
+            "transform_context_factory was not applied to the arc TRANSFORM"
+        )
+    finally:
+        await helper.close()
+
+
+# --------------------------------------------------------------------------- #
+# 11: {role: name} arc resources are reachable from config (dict-shaped)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_arc_dict_resources_bind_roles_from_config(tmp_path: Path) -> None:
+    """An arc may declare ``resources`` as a ``{role: name}`` map in config.
+
+    Fails today: the builder produced an identity ``{name: name}`` map from a
+    *list* only, so the role indirection (and any dict-shaped binding) was
+    unreachable from YAML/dict — ``{r: r for r in {"database": "target_db"}}``
+    iterates the KEYS, so ``DatabaseUpsert('target_db')`` never receives its
+    resource and nothing persists.
+    """
+    target = {"type": "file", "path": str(tmp_path / "roles.json")}
+    config = {
+        "name": "arc_dict_resources",
+        "data_mode": DataHandlingMode.COPY.value,
+        "resources": [
+            {"name": "target_db", "type": "async_database", "config": target},
+        ],
+        "states": [
+            {
+                "name": "start",
+                "is_start": True,
+                "arcs": [
+                    {
+                        "target": "done",
+                        "transform": {"type": "registered", "name": "load"},
+                        "resources": {"database": "target_db"},
+                        "metadata": {"name": "loaded"},
+                    }
+                ],
+            },
+            {"name": "done", "is_end": True},
+        ],
+    }
+    fsm = AsyncSimpleFSM(
+        config,
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={
+            "load": DatabaseUpsert(
+                resource_name="target_db", table="rows", key_columns=["id"]
+            ),
+        },
+    )
+    try:
+        arc = _find_arc(fsm._fsm, "start")
+        assert arc.required_resources == {"database": "target_db"}, (
+            "dict-shaped arc 'resources' did not produce a {role: name} map; "
+            f"got {arc.required_resources!r}"
+        )
+        result = await fsm.process({"id": "1", "name": "Dana"})
+        assert result["success"], f"FSM did not complete cleanly: {result}"
+    finally:
+        await fsm.close()
+
+    row = await _read_row(target, "1")
+    assert row is not None and row.to_dict().get("name") == "Dana", (
+        "arc with dict {role: name} resources did not persist via 'target_db'"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 12: test-interface (IStateTestFunction) arc condition reaches its resource
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_test_interface_arc_condition_reaches_resources(
+    tmp_path: Path,
+) -> None:
+    """A raw ``IStateTestFunction`` arc condition can read its injected resource.
+
+    Fails today: ``_evaluate_pre_test`` called ``func.test(SimpleNamespace(
+    data=...))`` — wrapping data in a namespace and dropping the func_context —
+    so a ``test``-interface condition saw no context and could not reach the
+    arc's resources (the resulting ``AttributeError`` was swallowed to
+    ``False``). The declared interface is ``test(data, context)``; the engine
+    now passes the resource-bearing func_context as that context.
+    """
+    from dataknobs_fsm.core.arc import ArcDefinition
+    from dataknobs_fsm.functions.base import IStateTestFunction
+
+    class GatePresent(IStateTestFunction):
+        def test(
+            self, data: Any, context: Any = None
+        ) -> tuple[bool, str | None]:
+            # require_resource raises (→ swallowed False) if the gate or the
+            # context was not delivered.
+            gate = context.require_resource("gate")
+            return gate is not None, None
+
+        def get_test_description(self) -> str:
+            return "gate resource present"
+
+    config = {
+        "name": "test_iface_cond",
+        "data_mode": DataHandlingMode.COPY.value,
+        "resources": [
+            {
+                "name": "gate",
+                "type": "async_database",
+                "config": {"type": "file", "path": str(tmp_path / "gate.json")},
+            },
+        ],
+        "states": [
+            {"name": "start", "is_start": True},
+            {"name": "open", "is_end": True},
+        ],
+    }
+    helper = AsyncSimpleFSM(config, data_mode=DataHandlingMode.COPY)
+    try:
+        fsm = helper._fsm
+        fsm.function_registry.register("gate_test", GatePresent())
+        arc = ArcDefinition(target_state="open", pre_test="gate_test")
+        arc.required_resources = {"gate": "gate"}
+        engine = ExecutionEngine(fsm)
+        ctx = ContextFactory.create_context(
+            fsm=fsm,
+            data=Record({"id": "1"}),
+            data_mode=ProcessingMode.SINGLE,
+            resource_manager=helper._resource_manager,
+        )
+        ctx.set_state("start")
+        assert engine._evaluate_pre_test(arc, ctx) is True, (
+            "test-interface arc condition did not receive its 'gate' resource — "
+            "_evaluate_pre_test dropped the func_context for the test() interface"
+        )
+    finally:
+        await helper.close()
+
+
+# --------------------------------------------------------------------------- #
+# 13: sync engine acquires an arc's resources once per transition (not per retry)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_sync_arc_resources_acquired_once_per_transition(
+    tmp_path: Path,
+) -> None:
+    """The sync engine acquires/releases an arc's resources exactly once.
+
+    Guard for the acquire-once invariant: the engine pre-acquires arc resources
+    *before* its retry loop and reuses the handles across attempts (parity with
+    the async engine's ``_execute_transition``) instead of re-acquiring — and
+    re-running the transform — on every retry. A regression that moved
+    allocation back inside the loop would acquire more than once whenever a
+    transition retries.
+    """
+    config = {
+        "name": "acquire_once",
+        "data_mode": DataHandlingMode.COPY.value,
+        "resources": [
+            {
+                "name": "target_db",
+                "type": "async_database",
+                "config": {"type": "file", "path": str(tmp_path / "once.json")},
+            },
+        ],
+        "states": [
+            {
+                "name": "start",
+                "is_start": True,
+                "arcs": [
+                    {
+                        "target": "done",
+                        "transform": {"type": "registered", "name": "touch"},
+                        "resources": ["target_db"],
+                        "metadata": {"name": "loaded"},
+                    }
+                ],
+            },
+            {"name": "done", "is_end": True},
+        ],
+    }
+
+    def touch(data: Any, ctx: Any) -> Any:
+        # Reading the resource proves injection; raising would surface as a
+        # FunctionError rather than a silent miss.
+        ctx.require_resource("target_db")
+        return data
+
+    helper = AsyncSimpleFSM(
+        config,
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={"touch": touch},
+    )
+    try:
+        fsm = helper._fsm
+        # Count acquire/release for the arc resource by wrapping the real
+        # resource manager (after build, so build-time wiring isn't counted).
+        rm = helper._resource_manager
+        acquired: list[Any] = []
+        released: list[Any] = []
+        real_acquire = rm.acquire
+        real_release = rm.release
+
+        def counting_acquire(*args: Any, **kwargs: Any) -> Any:
+            acquired.append(kwargs.get("name") or (args[0] if args else None))
+            return real_acquire(*args, **kwargs)
+
+        def counting_release(*args: Any, **kwargs: Any) -> Any:
+            released.append(kwargs.get("name") or (args[0] if args else None))
+            return real_release(*args, **kwargs)
+
+        rm.acquire = counting_acquire  # type: ignore[method-assign]
+        rm.release = counting_release  # type: ignore[method-assign]
+
+        engine = ExecutionEngine(fsm, custom_functions={"touch": touch})
+        ctx = ContextFactory.create_context(
+            fsm=fsm,
+            data=Record({"id": "1"}),
+            data_mode=ProcessingMode.SINGLE,
+            resource_manager=rm,
+        )
+        ctx.set_state("start")
+        arc = _find_arc(fsm, "start")
+        engine._execute_transition(ctx, arc)
+
+        assert acquired.count("target_db") == 1, (
+            "arc resource 'target_db' was acquired "
+            f"{acquired.count('target_db')} times — expected exactly once "
+            "(acquire-once across the retry loop)"
+        )
+        assert released.count("target_db") == 1, (
+            "arc resource 'target_db' was released "
+            f"{released.count('target_db')} times — expected exactly once"
+        )
+    finally:
+        await helper.close()
+
+
+# --------------------------------------------------------------------------- #
+# 14: a raising async arc condition de-selects the arc, never crashes the run
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_async_arc_condition_exception_deselects_arc(tmp_path: Path) -> None:
+    """A raising async arc condition makes that arc unavailable — not a hard fail.
+
+    Cross-engine parity: the sync engine's ``_evaluate_pre_test`` already wraps
+    the predicate call in ``try/except -> return False``, so a raising sync
+    condition simply de-selects its arc. The async engine evaluates conditions
+    as *unawaited* ``asyncio`` tasks in ``_get_available_transitions``; before
+    the fix, a predicate that raised (most realistically ``require_resource()``
+    after a failed concurrent acquire — a path this PR newly introduced by
+    injecting resources into conditions) propagated out through ``await task``
+    and failed the *entire* FSM run instead of de-selecting the one arc.
+
+    Fails against the unguarded async engine: the higher-priority ``to_open``
+    arc's condition raises, so ``process()`` errors out rather than falling
+    through to the unconditional ``to_closed`` arc.
+    """
+
+    def gate_raises(_data: Any, ctx: Any) -> bool:
+        # The realistic trigger: a condition that asks for a resource it does
+        # not have raises TransformError. On the async engine this runs inside
+        # an unawaited task, so an unguarded raise escapes the evaluator.
+        ctx.require_resource("absent")
+        return True  # unreachable
+
+    config = {
+        "name": "raising_condition",
+        "data_mode": DataHandlingMode.COPY.value,
+        "states": [
+            {
+                "name": "start",
+                "is_start": True,
+                "arcs": [
+                    {
+                        "target": "open",
+                        "condition": {"type": "registered", "name": "gate_raises"},
+                        "priority": 10,
+                        "metadata": {"name": "to_open"},
+                    },
+                    {"target": "closed", "metadata": {"name": "to_closed"}},
+                ],
+            },
+            {"name": "open", "is_end": True},
+            {"name": "closed", "is_end": True},
+        ],
+    }
+    fsm = AsyncSimpleFSM(
+        config,
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={"gate_raises": gate_raises},
+    )
+    try:
+        result = await fsm.process({"id": "1"})
+    finally:
+        await fsm.close()
+
+    assert result["success"], (
+        "a raising async arc condition crashed the FSM run — _evaluate_arc let "
+        f"the predicate exception escape the unawaited task (got {result})"
+    )
+    assert result["final_state"] == "closed", (
+        "the raising arc was not de-selected — expected the run to fall through "
+        f"to the unconditional 'to_closed' arc (got {result['final_state']!r})"
+    )
