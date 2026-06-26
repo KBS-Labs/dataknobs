@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-25T23:14:34Z",
+  "timestamp": "2026-06-25T23:44:41Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sb/fsm-etl-review-followups-PR-B",
-  "git_commit": "ac9b45409ee1f03e95a2dc49324d6570fbe15fad",
+  "git_commit": "723a107f787fd400f5b885bf8074a2ed71319ac8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
