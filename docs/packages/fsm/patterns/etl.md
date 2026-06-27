@@ -203,6 +203,12 @@ async def id_in_reference(record, ctx) -> bool:
     rows = await reference.execute_query(Query())
     return record.get("id") in {r.get("id") for r in rows}
 
+# `validation_resources` binds each resource with role == name, so you can
+# resolve it by either `ctx.require_resource("valid_ids")` (by name) or
+# `ctx.resource_for_role("valid_ids")` (by role). For a hand-built (non-ETL)
+# resource gate where role and name differ, use `resource_for_role(role)`
+# (see the Resources guide).
+
 etl = DatabaseETL(ETLConfig(
     source_db={"type": "file", "path": "source.json"},
     target_db={"type": "file", "path": "target.json"},

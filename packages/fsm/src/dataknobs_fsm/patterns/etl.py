@@ -115,6 +115,18 @@ class ETLConfig(StructuredConfig):
                     f"renamed field, or map a non-key field instead."
                 )
 
+        # `validation_resources` only takes effect on the `valid` gate arc,
+        # which is wired only when `validation_schema` is set. Declaring
+        # resources with no gate is a silent no-op, so reject it as a
+        # misconfiguration rather than registering unreferenced resources.
+        if self.validation_resources and not self.validation_schema:
+            raise InvalidConfigurationError(
+                "validation_resources is set but validation_schema is not — the "
+                "resources would be registered but never bound to a gate arc. "
+                "Set validation_schema (a resource-reading predicate), or drop "
+                "validation_resources."
+            )
+
 
 class _ETLTransform(ITransformFunction):
     """Per-record transform step: apply field mappings then user callables.

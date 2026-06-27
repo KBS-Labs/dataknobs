@@ -45,21 +45,38 @@ def test_dict_schema_min_max_pattern() -> None:
     assert check({"age": 30, "email": "not-an-email"}, None) is False
 
 
-def test_dict_schema_min_max_absent_or_non_numeric_rejects() -> None:
-    """A ``min``/``max``-constrained field that is absent or non-numeric rejects.
+def test_dict_schema_present_value_constraints_are_type_safe() -> None:
+    """A present ``min``/``max`` value that is non-numeric rejects, never raises.
 
-    Regression for the promoted ``_make_validator`` quirks: a missing field used
-    to default to ``0`` (so it could silently *pass* a ``min`` bound), and a
-    non-numeric value raised ``TypeError`` (``"abc" >= 18``). Both are now a
-    clean reject — bad data diverts to the reject terminal, never a pipeline
-    error and never a silent pass.
+    Regression for the promoted ``_make_validator`` quirk: a non-numeric value
+    used to raise ``TypeError`` (``"abc" >= 18``). It is now a clean reject —
+    bad data diverts to the reject terminal, never surfacing as a pipeline
+    error.
     """
     check = build_record_validator({"age": {"min": 18}})
     assert check({"age": 30}, None) is True
     assert check({"age": 10}, None) is False
-    assert check({}, None) is False  # absent: no longer defaults to 0 and passes
     assert check({"age": "old"}, None) is False  # non-numeric: reject, not TypeError
     assert check({"age": None}, None) is False
+
+
+def test_dict_schema_presence_and_value_are_independent() -> None:
+    """``required`` governs absence; ``min``/``max``/``type`` apply when present.
+
+    The promoted ``_make_validator`` defaulted a missing numeric field to ``0``,
+    so a ``min`` bound silently depended on whether ``0`` happened to satisfy it.
+    Presence is now decoupled: an absent field passes unless ``required`` (so an
+    optional bounded field is "if present, must satisfy the bound"); a
+    ``required`` field must be present *and* satisfy the bound.
+    """
+    optional = build_record_validator({"score": {"min": 0}})
+    assert optional({}, None) is True  # absent + not required → passes
+    assert optional({"score": 5}, None) is True
+    assert optional({"score": -1}, None) is False  # present → bound applies
+
+    required = build_record_validator({"score": {"required": True, "min": 0}})
+    assert required({}, None) is False  # absent + required → rejects
+    assert required({"score": 5}, None) is True
 
 
 # --------------------------------------------------------------------------

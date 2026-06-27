@@ -256,12 +256,20 @@ class ExecutionEngine(BaseExecutionEngine):
                 # Use the common state entry method
                 self.enter_state(item_context, initial_state, run_validators=False)
             
-            # Execute for this item
-            success, result = self._execute_single(
-                item_context,
-                max_transitions
-            )
-            
+            # Execute for this item. Isolate a per-record failure — including a
+            # condition that raised a genuine evaluation error, which now
+            # propagates rather than being swallowed — so one bad record is
+            # recorded as a batch error and the batch continues, instead of the
+            # outer execute() wrapper abandoning every remaining record. Parity
+            # with the async engine's per-record gather(return_exceptions=True).
+            try:
+                success, result = self._execute_single(
+                    item_context,
+                    max_transitions
+                )
+            except Exception as e:
+                success, result = False, str(e)
+
             if success:
                 context.add_batch_result(result)
             else:
@@ -325,12 +333,19 @@ class ExecutionEngine(BaseExecutionEngine):
                     # Use the common state entry method
                     self.enter_state(record_context, initial_state, run_validators=False)
                 
-                # Execute for this record
-                success, result = self._execute_single(
-                    record_context,
-                    max_transitions
-                )
-                
+                # Execute for this record. Isolate a per-record failure (incl. a
+                # now-propagating condition evaluation error) so one bad record
+                # is recorded and the stream continues rather than the outer
+                # execute() wrapper abandoning the rest — parity with the async
+                # engine's per-record isolation.
+                try:
+                    success, result = self._execute_single(
+                        record_context,
+                        max_transitions
+                    )
+                except Exception as e:
+                    success, result = False, str(e)
+
                 if not success:
                     errors.append((total_records, result))
                 

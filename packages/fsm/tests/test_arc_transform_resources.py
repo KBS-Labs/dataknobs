@@ -991,3 +991,80 @@ async def test_async_arc_condition_validation_error_is_soft_reject() -> None:
         "the soft-rejected arc was not de-selected — expected fall-through to "
         f"the unconditional 'to_closed' arc (got {result['final_state']!r})"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 16: sync BATCH mode isolates a raising condition per record (no batch abort)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_sync_batch_mode_isolates_a_raising_condition_per_record() -> None:
+    """A condition raising in sync BATCH mode errors one record, not the batch.
+
+    The sync engine's ``execute()`` wraps the data-mode dispatch in a try/except
+    so a propagated condition error becomes a failed result (parity with the
+    async engine). In BATCH/STREAM mode that wrapper must NOT abandon the whole
+    batch when one record's condition raises — ``_execute_batch`` isolates each
+    record so the others still process, mirroring the async engine's per-record
+    ``gather(return_exceptions=True)`` isolation.
+
+    Fails against the unisolated batch loop: the middle record's raise escapes
+    ``_execute_batch``, the outer wrapper returns ``(False, str(e))`` (a string,
+    not the per-record ``{results, errors}`` dict), and the last record is never
+    processed.
+    """
+
+    def gate(data: Any, _ctx: Any) -> bool:
+        if data.get("boom"):
+            raise RuntimeError("gate blew up on this record")
+        return True
+
+    config = {
+        "name": "batch_gate",
+        "data_mode": DataHandlingMode.COPY.value,
+        "states": [
+            {
+                "name": "start",
+                "is_start": True,
+                "arcs": [
+                    {
+                        "target": "done",
+                        "condition": {"type": "registered", "name": "gate"},
+                        "metadata": {"name": "go"},
+                    },
+                ],
+            },
+            {"name": "done", "is_end": True},
+        ],
+    }
+    helper = AsyncSimpleFSM(
+        config,
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={"gate": gate},
+    )
+    try:
+        fsm = helper._fsm
+        engine = ExecutionEngine(fsm, custom_functions={"gate": gate})
+        ctx = ContextFactory.create_context(
+            fsm=fsm,
+            data={"id": "1"},
+            data_mode=ProcessingMode.BATCH,
+            resource_manager=helper._resource_manager,
+        )
+        ctx.batch_data = [{"id": "1"}, {"id": "2", "boom": True}, {"id": "3"}]
+        ctx.set_state("start")
+        success, result = engine.execute(ctx)
+    finally:
+        await helper.close()
+
+    assert isinstance(result, dict), (
+        "the raising middle record abandoned the whole batch — the outer "
+        f"execute() wrapper returned a non-dict result (got {result!r})"
+    )
+    assert len(result["results"]) == 2, (
+        "the two clean records were not both processed — the batch aborted at "
+        f"the raising record instead of isolating it (got {result})"
+    )
+    assert len(result["errors"]) == 1, (
+        f"the raising record was not recorded as a single batch error: {result}"
+    )

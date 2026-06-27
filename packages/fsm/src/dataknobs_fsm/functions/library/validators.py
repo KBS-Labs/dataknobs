@@ -34,6 +34,14 @@ def _friendly_schema_predicate(
     an ``isinstance`` check via :data:`_VALIDATION_TYPE_MAP`), ``min`` / ``max``
     (inclusive numeric bounds), and ``pattern`` (regex). A field whose
     constraint is the literal ``True`` is treated as simply required.
+
+    Presence and value are independent: ``required`` (or the literal ``True``)
+    governs whether an *absent* field rejects, while ``type`` / ``min`` /
+    ``max`` / ``pattern`` apply only when the field is *present*. So
+    ``{"score": {"min": 0}}`` means "if present, score must be >= 0" and an
+    absent ``score`` passes; combine with ``"required": True`` to also demand
+    presence. A present value that cannot satisfy a numeric bound (e.g. a
+    string against ``min``) rejects the record rather than raising.
     """
 
     def validate_check(data: Dict[str, Any], context: Any = None) -> bool:
@@ -44,20 +52,24 @@ def _friendly_schema_predicate(
                 continue
             if not isinstance(constraints, dict):
                 continue
-            present = field_name in data
-            value = data.get(field_name)
-            if constraints.get("required") and not present:
-                return False
+            # Presence is governed solely by ``required`` (or the literal
+            # ``True`` shorthand above); the value constraints below apply only
+            # when the field is present. So ``{"score": {"min": 0}}`` means
+            # "if score is present it must be >= 0" — an absent optional field
+            # passes, mark it ``required`` to also demand presence.
+            if field_name not in data:
+                if constraints.get("required"):
+                    return False
+                continue
+            value = data[field_name]
             if "type" in constraints:
                 expected = _VALIDATION_TYPE_MAP.get(constraints["type"])
                 if expected is not None and not isinstance(value, expected):
                     return False
-            # ``min`` / ``max`` are inclusive numeric bounds. A field that is
-            # absent or not a real number cannot satisfy a numeric bound, so it
-            # is *invalid* (the gate rejects it) — never a ``TypeError`` from
-            # comparing e.g. ``"abc" >= 18``, and never a silent pass from the
-            # old "missing field defaults to 0" behaviour. Bad data must divert
-            # to the reject terminal, not surface as a pipeline error.
+            # ``min`` / ``max`` are inclusive numeric bounds. A *present* value
+            # that is not a real number cannot satisfy a numeric bound, so it is
+            # invalid (the gate rejects it) — never a ``TypeError`` from
+            # comparing e.g. ``"abc" >= 18``.
             if "min" in constraints and (
                 not isinstance(value, (int, float))
                 or value < constraints["min"]
@@ -69,7 +81,7 @@ def _friendly_schema_predicate(
             ):
                 return False
             if "pattern" in constraints and not re.match(
-                constraints["pattern"], str(value if present else "")
+                constraints["pattern"], str(value)
             ):
                 return False
         return True
@@ -167,6 +179,13 @@ def _callable_predicate(fn: Callable[..., Any]) -> Callable[..., Any]:
     ``(record, context)`` and forwards the right number of arguments; it is a
     coroutine function iff ``fn`` is, so the engine's ``iscoroutinefunction``
     check routes it correctly.
+
+    The context parameter must be positional (or have a default). Arity
+    detection counts positional parameters only, so a predicate that declares
+    ``context`` as a *required keyword-only* argument
+    (``def fn(record, *, context): ...``) is called with the record alone and
+    raises ``TypeError`` at evaluation time — write ``(record, context)`` or
+    ``(record, context=None)`` instead.
     """
     try:
         params = [

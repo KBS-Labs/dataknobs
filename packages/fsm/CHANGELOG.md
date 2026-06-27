@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each entry is registered as an FSM resource and bound on the `valid` arc, so a
   resource-reading `validation_schema` predicate resolves it from its
   `FunctionContext` (`require_resource(name)` / `resource_for_role(name)`).
+  Setting `validation_resources` without `validation_schema` raises
+  `InvalidConfigurationError` (the resources would never be bound to a gate).
 - `dataknobs_fsm.functions.library.validators.build_record_validator(spec)`
   normalizes any of three validation-spec forms — a friendly dict schema, a
   library `IValidationFunction`, or a callable predicate (sync or async) — into
@@ -106,10 +108,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   propagates and the record is counted as an error (tripping `error_threshold`).
   The sync engine's `execute()` gained the same per-record error wrapper the
   async engine already had, so the behaviour is identical across engines.
-- The friendly dict validation schema now treats a `min`/`max`-constrained field
-  that is absent or non-numeric as invalid (a clean reject) rather than silently
-  passing it (a missing field used to default to `0`) or raising `TypeError`
-  (comparing e.g. `"abc" >= 18`). Shared by the ETL and file-processing gates.
+- The friendly dict validation schema now separates presence from value:
+  `required` (or the literal `True` shorthand) governs whether an *absent* field
+  rejects, while `type` / `min` / `max` / `pattern` apply only when the field is
+  *present*. So `{"score": {"min": 0}}` means "if present, score must be >= 0"
+  (an absent optional field passes; add `"required": True` to also demand
+  presence), and a *present* value that cannot satisfy a numeric bound (e.g. a
+  string against `min`) rejects rather than raising `TypeError`. This replaces
+  the promoted `_make_validator` behaviour where a missing field defaulted to
+  `0` (so a `min` bound silently depended on whether `0` satisfied it). Shared
+  by the ETL and file-processing gates.
 - The ETL "error threshold exceeded" message now includes the rejected count
   when `reject_counts_as_error` is set, so it no longer reads a confusing
   "0 errors" when excess rejections (not errors) tripped the gate.

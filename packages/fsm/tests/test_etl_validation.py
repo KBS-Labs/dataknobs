@@ -25,7 +25,7 @@ import pytest
 
 from dataknobs_common.testing import assert_no_blocking
 from dataknobs_data import AsyncDatabase, Query, Record
-from dataknobs_fsm.core.exceptions import ETLError
+from dataknobs_fsm.core.exceptions import ETLError, InvalidConfigurationError
 from dataknobs_fsm.functions.library.validators import RangeValidator
 from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 
@@ -310,3 +310,23 @@ async def test_resource_backed_gate_via_validation_resources(tmp_path: Path) -> 
     assert metrics["loaded"] == 2, metrics
     assert metrics["rejected"] == 1, metrics
     assert metrics["errors"] == 0, metrics
+
+
+def test_validation_resources_without_schema_is_rejected() -> None:
+    """`validation_resources` with no `validation_schema` is a misconfiguration.
+
+    The resources would be registered but never bound to a gate arc (which is
+    wired only when `validation_schema` is set) — a silent no-op. Construction
+    rejects it instead.
+    """
+    with pytest.raises(InvalidConfigurationError):
+        ETLConfig(
+            source_db={"type": "file", "path": "s.json"},
+            target_db={"type": "file", "path": "t.json"},
+            target_table="records",
+            key_columns=["id"],
+            validation_resources={
+                "ref_db": {"type": "async_database",
+                           "config": {"type": "file", "path": "r.json"}},
+            },
+        )
