@@ -77,9 +77,16 @@ class SyncLoopBridge:
     deterministic teardown: it stops the loop and joins the thread.
 
     A single bridge is reusable across many :meth:`run` calls and is the
-    right shape for a long-lived synchronous wrapper. It is **not** designed
-    for concurrent :meth:`run` calls that race :meth:`close` from other
-    threads; ``run`` after ``close`` raises :class:`RuntimeError`.
+    right shape for a long-lived synchronous wrapper. Concurrent :meth:`run`
+    calls from multiple threads are supported — each coroutine runs on the
+    one shared loop and its caller blocks on its own result.
+
+    Ordering between :meth:`run` and :meth:`close` is the caller's
+    responsibility: a ``run`` issued strictly *after* ``close`` raises
+    :class:`RuntimeError`, but a ``run`` that *races* an in-flight ``close``
+    from another thread is undefined (it may raise, or block until its
+    ``timeout`` elapses). Quiesce ``run`` callers before closing, and pass a
+    ``timeout`` to ``run`` if you need a guaranteed upper bound on the wait.
     """
 
     def __init__(self, *, thread_name: str = _THREAD_NAME) -> None:
@@ -92,12 +99,22 @@ class SyncLoopBridge:
         """
         self._closed = False
         self._close_lock = threading.Lock()
+        # Set only after the winning ``close`` has stopped the loop and joined
+        # the thread, so a concurrent second closer waits for teardown to
+        # finish instead of returning while the thread is still alive.
+        self._closed_event = threading.Event()
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run_loop, name=thread_name, daemon=True
-        )
-        self._thread.start()
+        try:
+            self._thread = threading.Thread(
+                target=self._run_loop, name=thread_name, daemon=True
+            )
+            self._thread.start()
+        except BaseException:
+            # Thread creation/start failed -> close the loop we just created so
+            # its self-pipe file descriptors do not leak.
+            self._loop.close()
+            raise
         # Block construction until the loop is actually running, so the first
         # ``run`` cannot race a not-yet-started loop.
         self._ready.wait()
@@ -114,7 +131,7 @@ class SyncLoopBridge:
         finally:
             self._loop.close()
 
-    def run(self, coro: Coroutine[Any, Any, T]) -> T:
+    def run(self, coro: Coroutine[Any, Any, T], *, timeout: float | None = None) -> T:
         """Run ``coro`` to completion on the background loop and return it.
 
         Blocks the calling thread until the coroutine finishes. The
@@ -125,29 +142,74 @@ class SyncLoopBridge:
 
         Args:
             coro: The coroutine to run.
+            timeout: Maximum seconds to wait for the coroutine. ``None``
+                (the default) waits forever. On timeout, the still-running
+                coroutine is asked to cancel (best-effort — it may already be
+                past its last ``await`` point) and :class:`TimeoutError` is
+                raised; the bridge remains usable for further ``run`` calls.
 
         Returns:
             Whatever ``coro`` returns.
 
         Raises:
             RuntimeError: If the bridge has been closed.
+            TimeoutError: If ``timeout`` elapses before the coroutine finishes.
             BaseException: Whatever ``coro`` raises, re-raised in the caller.
+
+        Note:
+            If the calling thread is interrupted (e.g. ``KeyboardInterrupt``)
+            or times out while blocked here, the interrupt/timeout reaches the
+            *caller*, but the coroutine keeps running on the bridge loop until
+            it completes or its best-effort cancellation takes effect — it is
+            not abandoned mid-flight. This mirrors
+            :func:`asyncio.run_coroutine_threadsafe` semantics.
         """
         if self._closed:
             # Close the coroutine so it does not leak / warn as never-awaited.
             coro.close()
             raise RuntimeError("SyncLoopBridge is closed")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except RuntimeError:
+            # Lost a race with ``close`` — the loop was torn down between the
+            # check above and submission. Close the coroutine so it does not
+            # warn as never-awaited, and report the closed state uniformly.
+            coro.close()
+            raise RuntimeError("SyncLoopBridge is closed") from None
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            # Best-effort: ask the loop to cancel the still-running task so it
+            # does not run unbounded after the caller has stopped waiting.
+            future.cancel()
+            raise
 
     def close(self) -> None:
-        """Stop the background loop and join its thread. Idempotent."""
+        """Stop the background loop and join its thread. Idempotent.
+
+        Safe to call from any thread except the bridge's own loop thread:
+        calling ``close`` from inside a coroutine running on the bridge would
+        have to join the current thread, which is impossible, so that raises
+        :class:`RuntimeError` rather than deadlocking. Concurrent callers all
+        block until teardown completes — every ``close`` returns only once the
+        loop thread is actually gone.
+        """
+        if threading.current_thread() is self._thread:
+            raise RuntimeError(
+                "SyncLoopBridge.close() must not be called from within a "
+                "coroutine running on the bridge loop"
+            )
         with self._close_lock:
-            if self._closed:
-                return
+            already_closing = self._closed
             self._closed = True
+        if already_closing:
+            # Another thread owns teardown; wait for it to finish so this call
+            # also returns only after the thread has been joined.
+            self._closed_event.wait()
+            return
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
+        self._closed_event.set()
 
     def __enter__(self) -> Self:
         return self
@@ -161,7 +223,7 @@ class SyncLoopBridge:
         self.close()
 
 
-def run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
+def run_coro_sync(coro: Coroutine[Any, Any, T], *, timeout: float | None = None) -> T:
     """Run a single coroutine to completion from synchronous code.
 
     Convenience wrapper that spins up a throwaway :class:`SyncLoopBridge`,
@@ -175,12 +237,15 @@ def run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
 
     Args:
         coro: The coroutine to run.
+        timeout: Maximum seconds to wait, forwarded to
+            :meth:`SyncLoopBridge.run`. ``None`` (the default) waits forever.
 
     Returns:
         Whatever ``coro`` returns.
 
     Raises:
+        TimeoutError: If ``timeout`` elapses before the coroutine finishes.
         BaseException: Whatever ``coro`` raises, re-raised in the caller.
     """
     with SyncLoopBridge() as bridge:
-        return bridge.run(coro)
+        return bridge.run(coro, timeout=timeout)

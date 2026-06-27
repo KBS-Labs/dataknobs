@@ -63,11 +63,30 @@ result = run_coro_sync(some_async_function(arg))
   the caller with its **original traceback** preserved.
 - **Safe from inside a running event loop** — the coroutine runs on the
   bridge's separate loop, so there is no re-entrancy and no deadlock.
+- **Bounded wait** — `run(coro, timeout=...)` (and `run_coro_sync(coro,
+  timeout=...)`) raise `TimeoutError` if the coroutine does not finish in
+  time. The timed-out coroutine is asked to cancel (best-effort) and the
+  bridge stays usable. With no `timeout` the wait is unbounded.
 - **Clean teardown** — `close()` stops the loop and joins the thread; it is
-  idempotent and supported via the context-manager protocol. The loop
-  thread is a `daemon`, so it can never block process exit.
-- **Reusable** — a single bridge serves many `run()` calls. `run()` after
-  `close()` raises `RuntimeError`.
+  idempotent and supported via the context-manager protocol. Concurrent
+  closers all block until teardown completes. The loop thread is a
+  `daemon`, so it can never block process exit.
+- **Reusable, and concurrency-safe for submission** — a single bridge serves
+  many `run()` calls, including concurrent calls from multiple threads.
+  `run()` after `close()` raises `RuntimeError`.
+
+> **Interrupt/timeout semantics.** If the calling thread is interrupted
+> (`KeyboardInterrupt`) or times out while blocked in `run()`, the
+> interrupt/timeout reaches the *caller*, but the coroutine keeps running on
+> the bridge loop until it completes or its best-effort cancellation takes
+> effect — it is not abandoned mid-flight. Likewise, ordering between `run()`
+> and `close()` is the caller's responsibility: a `run()` issued strictly
+> after `close()` raises `RuntimeError`, but a `run()` that *races* an
+> in-flight `close()` from another thread is undefined — quiesce `run()`
+> callers before closing, and pass a `timeout` if you need a guaranteed upper
+> bound on the wait. Do **not** call `close()` from inside a coroutine
+> running on the bridge (it would have to join its own thread); that raises
+> `RuntimeError`.
 
 ### Cost and reuse
 
