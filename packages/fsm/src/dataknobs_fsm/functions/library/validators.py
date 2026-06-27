@@ -44,29 +44,96 @@ def _friendly_schema_predicate(
                 continue
             if not isinstance(constraints, dict):
                 continue
-            if constraints.get("required") and field_name not in data:
+            present = field_name in data
+            value = data.get(field_name)
+            if constraints.get("required") and not present:
                 return False
             if "type" in constraints:
                 expected = _VALIDATION_TYPE_MAP.get(constraints["type"])
-                if expected is not None and not isinstance(
-                    data.get(field_name), expected
-                ):
+                if expected is not None and not isinstance(value, expected):
                     return False
-            if "min" in constraints and not (
-                data.get(field_name, 0) >= constraints["min"]
+            # ``min`` / ``max`` are inclusive numeric bounds. A field that is
+            # absent or not a real number cannot satisfy a numeric bound, so it
+            # is *invalid* (the gate rejects it) — never a ``TypeError`` from
+            # comparing e.g. ``"abc" >= 18``, and never a silent pass from the
+            # old "missing field defaults to 0" behaviour. Bad data must divert
+            # to the reject terminal, not surface as a pipeline error.
+            if "min" in constraints and (
+                not isinstance(value, (int, float))
+                or value < constraints["min"]
             ):
                 return False
-            if "max" in constraints and not (
-                data.get(field_name, 0) <= constraints["max"]
+            if "max" in constraints and (
+                not isinstance(value, (int, float))
+                or value > constraints["max"]
             ):
                 return False
             if "pattern" in constraints and not re.match(
-                constraints["pattern"], str(data.get(field_name, ""))
+                constraints["pattern"], str(value if present else "")
             ):
                 return False
         return True
 
     return validate_check
+
+
+def build_gate_arcs(
+    *,
+    from_state: str,
+    condition_name: str,
+    pass_to: str,
+    reject_to: str,
+    pass_name: str,
+    reject_name: str,
+    priority: int = 10,
+    resources: Mapping[str, str] | None = None,
+) -> List[Dict[str, Any]]:
+    """Build the two-arc shape that turns a state into a record gate.
+
+    A higher-priority conditional ``pass`` arc routes records the registered
+    ``condition_name`` accepts onward to ``pass_to``; an unconditional
+    fall-through diverts the rest to ``reject_to``. The engine sorts available
+    arcs by priority (higher first), so a passing record is routed
+    deterministically without depending on arc declaration order.
+
+    Shared by the file-processing and ETL gate patterns so the gate *shape*
+    cannot drift between them — only the terminal names (``invalid`` /
+    ``filtered_out``) and downstream accounting differ, and those are the
+    parameters.
+
+    ``resources`` (optional) is a ``{role: name}`` binding declared on the
+    ``pass`` arc, so a resource-backed condition can resolve a reference
+    resource from its :class:`FunctionContext`
+    (``resource_for_role`` / ``require_resource``).
+
+    Args:
+        from_state: The gate state both arcs leave.
+        condition_name: Registered name of the ``pass`` arc condition.
+        pass_to: Target state for records the condition accepts.
+        reject_to: Target (non-emitting terminal) for rejected records.
+        pass_name / reject_name: Arc names for the pass / fall-through arcs.
+        priority: Priority of the conditional pass arc (must beat the
+            unconditional fall-through; default 10).
+        resources: Optional ``{role: name}`` resource binding for the pass arc.
+
+    Returns:
+        A two-element list ``[pass_arc, reject_arc]`` of arc-config dicts.
+    """
+    pass_arc: Dict[str, Any] = {
+        "from": from_state,
+        "to": pass_to,
+        "name": pass_name,
+        "condition": {"type": "registered", "name": condition_name},
+        "priority": priority,
+    }
+    if resources:
+        pass_arc["resources"] = dict(resources)
+    reject_arc: Dict[str, Any] = {
+        "from": from_state,
+        "to": reject_to,
+        "name": reject_name,
+    }
+    return [pass_arc, reject_arc]
 
 
 def _validation_function_predicate(

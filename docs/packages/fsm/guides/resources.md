@@ -432,11 +432,16 @@ fsm = AsyncSimpleFSM(
 )
 ```
 
-A condition that raises (e.g. `require_resource` on an undeclared resource)
-simply de-selects its arc — the record is diverted rather than crashing the run,
-so a wiring error fails closed. The ETL pattern's
-[validation gate](../patterns/etl.md#validation) builds exactly this shape for
-its `validate` stage.
+A condition that raises an *unexpected* error — `require_resource` on an
+undeclared/missing resource, a failing reference lookup — is treated as a
+genuine evaluation failure: the record surfaces as an **error**, not a silent
+reject. (An infrastructure outage in the gate must not masquerade as a clean
+data-quality drop.) To deliberately reject a record, the condition returns
+falsy or raises `ValidationError`. The ETL pattern's
+[validation gate](../patterns/etl.md#validation) builds this same gate shape for
+its `validate` stage, and `ETLConfig.validation_resources` wires the arc's
+reference resources for you (see
+[Resource-backed validation](../patterns/etl.md#resource-backed-validation-validate-against-a-reference-table)).
 
 ### Custom context: `transform_context_factory`
 

@@ -38,9 +38,10 @@ async def _seed_reference(path: str, valid_codes: list[str]) -> None:
 # The resource-backed gate predicate. It is an async arc condition: the engine
 # injects the arc's declared resource into ``ctx`` (keyed by name, with the
 # ``{role: name}`` map exposed for role lookup), so the predicate resolves the
-# reference table and checks membership. A raising ``require_resource`` would
-# simply de-select the ``valid`` arc (the engine treats a raising condition as
-# "arc unavailable"), so a wiring error fails closed rather than crashing.
+# reference table and checks membership. A raising ``require_resource`` (the
+# reference resource missing or down) is treated by the engine as a genuine
+# evaluation failure: it surfaces as a record *error*, not a silent reject —
+# an infrastructure outage must not masquerade as a clean data-quality drop.
 async def country_in_reference(data: dict[str, Any], ctx: FunctionContext) -> bool:
     reference = ctx.resource_for_role("reference")
     rows = await reference.execute_query(Query())

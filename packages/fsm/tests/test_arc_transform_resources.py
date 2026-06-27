@@ -891,36 +891,13 @@ async def test_sync_arc_resources_acquired_once_per_transition(
 
 
 # --------------------------------------------------------------------------- #
-# 14: a raising async arc condition de-selects the arc, never crashes the run
+# 14: an UNEXPECTED arc-condition exception surfaces as a record error
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.asyncio
-async def test_async_arc_condition_exception_deselects_arc(tmp_path: Path) -> None:
-    """A raising async arc condition makes that arc unavailable — not a hard fail.
-
-    Cross-engine parity: the sync engine's ``_evaluate_pre_test`` already wraps
-    the predicate call in ``try/except -> return False``, so a raising sync
-    condition simply de-selects its arc. The async engine evaluates conditions
-    as *unawaited* ``asyncio`` tasks in ``_get_available_transitions``; before
-    the fix, a predicate that raised (most realistically ``require_resource()``
-    after a failed concurrent acquire — a path this PR newly introduced by
-    injecting resources into conditions) propagated out through ``await task``
-    and failed the *entire* FSM run instead of de-selecting the one arc.
-
-    Fails against the unguarded async engine: the higher-priority ``to_open``
-    arc's condition raises, so ``process()`` errors out rather than falling
-    through to the unconditional ``to_closed`` arc.
-    """
-
-    def gate_raises(_data: Any, ctx: Any) -> bool:
-        # The realistic trigger: a condition that asks for a resource it does
-        # not have raises TransformError. On the async engine this runs inside
-        # an unawaited task, so an unguarded raise escapes the evaluator.
-        ctx.require_resource("absent")
-        return True  # unreachable
-
-    config = {
-        "name": "raising_condition",
+def _two_arc_gate_config(condition_name: str) -> dict[str, Any]:
+    """A start state with a priority-10 gated arc + an unconditional fallback."""
+    return {
+        "name": "gated",
         "data_mode": DataHandlingMode.COPY.value,
         "states": [
             {
@@ -929,7 +906,7 @@ async def test_async_arc_condition_exception_deselects_arc(tmp_path: Path) -> No
                 "arcs": [
                     {
                         "target": "open",
-                        "condition": {"type": "registered", "name": "gate_raises"},
+                        "condition": {"type": "registered", "name": condition_name},
                         "priority": 10,
                         "metadata": {"name": "to_open"},
                     },
@@ -940,8 +917,33 @@ async def test_async_arc_condition_exception_deselects_arc(tmp_path: Path) -> No
             {"name": "closed", "is_end": True},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_async_arc_condition_unexpected_exception_errors_record() -> None:
+    """A condition raising an UNEXPECTED error makes the *record* error.
+
+    The async engine evaluates conditions as concurrent ``asyncio`` tasks in
+    ``_get_available_transitions``. A condition that raises a non-validation
+    error — most realistically ``require_resource()`` for a resource that is
+    missing or down — means the engine could not evaluate whether the arc
+    applies. It must NOT silently de-select that arc and fall through to the
+    unconditional ``to_closed`` arc: doing so would route the record on a
+    routing decision made with incomplete information and hide an
+    infrastructure failure as a clean outcome. Instead the exception surfaces
+    as a record error (``success=False``), and sibling evaluation tasks are
+    awaited so none is orphaned.
+
+    Fails against the old "catch all exceptions -> de-select arc" behaviour,
+    which would report ``success=True`` at ``closed``.
+    """
+
+    def gate_raises(_data: Any, ctx: Any) -> bool:
+        ctx.require_resource("absent")  # TransformError — an unexpected failure
+        return True  # unreachable
+
     fsm = AsyncSimpleFSM(
-        config,
+        _two_arc_gate_config("gate_raises"),
         data_mode=DataHandlingMode.COPY,
         custom_functions={"gate_raises": gate_raises},
     )
@@ -950,11 +952,42 @@ async def test_async_arc_condition_exception_deselects_arc(tmp_path: Path) -> No
     finally:
         await fsm.close()
 
+    assert result["success"] is False, (
+        "an unexpected arc-condition exception was swallowed and the record "
+        f"silently fell through to the fallback arc (got {result})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_arc_condition_validation_error_is_soft_reject() -> None:
+    """A condition raising ``ValidationError`` is a soft reject (de-select).
+
+    ``ValidationError`` is the explicit "this record is invalid" signal, so a
+    condition raising it de-selects its arc (a clean reject) rather than
+    erroring the record — the run falls through to the unconditional
+    ``to_closed`` arc. This is the reject-vs-error boundary that keeps a
+    validation gate's rejects distinct from infrastructure failures.
+    """
+    from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
+
+    def gate_invalid(_data: Any, _ctx: Any) -> bool:
+        raise FSMValidationError("record is invalid")
+
+    fsm = AsyncSimpleFSM(
+        _two_arc_gate_config("gate_invalid"),
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={"gate_invalid": gate_invalid},
+    )
+    try:
+        result = await fsm.process({"id": "1"})
+    finally:
+        await fsm.close()
+
     assert result["success"], (
-        "a raising async arc condition crashed the FSM run — _evaluate_arc let "
-        f"the predicate exception escape the unawaited task (got {result})"
+        "a ValidationError-raising condition should be a soft reject (arc "
+        f"de-selected), not a record error (got {result})"
     )
     assert result["final_state"] == "closed", (
-        "the raising arc was not de-selected — expected the run to fall through "
-        f"to the unconditional 'to_closed' arc (got {result['final_state']!r})"
+        "the soft-rejected arc was not de-selected — expected fall-through to "
+        f"the unconditional 'to_closed' arc (got {result['final_state']!r})"
     )

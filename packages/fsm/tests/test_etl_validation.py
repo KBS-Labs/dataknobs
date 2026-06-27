@@ -207,3 +207,106 @@ async def test_no_double_counting_and_non_blocking(tmp_path: Path) -> None:
     assert metrics["extracted"] == (
         metrics["loaded"] + metrics["rejected"] + metrics["errors"]
     ), metrics
+
+
+@pytest.mark.asyncio
+async def test_gate_infrastructure_error_counts_as_error_not_reject(
+    tmp_path: Path,
+) -> None:
+    """A gate raising an UNEXPECTED error makes the record an *error*, not a reject.
+
+    Reproduce-first: before the engine distinguished reject from error, a gate
+    predicate that *raised* (a validator bug, a reference table down) was
+    swallowed to ``False``, so the record was silently routed to the
+    ``rejected`` terminal — counted as a clean data-quality drop with
+    ``errors == 0``, hiding the failure as a green run. Now an unexpected
+    exception surfaces as a record error.
+
+    ``error_threshold`` is set to 1.0 so the run completes and the metrics can
+    be inspected (otherwise the errors would correctly abort the run). Against
+    the old behaviour this asserts ``errors == 3`` / ``rejected == 0`` and
+    FAILS (it would have been ``rejected == 3`` / ``errors == 0``).
+    """
+    src = str(tmp_path / "source.json")
+    tgt = str(tmp_path / "target.json")
+    await _seed_source(src, _MIXED_ROWS)
+
+    def exploding_gate(_record: dict) -> bool:
+        # Simulates an infrastructure failure inside the gate (e.g. a reference
+        # lookup against a DB that is down) — NOT a "record is invalid" verdict.
+        raise RuntimeError("reference table unavailable")
+
+    etl = DatabaseETL(
+        ETLConfig(
+            source_db={"type": "file", "path": src},
+            target_db={"type": "file", "path": tgt},
+            source_query=None,
+            target_table="records",
+            key_columns=["id"],
+            mode=ETLMode.FULL_REFRESH,
+            validation_schema=exploding_gate,
+            error_threshold=1.0,  # don't abort; inspect the metrics
+        )
+    )
+    metrics = await etl.run()
+
+    assert metrics["errors"] == 3, metrics
+    assert metrics["rejected"] == 0, metrics
+    assert metrics["loaded"] == 0, metrics
+    assert await _read_target(tgt) == [], "no row should load when the gate errors"
+
+
+@pytest.mark.asyncio
+async def test_resource_backed_gate_via_validation_resources(tmp_path: Path) -> None:
+    """A resource-reading async ``validation_schema`` reaches its declared resource.
+
+    Reproduce-first for the resource-backed gate via ``DatabaseETL``: the
+    auto-built ``valid`` arc must carry the ``validation_resources`` binding, or
+    the gate predicate's ``context.resources`` is empty and ``require_resource``
+    raises — so (per the error-vs-reject contract) every record would *error*.
+    With the binding wired, the async predicate validates each row against a
+    reference-table resource: ids present in the reference pass; the rest are
+    rejected. Also exercises the async-predicate ETL path end-to-end.
+    """
+    src = str(tmp_path / "source.json")
+    tgt = str(tmp_path / "target.json")
+    ref = str(tmp_path / "reference.json")
+    await _seed_source(src, _MIXED_ROWS)
+
+    # Reference table: only ids "1" and "3" are allowed.
+    ref_db = await AsyncDatabase.from_backend("file", {"type": "file", "path": ref})
+    try:
+        for rid in ("1", "3"):
+            await ref_db.upsert(rid, Record({"id": rid}))
+    finally:
+        await ref_db.close()
+
+    async def id_in_reference(record: dict, context: Any) -> bool:
+        reference = context.require_resource("ref_db")
+        rows = await reference.execute_query(Query())
+        allowed = {row.get("id") for row in rows}
+        return record.get("id") in allowed
+
+    etl = DatabaseETL(
+        ETLConfig(
+            source_db={"type": "file", "path": src},
+            target_db={"type": "file", "path": tgt},
+            source_query=None,
+            target_table="records",
+            key_columns=["id"],
+            mode=ETLMode.FULL_REFRESH,
+            validation_schema=id_in_reference,
+            validation_resources={
+                "ref_db": {
+                    "type": "async_database",
+                    "config": {"type": "file", "path": ref},
+                }
+            },
+        )
+    )
+    metrics = await etl.run()
+
+    assert {r["id"] for r in await _read_target(tgt)} == {"1", "3"}, metrics
+    assert metrics["loaded"] == 2, metrics
+    assert metrics["rejected"] == 1, metrics
+    assert metrics["errors"] == 0, metrics

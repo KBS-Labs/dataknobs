@@ -25,7 +25,7 @@ from ..functions.base import (
     IValidationFunction,
     TransformError,
 )
-from ..functions.library.validators import build_record_validator
+from ..functions.library.validators import build_gate_arcs, build_record_validator
 
 
 class FileFormat(Enum):
@@ -350,23 +350,17 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         for index, stage in enumerate(active):
             nxt = active[index + 1] if index + 1 < len(active) else 'complete'
             if stage == 'validate':
-                arcs.append({
-                    'from': 'validate', 'to': nxt, 'name': 'valid',
-                    'condition': {'type': 'registered', 'name': 'validate_check'},
-                    'priority': 10,
-                })
-                arcs.append(
-                    {'from': 'validate', 'to': 'error', 'name': 'invalid'}
-                )
+                arcs.extend(build_gate_arcs(
+                    from_state='validate', condition_name='validate_check',
+                    pass_to=nxt, reject_to='error',
+                    pass_name='valid', reject_name='invalid',
+                ))
             elif stage == 'filter':
-                arcs.append({
-                    'from': 'filter', 'to': nxt, 'name': 'passed',
-                    'condition': {'type': 'registered', 'name': 'filter_pass'},
-                    'priority': 10,
-                })
-                arcs.append(
-                    {'from': 'filter', 'to': 'filtered', 'name': 'filtered_out'}
-                )
+                arcs.extend(build_gate_arcs(
+                    from_state='filter', condition_name='filter_pass',
+                    pass_to=nxt, reject_to='filtered',
+                    pass_name='passed', reject_name='filtered_out',
+                ))
             else:
                 arcs.append(
                     {'from': stage, 'to': nxt, 'name': f'{stage}_done'}

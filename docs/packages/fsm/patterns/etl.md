@@ -100,6 +100,7 @@ not JSON serialization.
 | `transformations` | `list[Callable] \| None` | `None` | Per-record map-style callables applied in the transform step |
 | `validation_schema` | `dict \| IValidationFunction \| Callable \| None` | `None` | Per-record validation gate; see [Validation](#validation) |
 | `reject_counts_as_error` | `bool` | `False` | When `True`, validation rejections count toward `error_threshold` |
+| `validation_resources` | `dict[str, dict] \| None` | `None` | Resources a resource-backed `validation_schema` predicate needs (e.g. a reference table); see [Resource-backed validation](#resource-backed-validation-validate-against-a-reference-table) |
 | `enrichment_sources` | `list[dict] \| None` | `None` | Reserved — not yet applied (see *Current limitations*) |
 
 ### Transformations
@@ -188,31 +189,42 @@ is exceeded.
 ### Resource-backed validation (validate against a reference table)
 
 The three forms above read only the record. To validate against a **reference
-resource** — e.g. "reject any row whose `country` is not in a `valid_countries`
-lookup table" — write the gate as an FSM arc condition that declares its
-resource and resolves it from the injected `FunctionContext`. The engine
-acquires the arc's declared resources and injects them into the condition's
-context (keyed by name, with the `{role: name}` map exposed for role lookup):
+resource** — e.g. "reject any row whose `id` is not in a `valid_ids` lookup
+table" — pass an async predicate as `validation_schema` and declare the
+resources it needs in `validation_resources`. Each `{name: {"type": ...,
+"config": ...}}` entry is registered as an FSM resource and bound on the `valid`
+arc, so the predicate resolves it from the injected `FunctionContext`:
 
 ```python
 from dataknobs_data import Query
-from dataknobs_fsm.functions.base import FunctionContext
 
-async def country_in_reference(record, ctx: FunctionContext) -> bool:
-    reference = ctx.resource_for_role("reference")   # or ctx.require_resource("valid_countries")
+async def id_in_reference(record, ctx) -> bool:
+    reference = ctx.require_resource("valid_ids")   # resolved by name
     rows = await reference.execute_query(Query())
-    return record.get("country") in {r.get("id") for r in rows}
+    return record.get("id") in {r.get("id") for r in rows}
 
-# In the FSM config, the gate arc declares the resource and the condition:
-#   {"from": "validate", "to": "transform", "name": "valid",
-#    "condition": {"type": "registered", "name": "country_in_reference"},
-#    "resources": {"reference": "valid_countries"}, "priority": 10}
-#   {"from": "validate", "to": "rejected", "name": "invalid"}
+etl = DatabaseETL(ETLConfig(
+    source_db={"type": "file", "path": "source.json"},
+    target_db={"type": "file", "path": "target.json"},
+    target_table="records",
+    key_columns=["id"],
+    validation_schema=id_in_reference,
+    validation_resources={
+        "valid_ids": {"type": "async_database",
+                      "config": {"type": "file", "path": "valid_ids.json"}},
+    },
+))
 ```
 
-A condition that raises (e.g. a missing resource) simply de-selects the `valid`
-arc, so a wiring error fails closed (the record is diverted) rather than
-crashing the run. See the
+Without `validation_resources` the gate condition's `context.resources` is
+empty, so `require_resource(...)` raises — and (see below) that surfaces every
+record as an **error**, not a reject. A condition that raises an *unexpected*
+error (a missing/down reference resource, a failing lookup) is treated as a
+genuine evaluation failure: the record is counted as an **error** (tripping
+`error_threshold`), never silently diverted to `rejected`. To deliberately
+reject a record the predicate returns `False` (or raises `ValidationError`).
+This keeps an infrastructure outage in the gate from masquerading as a clean
+data-quality drop. See the
 [Resources guide](../guides/resources.md#resource-backed-arc-conditions) for the
 arc resource-injection contract.
 

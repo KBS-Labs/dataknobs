@@ -13,6 +13,7 @@ from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelectionMode
@@ -108,16 +109,24 @@ class ExecutionEngine(BaseExecutionEngine):
         success, error = self._enter_initial_state(context)
         if not success:
             return False, error
-        
-        # Execute based on data mode
-        if context.data_mode == ProcessingMode.SINGLE:
-            return self._execute_single(context, max_transitions, arc_name)
-        elif context.data_mode == ProcessingMode.BATCH:
-            return self._execute_batch(context, max_transitions)
-        elif context.data_mode == ProcessingMode.STREAM:
-            return self._execute_stream(context, max_transitions)
-        else:
-            return False, f"Unknown data mode: {context.data_mode}"
+
+        # Execute based on data mode. A propagating exception (e.g. an arc
+        # condition that raised a non-validation error in _evaluate_pre_test)
+        # becomes a failed record result rather than escaping the call — parity
+        # with the async engine's execute(), so a per-record driver counts it
+        # as an error consistently across engines.
+        try:
+            if context.data_mode == ProcessingMode.SINGLE:
+                return self._execute_single(context, max_transitions, arc_name)
+            elif context.data_mode == ProcessingMode.BATCH:
+                return self._execute_batch(context, max_transitions)
+            elif context.data_mode == ProcessingMode.STREAM:
+                return self._execute_stream(context, max_transitions)
+            else:
+                return False, f"Unknown data mode: {context.data_mode}"
+        except Exception as e:
+            self._error_count += 1
+            return False, str(e)
     
     def _execute_single(
         self,
@@ -1205,8 +1214,25 @@ class ExecutionEngine(BaseExecutionEngine):
                 if isinstance(result, tuple):
                     return bool(result[0])
                 return bool(result)
-            except Exception:
+            except FSMValidationError:
+                # Explicit "this record is invalid" signal → arc unavailable
+                # (a soft reject). Parity with the async engine's _evaluate_arc.
                 return False
+            except Exception:
+                # A genuine evaluation failure (missing resource, validator bug,
+                # reference lookup error). Surface it as a record error rather
+                # than silently de-selecting the arc — a silent de-select would
+                # route the record to the fall-through (reject) terminal and
+                # hide an infrastructure failure as a clean data-quality drop.
+                logger.warning(
+                    "Arc condition %r raised; surfacing as an evaluation error "
+                    "(arc %s->%s)",
+                    arc.pre_test,
+                    context.current_state,
+                    arc.target_state,
+                    exc_info=True,
+                )
+                raise
         finally:
             self._release_arc_resources(context, arc_resources, owner_id)
 

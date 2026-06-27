@@ -27,7 +27,7 @@ from ..functions.base import (
     TransformError,
 )
 from ..functions.library.database import DatabaseUpsert
-from ..functions.library.validators import build_record_validator
+from ..functions.library.validators import build_gate_arcs, build_record_validator
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,15 @@ class ETLConfig(StructuredConfig):
     # ``False`` — validation is a filter, not a pipeline outage, so rejections
     # are reported in ``rejected`` without tripping the error threshold.
     reject_counts_as_error: bool = False
+    # Resources the validation gate condition needs — e.g. a reference table to
+    # validate a foreign key against. Each ``{name: {"type": ..., "config":
+    # ...}}`` entry is registered as an FSM resource AND bound on the ``valid``
+    # arc (role == name), so a resource-reading ``validation_schema`` predicate
+    # resolves it from its ``FunctionContext`` via ``require_resource(name)``.
+    # Without this the gate condition's ``context.resources`` is empty and a
+    # resource-backed predicate raises (→ the record errors). Dict form
+    # round-trips through the frozen config.
+    validation_resources: Dict[str, Dict[str, Any]] | None = None
     enrichment_sources: List[Dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
@@ -200,6 +209,13 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             {'name': 'target_db', 'type': 'async_database', 'config': self.config.target_db}
         ]
         
+        # Register resources the validation gate needs (e.g. a reference table)
+        # so the `valid` arc can acquire and inject them into the condition's
+        # function context. Bound on the arc below (role == name).
+        if self.config.validation_resources:
+            for res_name, decl in self.config.validation_resources.items():
+                resources.append({'name': res_name, **decl})
+
         # Add enrichment resources if configured
         if self.config.enrichment_sources:
             for i, source in enumerate(self.config.enrichment_sources):
@@ -261,23 +277,28 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         ]
 
         # Wire `validate` as a real gate only when a schema is configured. The
-        # `valid` arc carries a registered condition built from
-        # `validation_schema` and a higher priority; an unconditional
-        # fall-through diverts rejects to a non-loading `rejected` terminal. The
-        # async engine sorts available arcs by priority (higher first), so a
-        # passing record is routed deterministically to `transform` and a
-        # failing one to `rejected` — no record mutation. When no schema is set,
-        # `validate` stays an unconditional passthrough (no reject terminal),
-        # byte-identical to the pre-gate behavior.
-        if self.config.validation_schema is not None:
-            arcs.append({
-                'from': 'validate', 'to': 'transform', 'name': 'valid',
-                'condition': {'type': 'registered', 'name': 'validate_check'},
-                'priority': 10,
-            })
-            arcs.append(
-                {'from': 'validate', 'to': 'rejected', 'name': 'invalid'}
-            )
+        # shared `build_gate_arcs` builds the proven shape — a higher-priority
+        # `valid` arc carrying the registered condition + an unconditional
+        # fall-through that diverts rejects to a non-loading `rejected`
+        # terminal. The engine sorts available arcs by priority (higher first),
+        # so a passing record is routed deterministically to `transform` and a
+        # failing one to `rejected` — no record mutation. An empty schema (`{}`)
+        # is falsy → no gate, byte-identical to the pre-gate passthrough (and
+        # consistent with the file-processing pattern). `validation_resources`
+        # (if any) is bound on the `valid` arc so a resource-reading predicate
+        # can resolve its reference resource.
+        if self.config.validation_schema:
+            arcs.extend(build_gate_arcs(
+                from_state='validate',
+                condition_name='validate_check',
+                pass_to='transform',
+                reject_to='rejected',
+                pass_name='valid',
+                reject_name='invalid',
+                resources={
+                    name: name for name in self.config.validation_resources
+                } if self.config.validation_resources else None,
+            ))
             states.append(
                 {'name': 'rejected', 'is_end': True, 'emit_output': False}
             )
@@ -349,7 +370,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 key_columns=self.config.key_columns or ['id'],
             ),
         }
-        if self.config.validation_schema is not None:
+        if self.config.validation_schema:
             functions['validate_check'] = build_record_validator(
                 self.config.validation_schema
             )
@@ -408,7 +429,13 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 
                 # Check error threshold
                 if self._check_error_threshold():
-                    raise ETLError(f"Error threshold exceeded: {self._metrics['errors']} errors")
+                    # Report rejections too when they count toward the threshold,
+                    # so the message is not a confusing "0 errors" when excess
+                    # rejections (not errors) tripped the gate.
+                    detail = f"{self._metrics['errors']} errors"
+                    if self.config.reject_counts_as_error:
+                        detail += f", {self._metrics['rejected']} rejected"
+                    raise ETLError(f"Error threshold exceeded: {detail}")
                     
                 # Checkpoint if needed
                 if self._should_checkpoint():
@@ -465,8 +492,11 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
         """Update execution metrics by classifying each record's terminal.
 
-        Three outcomes are distinguished, mirroring the file-processing
-        pattern's terminal classification:
+        Three outcomes are distinguished, using the same terminal-based
+        classification *mechanism* as the file-processing pattern — but ETL
+        treats a validation reject as a distinct data-quality outcome
+        (``rejected``) rather than an error (file-processing classifies its
+        reject terminal as an error):
 
         - ``success`` + ``final_state == 'complete'`` → ``transformed`` +
           ``loaded`` (the record was written to the target).

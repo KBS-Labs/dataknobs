@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `errors`. By default rejections do not trip `error_threshold` (validation is a
   data-quality filter, not a pipeline outage); the new
   `ETLConfig.reject_counts_as_error` (default `False`) opts them in for a strict
-  gate. Validating against a reference table is supported by declaring the
-  resource on the gate arc and resolving it from the condition's
-  `FunctionContext` (`resource_for_role` / `require_resource`).
+  gate. To validate against a reference table, set
+  `ETLConfig.validation_resources` (`{name: {"type": ..., "config": ...}}`):
+  each entry is registered as an FSM resource and bound on the `valid` arc, so a
+  resource-reading `validation_schema` predicate resolves it from its
+  `FunctionContext` (`require_resource(name)` / `resource_for_role(name)`).
 - `dataknobs_fsm.functions.library.validators.build_record_validator(spec)`
   normalizes any of three validation-spec forms — a friendly dict schema, a
   library `IValidationFunction`, or a callable predicate (sync or async) — into
@@ -92,6 +94,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An arc condition that raises an *unexpected* error (a missing/down resource,
+  a validator bug, a failing reference lookup) now surfaces as a record error
+  instead of silently de-selecting the arc. Both engines previously swallowed
+  every condition exception to `False`, which routed the record to the
+  fall-through arc — so a validation gate whose reference table was down
+  rejected every row while reporting `errors == 0`, hiding an infrastructure
+  outage as a clean data-quality drop. Conditions now distinguish a soft reject
+  from a hard failure: returning falsy (or raising `ValidationError`, the
+  explicit "record is invalid" signal) de-selects the arc; any other exception
+  propagates and the record is counted as an error (tripping `error_threshold`).
+  The sync engine's `execute()` gained the same per-record error wrapper the
+  async engine already had, so the behaviour is identical across engines.
+- The friendly dict validation schema now treats a `min`/`max`-constrained field
+  that is absent or non-numeric as invalid (a clean reject) rather than silently
+  passing it (a missing field used to default to `0`) or raising `TypeError`
+  (comparing e.g. `"abc" >= 18`). Shared by the ETL and file-processing gates.
+- The ETL "error threshold exceeded" message now includes the rejected count
+  when `reject_counts_as_error` is set, so it no longer reads a confusing
+  "0 errors" when excess rejections (not errors) tripped the gate.
 - Arc transforms that are `ITransformFunction` instances (such as the database
   functions) now run on the async engine. The async arc path previously invoked
   the function as a plain `(data, context)` callable against the raw

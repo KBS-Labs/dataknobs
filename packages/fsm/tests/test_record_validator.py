@@ -45,6 +45,23 @@ def test_dict_schema_min_max_pattern() -> None:
     assert check({"age": 30, "email": "not-an-email"}, None) is False
 
 
+def test_dict_schema_min_max_absent_or_non_numeric_rejects() -> None:
+    """A ``min``/``max``-constrained field that is absent or non-numeric rejects.
+
+    Regression for the promoted ``_make_validator`` quirks: a missing field used
+    to default to ``0`` (so it could silently *pass* a ``min`` bound), and a
+    non-numeric value raised ``TypeError`` (``"abc" >= 18``). Both are now a
+    clean reject — bad data diverts to the reject terminal, never a pipeline
+    error and never a silent pass.
+    """
+    check = build_record_validator({"age": {"min": 18}})
+    assert check({"age": 30}, None) is True
+    assert check({"age": 10}, None) is False
+    assert check({}, None) is False  # absent: no longer defaults to 0 and passes
+    assert check({"age": "old"}, None) is False  # non-numeric: reject, not TypeError
+    assert check({"age": None}, None) is False
+
+
 # --------------------------------------------------------------------------
 # IValidationFunction branch — the raise contract becomes a boolean gate.
 # --------------------------------------------------------------------------
