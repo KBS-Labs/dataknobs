@@ -64,6 +64,10 @@ from dataknobs_common.callbacks import (
 from dataknobs_common.async_iter import (
     aiter_sync_in_thread,
 )
+from dataknobs_common.sync_bridge import (
+    SyncLoopBridge,
+    run_coro_sync,
+)
 from dataknobs_common.lifecycle import (
     close_if_owned,
     close_if_owned_sync,
@@ -269,6 +273,9 @@ __all__ = [
     "StageOrdering",
     # Async iteration
     "aiter_sync_in_thread",
+    # Async->sync bridge
+    "SyncLoopBridge",
+    "run_coro_sync",
     # Lifecycle
     "close_if_owned",
     "close_if_owned_sync",
