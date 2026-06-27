@@ -13,6 +13,34 @@ from typing import Any, Callable, Dict, List, Union
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 
 
+def merge_enrichment_field(
+    result: Dict[str, Any], field: str, value: Any, *, overwrite: bool
+) -> bool:
+    """Set ``result[field] = value`` under the shared ``overwrite`` policy.
+
+    The single source of truth for "add an enrichment field unless it is already
+    present and we are not overwriting". Shared by :class:`DataEnricher` (the
+    field→value form) and the reference-lookup enricher
+    (:class:`~dataknobs_fsm.functions.library.enrichers.LookupMergeEnricher`) so
+    the two enrichment forms cannot diverge on collision handling.
+
+    Args:
+        result: The record dict to mutate in place.
+        field: The field name to set.
+        value: The value to set.
+        overwrite: When ``False`` a field already present in ``result`` is left
+            untouched; when ``True`` it is replaced.
+
+    Returns:
+        ``True`` if the field was written, ``False`` if it was skipped because it
+        was already present and ``overwrite`` is ``False``.
+    """
+    if field in result and not overwrite:
+        return False
+    result[field] = value
+    return True
+
+
 class FieldMapper(ITransformFunction):
     """Map fields from source to target names."""
 
@@ -314,23 +342,27 @@ class DataEnricher(ITransformFunction):
             Transformed data with enrichments.
         """
         result = copy.deepcopy(data)
-        
+
         for field, value in self.enrichments.items():
-            # Skip if field exists and not overwriting
+            # Skip before evaluating a callable so a present-and-not-overwritten
+            # field never triggers (a potentially side-effecting) computation.
             if field in result and not self.overwrite:
                 continue
-            
+
             # Evaluate value if callable
             if callable(value):
                 try:
-                    result[field] = value(data)
+                    computed = value(data)
                 except Exception as e:
                     raise TransformError(
                         f"Failed to compute enrichment for '{field}': {e}"
                     ) from e
             else:
-                result[field] = value
-        
+                computed = value
+            # The gate is already decided above; merge under the shared policy
+            # (the single set-the-field primitive shared with the lookup form).
+            merge_enrichment_field(result, field, computed, overwrite=True)
+
         return result
     
     def get_transform_description(self) -> str:

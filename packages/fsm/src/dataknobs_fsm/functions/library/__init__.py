@@ -12,6 +12,10 @@ These functions implement standard FSM interfaces and can be used
 directly in FSM state definitions.
 """
 
+from .enrichers import (
+    LookupMergeEnricher,
+    build_record_enricher,
+)
 from .validators import (
     CompositeValidator,
     DependencyValidator,
@@ -33,6 +37,11 @@ __all__ = [
     # two-arc gate shape both the file-processing and ETL patterns use).
     "build_record_validator",
     "build_gate_arcs",
+    # Record-enrichment substrate (the consumer extension surface for a
+    # per-record enrich step — accepts a field->value map, a reference-table
+    # lookup spec, an ITransformFunction, or a callable).
+    "build_record_enricher",
+    "LookupMergeEnricher",
     # Library validators.
     "RequiredFieldsValidator",
     "SchemaValidator",

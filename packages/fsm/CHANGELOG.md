@@ -30,6 +30,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `(record, context) -> bool` gate the engine invokes as an arc condition.
   The ETL and file-processing patterns build their `validate` gate through it,
   so the friendly validation vocabulary is identical across both.
+- The ETL `enrich` stage is now a real per-record step. `ETLConfig.enrichment_sources`
+  is a list of enrichers applied in order between `transform` and `load`; each is
+  a computed field→value map (static or callable values), a reference-table
+  lookup (`{"database": <backend cfg>, "match": {record_field: reference_field},
+  "fields": [...], "overwrite": bool}` — the looked-up fields are merged into the
+  record), a library `ITransformFunction`, or a callable `record -> dict`. The
+  reference lookup compiles to a `dataknobs-data` `Query` (backend-agnostic — no
+  raw SQL) and reads through a non-blocking `async_database` resource. The new
+  `ETLConfig.enrichment_on_missing` (`"ignore"` default / `"null"` / `"error"`)
+  controls how a missed reference lookup is handled. An enrichment failure counts
+  as an `error`; enrichment adds no new terminal or metric key. Per-record API
+  lookups and multi-row fan-out joins are not yet wired (an `api` source is
+  rejected at config validation).
+- `dataknobs_fsm.functions.library.enrichers.build_record_enricher(spec)`
+  normalizes any of four enrichment-spec forms — a field→value map, a
+  reference-table lookup (`LookupMergeEnricher`, exported alongside it), an
+  `ITransformFunction`, or a callable (sync or async) — into the
+  `(record, context) -> dict` step the engine applies in the enrich stage. The
+  shared `merge_enrichment_field` primitive applies one `overwrite` policy across
+  the computed and lookup forms.
 - New `async_database` FSM resource type (backed by
   `AsyncDatabaseResourceAdapter`) so a state transform can `await`
   non-blocking `upsert` / `execute_query` against any `dataknobs-data`
@@ -276,8 +296,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transformed` / `loaded` / `errors`) reflect the records actually
   processed. Previously records traversed skeleton states without a load
   step, the user `transformations` callables were never applied, and the
-  metrics were hollow. (The `validate` stage is now a real gate — see *Added*;
-  the `enrich` stage remains a passthrough pending its config contract.)
+  metrics were hollow. (The `validate` and `enrich` stages are now real
+  per-record steps — see *Added*.)
 - `AsyncBatchExecutor` drives the async execution engine directly instead
   of running the synchronous engine in a thread pool, so async state
   transforms are awaited — they previously leaked unawaited coroutines and

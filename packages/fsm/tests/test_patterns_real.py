@@ -117,8 +117,16 @@ class TestETLPatternReal:
         config = ETLConfig(
             source_db={'type': 'postgres', 'host': 'source-host'},
             target_db={'type': 'postgres', 'host': 'target-host'},
+            # A reference-lookup enrichment source: the backend config is
+            # registered as the enrichment resource and a `match` join drives the
+            # per-record lookup (the bare `{'database': cfg}` shape — a no-op
+            # before this stage was wired — now requires a `match`).
             enrichment_sources=[
-                {'database': {'type': 'redis', 'host': 'cache-host'}}
+                {
+                    'database': {'type': 'redis', 'host': 'cache-host'},
+                    'match': {'id': 'key'},
+                    'fields': ['cached'],
+                }
             ]
         )
 
@@ -134,10 +142,10 @@ class TestETLPatternReal:
         # A configured database enrichment source is declared at the FSM level.
         assert 'enrichment_db_0' in resources
 
-        # The per-record transform and load steps are wired as registered
-        # functions (the proven custom_functions= idiom).
+        # The per-record transform, load, and (now-wired) enrich steps are
+        # registered functions (the proven custom_functions= idiom).
         functions = etl._build_custom_functions()
-        assert set(functions) == {'transform', 'load'}
+        assert set(functions) == {'transform', 'load', 'enrich'}
 
 
 class TestFileProcessingPatternReal:
