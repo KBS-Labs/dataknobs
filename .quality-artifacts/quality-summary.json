@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-27T22:03:21Z",
+  "timestamp": "2026-06-27T22:20:13Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -10,7 +10,7 @@
   "common": "8af57b310441e6152f47764d2f96e72f76ab36d5cf188c5ec51e160f6f542065",
   "config": "53c9d16d509cb65d450b5c4cadfb3d1dd08eaa0a5eac5739d7a8249685516e86",
   "data": "7c003692b0e2e178a433118262c40ce70449dce09474402ab43ae41d72ed2888",
-  "fsm": "f4d61ac71d28836ae3f4998d7ffb1e4fa1b20c0c8c981edc2c4b17f5a1c9c684",
+  "fsm": "798852b36c88df1990745af40323f8c0bd8722d3a98e21a413aa52f080983b80",
   "legacy": "ddc6bd0d83e9e40ea4107cd6db0f40f7fcdbe5f5814c0814aabeb050d1ed039c",
   "llm": "18dfc02f4e6184a519cadbb2416e47609b4592a585a156d781b21eb10f421bdb",
   "structures": "ce60414882928dd3bdfdab36c9c968f55dc6be83883d8cec429929ff2049e06c",
@@ -22,7 +22,7 @@
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": true,
+      "skipped": false,
       "tool": "mkdocs"
     },
     "documentation_versions": {
