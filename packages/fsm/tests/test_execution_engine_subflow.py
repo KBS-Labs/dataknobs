@@ -90,7 +90,7 @@ class TestDataMapping:
     """Test data mapping between parent and child contexts."""
 
     def test_apply_data_mapping_helper(self):
-        """Test the _apply_data_mapping helper method directly."""
+        """Test the apply_data_mapping helper method directly."""
         config = FSMConfig(
             name="test_fsm",
             main_network="main",
@@ -126,7 +126,7 @@ class TestDataMapping:
             "user_name": "name"
         }
 
-        result = engine._apply_data_mapping(parent_data, mapping)
+        result = engine.apply_data_mapping(parent_data, mapping)
 
         # Only mapped fields should be present
         assert result.get("id") == 123
@@ -162,7 +162,7 @@ class TestDataMapping:
         original_data = {"field1": "value1", "field2": "value2"}
 
         # Empty mapping should return original
-        result = engine._apply_data_mapping(original_data, {})
+        result = engine.apply_data_mapping(original_data, {})
 
         assert result == original_data
 
@@ -171,7 +171,7 @@ class TestResultMapping:
     """Test result mapping from child back to parent context."""
 
     def test_apply_result_mapping_helper(self):
-        """Test the _apply_result_mapping helper method directly."""
+        """Test the apply_result_mapping helper method directly."""
         config = FSMConfig(
             name="test_fsm",
             main_network="main",
@@ -211,7 +211,7 @@ class TestResultMapping:
             "status": "workflow_status"
         }
 
-        result = engine._apply_result_mapping(child_data, mapping, parent_data)
+        result = engine.apply_result_mapping(child_data, mapping, parent_data)
 
         assert result["output"] == 42
         assert result["workflow_status"] == "complete"
@@ -760,8 +760,8 @@ class TestExecutionEngineDirectPushArc:
         fsm = builder.build(config)
         engine = ExecutionEngine(fsm)
 
-        # Verify methods exist
-        assert hasattr(engine, '_apply_data_mapping')
-        assert hasattr(engine, '_apply_result_mapping')
-        assert callable(engine._apply_data_mapping)
-        assert callable(engine._apply_result_mapping)
+        # Verify methods exist (shared on BaseExecutionEngine)
+        assert hasattr(engine, 'apply_data_mapping')
+        assert hasattr(engine, 'apply_result_mapping')
+        assert callable(engine.apply_data_mapping)
+        assert callable(engine.apply_result_mapping)

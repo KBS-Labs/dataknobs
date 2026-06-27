@@ -13,11 +13,13 @@ the one that matters for the "``direct`` fails loud at load" migration
 guarantee -- a raw dict whose ``PushArcConfig`` fails validation must raise,
 not silently degrade to a plain ``ArcConfig`` that drops ``target_network``.
 
-Execution-status note: the sync ``ExecutionEngine`` does not traverse
-sub-networks and the async engine does not execute push arcs at all, so those
-paths do not honor ``isolation_mode`` yet. ``NetworkExecutor`` -- a public,
-exported executor -- *does* traverse sub-networks and now honors all three
-modes at the data-input boundary (proven below).
+Execution-status note: the async ``AsyncExecutionEngine`` now executes push
+arcs -- it pushes the sub-network, isolates the data via the shared
+``DataIsolationMode.apply`` helper, enters the sub-network, and pops back on
+completion (proven below on the ``AsyncSimpleFSM`` path). ``NetworkExecutor`` --
+a public, exported executor -- also traverses sub-networks and honors all three
+modes at the data-input boundary (proven below). The sync ``ExecutionEngine``
+likewise traverses sub-networks via its own push/pop path.
 """
 
 import inspect
@@ -495,20 +497,15 @@ def test_network_executor_enforces_max_depth_across_nested_push_arcs():
         executor.execute_network("main", context, context.data)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "The async execution engine does not yet execute push arcs: a push arc "
-        "is treated as a flat transition with no sub-network push/pop, so the "
-        "subflow is never entered. Flip to a real assertion when async push-arc "
-        "execution is wired."
-    ),
-    strict=False,
-)
 async def test_async_push_arc_enters_subflow():
-    """Pins the bound that push arcs do not execute on the async path today.
+    """The async engine executes a push arc and enters the sub-network.
 
-    ``SimpleFSM.process()`` shares this async engine, so the same flat-transition
-    behavior holds there too.
+    Reproduces (and now confirms the fix for) the gap where the async engine
+    treated a push arc as a flat transition with no sub-network push/pop, so
+    the subflow was never entered. After wiring async push-arc execution the
+    sub-network's start-state transform runs and sets ``entered_subflow``.
+    ``SimpleFSM.process()`` shares this async engine, so the same behavior now
+    holds there too.
     """
     from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 
@@ -563,3 +560,91 @@ async def test_async_push_arc_enters_subflow():
     finally:
         await fsm.close()
     assert result.get("data", {}).get("entered_subflow") is True
+
+
+def _async_push_isolation_config(isolation_value: str | None) -> dict:
+    """Two-network config whose sub start-state transform mutates the data.
+
+    The push arc carries ``data_isolation`` (omitted when ``None`` so the
+    runtime default COPY applies). The sub-network's ``s1`` transform sets
+    ``sub_touched`` on the data it receives, and the main flow runs
+    start -(push)-> sub(s1->s2) -(pop)-> after -> end.
+    """
+    arc: dict = {
+        "target": "after",
+        "target_network": "sub",
+        "return_state": "after",
+    }
+    if isolation_value is not None:
+        arc["data_isolation"] = isolation_value
+    return {
+        "name": "iso_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {"name": "start", "is_start": True, "arcs": [arc]},
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "s1",
+                        "is_start": True,
+                        "arcs": [{"target": "s2"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_touched'] = True\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "s2", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("isolation_value", ["copy", "serialize", None])
+async def test_async_push_arc_isolating_modes_propagate_result(isolation_value):
+    """COPY/SERIALIZE (and the default) enter the subflow and merge the result.
+
+    The async engine isolates the sub-network's data view via
+    ``DataIsolationMode.apply``; the sub mutates its isolated snapshot and the
+    result is merged back onto ``context.data`` so it still propagates to the
+    final result. (``None`` exercises the runtime default, which is COPY.)
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_push_isolation_config(isolation_value))
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+    assert result.get("data", {}).get("sub_touched") is True
+
+
+async def test_async_push_arc_reference_mode_enters_subflow():
+    """REFERENCE shares the parent's data object with the sub-network.
+
+    The contrast case to the isolating modes: with REFERENCE the sub-network
+    operates on the parent's data by reference, so its mutation is visible in
+    the final result. The async engine still enters and pops the subflow.
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_push_isolation_config("reference"))
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+    assert result.get("data", {}).get("sub_touched") is True

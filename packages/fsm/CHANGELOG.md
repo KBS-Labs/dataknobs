@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- The async execution engine now executes **push arcs**. Previously a push arc
+  was treated as a flat transition on the async path, so the sub-network was
+  never entered (`SimpleFSM.process()` runs on the async engine, so it was
+  affected too). `AsyncExecutionEngine` now pushes the target sub-network onto
+  the context stack, isolates the sub-network's data view via the shared
+  `DataIsolationMode.apply` helper (the single source of truth — `copy` /
+  `reference` / `serialize`), enters the sub-network's initial state, and pops
+  back to the parent's return state when the sub-network reaches a final state —
+  matching the synchronous engine's subflow lifecycle.
+
+### Changed
+
+- The parent→child / child→parent push-arc data-mapping helpers
+  (`apply_data_mapping` / `apply_result_mapping`) moved to
+  `BaseExecutionEngine`, so the synchronous and asynchronous engines share one
+  implementation and cannot drift (previously private methods on the sync
+  engine).
+
 ### Added
 
 - The ETL `validate` stage is now a real per-record gate. `ETLConfig.validation_schema`

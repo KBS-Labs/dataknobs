@@ -622,7 +622,7 @@ class ExecutionEngine(BaseExecutionEngine):
 
         # Apply data mapping (parent → child)
         if push_arc.data_mapping:
-            mapped_data = self._apply_data_mapping(
+            mapped_data = self.apply_data_mapping(
                 context.data,
                 push_arc.data_mapping
             )
@@ -678,64 +678,6 @@ class ExecutionEngine(BaseExecutionEngine):
         )
 
         return True
-
-    def _apply_data_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str]
-    ) -> Dict[str, Any]:
-        """Apply data mapping from parent to child context.
-
-        Args:
-            data: Source data (parent context data).
-            mapping: Dict mapping parent_field -> child_field.
-
-        Returns:
-            Mapped data dictionary for child context.
-        """
-        if not mapping:
-            return data if isinstance(data, dict) else {'value': data}
-
-        mapped = {}
-        source_data = data if isinstance(data, dict) else {}
-
-        for parent_field, child_field in mapping.items():
-            if parent_field in source_data:
-                mapped[child_field] = source_data[parent_field]
-            elif hasattr(data, parent_field):
-                mapped[child_field] = getattr(data, parent_field)
-
-        return mapped
-
-    def _apply_result_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str],
-        parent_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Apply result mapping from child to parent context.
-
-        Args:
-            data: Source data (child context result).
-            mapping: Dict mapping child_field -> parent_field.
-            parent_data: Parent context data to update.
-
-        Returns:
-            Updated parent data with mapped results.
-        """
-        if not mapping:
-            return data if isinstance(data, dict) else parent_data
-
-        result = dict(parent_data) if parent_data else {}
-        source_data = data if isinstance(data, dict) else {}
-
-        for child_field, parent_field in mapping.items():
-            if child_field in source_data:
-                result[parent_field] = source_data[child_field]
-            elif hasattr(data, child_field):
-                result[parent_field] = getattr(data, child_field)
-
-        return result
 
     def _check_subflow_completion(
         self,
@@ -810,7 +752,7 @@ class ExecutionEngine(BaseExecutionEngine):
             # Get the parent's data snapshot before subflow
             # (this would need to be stored when pushing)
             parent_data = getattr(context, '_parent_data_snapshot', {})
-            context.data = self._apply_result_mapping(
+            context.data = self.apply_result_mapping(
                 context.data,
                 push_arc.result_mapping,
                 parent_data

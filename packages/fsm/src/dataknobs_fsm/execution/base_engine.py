@@ -340,6 +340,74 @@ class BaseExecutionEngine(ABC):
             )
         return True, context.data
 
+    def apply_data_mapping(
+        self,
+        data: Any,
+        mapping: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Map a parent context's data into a child (sub-network) shape.
+
+        Shared by both engines' push-arc handlers so parent→child field
+        mapping cannot drift between the sync and async paths.
+
+        Args:
+            data: Source data (parent context data).
+            mapping: Dict mapping ``parent_field -> child_field``.
+
+        Returns:
+            Mapped data dictionary for the child context. With no mapping the
+            data passes through unchanged (wrapped as ``{'value': data}`` only
+            when it is not already a dict).
+        """
+        if not mapping:
+            return data if isinstance(data, dict) else {'value': data}
+
+        mapped = {}
+        source_data = data if isinstance(data, dict) else {}
+
+        for parent_field, child_field in mapping.items():
+            if parent_field in source_data:
+                mapped[child_field] = source_data[parent_field]
+            elif hasattr(data, parent_field):
+                mapped[child_field] = getattr(data, parent_field)
+
+        return mapped
+
+    def apply_result_mapping(
+        self,
+        data: Any,
+        mapping: Dict[str, str],
+        parent_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Map a child (sub-network) result back onto the parent's data.
+
+        Counterpart to :meth:`apply_data_mapping`, shared by both engines'
+        subflow-pop handlers.
+
+        Args:
+            data: Source data (child context result).
+            mapping: Dict mapping ``child_field -> parent_field``.
+            parent_data: Parent context data to update.
+
+        Returns:
+            Updated parent data with the mapped results. With no mapping the
+            child data passes through unchanged (when it is a dict), otherwise
+            the parent data is returned untouched.
+        """
+        if not mapping:
+            return data if isinstance(data, dict) else parent_data
+
+        result = dict(parent_data) if parent_data else {}
+        source_data = data if isinstance(data, dict) else {}
+
+        for child_field, parent_field in mapping.items():
+            if child_field in source_data:
+                result[parent_field] = source_data[child_field]
+            elif hasattr(data, child_field):
+                result[parent_field] = getattr(data, child_field)
+
+        return result
+
     def evaluate_arc_condition_common(
         self,
         arc: ArcDefinition,
