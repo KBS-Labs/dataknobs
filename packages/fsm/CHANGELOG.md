@@ -18,14 +18,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reference` / `serialize`), enters the sub-network's initial state, and pops
   back to the parent's return state when the sub-network reaches a final state —
   matching the synchronous engine's subflow lifecycle.
+- The async subflow state entry now runs the sub-network initial state's
+  **pre-validators** and allocates its **state resources** (inheriting the
+  parent state's), at parity with the synchronous engine — previously the async
+  path only set the state and ran transforms, so sub-network pre-validators
+  never ran and state resources were never available for child inheritance. A
+  rejecting pre-validator now fails the push and rolls it back.
+- Push-arc **`result_mapping`** is now applied when a subflow completes (mapping
+  the sub-network's result fields back onto the parent's pre-push data). It was
+  previously inert on both engines — the pop did not have the originating arc,
+  and the parent-data snapshot it relied on was never recorded.
+- A **nested** subflow that returns to a state which is itself a final state of
+  the parent sub-network now unwinds every completed level in one step, instead
+  of finalizing the whole run prematurely inside the parent sub-network.
+- A push whose initial state cannot be resolved (an unknown `network:state`
+  target) now leaves the context unchanged — the parent's data is no longer
+  replaced by an orphaned isolated copy. The target is resolved before the push
+  is committed; a state-entry failure after commit rolls back cleanly.
 
 ### Changed
 
-- The parent→child / child→parent push-arc data-mapping helpers
-  (`apply_data_mapping` / `apply_result_mapping`) moved to
-  `BaseExecutionEngine`, so the synchronous and asynchronous engines share one
-  implementation and cannot drift (previously private methods on the sync
-  engine).
+- The push-arc subflow lifecycle is now driven by shared, color-free helpers on
+  `BaseExecutionEngine` (target parsing, initial-state resolution, data-mapping
+  application, push commit, rollback, result mapping, and subflow-final-state
+  detection), in addition to the `apply_data_mapping` / `apply_result_mapping`
+  helpers (previously private to the sync engine). The synchronous and
+  asynchronous engines now share one implementation of the push/pop logic and
+  cannot drift; the per-push state needed for result mapping and rollback is
+  tracked on a `SubflowFrame` stack on `ExecutionContext`.
+
+### Added
+
+- Push arcs now honor config-authored **`data_mapping`** and **`result_mapping`**
+  (`PushArcConfig.data_mapping` / `result_mapping`). These thread through the
+  builder to the runtime `PushArc`; previously the fields could not be expressed
+  in config and were dropped at build time, so `result_mapping` was inert end to
+  end.
 
 ### Added
 

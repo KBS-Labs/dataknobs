@@ -37,6 +37,7 @@ from dataknobs_fsm.config.schema import (
     StateConfig,
 )
 from dataknobs_fsm.core.arc import DataIsolationMode, PushArc
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.network import NetworkExecutor
 from dataknobs_fsm.functions.base import StateTransitionError
@@ -648,3 +649,337 @@ async def test_async_push_arc_reference_mode_enters_subflow():
     finally:
         await fsm.close()
     assert result.get("data", {}).get("sub_touched") is True
+
+
+# --- Async engine isolation: observe the actual mode divergence ---------------
+#
+# The propagation tests above prove the sub-network's result reaches the final
+# output, but they assert the *same* thing for every mode, so they cannot tell
+# COPY/SERIALIZE from REFERENCE. These engine-level tests retain the parent's
+# input object and assert the divergence directly: COPY/SERIALIZE give the
+# sub-network an isolated snapshot (the parent's original object is left
+# untouched) while REFERENCE shares it (the mutation lands on the original
+# object). Driven at the ``AsyncExecutionEngine`` level so the test owns the
+# exact ``context.data`` object the engine isolates.
+
+
+async def _run_async_engine_push_isolation(isolation_value: str):
+    """Run a push through the async engine and report parent-object mutation.
+
+    Returns ``(original_obj, context, success)``. The sub start-state transform
+    mutates the data it receives; under an isolating mode the parent's original
+    object is left untouched, under REFERENCE it is mutated in place.
+    """
+    fsm = FSMBuilder().build(
+        FSMConfig.model_validate(_async_push_isolation_config(isolation_value))
+    )
+    engine = AsyncExecutionEngine(fsm)
+    context = ExecutionContext()
+    original = {"id": 1}
+    context.data = original
+    success, _result = await engine.execute(context)
+    return original, context, success
+
+
+@pytest.mark.parametrize("value", ["copy", "serialize"])
+async def test_async_engine_isolating_modes_leave_parent_object_untouched(value):
+    """COPY/SERIALIZE isolate the parent's input object from the sub-network.
+
+    The sub-network mutates an isolated snapshot, so the parent's original
+    object is left untouched while the result still propagates onto
+    ``context.data`` (a distinct object). This is what distinguishes the
+    isolating modes from REFERENCE — the propagation-only tests could not.
+    """
+    original, context, success = await _run_async_engine_push_isolation(value)
+    assert success is True
+    assert "sub_touched" not in original  # parent's original object untouched
+    assert context.data is not original  # isolated snapshot, distinct object
+    assert context.data.get("sub_touched") is True  # result still propagates
+
+
+async def test_async_engine_reference_mode_mutates_parent_object():
+    """REFERENCE shares the parent's input object with the sub-network.
+
+    The contrast to the isolating modes: the sub mutates the parent's object in
+    place, so the marker appears on the original object and ``context.data`` is
+    that same object.
+    """
+    original, context, success = await _run_async_engine_push_isolation("reference")
+    assert success is True
+    assert original.get("sub_touched") is True  # mutated in place
+    assert context.data is original  # same object, no snapshot
+
+
+# --- Async result mapping: config-authored mapping applied on pop -------------
+
+
+def _async_result_mapping_config() -> dict:
+    """Config whose push arc carries a ``result_mapping`` (sub_out -> parent_in).
+
+    The main start state sets a parent-only ``keep`` field, the sub-network's
+    ``s1`` sets ``sub_out``, and the push arc maps ``sub_out`` back to the
+    parent's ``parent_in`` on completion.
+    """
+    return {
+        "name": "rm_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['keep'] = 'me'\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub",
+                                "return_state": "after",
+                                "result_mapping": {"sub_out": "parent_in"},
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "s1",
+                        "is_start": True,
+                        "arcs": [{"target": "s2"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_out'] = 99\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "s2", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+async def test_async_push_arc_applies_config_authored_result_mapping():
+    """A config-authored ``result_mapping`` reaches the runtime arc and applies.
+
+    End to end on the async ``AsyncSimpleFSM`` path: the sub-network's
+    ``sub_out`` is mapped onto the parent's ``parent_in``, the parent-only
+    ``keep`` survives, and the unmapped ``sub_out`` does not leak. Reproduces
+    the full dead-``result_mapping`` chain: before the fix the config field did
+    not exist (silently dropped at build), and the pop ignored the arc — so
+    ``parent_in`` was absent.
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_result_mapping_config())
+    try:
+        result = await fsm.process({})
+    finally:
+        await fsm.close()
+    data = result.get("data", {})
+    assert data.get("parent_in") == 99  # mapped child field reached the parent
+    assert data.get("keep") == "me"  # parent's pre-push field preserved
+    assert "sub_out" not in data  # unmapped child field did not leak through
+
+
+# --- Async subflow state-entry parity: pre-validators run (and can reject) -----
+
+
+def _async_pre_validator_config(reject: bool) -> dict:
+    """Config whose sub start-state declares a pre-validator.
+
+    With ``reject=False`` the validator merges ``{'pre_ran': True}`` into the
+    data (proving it ran); with ``reject=True`` it returns ``False`` (proving a
+    rejecting pre-validator blocks the subflow push).
+    """
+    pre_code = (
+        "def pre_val(data, context):\n    return False\n"
+        if reject
+        else "def pre_val(data, context):\n    return {'pre_ran': True}\n"
+    )
+    return {
+        "name": "pv_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub",
+                                "return_state": "after",
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "s1",
+                        "is_start": True,
+                        "pre_validators": [{"type": "inline", "code": pre_code}],
+                        "arcs": [{"target": "s2"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_touched'] = True\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "s2", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+async def test_async_subflow_runs_pre_validators():
+    """The async engine runs the sub-network initial state's pre-validators.
+
+    Parity with the sync engine, which entered subflow states via ``enter_state``
+    (running pre-validators) while the async engine only did ``set_state`` +
+    transforms. The pre-validator merges ``pre_ran`` into the data; before the
+    fix it never ran, so ``pre_ran`` was absent from the result.
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_pre_validator_config(reject=False))
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+    data = result.get("data", {})
+    assert data.get("pre_ran") is True  # the subflow pre-validator ran
+    assert data.get("sub_touched") is True  # and the subflow still executed
+
+
+async def test_async_subflow_rejecting_pre_validator_blocks_push():
+    """A rejecting pre-validator fails the subflow push and rolls it back.
+
+    The sub initial state's pre-validator returns ``False``; the async
+    ``enter_state`` releases what it acquired and the push rolls back, so the
+    transition fails (the run reports failure) and the sub transform never ran.
+    Before the fix the validator was ignored, so the push succeeded and the run
+    completed. Also exercises the failed-push rollback path (the context is not
+    left stranded with the isolated sub-network data).
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_pre_validator_config(reject=True))
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+    assert result.get("success") is False  # the rejected push failed the run
+    assert result.get("data", {}).get("sub_touched") is not True  # sub never ran
+
+
+# --- Async nested subflow cascade: a single check drains all levels -----------
+
+
+def _async_nested_config() -> dict:
+    """Nested config: subA pushes subB whose return state is subA's final state.
+
+    main: start -(push subA, return after)-> after -> end
+    subA: a1 -(push subB, return a_end[final of subA])-> ...
+    subB: b1 -> b_end[final]
+    """
+    return {
+        "name": "nested_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "subA",
+                                "return_state": "after",
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "subA",
+                "states": [
+                    {
+                        "name": "a1",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "a_end",
+                                "target_network": "subB",
+                                "return_state": "a_end",
+                            }
+                        ],
+                    },
+                    {"name": "a_end", "is_end": True},
+                ],
+            },
+            {
+                "name": "subB",
+                "states": [
+                    {"name": "b1", "is_start": True, "arcs": [{"target": "b_end"}]},
+                    {"name": "b_end", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+async def test_async_nested_subflow_unwinds_fully_to_main_end():
+    """A nested subflow cascade unwinds fully to the main network's end.
+
+    subB returns to subA's *final* state, which would (with a single-level pop)
+    let the next loop-top global final-state check finalize the whole run inside
+    subA. The drain pops both levels, so the run reaches the main network's
+    ``end``. Before the fix the run finalized in subA (``final_state`` would be
+    ``a_end``, not ``end``).
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_nested_config())
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+    assert result.get("success") is True
+    assert result.get("final_state") == "end"  # not finalized inside a sub-network

@@ -5,6 +5,7 @@ the synchronous (ExecutionEngine) and asynchronous (AsyncExecutionEngine)
 implementations, reducing code duplication and ensuring feature parity.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 from types import SimpleNamespace
@@ -27,6 +28,8 @@ from dataknobs_fsm.execution.common import (
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.engine import TraversalStrategy
+
+logger = logging.getLogger(__name__)
 
 
 class BaseExecutionEngine(ABC):
@@ -407,6 +410,194 @@ class BaseExecutionEngine(ABC):
                 result[parent_field] = getattr(data, child_field)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Subflow (push-arc) lifecycle — shared, color-free building blocks.
+    #
+    # Both engines drive an identical push/pop subflow lifecycle; only the
+    # state-entry step (sync ``enter_state`` vs the async one) and the hook
+    # firing / ``await`` differ by async coloring. Everything that does *not*
+    # depend on that coloring lives here, so the two engines' orchestrators are
+    # thin and cannot drift on the parsing, depth check, target/initial-state
+    # resolution, push commit, rollback, final-state detection, or result
+    # mapping. (The orchestrators themselves stay per-engine because a method
+    # cannot be both sync and ``async``.)
+    # ------------------------------------------------------------------
+
+    def subflow_depth_exceeded(
+        self,
+        context: ExecutionContext,
+        push_arc: Any,
+        max_subflow_depth: int,
+    ) -> bool:
+        """Whether pushing ``push_arc`` would exceed the nesting depth limit."""
+        if len(context.network_stack) >= max_subflow_depth:
+            logger.error(
+                "Maximum subflow depth %d exceeded when pushing to network '%s'",
+                max_subflow_depth,
+                push_arc.target_network,
+            )
+            return True
+        return False
+
+    def parse_push_target(self, push_arc: Any) -> Tuple[str, str | None]:
+        """Split a push arc's ``target_network`` into ``(network, initial?)``.
+
+        Supports the ``"network"`` and ``"network:initial_state"`` forms.
+
+        Returns:
+            ``(network_name, explicit_initial_state_or_None)``.
+        """
+        target = push_arc.target_network
+        if ':' in target:
+            network_name, initial_state = target.split(':', 1)
+            return network_name, initial_state.strip()
+        return target, None
+
+    def resolve_subflow_initial_state(
+        self,
+        target_network: Any,
+        network_name: str,
+        explicit_initial_state: str | None,
+    ) -> str | None:
+        """Resolve the sub-network's initial state, or ``None`` on a bad target.
+
+        Resolution is done *before* the push is committed so the bad-target
+        paths (unknown explicit state, no default initial state) fail cleanly
+        without having mutated the context.
+
+        Args:
+            target_network: The resolved target network object.
+            network_name: Name of the target network (for logging).
+            explicit_initial_state: An explicit ``network:state`` override, or
+                ``None`` to use the network's default initial state.
+
+        Returns:
+            The state name to enter, or ``None`` if it cannot be resolved.
+        """
+        if explicit_initial_state:
+            if explicit_initial_state not in target_network.states:
+                logger.error(
+                    "Initial state '%s' not found in network '%s'",
+                    explicit_initial_state,
+                    network_name,
+                )
+                return None
+            return explicit_initial_state
+        if target_network.initial_states:
+            return next(iter(target_network.initial_states))
+        logger.error("No initial state in network '%s'", network_name)
+        return None
+
+    def prepare_subflow_input(self, push_arc: Any, data: Any) -> Any:
+        """Apply the push arc's parent→child data mapping (pre-isolation).
+
+        The isolation step (``isolation_mode.apply``) is applied by the caller
+        so the async engine can offload its (potentially large) deepcopy /
+        serialize off the event loop.
+        """
+        if push_arc.data_mapping:
+            return self.apply_data_mapping(data, push_arc.data_mapping)
+        return data
+
+    def begin_subflow(
+        self,
+        context: ExecutionContext,
+        push_arc: Any,
+        network_name: str,
+        parent_state_resources: Dict[str, Any],
+        isolated_data: Any,
+    ) -> None:
+        """Commit a push: replace data, push the network, record the frame.
+
+        Captures the parent's pre-push data object and prior
+        ``parent_state_resources`` into a :class:`SubflowFrame` *before*
+        overwriting them, so :meth:`rollback_push` (failed entry) and the pop
+        (result mapping + resource restore) can undo/consume them precisely.
+        """
+        prev_parent_state_resources = getattr(
+            context, 'parent_state_resources', {}
+        )
+        parent_data = context.data
+        context.data = isolated_data
+        context.push_network(network_name, push_arc.return_state)
+        context.push_subflow_frame(
+            push_arc, parent_data, prev_parent_state_resources
+        )
+        # The sub-network's states inherit the pushing state's resources.
+        context.parent_state_resources = parent_state_resources
+
+    def rollback_push(self, context: ExecutionContext) -> None:
+        """Undo a committed push whose initial-state entry failed.
+
+        Pops the frame and network, restores the parent's data object and
+        inherited-resource view. No result mapping is applied (the push did not
+        complete).
+        """
+        frame = context.pop_subflow_frame()
+        context.pop_network()
+        if frame is not None:
+            context.data = frame.parent_data
+        self.restore_after_pop(context, frame)
+
+    def subflow_at_final_state(self, context: ExecutionContext) -> bool:
+        """Whether the current state is a final state of the top-of-stack network.
+
+        ``is_final_state_common`` is global (a name match across *all* networks),
+        so it cannot tell "the sub-network finished" from "the whole run
+        finished". This network-scoped check is what the pop logic keys on.
+        """
+        if not context.network_stack:
+            return False
+        current_network_name = context.network_stack[-1][0]
+        current_network = self.fsm.networks.get(current_network_name)
+        if not current_network:
+            logger.warning(
+                "Network '%s' from stack not found in FSM",
+                current_network_name,
+            )
+            return False
+        if not context.current_state:
+            return False
+        return context.current_state in current_network.final_states
+
+    def restore_after_pop(
+        self,
+        context: ExecutionContext,
+        frame: Any,
+    ) -> None:
+        """Restore the parent level's inherited-resource view after a pop.
+
+        Resets ``parent_state_resources`` to the value captured in the frame
+        (the grandparent's resources, or ``{}`` at the top level) so a nested
+        pop restores its own parent state rather than a single global slot.
+        """
+        if frame is not None:
+            context.parent_state_resources = frame.prev_parent_state_resources or {}
+        elif hasattr(context, 'parent_state_resources'):
+            context.parent_state_resources = {}
+
+    def apply_subflow_result_mapping(
+        self,
+        context: ExecutionContext,
+        frame: Any,
+    ) -> None:
+        """Apply the popped frame's push-arc ``result_mapping`` onto the data.
+
+        Maps the completed sub-network's result fields back onto the parent's
+        pre-push data (``frame.parent_data``). With no frame or no
+        ``result_mapping`` the data is left as-is (the sub-network's result
+        flows straight through, the historical default).
+        """
+        if frame is None:
+            return
+        push_arc = frame.push_arc
+        if push_arc is not None and getattr(push_arc, 'result_mapping', None):
+            context.data = self.apply_result_mapping(
+                context.data,
+                push_arc.result_mapping,
+                frame.parent_data,
+            )
 
     def evaluate_arc_condition_common(
         self,

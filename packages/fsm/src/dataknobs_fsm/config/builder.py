@@ -534,6 +534,11 @@ class FSMBuilder:
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
                 isolation_mode=arc_config.data_isolation,
+                # Thread the parent↔child field mappings through to the runtime
+                # arc; without this the configured mappings were dropped and
+                # ``result_mapping`` was inert end to end.
+                data_mapping=dict(arc_config.data_mapping),
+                result_mapping=dict(arc_config.result_mapping),
             )
             arc.required_resources = self._normalize_arc_resources(arc_config.resources)
             return arc
