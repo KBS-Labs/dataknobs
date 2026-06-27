@@ -136,6 +136,14 @@ class PushArcConfig(ArcConfig):
     # handling mode, copy/reference/direct); ``direct`` is not a valid push-arc
     # isolation value.
     data_isolation: DataIsolationMode = DataIsolationMode.COPY
+    # Field mapping for the parent→child data crossing (``{parent_field:
+    # child_field}``) and the child→parent result crossing (``{child_field:
+    # parent_field}``). These thread straight to ``PushArc.data_mapping`` /
+    # ``PushArc.result_mapping``; without them a config-authored mapping was
+    # silently dropped at build time (the runtime arc always carried empty
+    # mappings, so ``result_mapping`` was inexpressible from config).
+    data_mapping: Dict[str, str] = Field(default_factory=dict)
+    result_mapping: Dict[str, str] = Field(default_factory=dict)
 
 
 class StateConfig(BaseModel):

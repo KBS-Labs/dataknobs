@@ -91,13 +91,23 @@ In JSON/dict configuration, push arcs are distinguished from regular arcs by the
     "target": "placeholder",
     "target_network": "validation",
     "return_state": "post_validation",
-    "data_isolation": "copy"
+    "data_isolation": "copy",
+    "data_mapping": {"order": "payload"},
+    "result_mapping": {"verdict": "validation_result"}
 }
 ```
 
 The `data_isolation` value uses the `DataIsolationMode` enum (below): valid
 values are `"copy"` (default), `"reference"`, and `"serialize"`. The configured
 value is carried through to the runtime `PushArc.isolation_mode`.
+
+`data_mapping` (`{parent_field: child_field}`) and `result_mapping`
+(`{child_field: parent_field}`) are likewise config-authorable and thread
+through to the runtime `PushArc`: `data_mapping` shapes the data the sub-network
+receives, and `result_mapping` overlays the sub-network's result fields back
+onto the parent's pre-push data when the subflow completes. Both default to
+empty (no mapping — the parent data passes through, and the sub-network's result
+flows straight back).
 
 > **Migration note.** `data_isolation` previously borrowed the state-level
 > data-handling enum (`copy`/`reference`/**`direct`**). It now uses the push-arc
@@ -161,20 +171,24 @@ through that encoder; types it does not special-case (e.g. a raw `datetime` or
 
 > **Execution status.** The configured `data_isolation` value reaches the runtime
 > `PushArc.isolation_mode`, and every executor that traverses a push arc's
-> sub-network applies it through the shared `DataIsolationMode.apply` helper.
-> `NetworkExecutor` (`dataknobs_fsm.execution.network`) — a public executor that
-> runs a push arc's full sub-network — honors all three modes: `copy` deep-copies,
-> `serialize` round-trips through the JSON encoder, and `reference` shares the data
-> object by reference (the sub-network always runs in a fresh execution context so
-> its traversal cannot corrupt the parent's stack; only the *data* crossing the
-> boundary varies by mode). `ExecutionEngine._execute_push_arc` applies the same
-> helper. The default high-level entry points, however, do not yet route push-arc
-> execution through a sub-network traversal: the async engine
-> (`AsyncSimpleFSM` / `SimpleFSM` / the ETL and file-processing patterns) treats a
-> push arc as a flat transition and does not execute it, and the synchronous
-> `ExecutionEngine.execute()` does not traverse sub-networks. So isolation behaves
-> as configured wherever a sub-network is actually traversed (notably via
-> `NetworkExecutor`); wiring it into those high-level engines is the remaining work.
+> sub-network applies it through the shared `DataIsolationMode.apply` helper. The
+> **async execution engine** — which `AsyncSimpleFSM` and `SimpleFSM` both run on
+> — executes push arcs end to end: it pushes the sub-network, isolates the data by
+> mode, applies `data_mapping` on entry and `result_mapping` on completion, runs
+> the sub-network initial state's pre-validators (and allocates its state
+> resources), and unwinds nested subflows back to the parent. `NetworkExecutor`
+> (`dataknobs_fsm.execution.network`), a public executor, likewise honors all
+> three modes — `copy` deep-copies, `serialize` round-trips through the JSON
+> encoder, `reference` shares by reference — running each sub-network in a fresh
+> context so its traversal cannot corrupt the parent's stack. The one remaining
+> gap is the **synchronous** `ExecutionEngine.execute()` entry, which still treats
+> a push arc as a flat transition and does not traverse the sub-network; drive
+> subflows through the async engine or `NetworkExecutor`. (Mechanism: the sync
+> `execute()` path reads its candidate arcs through `StateNetwork.arcs`
+> (`dataknobs_fsm.core.network`), which reconstructs every arc as a plain
+> `ArcDefinition` from `target_state`/`pre_test`/`transform` and drops the
+> `PushArc` subtype, so the engine's `isinstance(arc, PushArc)` push dispatch is
+> never reached on that path.)
 
 The `ExecutionEngine` (in `dataknobs_fsm.execution.engine`) handles the full lifecycle of subflow execution through three methods: `_execute_push_arc`, `_check_subflow_completion`, and `_pop_subflow`.
 

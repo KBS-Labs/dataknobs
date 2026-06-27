@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Dict, List, Tuple
 
-from dataknobs_fsm.core.arc import ArcDefinition
+from dataknobs_fsm.core.arc import ArcDefinition, DataIsolationMode, PushArc
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode
@@ -205,6 +205,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # No valid transitions - check if this is a final state
                 if await self._is_final_state(context.current_state):
                     return self.finalize_single_result(context)
+
+                # In a subflow at a final state with no transitions - pop back
+                # to the parent and continue (covers a subflow whose initial
+                # state is itself a final state).
+                if context.network_stack:
+                    if await self._check_subflow_completion(context):
+                        continue
+
                 return False, f"No valid transitions from state: {context.current_state}"
             
             # Choose transition based on strategy
@@ -225,8 +233,15 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             if not success:
                 return False, f"Transition failed: {next_transition}"
 
+            # If that transition completed a subflow (reached the sub-network's
+            # final state), pop back to the parent network now — before the next
+            # loop-top final-state check would otherwise finalize the whole run
+            # on a sub-network final state (is_final_state_common is global).
+            if context.network_stack:
+                await self._check_subflow_completion(context)
+
             transitions += 1
-        
+
         return False, f"Maximum transitions ({max_transitions}) exceeded"
     
     async def _execute_batch(
@@ -558,6 +573,13 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Returns:
             True if successful.
         """
+        # Check if this is a PushArc (subflow transition). A push arc is not a
+        # flat transition: it pushes a sub-network onto the stack, isolates the
+        # data, and enters the sub-network's initial state (parity with the
+        # sync engine's _execute_transition dispatch).
+        if isinstance(arc, PushArc):
+            return await self._execute_push_arc(context, arc)
+
         # Fire pre-transition hooks
         await self._fire_hooks(self._pre_transition_hooks, context, arc)
 
@@ -703,10 +725,362 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             self._release_named_resources(
                 context, arc_resources, owner_id, owner_label=arc_label
             )
-    
-    async def _execute_state_transforms(
+
+    async def _execute_push_arc(
+        self,
+        context: ExecutionContext,
+        push_arc: PushArc,
+        max_subflow_depth: int = 10
+    ) -> bool:
+        """Execute a push arc to transition into a subflow network.
+
+        Async counterpart to ``ExecutionEngine._execute_push_arc``, driving the
+        same shared subflow lifecycle (``base_engine`` helpers): resolves and
+        validates the target before committing, isolates the parent data via
+        the shared ``DataIsolationMode.apply`` helper (the single source of
+        truth, so the sync engine, ``NetworkExecutor``, and this path cannot
+        drift), records a :class:`SubflowFrame` (for the pop's ``result_mapping``
+        and a failed entry's rollback), and enters the sub-network's initial
+        state via the async :meth:`enter_state` — which runs pre-validators and
+        allocates the sub-network state's own resources, at parity with the sync
+        engine. The isolation deepcopy / serialize is offloaded off the event
+        loop.
+
+        Resource *inheritance* caveat: the sub-network inherits the pushing
+        state's resources only when that state was itself entered via
+        :meth:`enter_state` (i.e. nested subflows), because inheritance seeds
+        from ``current_state_resources``, which the async regular-transition and
+        initial-state paths do not yet populate. A push fired from a
+        regularly-entered parent therefore inherits no parent resources today.
+        Full inheritance parity lands when those paths are routed through
+        :meth:`enter_state` in the engine-consolidation follow-up.
+
+        Args:
+            context: Execution context.
+            push_arc: PushArc definition with target network and mappings.
+            max_subflow_depth: Maximum allowed nesting depth for subflows.
+
+        Returns:
+            True if the push was successful.
+        """
+        if self.subflow_depth_exceeded(context, push_arc, max_subflow_depth):
+            return False
+
+        network_name, explicit_initial_state = self.parse_push_target(push_arc)
+
+        target_network = self.fsm.networks.get(network_name)
+        if not target_network:
+            logger.error("Target network '%s' not found for PushArc", network_name)
+            return False
+
+        # Save current state resources so the sub-network inherits them. NOTE:
+        # only states entered via enter_state populate current_state_resources
+        # today, so a push from a regularly-entered parent inherits {} (see the
+        # inheritance caveat in this method's docstring).
+        parent_state_resources = getattr(context, 'current_state_resources', {})
+
+        # Fire pre-transition hooks
+        await self._fire_hooks(self._pre_transition_hooks, context, push_arc)
+
+        # Resolve the target state BEFORE committing the push, so a bad target
+        # fails cleanly without having mutated the context.
+        target_state = self.resolve_subflow_initial_state(
+            target_network, network_name, explicit_initial_state
+        )
+        if target_state is None:
+            return False
+
+        mapped_data = self.prepare_subflow_input(push_arc, context.data)
+        isolated_data = await self._isolate_subflow_data(
+            push_arc.isolation_mode, mapped_data
+        )
+
+        # Commit the push (replace data, push network + frame, set parent
+        # resources), then enter the sub-network's initial state.
+        self.begin_subflow(
+            context, push_arc, network_name, parent_state_resources, isolated_data
+        )
+        if not await self.enter_state(context, target_state, run_validators=True):
+            logger.error("Failed to enter subflow initial state '%s'", target_state)
+            self.rollback_push(context)
+            return False
+
+        self._transition_count += 1
+
+        # Fire post-transition hooks
+        await self._fire_hooks(self._post_transition_hooks, context, push_arc)
+
+        logger.debug(
+            "Pushed to subflow network '%s', state '%s'",
+            network_name,
+            target_state
+        )
+
+        return True
+
+    @staticmethod
+    async def _isolate_subflow_data(
+        isolation_mode: DataIsolationMode, data: Any
+    ) -> Any:
+        """Produce the sub-network's isolated data view without stalling the loop.
+
+        ``REFERENCE`` is a pass-through (no work, no thread hop). ``COPY`` /
+        ``SERIALIZE`` do a synchronous ``deepcopy`` / JSON round-trip whose cost
+        grows with the payload, so they are offloaded to a worker thread — a
+        large subflow payload must not block the shared event loop. The actual
+        transformation stays the shared ``DataIsolationMode.apply`` helper, so
+        no isolation logic forks onto the async path.
+        """
+        if isolation_mode is DataIsolationMode.REFERENCE:
+            return isolation_mode.apply(data)
+        return await asyncio.to_thread(isolation_mode.apply, data)
+
+    async def _check_subflow_completion(
         self,
         context: ExecutionContext
+    ) -> bool:
+        """Pop back to the parent for every subflow now at a final state.
+
+        Async counterpart to ``ExecutionEngine._check_subflow_completion``.
+        Drains nested completions in a loop: if popping one level lands on a
+        state that is itself a final state of the next network on the stack
+        (e.g. a push arc whose ``return_state`` is a final state of the parent
+        sub-network), that level pops too, until the current state is no longer
+        a subflow final state. Because :meth:`is_final_state_common` treats a
+        sub-network final state as "final" for the whole FSM, the main loop must
+        call this immediately after each transition (before the next loop-top
+        final-state check), and a single-level pop would leave a nested chain
+        half-unwound and finalize the run prematurely.
+
+        Args:
+            context: Execution context.
+
+        Returns:
+            True if at least one subflow level was completed and popped.
+        """
+        popped_any = False
+        while self.subflow_at_final_state(context):
+            if not await self._pop_subflow(context):
+                break
+            popped_any = True
+        return popped_any
+
+    async def _pop_subflow(
+        self,
+        context: ExecutionContext
+    ) -> bool:
+        """Pop from a subflow back to the parent network.
+
+        Async counterpart to ``ExecutionEngine._pop_subflow``. Consumes the
+        :class:`SubflowFrame` recorded at push time to restore the parent's
+        inherited-resource view and apply the originating push arc's
+        ``result_mapping``, then enters the parent's return state via the async
+        :meth:`enter_state`.
+
+        Args:
+            context: Execution context.
+
+        Returns:
+            True if the pop was successful.
+        """
+        if not context.network_stack:
+            return False
+
+        frame = context.pop_subflow_frame()
+        _network_name, return_state = context.pop_network()
+
+        # Restore the parent level's inherited-resource view, then map the
+        # sub-network's result back onto the parent data (before the return
+        # state's transforms run, so they see the mapped data).
+        self.restore_after_pop(context, frame)
+        self.apply_subflow_result_mapping(context, frame)
+
+        # Transition to return state if specified
+        if return_state:
+            if not await self.enter_state(context, return_state, run_validators=True):
+                logger.error("Failed to enter return state '%s'", return_state)
+                return False
+
+        logger.debug(
+            "Popped from subflow, returned to state '%s'",
+            return_state or context.current_state
+        )
+
+        return True
+
+    async def enter_state(
+        self,
+        context: ExecutionContext,
+        state_name: str,
+        run_validators: bool = True,
+    ) -> bool:
+        """Enter a state on the async engine, at parity with the sync engine.
+
+        Mirrors ``ExecutionEngine.enter_state``: set the state, allocate its
+        resources (merging parent-inherited resources) and store them on the
+        context for child inheritance, optionally run pre-validators (a failing
+        validator releases the just-acquired resources and returns ``False``),
+        then run the state's transforms with those resources.
+
+        This closes the async-vs-sync state-entry gap on the subflow push and
+        pop-return paths, where the sync engine ran pre-validators and allocated
+        state resources but the async engine previously only did ``set_state`` +
+        transforms (so sub-network pre-validators never ran and
+        ``current_state_resources`` was never populated for child inheritance).
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state to enter.
+            run_validators: Whether to run pre-validators (default True).
+
+        Returns:
+            True if state entry succeeded, False if a pre-validator rejected it.
+        """
+        context.set_state(state_name)
+
+        state_def = self.fsm.get_state(state_name)
+        state_resources, owned = self._allocate_state_resources_with_inheritance(
+            context, state_def
+        )
+        context.current_state_resources = state_resources
+
+        if run_validators and state_def is not None:
+            if not await self._run_pre_validators(
+                context, state_def, state_name, state_resources
+            ):
+                # Release only what this entry acquired (not the inherited
+                # resources, which the parent owns), then fail the entry.
+                self._release_named_resources(
+                    context,
+                    owned,
+                    self._state_resource_owner(context, state_def),
+                    owner_label=f"state '{getattr(state_def, 'name', '?')}'",
+                )
+                context.current_state_resources = {}
+                # Match the sync engine: only set last_error if a more specific
+                # upstream error has not already been recorded (don't clobber it).
+                if not hasattr(context, 'last_error') or not context.last_error:
+                    context.last_error = (
+                        f"Pre-validation failed for state '{state_name}'"
+                    )
+                return False
+
+        # Reuse the resources allocated here (don't re-acquire / release).
+        await self._execute_state_transforms(
+            context, state_resources=state_resources
+        )
+        return True
+
+    def _allocate_state_resources_with_inheritance(
+        self,
+        context: ExecutionContext,
+        state_def: Any,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Allocate a state's resources, inheriting the parent state's.
+
+        Mirrors the sync engine's ``_allocate_state_resources``: start from the
+        parent-inherited resources, then acquire only the state's own
+        requirements that are not already inherited.
+
+        Returns:
+            ``(merged_resources, owned_resources)`` — the full view stored on
+            the context (parent-inherited + own), and just the resources this
+            call acquired (so a failed entry can release exactly those without
+            touching the parent-owned ones).
+        """
+        parent = getattr(context, 'parent_state_resources', None)
+        resources: Dict[str, Any] = dict(parent) if parent else {}
+        requirements = (
+            getattr(state_def, 'resource_requirements', None)
+            if state_def is not None
+            else None
+        )
+        if not requirements:
+            return resources, {}
+
+        names: list[str] = []
+        timeouts: Dict[str, Any] = {}
+        for resource_config in requirements:
+            name = getattr(resource_config, 'name', None)
+            if not name or name in resources:
+                # Skip resources already inherited from the parent state.
+                continue
+            names.append(name)
+            # Default to 30s when no timeout is configured, matching the sync
+            # engine (ExecutionEngine._allocate_state_resources) rather than
+            # leaving it None (an unbounded acquire wait).
+            timeouts[name] = (
+                getattr(resource_config, 'timeout_seconds', None)
+                or getattr(resource_config, 'timeout', None)
+                or 30
+            )
+
+        owned = self._acquire_named_resources(
+            context,
+            names,
+            self._state_resource_owner(context, state_def),
+            timeouts=timeouts,
+            owner_label=f"state '{getattr(state_def, 'name', '?')}'",
+        )
+        resources.update(owned)
+        return resources, owned
+
+    async def _run_pre_validators(
+        self,
+        context: ExecutionContext,
+        state_def: Any,
+        state_name: str,
+        state_resources: Dict[str, Any],
+    ) -> bool:
+        """Run a state's pre-validators (awaiting async ones).
+
+        Mirrors ``ExecutionEngine._execute_pre_validators``: a validator
+        returning ``False`` fails entry; a dict result is merged into
+        ``context.data``; any exception fails validation. Closes the gap where
+        the async engine never ran ``pre_validation_functions``.
+
+        Args:
+            context: Execution context.
+            state_def: The state definition whose pre-validators to run.
+            state_name: Name of the state (for the function context).
+            state_resources: Resources to inject into the validator context.
+
+        Returns:
+            True if all pre-validators pass, False otherwise.
+        """
+        validators = getattr(state_def, 'pre_validation_functions', None)
+        if not validators:
+            return True
+
+        for validator_func in validators:
+            try:
+                func_context = self._build_function_context(
+                    context,
+                    state_name=state_name,
+                    function_name=getattr(validator_func, '__name__', 'validate'),
+                    resources=state_resources,
+                    base_metadata={'state': state_name, 'phase': 'pre_validation'},
+                    # Validators are not transforms — the transform context
+                    # factory's documented scope (parity with the sync engine,
+                    # whose pre-validators build a plain FunctionContext).
+                    apply_factory=False,
+                )
+                result = validator_func(ensure_dict(context.data), func_context)
+                if inspect.isawaitable(result):
+                    result = await result
+                if result is False:
+                    return False
+                if isinstance(result, dict):
+                    context.data.update(result)
+            except Exception:
+                # Any error in a pre-validator fails validation (parity w/ sync).
+                return False
+        return True
+
+    async def _execute_state_transforms(
+        self,
+        context: ExecutionContext,
+        state_resources: Dict[str, Any] | None = None,
     ) -> None:
         """Execute state functions (validators and transforms) when in a state.
 
@@ -715,6 +1089,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
         Args:
             context: Execution context.
+            state_resources: Pre-acquired, caller-owned state resources. When
+                provided (by :meth:`enter_state`, which allocates them with
+                parent inheritance and stores them on the context for child
+                inheritance — parity with the sync engine), this method reuses
+                them and does NOT release them; the caller owns their lifecycle.
+                When ``None`` (the regular-transition / initial-state callers),
+                this method acquires and releases the state's own resources
+                itself, the historical behavior.
         """
         network = await self._get_current_network(context)
         if not network or context.current_state not in network.states:
@@ -763,8 +1145,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
         # Acquire the state's declared resources and inject them into the
         # function context so resource-bearing transforms (e.g. DatabaseUpsert)
-        # can reach them via context.resources. Released in the finally block.
-        state_resources = self._acquire_state_resources(context, state)
+        # can reach them via context.resources. When the caller pre-acquired
+        # them (enter_state), reuse and don't release here — the caller owns
+        # their lifecycle (mirrors the arc-resource ownership pattern).
+        owns_resources = state_resources is None
+        if owns_resources:
+            state_resources = self._acquire_state_resources(context, state)
         try:
             for transform_func in transform_functions:
                 # Skip running transforms on a record that already failed an
@@ -802,7 +1188,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     # Handle error using base class logic
                     self.handle_transform_error(e, context, state_name)
         finally:
-            self._release_state_resources(context, state, state_resources)
+            # Release only resources we acquired; caller-owned (pre-acquired)
+            # resources are released by the caller (parity with the sync engine,
+            # which keeps state resources allocated for child inheritance).
+            if owns_resources:
+                self._release_state_resources(context, state, state_resources)
 
     @staticmethod
     def _coalesce_transform_result(result: Any, current_data: Any) -> Any:
@@ -1039,8 +1429,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             if not name:
                 continue
             names.append(name)
-            timeouts[name] = getattr(resource_config, 'timeout_seconds', None) or getattr(
-                resource_config, 'timeout', None
+            # Default to 30s when no timeout is configured, matching the sync
+            # engine rather than leaving it None (an unbounded acquire wait).
+            timeouts[name] = (
+                getattr(resource_config, 'timeout_seconds', None)
+                or getattr(resource_config, 'timeout', None)
+                or 30
             )
         return self._acquire_named_resources(
             context,
