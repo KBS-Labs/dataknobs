@@ -128,32 +128,53 @@ class DataIsolationMode(Enum):
 
 ### How Isolation Is Applied
 
-The `ExecutionEngine._execute_push_arc` method applies isolation after data mapping but before entering the sub-network:
+Isolation is applied by the `DataIsolationMode.apply` helper, the single source
+of truth shared by every executor that pushes into a sub-network (so they cannot
+drift):
+
+```python
+class DataIsolationMode(Enum):
+    ...
+    def apply(self, data):
+        if self is DataIsolationMode.COPY:
+            return copy.deepcopy(data)            # full isolation
+        if self is DataIsolationMode.SERIALIZE:
+            return loads(dumps(data))             # JSON round-trip isolation
+        return data                               # REFERENCE — share by reference
+```
+
+Each executor applies it after data mapping but before entering the sub-network,
+e.g. `ExecutionEngine._execute_push_arc`:
 
 ```python
 # After data_mapping has been applied to produce mapped_data:
-
-if push_arc.isolation_mode == DataIsolationMode.COPY:
-    context.data = copy.deepcopy(mapped_data)
-elif push_arc.isolation_mode == DataIsolationMode.SERIALIZE:
-    serialized = dumps(mapped_data)
-    context.data = loads(serialized)
-else:
-    # REFERENCE mode - use data directly
-    context.data = mapped_data
+context.data = push_arc.isolation_mode.apply(mapped_data)
 ```
 
+`NetworkExecutor` uses the same helper to produce the sub-network context's data.
+`SERIALIZE` round-trips the data through the project JSON encoder
+(`dataknobs_fsm.utils.json_encoder`), which serializes the FSM-specific types
+stdlib `json` rejects — `FSMData`, `ExecutionResult`, and any object exposing
+`to_dict()` or `__json__()`. Values under `SERIALIZE` must be representable
+through that encoder; types it does not special-case (e.g. a raw `datetime` or
+`set`) still raise, so use `COPY` for data that isn't JSON-round-trippable.
+
 > **Execution status.** The configured `data_isolation` value reaches the runtime
-> `PushArc.isolation_mode`, and `ExecutionEngine._execute_push_arc` (shown above)
-> applies it correctly. However, push arcs are **not yet executed end-to-end with
-> isolation on the production engines**: the async engine
-> (`AsyncSimpleFSM` / `SimpleFSM` / the ETL and file-processing patterns) does not
-> execute push arcs at all (a push arc is treated as a flat transition), and the
-> synchronous `ExecutionEngine.execute()` does not traverse sub-networks. Today the
-> three isolation modes therefore produce the same run-time behavior; selecting
-> `reference` or `serialize` settles the configuration but does not yet change how
-> a full subflow shares data. End-to-end isolation behavior lands when push-arc
-> execution is wired on an engine.
+> `PushArc.isolation_mode`, and every executor that traverses a push arc's
+> sub-network applies it through the shared `DataIsolationMode.apply` helper.
+> `NetworkExecutor` (`dataknobs_fsm.execution.network`) — a public executor that
+> runs a push arc's full sub-network — honors all three modes: `copy` deep-copies,
+> `serialize` round-trips through the JSON encoder, and `reference` shares the data
+> object by reference (the sub-network always runs in a fresh execution context so
+> its traversal cannot corrupt the parent's stack; only the *data* crossing the
+> boundary varies by mode). `ExecutionEngine._execute_push_arc` applies the same
+> helper. The default high-level entry points, however, do not yet route push-arc
+> execution through a sub-network traversal: the async engine
+> (`AsyncSimpleFSM` / `SimpleFSM` / the ETL and file-processing patterns) treats a
+> push arc as a flat transition and does not execute it, and the synchronous
+> `ExecutionEngine.execute()` does not traverse sub-networks. So isolation behaves
+> as configured wherever a sub-network is actually traversed (notably via
+> `NetworkExecutor`); wiring it into those high-level engines is the remaining work.
 
 The `ExecutionEngine` (in `dataknobs_fsm.execution.engine`) handles the full lifecycle of subflow execution through three methods: `_execute_push_arc`, `_check_subflow_completion`, and `_pop_subflow`.
 

@@ -157,8 +157,8 @@ class StateConfig(BaseModel):
 
     model_config = {"populate_by_name": True}  # Allow both 'schema' and 'data_schema'
 
-    @classmethod
     @field_validator("arcs", mode="before")
+    @classmethod
     def validate_arcs(cls, v: List[Any]) -> List[Union[ArcConfig, PushArcConfig]]:
         """Validate and convert arc configurations."""
         result = []

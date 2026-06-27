@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Tuple
 
-from dataknobs_fsm.core.arc import PushArc, DataIsolationMode
+from dataknobs_fsm.core.arc import PushArc
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -224,8 +224,14 @@ class NetworkExecutor:
         Returns:
             True if successful.
         """
-        # Check depth limit
-        if len(context.network_stack) >= self.max_depth:
+        # Check depth limit. Each sub-network runs in a *fresh* context (below),
+        # so its network_stack starts empty and can no longer be used to count
+        # nesting depth across levels — network_stack is also load-bearing for
+        # final-state return routing, so it can't be seeded from the parent
+        # without breaking that. Track push depth on an explicit counter that
+        # accumulates across the fresh sub-contexts instead.
+        current_depth = getattr(context, 'push_depth', 0)
+        if current_depth >= self.max_depth:
             raise StateTransitionError(
                 from_state=context.current_state or "unknown",
                 to_state=arc.target_network,
@@ -256,30 +262,34 @@ class NetworkExecutor:
             context.pop_network()
             return False
 
-        # Create isolated context if requested
-        if hasattr(arc, 'isolation_mode') and arc.isolation_mode == DataIsolationMode.COPY:
-            # Full isolation - new context
-            sub_context = ExecutionContext(
-                data_mode=context.data_mode,
-                transaction_mode=context.transaction_mode,
-                resources=context.resource_limits
-            )
-            sub_context.data = context.data
-            sub_context.variables = context.variables  # Share variables for tracking
-            # Preserve resource manager in new context
-            if hasattr(context, 'resource_manager'):
-                sub_context.resource_manager = context.resource_manager
-            # Preserve parent state resources in new context
-            if parent_state_resources:
-                sub_context.parent_state_resources = parent_state_resources
-        else:
-            # No isolation - use same context
-            sub_context = context
-            if parent_state_resources:
-                context.parent_state_resources = parent_state_resources
-            # Ensure resource_manager is available in subcontext
-            if hasattr(context, 'resource_manager') and not hasattr(sub_context, 'resource_manager'):
-                sub_context.resource_manager = context.resource_manager
+        # Run the sub-network in a fresh, isolated execution context regardless
+        # of mode: a separate context keeps the sub-network's state/network-stack
+        # traversal from disturbing the parent's (sharing the parent context
+        # corrupts the parent's stack on return). The isolation mode governs only
+        # how the *data* crosses the boundary, via the shared
+        # DataIsolationMode.apply helper so every executor isolates identically:
+        # COPY deep-copies, SERIALIZE round-trips through the JSON encoder, and
+        # REFERENCE shares the data object by reference. The sub-network's final
+        # data is merged back into the parent via ``context.data = result`` on
+        # success (below), so an isolated snapshot still propagates results while
+        # leaving the parent's original data untouched if the subflow fails.
+        isolation_mode = arc.isolation_mode
+        sub_context = ExecutionContext(
+            data_mode=context.data_mode,
+            transaction_mode=context.transaction_mode,
+            resources=context.resource_limits
+        )
+        sub_context.data = isolation_mode.apply(context.data)
+        sub_context.variables = context.variables  # Share variables for tracking
+        # Carry nesting depth forward so max_depth is enforced across nested
+        # push arcs even though each level gets a fresh, empty network_stack.
+        sub_context.push_depth = current_depth + 1
+        # Preserve resource manager in new context
+        if hasattr(context, 'resource_manager'):
+            sub_context.resource_manager = context.resource_manager
+        # Preserve parent state resources in new context
+        if parent_state_resources:
+            sub_context.parent_state_resources = parent_state_resources
         
         # Execute target network (which will handle initial state and transforms)
         import logging
@@ -294,27 +304,23 @@ class NetworkExecutor:
         logging.debug(f"Sub-network execution result: success={success}, result={result}")
 
         # Pop the network from the stack since subflow has completed.
-        # This is needed because with isolated contexts (COPY mode), the subflow
-        # uses a separate context and can't pop from our stack.
-        # For non-isolated contexts, the subflow may have already popped via
-        # _handle_network_return, so we check before popping.
+        # The sub-network runs in a separate context and can't pop from our
+        # stack, so we pop the entry we pushed above. (Guard the check in case a
+        # future path pops via _handle_network_return.)
         if context.network_stack and context.network_stack[-1][0] == network_name:
             context.pop_network()
 
-        # Propagate transform failures from the (possibly isolated) sub-network
-        # back into the parent. failed_states is load-bearing for data integrity:
-        # it gates downstream transform persistence (should_skip_state_transforms)
-        # and the parent's finalize_single_result. COPY isolation (the default)
-        # gives the sub-network a fresh context, so it does not carry failures
-        # back on its own; for the no-isolation branch sub_context IS context,
-        # making the union a harmless no-op. Union here,
-        # before entering arc.return_state, so the return state and every later
-        # parent state see the failure and skip their transforms. Union regardless
-        # of `success`: a failed transform does not halt traversal, so the
-        # sub-network can reach a final state (success=True) while still having
-        # recorded a failure.
-        if sub_context is not context:
-            context.failed_states |= getattr(sub_context, 'failed_states', set())
+        # Propagate transform failures from the isolated sub-network back into
+        # the parent. failed_states is load-bearing for data integrity: it gates
+        # downstream transform persistence (should_skip_state_transforms) and the
+        # parent's finalize_single_result. The sub-network runs in a fresh
+        # context, so it does not carry failures back on its own; we union them
+        # here, before entering arc.return_state, so the return state and every
+        # later parent state see the failure and skip their transforms. Union
+        # regardless of `success`: a failed transform does not halt traversal, so
+        # the sub-network can reach a final state (success=True) while still
+        # having recorded a failure.
+        context.failed_states |= getattr(sub_context, 'failed_states', set())
 
         if success:
             # Update main context with result

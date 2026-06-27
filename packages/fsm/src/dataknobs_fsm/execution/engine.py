@@ -5,7 +5,7 @@ import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Tuple
 
-from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution, PushArc, DataIsolationMode
+from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution, PushArc
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -589,8 +589,6 @@ class ExecutionEngine(BaseExecutionEngine):
         Returns:
             True if push was successful.
         """
-        import copy
-
         # Check depth limit to prevent infinite recursion
         if len(context.network_stack) >= max_subflow_depth:
             logger.error(
@@ -631,16 +629,8 @@ class ExecutionEngine(BaseExecutionEngine):
         else:
             mapped_data = context.data
 
-        # Handle data isolation mode
-        if push_arc.isolation_mode == DataIsolationMode.COPY:
-            context.data = copy.deepcopy(mapped_data)
-        elif push_arc.isolation_mode == DataIsolationMode.SERIALIZE:
-            from dataknobs_fsm.utils.json_encoder import dumps, loads
-            serialized = dumps(mapped_data)
-            context.data = loads(serialized)
-        else:
-            # REFERENCE mode - use data directly
-            context.data = mapped_data
+        # Handle data isolation mode (shared helper — single source of truth)
+        context.data = push_arc.isolation_mode.apply(mapped_data)
 
         # Push the network onto the stack
         context.push_network(network_name, push_arc.return_state)

@@ -1061,10 +1061,12 @@ flowchart TD
    - `reference`: Subnetwork operates on the same data instance
    - `serialize`: Data is isolated via a JSON serialize/deserialize round-trip
 
-   The configured value is carried to the runtime `PushArc.isolation_mode`. See
-   the "Execution status" note in `FSM_SUBFLOWS.md`: push-arc execution with
-   isolation is not yet wired on the production engines, so the three modes
-   currently produce the same run-time behavior.
+   The configured value is carried to the runtime `PushArc.isolation_mode` and
+   applied by the shared `DataIsolationMode.apply` helper. See the "Execution
+   status" note in `FSM_SUBFLOWS.md`: executors that traverse a push arc's
+   sub-network (notably the public `NetworkExecutor`) honor all three modes,
+   while the default high-level engines do not yet execute push arcs through a
+   sub-network traversal.
 4. **Subnetwork Execution**: Subnetwork processes from its start to end states
 5. **Result Integration**: Subnetwork's final data replaces or merges with original
 6. **Return Transition**: Execution continues at `return_state` (if specified)
