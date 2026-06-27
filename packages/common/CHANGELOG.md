@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+- `SyncLoopBridge` and the `run_coro_sync` convenience function in
+  `dataknobs_common.sync_bridge` (exported from the package root). They run
+  a coroutine to completion from synchronous code on a private background
+  event-loop thread, returning the coroutine's value or re-raising its
+  exception with the traceback preserved. Because the loop runs on a
+  separate thread, both are safe to call from inside an already-running
+  event loop — the `asyncio.run()` / `loop.run_until_complete()` "loop
+  already running" footgun (and the `nest_asyncio` workaround the dependency
+  bar rejects) is avoided by construction. Both accept an optional `timeout`
+  that raises `TimeoutError` and best-effort-cancels the coroutine if it
+  overruns, and concurrent `run()` calls from multiple threads are
+  supported. This is the async→sync counterpart to the existing sync→async
+  `aiter_sync_in_thread`. Use a long-lived `SyncLoopBridge` for a
+  synchronous wrapper that makes repeated calls; use `run_coro_sync` for
+  one-off calls.
+
 ## v1.5.0 - 2026-06-22
 
 ### Added
