@@ -183,7 +183,12 @@ through that encoder; types it does not special-case (e.g. a raw `datetime` or
 > context so its traversal cannot corrupt the parent's stack. The one remaining
 > gap is the **synchronous** `ExecutionEngine.execute()` entry, which still treats
 > a push arc as a flat transition and does not traverse the sub-network; drive
-> subflows through the async engine or `NetworkExecutor`.
+> subflows through the async engine or `NetworkExecutor`. (Mechanism: the sync
+> `execute()` path reads its candidate arcs through `StateNetwork.arcs`
+> (`dataknobs_fsm.core.network`), which reconstructs every arc as a plain
+> `ArcDefinition` from `target_state`/`pre_test`/`transform` and drops the
+> `PushArc` subtype, so the engine's `isinstance(arc, PushArc)` push dispatch is
+> never reached on that path.)
 
 The `ExecutionEngine` (in `dataknobs_fsm.execution.engine`) handles the full lifecycle of subflow execution through three methods: `_execute_push_arc`, `_check_subflow_completion`, and `_pop_subflow`.
 

@@ -742,8 +742,18 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         drift), records a :class:`SubflowFrame` (for the pop's ``result_mapping``
         and a failed entry's rollback), and enters the sub-network's initial
         state via the async :meth:`enter_state` — which runs pre-validators and
-        allocates state resources, at full parity with the sync engine. The
-        isolation deepcopy / serialize is offloaded off the event loop.
+        allocates the sub-network state's own resources, at parity with the sync
+        engine. The isolation deepcopy / serialize is offloaded off the event
+        loop.
+
+        Resource *inheritance* caveat: the sub-network inherits the pushing
+        state's resources only when that state was itself entered via
+        :meth:`enter_state` (i.e. nested subflows), because inheritance seeds
+        from ``current_state_resources``, which the async regular-transition and
+        initial-state paths do not yet populate. A push fired from a
+        regularly-entered parent therefore inherits no parent resources today.
+        Full inheritance parity lands when those paths are routed through
+        :meth:`enter_state` in the engine-consolidation follow-up.
 
         Args:
             context: Execution context.
@@ -763,7 +773,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             logger.error("Target network '%s' not found for PushArc", network_name)
             return False
 
-        # Save current state resources so the sub-network inherits them.
+        # Save current state resources so the sub-network inherits them. NOTE:
+        # only states entered via enter_state populate current_state_resources
+        # today, so a push from a regularly-entered parent inherits {} (see the
+        # inheritance caveat in this method's docstring).
         parent_state_resources = getattr(context, 'current_state_resources', {})
 
         # Fire pre-transition hooks
@@ -944,9 +957,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     owner_label=f"state '{getattr(state_def, 'name', '?')}'",
                 )
                 context.current_state_resources = {}
-                context.last_error = (
-                    f"Pre-validation failed for state '{state_name}'"
-                )
+                # Match the sync engine: only set last_error if a more specific
+                # upstream error has not already been recorded (don't clobber it).
+                if not hasattr(context, 'last_error') or not context.last_error:
+                    context.last_error = (
+                        f"Pre-validation failed for state '{state_name}'"
+                    )
                 return False
 
         # Reuse the resources allocated here (don't re-acquire / release).
@@ -990,9 +1006,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # Skip resources already inherited from the parent state.
                 continue
             names.append(name)
-            timeouts[name] = getattr(
-                resource_config, 'timeout_seconds', None
-            ) or getattr(resource_config, 'timeout', None)
+            # Default to 30s when no timeout is configured, matching the sync
+            # engine (ExecutionEngine._allocate_state_resources) rather than
+            # leaving it None (an unbounded acquire wait).
+            timeouts[name] = (
+                getattr(resource_config, 'timeout_seconds', None)
+                or getattr(resource_config, 'timeout', None)
+                or 30
+            )
 
         owned = self._acquire_named_resources(
             context,
@@ -1408,8 +1429,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             if not name:
                 continue
             names.append(name)
-            timeouts[name] = getattr(resource_config, 'timeout_seconds', None) or getattr(
-                resource_config, 'timeout', None
+            # Default to 30s when no timeout is configured, matching the sync
+            # engine rather than leaving it None (an unbounded acquire wait).
+            timeouts[name] = (
+                getattr(resource_config, 'timeout_seconds', None)
+                or getattr(resource_config, 'timeout', None)
+                or 30
             )
         return self._acquire_named_resources(
             context,

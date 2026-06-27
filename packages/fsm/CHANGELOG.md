@@ -19,11 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to the parent's return state when the sub-network reaches a final state —
   matching the synchronous engine's subflow lifecycle.
 - The async subflow state entry now runs the sub-network initial state's
-  **pre-validators** and allocates its **state resources** (inheriting the
-  parent state's), at parity with the synchronous engine — previously the async
-  path only set the state and ran transforms, so sub-network pre-validators
-  never ran and state resources were never available for child inheritance. A
-  rejecting pre-validator now fails the push and rolls it back.
+  **pre-validators** and allocates its own **state resources**, at parity with
+  the synchronous engine — previously the async path only set the state and ran
+  transforms, so sub-network pre-validators never ran and state resources were
+  never allocated. A rejecting pre-validator now fails the push and rolls it
+  back. (Inheritance of the *pushing* state's resources currently spans nested
+  subflows; a push from a regularly-entered parent inherits none until the async
+  regular-transition path is routed through the shared state-entry path.)
 - Push-arc **`result_mapping`** is now applied when a subflow completes (mapping
   the sub-network's result fields back onto the parent's pre-push data). It was
   previously inert on both engines — the pop did not have the originating arc,
