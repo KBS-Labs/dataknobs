@@ -4,12 +4,175 @@ This module provides commonly used validation functions that can be
 referenced in FSM configurations.
 """
 
+import inspect
 import re
+from collections.abc import Callable, Mapping
 from typing import Any, Dict, List, Union
 
 from pydantic import BaseModel, ValidationError
 
 from dataknobs_fsm.functions.base import IValidationFunction, ValidationError as FSMValidationError
+
+
+# Map a friendly schema ``type`` token to the Python type used for the
+# ``isinstance`` check in :func:`build_record_validator`. Shared by every
+# pattern that accepts a friendly dict validation schema (file-processing, ETL).
+_VALIDATION_TYPE_MAP: Dict[str, type] = {
+    "str": str, "string": str, "int": int, "integer": int,
+    "float": float, "number": float, "bool": bool, "boolean": bool,
+    "list": list, "array": list, "dict": dict, "object": dict,
+}
+
+
+def _friendly_schema_predicate(
+    schema: Mapping[str, Any],
+) -> Callable[..., bool]:
+    """Build a ``(record, context) -> bool`` gate from a friendly dict schema.
+
+    A record is valid iff it satisfies every field constraint. Supported
+    per-field constraints: ``required``, ``type`` (mapped to a Python type for
+    an ``isinstance`` check via :data:`_VALIDATION_TYPE_MAP`), ``min`` / ``max``
+    (inclusive numeric bounds), and ``pattern`` (regex). A field whose
+    constraint is the literal ``True`` is treated as simply required.
+    """
+
+    def validate_check(data: Dict[str, Any], context: Any = None) -> bool:
+        for field_name, constraints in schema.items():
+            if constraints is True:
+                if field_name not in data:
+                    return False
+                continue
+            if not isinstance(constraints, dict):
+                continue
+            if constraints.get("required") and field_name not in data:
+                return False
+            if "type" in constraints:
+                expected = _VALIDATION_TYPE_MAP.get(constraints["type"])
+                if expected is not None and not isinstance(
+                    data.get(field_name), expected
+                ):
+                    return False
+            if "min" in constraints and not (
+                data.get(field_name, 0) >= constraints["min"]
+            ):
+                return False
+            if "max" in constraints and not (
+                data.get(field_name, 0) <= constraints["max"]
+            ):
+                return False
+            if "pattern" in constraints and not re.match(
+                constraints["pattern"], str(data.get(field_name, ""))
+            ):
+                return False
+        return True
+
+    return validate_check
+
+
+def _validation_function_predicate(
+    validator: IValidationFunction,
+) -> Callable[..., bool]:
+    """Adapt an :class:`IValidationFunction` into a ``-> bool`` gate.
+
+    The shipped library validators return ``True`` on success and raise
+    :class:`FSMValidationError` on failure (the rich error message carries the
+    per-field reason). A gate wants a boolean, so a raised validation error
+    becomes ``False`` — the arc condition de-selects the ``valid`` arc and the
+    record is diverted to the reject terminal.
+    """
+
+    def validate_check(data: Dict[str, Any], context: Any = None) -> bool:
+        try:
+            return bool(validator.validate(data))
+        except FSMValidationError:
+            return False
+
+    return validate_check
+
+
+def _callable_predicate(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Arity- and async-normalize a user predicate to the engine's call shape.
+
+    The FSM engine always invokes an arc condition as ``fn(record, context)``.
+    A consumer's predicate may be written as ``record -> bool`` or
+    ``(record, context) -> bool``, and may be sync or async (an async predicate
+    is what a resource-reading gate uses). The returned callable always accepts
+    ``(record, context)`` and forwards the right number of arguments; it is a
+    coroutine function iff ``fn`` is, so the engine's ``iscoroutinefunction``
+    check routes it correctly.
+    """
+    try:
+        params = [
+            p
+            for p in inspect.signature(fn).parameters.values()
+            if p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            )
+        ]
+        wants_context = any(
+            p.kind is inspect.Parameter.VAR_POSITIONAL for p in params
+        ) or len(params) >= 2
+    except (TypeError, ValueError):
+        # Builtins / C-callables with no introspectable signature: be permissive
+        # and pass only the record (the common ``record -> bool`` shape).
+        wants_context = False
+
+    if inspect.iscoroutinefunction(fn):
+        async def async_check(data: Dict[str, Any], context: Any = None) -> bool:
+            return bool(await (fn(data, context) if wants_context else fn(data)))
+
+        return async_check
+
+    def sync_check(data: Dict[str, Any], context: Any = None) -> bool:
+        return bool(fn(data, context) if wants_context else fn(data))
+
+    return sync_check
+
+
+def build_record_validator(
+    spec: Mapping[str, Any] | IValidationFunction | Callable[..., Any],
+) -> Callable[..., Any]:
+    """Normalize any supported validation spec to a record gate.
+
+    Returns a callable the FSM engine can register as a ``validate`` arc
+    condition: it is invoked as ``gate(record, context)`` and returns truthy
+    when the record passes. Three spec forms are accepted so a consumer can
+    pick the right tool — or roll their own:
+
+    - a **friendly dict schema** (the config-authored, serializable default):
+      ``{field: {required, type, min, max, pattern}}`` (a constraint of literal
+      ``True`` means "present"). Shared with the file-processing pattern.
+    - any library **:class:`IValidationFunction`** instance (the shipped
+      validators, or a consumer subclass): its ``validate()`` raise contract is
+      adapted to a boolean gate.
+    - a plain **callable** predicate ``record -> bool`` or
+      ``(record, context) -> bool`` (sync or async): used directly,
+      arity-normalized to the engine's call shape.
+
+    Args:
+        spec: The validation specification (mapping / validator / callable).
+
+    Returns:
+        A ``(record, context) -> bool`` gate (a coroutine function when the
+        supplied callable is async).
+
+    Raises:
+        TypeError: If ``spec`` is none of the supported forms.
+    """
+    if isinstance(spec, IValidationFunction):
+        return _validation_function_predicate(spec)
+    if isinstance(spec, Mapping):
+        return _friendly_schema_predicate(spec)
+    if callable(spec):
+        return _callable_predicate(spec)
+    raise TypeError(
+        "validation spec must be a mapping (friendly schema), an "
+        "IValidationFunction, or a callable predicate; got "
+        f"{type(spec).__name__}"
+    )
 
 
 class RequiredFieldsValidator(IValidationFunction):

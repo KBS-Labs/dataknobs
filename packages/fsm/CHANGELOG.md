@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The ETL `validate` stage is now a real per-record gate. `ETLConfig.validation_schema`
+  accepts a friendly dict schema (`{field: {required, type, min, max, pattern}}`),
+  a library `IValidationFunction`, or a callable predicate `record -> bool`; a
+  record that fails is diverted to a non-loading `rejected` terminal (never
+  written to the target) and counted in a new `rejected` metric, distinct from
+  `errors`. By default rejections do not trip `error_threshold` (validation is a
+  data-quality filter, not a pipeline outage); the new
+  `ETLConfig.reject_counts_as_error` (default `False`) opts them in for a strict
+  gate. Validating against a reference table is supported by declaring the
+  resource on the gate arc and resolving it from the condition's
+  `FunctionContext` (`resource_for_role` / `require_resource`).
+- `dataknobs_fsm.functions.library.validators.build_record_validator(spec)`
+  normalizes any of three validation-spec forms — a friendly dict schema, a
+  library `IValidationFunction`, or a callable predicate (sync or async) — into
+  the `(record, context) -> bool` gate the engine invokes as an arc condition.
+  The ETL and file-processing patterns build their `validate` gate through it,
+  so the friendly validation vocabulary is identical across both.
 - New `async_database` FSM resource type (backed by
   `AsyncDatabaseResourceAdapter`) so a state transform can `await`
   non-blocking `upsert` / `execute_query` against any `dataknobs-data`
@@ -165,6 +182,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `FileProcessingConfig.validation_schema` now also accepts a library
+  `IValidationFunction` or a callable predicate, not only a dict schema (the
+  three forms the ETL pattern accepts), via the shared `build_record_validator`.
+  The friendly dict-schema behavior is unchanged.
 - A record whose **state transform raises** is now reported as a failed
   record by the execution engines: it still traverses to a final state, but
   `execute()` returns `success=False` (the failure is recorded in
@@ -226,8 +247,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transformed` / `loaded` / `errors`) reflect the records actually
   processed. Previously records traversed skeleton states without a load
   step, the user `transformations` callables were never applied, and the
-  metrics were hollow. (The `validate` and `enrich` stages remain
-  passthroughs pending their config contracts.)
+  metrics were hollow. (The `validate` stage is now a real gate — see *Added*;
+  the `enrich` stage remains a passthrough pending its config contract.)
 - `AsyncBatchExecutor` drives the async execution engine directly instead
   of running the synchronous engine in a thread pool, so async state
   transforms are awaited — they previously leaked unawaited coroutines and

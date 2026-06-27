@@ -388,6 +388,56 @@ class RoleWriter(ITransformFunction):
 (Equivalently, a programmatic arc may set `arc.required_resources =
 {"database": "target_db"}` directly.)
 
+### Resource-backed arc conditions
+
+Because the arc **condition** receives the arc's resources too, a routing gate
+can validate against a *reference resource* — the canonical "reject any row not
+in a reference table" pattern. Declare the resource on the gate arc and resolve
+it from the injected context:
+
+```python
+from dataknobs_data import Query
+from dataknobs_fsm.functions.base import FunctionContext
+
+async def country_in_reference(record, ctx: FunctionContext) -> bool:
+    reference = ctx.resource_for_role("reference")        # role -> name -> resource
+    rows = await reference.execute_query(Query())
+    return record.get("country") in {r.get("id") for r in rows}
+```
+
+```python
+config = {
+    "states": [
+        {"name": "read", "is_start": True},
+        {"name": "validate"},
+        {"name": "complete", "is_end": True},
+        {"name": "rejected", "is_end": True, "emit_output": False},
+    ],
+    "arcs": [
+        {"from": "read", "to": "validate", "name": "start"},
+        # The gate arc declares its reference resource and a higher priority,
+        # so a passing record is routed to `complete` deterministically.
+        {"from": "validate", "to": "complete", "name": "valid",
+         "condition": {"type": "registered", "name": "country_in_reference"},
+         "resources": {"reference": "valid_countries"}, "priority": 10},
+        {"from": "validate", "to": "rejected", "name": "invalid"},
+    ],
+    "resources": [
+        {"name": "valid_countries", "type": "async_database",
+         "config": {"type": "file", "path": "valid_countries.json"}},
+    ],
+}
+fsm = AsyncSimpleFSM(
+    config, custom_functions={"country_in_reference": country_in_reference}
+)
+```
+
+A condition that raises (e.g. `require_resource` on an undeclared resource)
+simply de-selects its arc — the record is diverted rather than crashing the run,
+so a wiring error fails closed. The ETL pattern's
+[validation gate](../patterns/etl.md#validation) builds exactly this shape for
+its `validate` stage.
+
 ### Custom context: `transform_context_factory`
 
 `ExecutionContext.transform_context_factory` lets you wrap the built

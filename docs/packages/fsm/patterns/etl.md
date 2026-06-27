@@ -24,7 +24,11 @@ extract ──▶ validate ──▶ transform ──▶ [enrich] ──▶ load
 - **extract** — the FSM start state is a passthrough. Extraction itself is done
   by `run()` (a per-record "fetch all" would be nonsensical), so the record
   arrives already populated.
-- **validate** — currently a passthrough (see *Current limitations*).
+- **validate** — when `validation_schema` is set, this is a real gate: a record
+  that satisfies the schema flows to `transform`, and a record that fails is
+  diverted to a non-loading `rejected` terminal (counted in `rejected`, not
+  `errors`). When `validation_schema` is unset, `validate` is an unconditional
+  passthrough. See [Validation](#validation).
 - **transform** — applies `field_mappings` (key renames) and then each
   `transformations` callable, in order. This is a real per-record step.
 - **enrich** — the record routes through this state only when
@@ -63,7 +67,7 @@ config = ETLConfig(
 
 etl = DatabaseETL(config)
 metrics = asyncio.run(etl.run())
-print(metrics)  # {'extracted': N, 'transformed': N, 'loaded': N, 'errors': 0, 'skipped': 0}
+print(metrics)  # {'extracted': N, 'transformed': N, 'loaded': N, 'rejected': 0, 'errors': 0, 'skipped': 0}
 ```
 
 `DatabaseETL` is built from an `ETLConfig` (its `CONFIG_CLS`). You can also
@@ -94,7 +98,8 @@ not JSON serialization.
 | `key_columns` | `list[str] \| None` | `None` (→ `["id"]`) | Columns forming the upsert key |
 | `field_mappings` | `dict[str, str] \| None` | `None` | `old_name → new_name` renames applied in the transform step |
 | `transformations` | `list[Callable] \| None` | `None` | Per-record map-style callables applied in the transform step |
-| `validation_schema` | `dict \| None` | `None` | Reserved — not yet applied (see *Current limitations*) |
+| `validation_schema` | `dict \| IValidationFunction \| Callable \| None` | `None` | Per-record validation gate; see [Validation](#validation) |
+| `reject_counts_as_error` | `bool` | `False` | When `True`, validation rejections count toward `error_threshold` |
 | `enrichment_sources` | `list[dict] \| None` | `None` | Reserved — not yet applied (see *Current limitations*) |
 
 ### Transformations
@@ -131,6 +136,86 @@ callables in order.
 > applies to a `transformations` callable that drops a key column (not statically
 > checkable — author such callables to preserve the key fields).
 
+## Validation
+
+When `validation_schema` is set, the `validate` stage becomes a real gate: each
+record is checked, valid records flow to `transform`, and rejected records are
+diverted to a non-loading `rejected` terminal (never reaching `load`, so they
+are never written to the target). The gate routes on the record alone and
+**mutates nothing**.
+
+`validation_schema` accepts three forms (a consumer picks the right tool, or
+rolls their own) — all normalized by
+`dataknobs_fsm.functions.library.validators.build_record_validator`:
+
+```python
+from dataknobs_fsm.functions.library.validators import RangeValidator
+
+# 1. Friendly dict schema (the serializable, config-authored default).
+#    Per-field constraints: required / type / min / max / pattern; a constraint
+#    of literal True means "field must be present". Shared with file-processing
+#    (see its validation vocabulary).
+ETLConfig(..., validation_schema={"age": {"type": "int", "min": 18}})
+
+# 2. A library IValidationFunction (RangeValidator / SchemaValidator /
+#    PatternValidator / TypeValidator / ... — or your own subclass). Its
+#    validate() raise contract is adapted to a boolean gate.
+ETLConfig(..., validation_schema=RangeValidator({"age": {"min": 18}}))
+
+# 3. A plain callable predicate `record -> bool` (or `(record, context) -> bool`).
+ETLConfig(..., validation_schema=lambda row: row.get("age", 0) >= 18)
+```
+
+The dict form round-trips through the frozen config; the validator / callable
+forms are in-process only (like `transformations`).
+
+### Reject accounting
+
+A rejected record is an expected **data-quality** drop, not a pipeline outage,
+so it is counted in `rejected` — distinct from `errors` (a `transform` / `load`
+failure). By default rejections do **not** trip `error_threshold`:
+
+```python
+# A run that rejects 30% of rows completes; rejected reflects the count.
+metrics = asyncio.run(etl.run())   # {'loaded': 7, 'rejected': 3, 'errors': 0, ...}
+```
+
+Set `reject_counts_as_error=True` for a strict data-quality gate where too many
+invalid rows should abort the run — then `rejected` folds into the
+`error_threshold` numerator and the run raises `ETLError` once the combined rate
+is exceeded.
+
+### Resource-backed validation (validate against a reference table)
+
+The three forms above read only the record. To validate against a **reference
+resource** — e.g. "reject any row whose `country` is not in a `valid_countries`
+lookup table" — write the gate as an FSM arc condition that declares its
+resource and resolves it from the injected `FunctionContext`. The engine
+acquires the arc's declared resources and injects them into the condition's
+context (keyed by name, with the `{role: name}` map exposed for role lookup):
+
+```python
+from dataknobs_data import Query
+from dataknobs_fsm.functions.base import FunctionContext
+
+async def country_in_reference(record, ctx: FunctionContext) -> bool:
+    reference = ctx.resource_for_role("reference")   # or ctx.require_resource("valid_countries")
+    rows = await reference.execute_query(Query())
+    return record.get("country") in {r.get("id") for r in rows}
+
+# In the FSM config, the gate arc declares the resource and the condition:
+#   {"from": "validate", "to": "transform", "name": "valid",
+#    "condition": {"type": "registered", "name": "country_in_reference"},
+#    "resources": {"reference": "valid_countries"}, "priority": 10}
+#   {"from": "validate", "to": "rejected", "name": "invalid"}
+```
+
+A condition that raises (e.g. a missing resource) simply de-selects the `valid`
+arc, so a wiring error fails closed (the record is diverted) rather than
+crashing the run. See the
+[Resources guide](../guides/resources.md#resource-backed-arc-conditions) for the
+arc resource-injection contract.
+
 ## ETL modes
 
 ```python
@@ -152,18 +237,21 @@ checkpoint).
 
 | Key | Meaning |
 |---|---|
-| `extracted` | Records actually processed this run, recomputed as `loaded + errors` |
+| `extracted` | Records actually processed this run, recomputed as `loaded + rejected + errors` |
 | `transformed` | Records that completed cleanly (transformed and loaded) |
 | `loaded` | Records upserted into the target |
+| `rejected` | Records diverted by validation (data-quality drops, not failures) |
 | `errors` | Records whose `transform` or `load` step raised |
 | `skipped` | Reserved (currently always `0`) |
 
 A record only counts toward `transformed` + `loaded` when it reached `complete`
-**and** the per-record execution reported success. A record whose `transform` or
-`load` step raised is reported as a failure by the engine and counted as an
-`error` — not as `loaded` — even though the FSM still traversed to a final state.
-This keeps `error_threshold` honest: a target-write outage surfaces as errors
-rather than being silently reported as loaded.
+**and** the per-record execution reported success. A record diverted by the
+[validation gate](#validation) reaches the `rejected` terminal and is counted in
+`rejected`. A record whose `transform` or `load` step raised is reported as a
+failure by the engine and counted as an `error` — not as `loaded` — even though
+the FSM still traversed to a final state. This keeps `error_threshold` honest: a
+target-write outage surfaces as errors, dirty source data surfaces as
+rejections, and (by default) only the former aborts the run.
 
 Metrics are reset at the start of every `run()` (they do not accumulate across
 runs), and `run()` rebuilds the FSM each call, so a single `DatabaseETL`
@@ -212,15 +300,13 @@ pipelines = create_data_warehouse_load(
 
 ## Current limitations
 
-- **`validate`** is a passthrough. `validation_schema` is accepted but not yet
-  applied — no record is routed away from the pipeline by validation.
 - **`enrich`** is a passthrough. `enrichment_sources` is accepted but the
   per-record database/API lookup is not yet implemented.
 
-Both are honest no-ops today — they do not silently transform data incorrectly.
-Wiring them requires settling their config contracts (a schema format for
-validation, and per-record lookup semantics for enrichment) and is tracked
-separately.
+This is an honest no-op today — it does not silently transform data
+incorrectly. Wiring it requires settling its config contract (per-record lookup
+semantics) and is tracked separately. (The `validate` stage is fully wired — see
+[Validation](#validation).)
 
 - **Failure routing.** A record whose `transform` or `load` step raises is
   counted as an `error` (and trips `error_threshold`), but it is **not** routed
