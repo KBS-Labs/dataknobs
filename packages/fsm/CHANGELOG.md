@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The ETL `validate` stage is now a real per-record gate. `ETLConfig.validation_schema`
+  accepts a friendly dict schema (`{field: {required, type, min, max, pattern}}`),
+  a library `IValidationFunction`, or a callable predicate `record -> bool`; a
+  record that fails is diverted to a non-loading `rejected` terminal (never
+  written to the target) and counted in a new `rejected` metric, distinct from
+  `errors`. By default rejections do not trip `error_threshold` (validation is a
+  data-quality filter, not a pipeline outage); the new
+  `ETLConfig.reject_counts_as_error` (default `False`) opts them in for a strict
+  gate. To validate against a reference table, set
+  `ETLConfig.validation_resources` (`{name: {"type": ..., "config": ...}}`):
+  each entry is registered as an FSM resource and bound on the `valid` arc, so a
+  resource-reading `validation_schema` predicate resolves it from its
+  `FunctionContext` (`require_resource(name)` / `resource_for_role(name)`).
+  Setting `validation_resources` without `validation_schema` raises
+  `InvalidConfigurationError` (the resources would never be bound to a gate).
+- `dataknobs_fsm.functions.library.validators.build_record_validator(spec)`
+  normalizes any of three validation-spec forms — a friendly dict schema, a
+  library `IValidationFunction`, or a callable predicate (sync or async) — into
+  the `(record, context) -> bool` gate the engine invokes as an arc condition.
+  The ETL and file-processing patterns build their `validate` gate through it,
+  so the friendly validation vocabulary is identical across both.
 - New `async_database` FSM resource type (backed by
   `AsyncDatabaseResourceAdapter`) so a state transform can `await`
   non-blocking `upsert` / `execute_query` against any `dataknobs-data`
@@ -75,6 +96,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An arc condition that raises an *unexpected* error (a missing/down resource,
+  a validator bug, a failing reference lookup) now surfaces as a record error
+  instead of silently de-selecting the arc. Both engines previously swallowed
+  every condition exception to `False`, which routed the record to the
+  fall-through arc — so a validation gate whose reference table was down
+  rejected every row while reporting `errors == 0`, hiding an infrastructure
+  outage as a clean data-quality drop. Conditions now distinguish a soft reject
+  from a hard failure: returning falsy (or raising `ValidationError`, the
+  explicit "record is invalid" signal) de-selects the arc; any other exception
+  propagates and the record is counted as an error (tripping `error_threshold`).
+  The sync engine's `execute()` gained the same per-record error wrapper the
+  async engine already had, so the behaviour is identical across engines.
+- The friendly dict validation schema now separates presence from value:
+  `required` (or the literal `True` shorthand) governs whether an *absent* field
+  rejects, while `type` / `min` / `max` / `pattern` apply only when the field is
+  *present*. So `{"score": {"min": 0}}` means "if present, score must be >= 0"
+  (an absent optional field passes; add `"required": True` to also demand
+  presence), and a *present* value that cannot satisfy a numeric bound (e.g. a
+  string against `min`) rejects rather than raising `TypeError`. This replaces
+  the promoted `_make_validator` behaviour where a missing field defaulted to
+  `0` (so a `min` bound silently depended on whether `0` satisfied it). Shared
+  by the ETL and file-processing gates.
+- The ETL "error threshold exceeded" message now includes the rejected count
+  when `reject_counts_as_error` is set, so it no longer reads a confusing
+  "0 errors" when excess rejections (not errors) tripped the gate.
 - Arc transforms that are `ITransformFunction` instances (such as the database
   functions) now run on the async engine. The async arc path previously invoked
   the function as a plain `(data, context)` callable against the raw
@@ -165,6 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `FileProcessingConfig.validation_schema` now also accepts a library
+  `IValidationFunction` or a callable predicate, not only a dict schema (the
+  three forms the ETL pattern accepts), via the shared `build_record_validator`.
+  The friendly dict-schema behavior is unchanged.
 - A record whose **state transform raises** is now reported as a failed
   record by the execution engines: it still traverses to a final state, but
   `execute()` returns `success=False` (the failure is recorded in
@@ -226,8 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transformed` / `loaded` / `errors`) reflect the records actually
   processed. Previously records traversed skeleton states without a load
   step, the user `transformations` callables were never applied, and the
-  metrics were hollow. (The `validate` and `enrich` stages remain
-  passthroughs pending their config contracts.)
+  metrics were hollow. (The `validate` stage is now a real gate — see *Added*;
+  the `enrich` stage remains a passthrough pending its config contract.)
 - `AsyncBatchExecutor` drives the async execution engine directly instead
   of running the synchronous engine in a thread pool, so async state
   transforms are awaited — they previously leaked unawaited coroutines and

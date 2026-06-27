@@ -13,6 +13,7 @@ from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelectionMode
@@ -108,16 +109,24 @@ class ExecutionEngine(BaseExecutionEngine):
         success, error = self._enter_initial_state(context)
         if not success:
             return False, error
-        
-        # Execute based on data mode
-        if context.data_mode == ProcessingMode.SINGLE:
-            return self._execute_single(context, max_transitions, arc_name)
-        elif context.data_mode == ProcessingMode.BATCH:
-            return self._execute_batch(context, max_transitions)
-        elif context.data_mode == ProcessingMode.STREAM:
-            return self._execute_stream(context, max_transitions)
-        else:
-            return False, f"Unknown data mode: {context.data_mode}"
+
+        # Execute based on data mode. A propagating exception (e.g. an arc
+        # condition that raised a non-validation error in _evaluate_pre_test)
+        # becomes a failed record result rather than escaping the call — parity
+        # with the async engine's execute(), so a per-record driver counts it
+        # as an error consistently across engines.
+        try:
+            if context.data_mode == ProcessingMode.SINGLE:
+                return self._execute_single(context, max_transitions, arc_name)
+            elif context.data_mode == ProcessingMode.BATCH:
+                return self._execute_batch(context, max_transitions)
+            elif context.data_mode == ProcessingMode.STREAM:
+                return self._execute_stream(context, max_transitions)
+            else:
+                return False, f"Unknown data mode: {context.data_mode}"
+        except Exception as e:
+            self._error_count += 1
+            return False, str(e)
     
     def _execute_single(
         self,
@@ -247,12 +256,20 @@ class ExecutionEngine(BaseExecutionEngine):
                 # Use the common state entry method
                 self.enter_state(item_context, initial_state, run_validators=False)
             
-            # Execute for this item
-            success, result = self._execute_single(
-                item_context,
-                max_transitions
-            )
-            
+            # Execute for this item. Isolate a per-record failure — including a
+            # condition that raised a genuine evaluation error, which now
+            # propagates rather than being swallowed — so one bad record is
+            # recorded as a batch error and the batch continues, instead of the
+            # outer execute() wrapper abandoning every remaining record. Parity
+            # with the async engine's per-record gather(return_exceptions=True).
+            try:
+                success, result = self._execute_single(
+                    item_context,
+                    max_transitions
+                )
+            except Exception as e:
+                success, result = False, str(e)
+
             if success:
                 context.add_batch_result(result)
             else:
@@ -316,12 +333,19 @@ class ExecutionEngine(BaseExecutionEngine):
                     # Use the common state entry method
                     self.enter_state(record_context, initial_state, run_validators=False)
                 
-                # Execute for this record
-                success, result = self._execute_single(
-                    record_context,
-                    max_transitions
-                )
-                
+                # Execute for this record. Isolate a per-record failure (incl. a
+                # now-propagating condition evaluation error) so one bad record
+                # is recorded and the stream continues rather than the outer
+                # execute() wrapper abandoning the rest — parity with the async
+                # engine's per-record isolation.
+                try:
+                    success, result = self._execute_single(
+                        record_context,
+                        max_transitions
+                    )
+                except Exception as e:
+                    success, result = False, str(e)
+
                 if not success:
                     errors.append((total_records, result))
                 
@@ -1205,8 +1229,25 @@ class ExecutionEngine(BaseExecutionEngine):
                 if isinstance(result, tuple):
                     return bool(result[0])
                 return bool(result)
-            except Exception:
+            except FSMValidationError:
+                # Explicit "this record is invalid" signal → arc unavailable
+                # (a soft reject). Parity with the async engine's _evaluate_arc.
                 return False
+            except Exception:
+                # A genuine evaluation failure (missing resource, validator bug,
+                # reference lookup error). Surface it as a record error rather
+                # than silently de-selecting the arc — a silent de-select would
+                # route the record to the fall-through (reject) terminal and
+                # hide an infrastructure failure as a clean data-quality drop.
+                logger.warning(
+                    "Arc condition %r raised; surfacing as an evaluation error "
+                    "(arc %s->%s)",
+                    arc.pre_test,
+                    context.current_state,
+                    arc.target_state,
+                    exc_info=True,
+                )
+                raise
         finally:
             self._release_arc_resources(context, arc_resources, owner_id)
 

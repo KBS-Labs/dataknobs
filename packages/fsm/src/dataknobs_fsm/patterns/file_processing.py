@@ -20,7 +20,12 @@ from dataknobs_common.structured_config import (
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 from ..api.async_simple import AsyncSimpleFSM
-from ..functions.base import ITransformFunction, TransformError
+from ..functions.base import (
+    ITransformFunction,
+    IValidationFunction,
+    TransformError,
+)
+from ..functions.library.validators import build_gate_arcs, build_record_validator
 
 
 class FileFormat(Enum):
@@ -51,8 +56,15 @@ class FileProcessingConfig(StructuredConfig):
     parallel_chunks: int = 4
     encoding: str = "utf-8"
     
-    # Processing options
-    validation_schema: Dict[str, Any] | None = None
+    # Processing options. ``validation_schema`` accepts any form
+    # :func:`build_record_validator` understands: a friendly dict schema
+    # (the serializable, config-authored default), a library
+    # :class:`IValidationFunction`, or a callable ``record -> bool`` predicate.
+    # The dict form round-trips through the frozen config; the validator /
+    # callable forms are in-process only (like ``transformations``/``filters``).
+    validation_schema: (
+        Dict[str, Any] | IValidationFunction | Callable[..., Any] | None
+    ) = None
     transformations: List[Callable] | None = None
     filters: List[Callable] | None = None
     aggregations: Dict[str, Callable] | None = None
@@ -65,13 +77,6 @@ class FileProcessingConfig(StructuredConfig):
     # Format-specific configs
     json_config: Dict[str, Any] = field(default_factory=dict)
     log_config: Dict[str, Any] = field(default_factory=dict)
-
-
-_VALIDATION_TYPE_MAP: Dict[str, type] = {
-    "str": str, "string": str, "int": int, "integer": int,
-    "float": float, "number": float, "bool": bool, "boolean": bool,
-    "list": list, "array": list, "dict": dict, "object": dict,
-}
 
 
 # Map a resolved :class:`FileFormat` to the streaming reader/writer's
@@ -154,49 +159,6 @@ def _make_filter(filters: List[Callable]) -> Callable[..., bool]:
         return all(predicate(data) for predicate in filters)
 
     return filter_pass
-
-
-def _make_validator(schema: Dict[str, Any]) -> Callable[..., bool]:
-    """Build the ``validate`` arc condition from a validation schema.
-
-    A record is valid iff it satisfies every field constraint. Supported
-    per-field constraints: ``required``, ``type`` (mapped to a Python type for
-    an ``isinstance`` check), ``min`` / ``max`` (inclusive numeric bounds), and
-    ``pattern`` (regex). A field whose constraint is the literal ``True`` is
-    treated as simply required.
-    """
-
-    def validate_check(data: Dict[str, Any], context: Any = None) -> bool:
-        for field_name, constraints in schema.items():
-            if constraints is True:
-                if field_name not in data:
-                    return False
-                continue
-            if not isinstance(constraints, dict):
-                continue
-            if constraints.get("required") and field_name not in data:
-                return False
-            if "type" in constraints:
-                expected = _VALIDATION_TYPE_MAP.get(constraints["type"])
-                if expected is not None and not isinstance(
-                    data.get(field_name), expected
-                ):
-                    return False
-            if "min" in constraints and not (
-                data.get(field_name, 0) >= constraints["min"]
-            ):
-                return False
-            if "max" in constraints and not (
-                data.get(field_name, 0) <= constraints["max"]
-            ):
-                return False
-            if "pattern" in constraints and not re.match(
-                constraints["pattern"], str(data.get(field_name, ""))
-            ):
-                return False
-        return True
-
-    return validate_check
 
 
 class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
@@ -388,23 +350,17 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         for index, stage in enumerate(active):
             nxt = active[index + 1] if index + 1 < len(active) else 'complete'
             if stage == 'validate':
-                arcs.append({
-                    'from': 'validate', 'to': nxt, 'name': 'valid',
-                    'condition': {'type': 'registered', 'name': 'validate_check'},
-                    'priority': 10,
-                })
-                arcs.append(
-                    {'from': 'validate', 'to': 'error', 'name': 'invalid'}
-                )
+                arcs.extend(build_gate_arcs(
+                    from_state='validate', condition_name='validate_check',
+                    pass_to=nxt, reject_to='error',
+                    pass_name='valid', reject_name='invalid',
+                ))
             elif stage == 'filter':
-                arcs.append({
-                    'from': 'filter', 'to': nxt, 'name': 'passed',
-                    'condition': {'type': 'registered', 'name': 'filter_pass'},
-                    'priority': 10,
-                })
-                arcs.append(
-                    {'from': 'filter', 'to': 'filtered', 'name': 'filtered_out'}
-                )
+                arcs.extend(build_gate_arcs(
+                    from_state='filter', condition_name='filter_pass',
+                    pass_to=nxt, reject_to='filtered',
+                    pass_name='passed', reject_name='filtered_out',
+                ))
             else:
                 arcs.append(
                     {'from': stage, 'to': nxt, 'name': f'{stage}_done'}
@@ -435,7 +391,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         if self.config.filters:
             functions['filter_pass'] = _make_filter(self.config.filters)
         if self.config.validation_schema:
-            functions['validate_check'] = _make_validator(
+            functions['validate_check'] = build_record_validator(
                 self.config.validation_schema
             )
         return functions

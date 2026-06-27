@@ -21,8 +21,13 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.exceptions import ETLError, InvalidConfigurationError
 
 from ..api.async_simple import AsyncSimpleFSM
-from ..functions.base import ITransformFunction, TransformError
+from ..functions.base import (
+    ITransformFunction,
+    IValidationFunction,
+    TransformError,
+)
 from ..functions.library.database import DatabaseUpsert
+from ..functions.library.validators import build_gate_arcs, build_record_validator
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +57,32 @@ class ETLConfig(StructuredConfig):
     key_columns: List[str] | None = None
     field_mappings: Dict[str, str] | None = None
     transformations: List[Callable] | None = None
-    validation_schema: Dict[str, Any] | None = None
+    # ``validation_schema`` accepts any form :func:`build_record_validator`
+    # understands: a friendly dict schema (the serializable, config-authored
+    # default — ``{field: {required, type, min, max, pattern}}``), a library
+    # :class:`IValidationFunction`, or a callable ``record -> bool`` predicate.
+    # When set, the ``validate`` stage becomes a real gate: passing records flow
+    # to ``transform``; rejected records are diverted to a non-loading terminal
+    # and counted in ``rejected`` (not ``errors``). The dict form round-trips
+    # through the frozen config; the validator / callable forms are in-process
+    # only (like ``transformations``).
+    validation_schema: (
+        Dict[str, Any] | IValidationFunction | Callable[..., Any] | None
+    ) = None
+    # When ``True``, validation rejections count toward ``error_threshold`` (a
+    # strict data-quality gate: too many invalid rows aborts the run). Default
+    # ``False`` — validation is a filter, not a pipeline outage, so rejections
+    # are reported in ``rejected`` without tripping the error threshold.
+    reject_counts_as_error: bool = False
+    # Resources the validation gate condition needs — e.g. a reference table to
+    # validate a foreign key against. Each ``{name: {"type": ..., "config":
+    # ...}}`` entry is registered as an FSM resource AND bound on the ``valid``
+    # arc (role == name), so a resource-reading ``validation_schema`` predicate
+    # resolves it from its ``FunctionContext`` via ``require_resource(name)``.
+    # Without this the gate condition's ``context.resources`` is empty and a
+    # resource-backed predicate raises (→ the record errors). Dict form
+    # round-trips through the frozen config.
+    validation_resources: Dict[str, Dict[str, Any]] | None = None
     enrichment_sources: List[Dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
@@ -84,6 +114,18 @@ class ETLConfig(StructuredConfig):
                     f"reference post-transform names). Set key_columns to the "
                     f"renamed field, or map a non-key field instead."
                 )
+
+        # `validation_resources` only takes effect on the `valid` gate arc,
+        # which is wired only when `validation_schema` is set. Declaring
+        # resources with no gate is a silent no-op, so reject it as a
+        # misconfiguration rather than registering unreferenced resources.
+        if self.validation_resources and not self.validation_schema:
+            raise InvalidConfigurationError(
+                "validation_resources is set but validation_schema is not — the "
+                "resources would be registered but never bound to a gate arc. "
+                "Set validation_schema (a resource-reading predicate), or drop "
+                "validation_resources."
+            )
 
 
 class _ETLTransform(ITransformFunction):
@@ -160,6 +202,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             'extracted': 0,
             'transformed': 0,
             'loaded': 0,
+            'rejected': 0,
             'errors': 0,
             'skipped': 0
         }
@@ -178,6 +221,13 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             {'name': 'target_db', 'type': 'async_database', 'config': self.config.target_db}
         ]
         
+        # Register resources the validation gate needs (e.g. a reference table)
+        # so the `valid` arc can acquire and inject them into the condition's
+        # function context. Bound on the arc below (role == name).
+        if self.config.validation_resources:
+            for res_name, decl in self.config.validation_resources.items():
+                resources.append({'name': res_name, **decl})
+
         # Add enrichment resources if configured
         if self.config.enrichment_sources:
             for i, source in enumerate(self.config.enrichment_sources):
@@ -194,57 +244,94 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                         'config': source['api']
                     })
         
-        # Route through `enrich` only when enrichment is configured. `validate`
-        # and `enrich` are currently honest passthroughs (their config
-        # contracts — `validation_schema` / `enrichment_sources` — are
-        # underspecified for real per-record wiring; see _build_custom_functions).
+        # Route through `enrich` only when enrichment is configured. `enrich`
+        # is still an honest passthrough (its config contract —
+        # `enrichment_sources` — is underspecified for real per-record wiring;
+        # see _build_custom_functions).
         post_transform = 'enrich' if self.config.enrichment_sources else 'load'
+
+        states: List[Dict[str, Any]] = [
+            {
+                'name': 'extract',
+                'is_start': True,
+                'resources': []
+            },
+            {
+                'name': 'validate',
+                'resources': []
+            },
+            {
+                'name': 'transform',
+                'resources': [],
+                'functions': {
+                    'transform': {'type': 'registered', 'name': 'transform'}
+                }
+            },
+            {
+                'name': 'enrich',
+                'resources': []
+            },
+            {
+                'name': 'load',
+                'resources': ['target_db'],
+                'functions': {
+                    'transform': {'type': 'registered', 'name': 'load'}
+                }
+            },
+            {
+                'name': 'complete',
+                'is_end': True
+            }
+        ]
+
+        arcs: List[Dict[str, Any]] = [
+            {'from': 'extract', 'to': 'validate', 'name': 'extracted'},
+        ]
+
+        # Wire `validate` as a real gate only when a schema is configured. The
+        # shared `build_gate_arcs` builds the proven shape — a higher-priority
+        # `valid` arc carrying the registered condition + an unconditional
+        # fall-through that diverts rejects to a non-loading `rejected`
+        # terminal. The engine sorts available arcs by priority (higher first),
+        # so a passing record is routed deterministically to `transform` and a
+        # failing one to `rejected` — no record mutation. An empty schema (`{}`)
+        # is falsy → no gate, byte-identical to the pre-gate passthrough (and
+        # consistent with the file-processing pattern). `validation_resources`
+        # (if any) is bound on the `valid` arc so a resource-reading predicate
+        # can resolve its reference resource.
+        if self.config.validation_schema:
+            arcs.extend(build_gate_arcs(
+                from_state='validate',
+                condition_name='validate_check',
+                pass_to='transform',
+                reject_to='rejected',
+                pass_name='valid',
+                reject_name='invalid',
+                resources={
+                    name: name for name in self.config.validation_resources
+                } if self.config.validation_resources else None,
+            ))
+            states.append(
+                {'name': 'rejected', 'is_end': True, 'emit_output': False}
+            )
+        else:
+            arcs.append(
+                {'from': 'validate', 'to': 'transform', 'name': 'valid'}
+            )
+
+        arcs.extend([
+            {'from': 'transform', 'to': post_transform, 'name': 'transformed'},
+            {'from': 'enrich', 'to': 'load', 'name': 'enriched'},
+            {'from': 'load', 'to': 'complete', 'name': 'loaded'},
+        ])
 
         # Create FSM configuration
         fsm_config = {
             'name': 'ETL_Pipeline',
             'data_mode': DataHandlingMode.COPY.value,  # Use COPY for data isolation
             'resources': resources,
-            'states': [
-                {
-                    'name': 'extract',
-                    'is_start': True,
-                    'resources': []
-                },
-                {
-                    'name': 'validate',
-                    'resources': []
-                },
-                {
-                    'name': 'transform',
-                    'resources': [],
-                    'functions': {
-                        'transform': {'type': 'registered', 'name': 'transform'}
-                    }
-                },
-                {
-                    'name': 'enrich',
-                    'resources': []
-                },
-                {
-                    'name': 'load',
-                    'resources': ['target_db'],
-                    'functions': {
-                        'transform': {'type': 'registered', 'name': 'load'}
-                    }
-                },
-                {
-                    'name': 'complete',
-                    'is_end': True
-                }
-            ],
-            'arcs': [
-                {'from': 'extract', 'to': 'validate', 'name': 'extracted'},
-                {'from': 'validate', 'to': 'transform', 'name': 'valid'},
-                {'from': 'transform', 'to': post_transform, 'name': 'transformed'},
-                {'from': 'enrich', 'to': 'load', 'name': 'enriched'},
-                {'from': 'load', 'to': 'complete', 'name': 'loaded'},
-            ]
+            'states': states,
+            'arcs': arcs,
         }
 
         # Wire the per-record functions through the proven custom_functions
@@ -261,25 +348,30 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     def _build_custom_functions(self) -> Dict[str, Callable]:
         """Build the registered functions the ETL FSM references by name.
 
-        Two per-record steps are wired as FSM transforms:
+        Per-record steps wired as FSM functions:
 
         - ``transform`` (:class:`_ETLTransform`) applies ``field_mappings`` and
           the user ``transformations`` callables.
         - ``load`` (:class:`DatabaseUpsert`) upserts the record into the
           ``target_db`` async-database resource.
+        - ``validate_check`` — present only when ``validation_schema`` is set —
+          is the ``valid`` arc condition, built from any supported spec form
+          (friendly dict schema / library ``IValidationFunction`` / callable
+          predicate) via :func:`build_record_validator`. Passing records flow to
+          ``transform``; rejected records are diverted to the ``rejected``
+          terminal (see :meth:`_build_fsm`).
 
         Extraction is owned by ``run()._extract_batches`` (a per-record
         ``DatabaseFetch`` 'fetch all' would be nonsensical), so
         ``DatabaseFetch`` is repaired and exercised at the library layer
-        rather than wired here. The ``validate`` / ``enrich`` states are honest
-        passthroughs for now: ``validation_schema`` and ``enrichment_sources``
-        have underspecified config contracts (schema format / per-record
-        DB-API lookup) that need their own design before they can be wired
-        without silently doing the wrong thing. The returned instances are
+        rather than wired here. The ``enrich`` state is still an honest
+        passthrough: ``enrichment_sources`` has an underspecified per-record
+        DB/API lookup contract that needs its own design before it can be wired
+        without silently doing the wrong thing. The returned callables are
         passed via ``AsyncSimpleFSM(config, custom_functions=...)`` and
-        referenced from each state's ``functions`` block.
+        referenced from each state's ``functions`` block / arc condition.
         """
-        return {
+        functions: Dict[str, Callable] = {
             'transform': _ETLTransform(
                 self.config.field_mappings,
                 self.config.transformations,
@@ -290,6 +382,11 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 key_columns=self.config.key_columns or ['id'],
             ),
         }
+        if self.config.validation_schema:
+            functions['validate_check'] = build_record_validator(
+                self.config.validation_schema
+            )
+        return functions
         
     async def run(
         self,
@@ -344,7 +441,13 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 
                 # Check error threshold
                 if self._check_error_threshold():
-                    raise ETLError(f"Error threshold exceeded: {self._metrics['errors']} errors")
+                    # Report rejections too when they count toward the threshold,
+                    # so the message is not a confusing "0 errors" when excess
+                    # rejections (not errors) tripped the gate.
+                    detail = f"{self._metrics['errors']} errors"
+                    if self.config.reject_counts_as_error:
+                        detail += f", {self._metrics['rejected']} rejected"
+                    raise ETLError(f"Error threshold exceeded: {detail}")
                     
                 # Checkpoint if needed
                 if self._should_checkpoint():
@@ -399,35 +502,62 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             return Query()
             
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
-        """Update execution metrics.
+        """Update execution metrics by classifying each record's terminal.
 
-        A record only counts as ``transformed`` + ``loaded`` when it reached
-        ``complete`` *and* the per-record execution reported success. A record
-        whose ``transform`` or ``load`` step raised is reported as a failure by
-        the engine (``success=False`` — see
-        ``BaseExecutionEngine.finalize_single_result``), so it counts as an
-        ``error`` and is NOT counted as loaded, even though it reached a final
-        state. This keeps ``error_threshold`` honest: a target-write outage
-        surfaces as errors rather than being silently reported as loaded.
+        Three outcomes are distinguished, using the same terminal-based
+        classification *mechanism* as the file-processing pattern — but ETL
+        treats a validation reject as a distinct data-quality outcome
+        (``rejected``) rather than an error (file-processing classifies its
+        reject terminal as an error):
+
+        - ``success`` + ``final_state == 'complete'`` → ``transformed`` +
+          ``loaded`` (the record was written to the target).
+        - ``success`` + ``final_state == 'rejected'`` → ``rejected`` (the record
+          failed validation and was diverted to the non-loading terminal). This
+          is an expected data-quality drop, NOT a pipeline failure, so it is
+          counted distinctly from ``errors``.
+        - anything else (incl. ``success=False`` — a ``transform`` / ``load``
+          step that raised, reported by the engine via
+          ``BaseExecutionEngine.finalize_single_result``) → ``errors``.
+
+        Keeping rejections out of ``errors`` keeps ``error_threshold`` honest: a
+        target-write *outage* surfaces as errors, while dirty *source data*
+        surfaces as rejections (which only abort the run when
+        ``reject_counts_as_error`` is set — see :meth:`_check_error_threshold`).
         """
         for result in results:
             if result['success'] and result['final_state'] == 'complete':
                 self._metrics['transformed'] += 1
                 self._metrics['loaded'] += 1
+            elif result['success'] and result['final_state'] == 'rejected':
+                self._metrics['rejected'] += 1
             else:
                 self._metrics['errors'] += 1
 
         # ``extracted`` is the count of records actually processed this run
-        # (every record ends as either loaded or errored); it is recomputed
+        # (every record ends loaded, rejected, or errored); it is recomputed
         # from outcomes rather than counted at the source.
-        self._metrics['extracted'] = self._metrics['loaded'] + self._metrics['errors']
-        
+        self._metrics['extracted'] = (
+            self._metrics['loaded']
+            + self._metrics['rejected']
+            + self._metrics['errors']
+        )
+
     def _check_error_threshold(self) -> bool:
-        """Check if error threshold is exceeded."""
+        """Check if the error threshold is exceeded.
+
+        Validation rejections count toward the threshold only when
+        ``reject_counts_as_error`` is set; by default a rejection is a filtered
+        record (a data-quality outcome), not an error, so it does not abort the
+        run.
+        """
         if self._metrics['extracted'] == 0:
             return False
-            
-        error_rate = self._metrics['errors'] / self._metrics['extracted']
+
+        failures = self._metrics['errors']
+        if self.config.reject_counts_as_error:
+            failures += self._metrics['rejected']
+        error_rate = failures / self._metrics['extracted']
         return error_rate > self.config.error_threshold
         
     def _should_checkpoint(self) -> bool:

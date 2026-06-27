@@ -192,6 +192,13 @@ config = FileProcessingConfig(
 )
 ```
 
+`validation_schema` also accepts a library `IValidationFunction` (e.g.
+`RangeValidator`, `SchemaValidator`) or a plain callable predicate
+`record -> bool` — the same
+three forms the ETL pattern accepts. All are normalized by the shared
+`dataknobs_fsm.functions.library.validators.build_record_validator`, so the
+friendly dict-schema vocabulary above is identical across both patterns.
+
 ### Custom Validation
 
 Implement custom validation through filter functions:

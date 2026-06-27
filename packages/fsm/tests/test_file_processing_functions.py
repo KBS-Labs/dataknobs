@@ -20,13 +20,13 @@ from __future__ import annotations
 import pytest
 
 from dataknobs_fsm.functions.base import TransformError
+from dataknobs_fsm.functions.library.validators import RangeValidator
 from dataknobs_fsm.patterns.file_processing import (
     FileProcessingConfig,
     FileProcessor,
     _FileAggregator,
     _FileTransform,
     _make_filter,
-    _make_validator,
 )
 
 
@@ -94,32 +94,42 @@ def test_make_filter_accepts_context_kwarg() -> None:
     assert filter_pass({"x": 1}) is True  # context defaulted
 
 
+# Friendly-schema unit coverage now lives with the shared builder in
+# test_record_validator.py (the schema logic moved to
+# functions/library/validators.build_record_validator). The cases below verify
+# FileProcessor *adopts* that builder and accepts the broadened spec forms.
+
+
 # --------------------------------------------------------------------------
-# _make_validator — arc condition built from a validation schema.
+# _build_custom_functions — only configured stages are exposed by name; the
+# validate gate is built from the shared builder for every accepted spec form.
 # --------------------------------------------------------------------------
 
 
-def test_make_validator_required_and_type() -> None:
-    check = _make_validator(
-        {"name": {"required": True, "type": "str"}, "active": True}
+def test_validate_check_accepts_validation_function_form() -> None:
+    """A library IValidationFunction validation_schema builds a working gate."""
+    proc = FileProcessor(
+        FileProcessingConfig(
+            input_path="x.json",
+            validation_schema=RangeValidator({"age": {"min": 18}}),
+        )
     )
-    assert check({"name": "alice", "active": True}, None) is True
-    assert check({"active": True}, None) is False  # missing required name
-    assert check({"name": 5, "active": True}, None) is False  # wrong type
-    assert check({"name": "alice"}, None) is False  # missing required 'active'
+    check = proc._build_custom_functions()["validate_check"]
+    assert check({"age": 30}, None) is True
+    assert check({"age": 10}, None) is False
 
 
-def test_make_validator_min_max_pattern() -> None:
-    check = _make_validator(
-        {
-            "age": {"type": "int", "min": 0, "max": 120},
-            "email": {"pattern": r"^[^@]+@[^@]+\.[^@]+$"},
-        }
+def test_validate_check_accepts_callable_form() -> None:
+    """A plain callable predicate validation_schema builds a working gate."""
+    proc = FileProcessor(
+        FileProcessingConfig(
+            input_path="x.json",
+            validation_schema=lambda r: r.get("age", 0) >= 18,
+        )
     )
-    assert check({"age": 30, "email": "a@b.co"}, None) is True
-    assert check({"age": -1, "email": "a@b.co"}, None) is False
-    assert check({"age": 200, "email": "a@b.co"}, None) is False
-    assert check({"age": 30, "email": "not-an-email"}, None) is False
+    check = proc._build_custom_functions()["validate_check"]
+    assert check({"age": 30}, None) is True
+    assert check({"age": 10}, None) is False
 
 
 # --------------------------------------------------------------------------

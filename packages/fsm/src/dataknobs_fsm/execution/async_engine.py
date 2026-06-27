@@ -21,6 +21,7 @@ from dataknobs_fsm.execution.common import (
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
 from dataknobs_fsm.core.data_wrapper import ensure_dict
 
 logger = logging.getLogger(__name__)
@@ -390,20 +391,30 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 return []
         
         # Evaluate all arc pre-conditions in parallel
-        tasks = []
-        for arc in arcs_to_evaluate:
-            task = asyncio.create_task(self._evaluate_arc(arc, context))
-            tasks.append((arc, task))
-        
-        # Wait for all evaluations
-        for arc, task in tasks:
-            can_execute = await task
-            if can_execute:
+        tasks = [
+            (arc, asyncio.create_task(self._evaluate_arc(arc, context)))
+            for arc in arcs_to_evaluate
+        ]
+
+        # Await ALL evaluations (return_exceptions=True) so a condition that
+        # raises never orphans a sibling task ("Task exception was never
+        # retrieved"). _evaluate_arc has already converted a soft reject
+        # (ValidationError) to False, so any exception surfaced here is a
+        # genuine evaluation failure — re-raise it so the record errors out
+        # (engine.execute() turns it into a failed record result) instead of
+        # being silently de-selected.
+        outcomes = await asyncio.gather(
+            *(task for _, task in tasks), return_exceptions=True
+        )
+        for (arc, _), outcome in zip(tasks, outcomes):
+            if isinstance(outcome, BaseException):
+                raise outcome
+            if outcome:
                 available.append(arc)
-        
+
         # Sort by priority (higher first)
         available.sort(key=lambda a: a.priority, reverse=True)
-        
+
         return available
     
     async def _evaluate_arc(
@@ -475,15 +486,32 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                         context.data,
                         func_context,
                     )
-            except Exception:
-                # A raising condition means the arc is simply unavailable — parity
-                # with the sync engine's _evaluate_pre_test, which returns False on
-                # condition exceptions. Critically, conditions are evaluated as
-                # unawaited tasks in _get_available_transitions; without this catch
-                # a raising predicate (e.g. require_resource() after a failed
-                # concurrent acquire) would propagate out and fail the whole FSM
-                # run instead of de-selecting the one arc.
+            except FSMValidationError:
+                # An explicit "this record is invalid" signal → the arc is
+                # unavailable (a soft reject). The build_record_validator gate
+                # predicates already return False for invalid data; this branch
+                # is for a hand-authored condition that prefers to raise.
                 return False
+            except Exception:
+                # A genuine evaluation failure — a resource the condition needs
+                # is missing/down, a validator has a bug, a reference lookup
+                # errored. This is NOT a clean "record invalid" outcome, so it
+                # must surface as a record error (counted in errors / tripping
+                # error_threshold) rather than silently de-selecting the arc and
+                # routing the record to the fall-through reject terminal — which
+                # would hide an infrastructure outage as a data-quality drop.
+                # _get_available_transitions propagates this; engine.execute()
+                # converts it to a failed record result. (Parity with the sync
+                # engine's _evaluate_pre_test.)
+                logger.warning(
+                    "Arc condition %r raised; surfacing as an evaluation error "
+                    "(arc %s->%s)",
+                    arc.pre_test,
+                    getattr(context, 'current_state', '?'),
+                    arc.target_state,
+                    exc_info=True,
+                )
+                raise
         finally:
             self._release_named_resources(
                 context, arc_resources, owner_id, owner_label=arc_label
