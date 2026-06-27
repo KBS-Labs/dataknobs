@@ -48,8 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference-table lookup (`LookupMergeEnricher`, exported alongside it), an
   `ITransformFunction`, or a callable (sync or async) — into the
   `(record, context) -> dict` step the engine applies in the enrich stage. The
-  shared `merge_enrichment_field` primitive applies one `overwrite` policy across
-  the computed and lookup forms.
+  computed and lookup forms share one collision decision (`_enrichment_collides`)
+  and one write primitive (`merge_enrichment_field`), so they cannot diverge on
+  `overwrite` handling. A reference-lookup spec is validated eagerly: a `match`
+  join with no source key (a malformed lookup that would otherwise be mis-read as
+  a field→value map), `overwrite` without explicit `fields` (a blanket merge-all
+  could clobber the record's own key columns), and `on_missing="null"` without
+  `fields` (nothing to null) are all rejected at construction rather than
+  silently mis-enriching or no-op'ing at run time.
 - New `async_database` FSM resource type (backed by
   `AsyncDatabaseResourceAdapter`) so a state transform can `await`
   non-blocking `upsert` / `execute_query` against any `dataknobs-data`
@@ -277,6 +283,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emission in the batch and whole-file modes too — both writers resolve
   `emit_output` from the final state rather than matching a hardcoded `complete`
   name, so they apply exactly the policy the streaming sink already used.
+- `ETLConfig.enrichment_sources`, previously accepted but silently ignored (a
+  documented per-record passthrough), is now wired as a real enrich stage
+  between `transform` and `load`. A source that was inert before will now run;
+  a malformed source — a `database` source with no `match` join spec,
+  `overwrite` without an explicit `fields` list, or `on_missing="null"` without
+  `fields` — raises `InvalidConfigurationError` at `ETLConfig` construction
+  instead of no-op'ing. Migration: add a `match` (and `fields`) to each
+  reference source you intended to run, or remove sources you did not.
 
 ### Fixed
 

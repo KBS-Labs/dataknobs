@@ -4,7 +4,6 @@ This module provides commonly used validation functions that can be
 referenced in FSM configurations.
 """
 
-import inspect
 import re
 from collections.abc import Callable, Mapping
 from typing import Any, Dict, List, Union
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Union
 from pydantic import BaseModel, ValidationError
 
 from dataknobs_fsm.functions.base import IValidationFunction, ValidationError as FSMValidationError
+from dataknobs_fsm.functions.library._callables import normalize_record_callable
 
 
 # Map a friendly schema ``type`` token to the Python type used for the
@@ -175,47 +175,19 @@ def _callable_predicate(fn: Callable[..., Any]) -> Callable[..., Any]:
     The FSM engine always invokes an arc condition as ``fn(record, context)``.
     A consumer's predicate may be written as ``record -> bool`` or
     ``(record, context) -> bool``, and may be sync or async (an async predicate
-    is what a resource-reading gate uses). The returned callable always accepts
-    ``(record, context)`` and forwards the right number of arguments; it is a
-    coroutine function iff ``fn`` is, so the engine's ``iscoroutinefunction``
-    check routes it correctly.
+    is what a resource-reading gate uses). Delegates to the shared
+    :func:`~dataknobs_fsm.functions.library._callables.normalize_record_callable`
+    (the enrichment step uses the same normalizer) with ``coerce=bool`` so the
+    gate always yields a boolean; the returned callable is a coroutine function
+    iff ``fn`` is.
 
-    The context parameter must be positional (or have a default). Arity
-    detection counts positional parameters only, so a predicate that declares
-    ``context`` as a *required keyword-only* argument
+    The context parameter must be positional (or have a default). A predicate
+    that declares ``context`` as a *required keyword-only* argument
     (``def fn(record, *, context): ...``) is called with the record alone and
     raises ``TypeError`` at evaluation time — write ``(record, context)`` or
     ``(record, context=None)`` instead.
     """
-    try:
-        params = [
-            p
-            for p in inspect.signature(fn).parameters.values()
-            if p.kind
-            in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.VAR_POSITIONAL,
-            )
-        ]
-        wants_context = any(
-            p.kind is inspect.Parameter.VAR_POSITIONAL for p in params
-        ) or len(params) >= 2
-    except (TypeError, ValueError):
-        # Builtins / C-callables with no introspectable signature: be permissive
-        # and pass only the record (the common ``record -> bool`` shape).
-        wants_context = False
-
-    if inspect.iscoroutinefunction(fn):
-        async def async_check(data: Dict[str, Any], context: Any = None) -> bool:
-            return bool(await (fn(data, context) if wants_context else fn(data)))
-
-        return async_check
-
-    def sync_check(data: Dict[str, Any], context: Any = None) -> bool:
-        return bool(fn(data, context) if wants_context else fn(data))
-
-    return sync_check
+    return normalize_record_callable(fn, coerce=bool)
 
 
 def build_record_validator(

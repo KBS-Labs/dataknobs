@@ -30,13 +30,13 @@ supported path and backend-agnostic (file, memory, sqlite, postgres).
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
 from typing import Any
 
 from dataknobs_data import Filter, Operator, Query
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
+from dataknobs_fsm.functions.library._callables import normalize_record_callable
 from dataknobs_fsm.functions.library.database import _require_resource
 from dataknobs_fsm.functions.library.transformers import (
     DataEnricher,
@@ -53,58 +53,6 @@ _LOOKUP_RESOURCE_KEY = "resource"
 _ETL_SOURCE_KEYS = ("database", "api")
 
 
-def _normalize_enricher_callable(
-    fn: Callable[..., Any],
-) -> Callable[..., Any]:
-    """Arity- and await-normalize an enricher to the engine's call shape.
-
-    The ETL enrich step always invokes an enricher as ``fn(record, context)``.
-    A supplied enricher may be a bare ``record -> dict`` callable, a
-    ``(record, context) -> dict`` callable, or an
-    :class:`ITransformFunction`'s bound ``transform`` (sync ``(data)`` like
-    :class:`DataEnricher`, or async ``(data, context)`` like
-    :class:`LookupMergeEnricher`). The returned callable always accepts
-    ``(record, context)``, forwards the right number of arguments, and is a
-    coroutine function iff ``fn`` is — so the caller's ``isawaitable`` check
-    routes it correctly.
-
-    Mirrors ``validators._callable_predicate`` (the validation-gate counterpart)
-    but returns the enricher's value unchanged (the caller validates it is a
-    dict) rather than coercing to ``bool``.
-    """
-    try:
-        params = [
-            p
-            for p in inspect.signature(fn).parameters.values()
-            if p.kind
-            in (
-                inspect.Parameter.POSITIONAL_ONLY,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.VAR_POSITIONAL,
-            )
-        ]
-        wants_context = (
-            any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
-            or len(params) >= 2
-        )
-    except (TypeError, ValueError):
-        # Builtins / C-callables with no introspectable signature: pass only the
-        # record (the common ``record -> dict`` shape).
-        wants_context = False
-
-    if inspect.iscoroutinefunction(fn):
-
-        async def async_enrich(data: dict, context: Any = None) -> Any:
-            return await (fn(data, context) if wants_context else fn(data))
-
-        return async_enrich
-
-    def sync_enrich(data: dict, context: Any = None) -> Any:
-        return fn(data, context) if wants_context else fn(data)
-
-    return sync_enrich
-
-
 class LookupMergeEnricher(ITransformFunction):
     """Enrich a record from a reference table by key, then merge fields.
 
@@ -117,7 +65,13 @@ class LookupMergeEnricher(ITransformFunction):
 
     The reference read goes through a dataknobs :class:`~dataknobs_data.Query`
     (``execute_query(query, fetch_one=True)``) — the primitive the async
-    database resource adapter supports — so the lookup is backend-agnostic.
+    database resource adapter supports — so the lookup is backend-agnostic. A
+    multi-field ``match`` compiles to AND-combined equality filters (every join
+    column must match). When more than one reference row satisfies the join only
+    the first (in backend ``stream_read`` order) is merged — author ``match`` on a
+    unique key; multi-row fan-out is not supported. A record missing a ``match``
+    source field queries that join column against ``None`` (so it matches a row
+    whose reference column is null, if any), rather than raising.
     """
 
     def __init__(
@@ -138,16 +92,25 @@ class LookupMergeEnricher(ITransformFunction):
                 record's ``record_field`` values is the match.
             fields: Reference columns to merge into the record. When omitted,
                 every reference column except the ``match`` reference fields is
-                merged.
+                merged — including the reference table's own ``id``/storage
+                columns, so name ``fields`` explicitly when the reference shares
+                column names with the record. Required when ``overwrite`` is
+                ``True`` or ``on_missing`` is ``"null"`` (see ``Raises``).
             overwrite: When ``False`` a looked-up field that collides with an
-                existing record key is dropped; when ``True`` it replaces it.
+                existing record key is dropped; when ``True`` it replaces it
+                (requires explicit ``fields``).
             on_missing: Policy when no reference row matches — ``"ignore"`` (pass
                 the record through unchanged), ``"null"`` (set the listed
-                ``fields`` to ``None``), or ``"error"`` (raise
-                :class:`TransformError`, so the record is a counted error).
+                ``fields`` to ``None``, subject to the ``overwrite`` policy: a
+                field the record already carries is left untouched when
+                ``overwrite`` is ``False`` and nulled only when it is ``True``),
+                or ``"error"`` (raise :class:`TransformError`, so the record is a
+                counted error).
 
         Raises:
-            ValueError: ``match`` empty, or unknown ``on_missing``.
+            ValueError: ``match`` empty; unknown ``on_missing``; ``overwrite``
+                without explicit ``fields``; or ``on_missing="null"`` without
+                explicit ``fields``.
         """
         if not match:
             raise ValueError(
@@ -158,6 +121,25 @@ class LookupMergeEnricher(ITransformFunction):
             raise ValueError(
                 f"unknown on_missing '{on_missing}'; expected one of "
                 f"{', '.join(ENRICHMENT_ON_MISSING)}"
+            )
+        # A blanket "merge every reference column" (``fields`` omitted) combined
+        # with ``overwrite`` can replace the record's own key/identity columns
+        # (the reference table's ``id`` clobbers the record's ``id``), collapsing
+        # rows onto the wrong storage id at load. Demand explicit ``fields`` when
+        # overwriting so the author names exactly what is replaced.
+        if overwrite and fields is None:
+            raise ValueError(
+                "overwrite=True requires an explicit 'fields' list — a blanket "
+                "merge of every reference column with overwrite can clobber the "
+                "record's own key columns. Name the fields to overwrite."
+            )
+        # ``on_missing="null"`` nulls the named ``fields``; with no ``fields`` it
+        # would null nothing — silently identical to ``"ignore"``. Reject the
+        # no-op rather than let it masquerade as a miss policy.
+        if on_missing == "null" and fields is None:
+            raise ValueError(
+                "on_missing='null' requires an explicit 'fields' list — there "
+                "are no named fields to set to None."
             )
         self.resource_name = resource_name
         self.match = dict(match)
@@ -243,11 +225,13 @@ def build_record_enricher(
     Raises:
         TypeError: ``spec`` is none of the supported forms, or a mapping carries
             an ETL-level ``database`` / ``api`` source key (use ``resource`` with
-            a registered resource name).
+            a registered resource name), or a mapping carries a ``match`` join
+            spec but no ``resource`` source (a malformed reference lookup that
+            would otherwise be silently mis-read as a field→value map).
         ValueError: a ``resource`` lookup spec lacks a non-empty ``match``.
     """
     if isinstance(spec, ITransformFunction):
-        return _normalize_enricher_callable(spec.transform)
+        return normalize_record_callable(spec.transform)
     if isinstance(spec, Mapping):
         if _LOOKUP_RESOURCE_KEY in spec:
             match = spec.get("match")
@@ -263,7 +247,7 @@ def build_record_enricher(
                 overwrite=bool(spec.get("overwrite", False)),
                 on_missing=on_missing,
             )
-            return _normalize_enricher_callable(enricher.transform)
+            return normalize_record_callable(enricher.transform)
         conflict = next((k for k in _ETL_SOURCE_KEYS if k in spec), None)
         if conflict is not None:
             raise TypeError(
@@ -273,10 +257,22 @@ def build_record_enricher(
                 "{'resource': <name>, 'match': {...}}, or let the ETL pattern "
                 "register the backend and rewrite it for you."
             )
+        # A ``match`` join spec with no source key is a reference lookup missing
+        # its ``resource`` — NOT a field→value map. Reinterpreting it as a
+        # field-map would add literal ``match`` / ``fields`` columns to every
+        # record and silently mis-enrich (the exact silent-no-op this builder
+        # exists to prevent). Reject it pointing at the missing source key.
+        if isinstance(spec.get("match"), Mapping):
+            raise TypeError(
+                "enrichment spec has a 'match' join spec but no 'resource' "
+                "source key — a reference lookup needs {'resource': <name>, "
+                "'match': {...}}. Add the resource name, or remove 'match' for a "
+                "computed field→value map."
+            )
         # No source key: a field->value map (static or callable values).
-        return _normalize_enricher_callable(DataEnricher(dict(spec)).transform)
+        return normalize_record_callable(DataEnricher(dict(spec)).transform)
     if callable(spec):
-        return _normalize_enricher_callable(spec)
+        return normalize_record_callable(spec)
     raise TypeError(
         "enrichment spec must be a mapping (field map or reference lookup), an "
         "ITransformFunction, or a callable; got " + type(spec).__name__

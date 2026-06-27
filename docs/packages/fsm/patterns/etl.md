@@ -264,6 +264,14 @@ enrichment_sources=[{
     "fields": ["name", "region"],        # columns to merge (omit = all non-match)
     "overwrite": False,                  # keep existing record fields on collision
 }]
+# A `match` join spec with no `database` is a malformed lookup (it would
+# otherwise be mis-read as a field→value map) and is rejected at construction.
+# `fields` is REQUIRED when `overwrite` is true (a blanket merge-all could
+# overwrite the record's own key columns) or when `enrichment_on_missing` is
+# `"null"` (there would be no named fields to null). Omitting `fields` merges
+# every reference column except the `match` columns — including the reference
+# table's own `id`/storage columns — so name `fields` when the reference shares
+# column names with the record.
 
 # 3. Any library ITransformFunction (a pre-built DataEnricher / your own). Used
 #    directly; its transform may be sync or async.
@@ -288,7 +296,9 @@ matching row:
 
 - `"ignore"` (default) — the record passes through unchanged; enrichment is
   best-effort and a missing reference is not a pipeline outage.
-- `"null"` — the looked-up `fields` are set to `None`.
+- `"null"` — the looked-up `fields` are set to `None` (subject to `overwrite`:
+  a field the record already carries is nulled only when `overwrite` is true,
+  consistent with the hit path).
 - `"error"` — the record becomes a counted **error** (so too many misses can
   trip `error_threshold`). This is the strict opt-in, parallel to the validation
   gate's `reject_counts_as_error`.
@@ -298,9 +308,15 @@ failing enricher (a non-dict return, a raised exception, or `on_missing="error"`
 makes the record a counted **error** — enrichment adds no new terminal or metric
 key (distinct from the validation gate, which adds `rejected`).
 
-> Reference lookups currently match a **single** row by key. Multi-row / fan-out
-> joins and per-record **API** lookups are not yet wired (see
-> *Current limitations*).
+> Reference lookups match a **single** row by key. A multi-field `match`
+> AND-combines (every join column must match); when more than one reference row
+> satisfies the join only the first (in backend read order) is merged, so author
+> `match` on a unique key. A record missing a `match` source field joins that
+> column against `None` rather than erroring. Multi-row / fan-out joins and
+> per-record **API** lookups are not yet wired (see *Current limitations*).
+>
+> `enrichment_on_missing` is **global** — it applies to every reference-lookup
+> source in the run (a per-source miss policy is a captured follow-up).
 
 ## ETL modes
 

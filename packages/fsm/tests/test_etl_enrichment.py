@@ -378,3 +378,58 @@ async def test_api_enrichment_source_is_rejected(tmp_path: Path) -> None:
             target_db={"type": "file", "path": "t"},
             enrichment_sources=[{"api": {"url": "http://x"}, "match": {"a": "b"}}],
         )
+
+
+def test_match_without_database_source_is_rejected() -> None:
+    """A 'match' join spec with no 'database' is a malformed lookup, not a map.
+
+    Reproduces the silent mis-enrich at the ETL config layer: without the guard
+    the spec is read as a field→value map and adds literal ``match`` / ``fields``
+    columns to every row instead of doing a reference lookup.
+    """
+    from dataknobs_common.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="'match' join spec but no 'database'"):
+        ETLConfig(
+            source_db={"type": "file", "path": "s"},
+            target_db={"type": "file", "path": "t"},
+            enrichment_sources=[
+                {"match": {"country_code": "code"}, "fields": ["region"]}
+            ],
+        )
+
+
+def test_overwrite_lookup_without_fields_is_rejected() -> None:
+    """``overwrite: true`` with no explicit ``fields`` would clobber record keys."""
+    from dataknobs_common.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="requires an explicit 'fields'"):
+        ETLConfig(
+            source_db={"type": "file", "path": "s"},
+            target_db={"type": "file", "path": "t"},
+            enrichment_sources=[
+                {
+                    "database": {"type": "file", "path": "ref"},
+                    "match": {"country_code": "code"},
+                    "overwrite": True,
+                }
+            ],
+        )
+
+
+def test_null_on_missing_lookup_without_fields_is_rejected() -> None:
+    """``enrichment_on_missing='null'`` needs each lookup source to name fields."""
+    from dataknobs_common.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="enrichment_on_missing='null' requires"):
+        ETLConfig(
+            source_db={"type": "file", "path": "s"},
+            target_db={"type": "file", "path": "t"},
+            enrichment_on_missing="null",
+            enrichment_sources=[
+                {
+                    "database": {"type": "file", "path": "ref"},
+                    "match": {"country_code": "code"},
+                }
+            ],
+        )

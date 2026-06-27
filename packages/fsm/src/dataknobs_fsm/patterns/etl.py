@@ -179,6 +179,71 @@ class ETLConfig(StructuredConfig):
                         "a 'database' enrichment source requires a non-empty "
                         "'match' mapping {record_field: reference_field}."
                     )
+                # ``fields`` omitted + overwrite would clobber the record's own
+                # key columns (the reference ``id`` replaces the record ``id``),
+                # collapsing rows at load. And ``on_missing='null'`` with no
+                # ``fields`` nulls nothing — a silent no-op. Both mirror
+                # LookupMergeEnricher.__init__; reject at construction so the
+                # destructive / no-op config never reaches a run.
+                if source.get("overwrite") and "fields" not in source:
+                    raise InvalidConfigurationError(
+                        "a 'database' enrichment source with 'overwrite': true "
+                        "requires an explicit 'fields' list — a blanket merge of "
+                        "every reference column with overwrite can clobber the "
+                        "record's own key columns."
+                    )
+                if (
+                    self.enrichment_on_missing == "null"
+                    and "fields" not in source
+                ):
+                    raise InvalidConfigurationError(
+                        "enrichment_on_missing='null' requires each 'database' "
+                        "source to name 'fields' — there are no fields to set to "
+                        "None otherwise."
+                    )
+            elif isinstance(source.get("match"), Mapping):
+                # A ``match`` join spec with no ``database`` source is a
+                # reference lookup missing its backend — NOT a field→value map.
+                # Reinterpreting it as a field-map would add literal ``match`` /
+                # ``fields`` columns to every record and silently mis-enrich.
+                raise InvalidConfigurationError(
+                    "an enrichment source has a 'match' join spec but no "
+                    "'database' source — a reference lookup needs {'database': "
+                    "<cfg>, 'match': {...}}. Add the 'database' backend config, "
+                    "or remove 'match' for a computed field→value map."
+                )
+
+
+async def _apply_record_steps(
+    steps: List[Callable[..., Any]],
+    data: Dict[str, Any],
+    context: Any,
+    *,
+    label: str,
+) -> Dict[str, Any]:
+    """Apply ``(record, context) -> dict`` steps in order, threading the result.
+
+    Shared by :class:`_ETLTransform` and :class:`_ETLEnrich` so the per-record
+    step loop and its non-dict guard cannot drift between the ``transform`` and
+    ``enrich`` stages (their only real difference is the field-mapping prelude
+    and the ``label`` in the error message). Each step is invoked as
+    ``step(record, context)`` (awaited when it returns an awaitable); a non-dict
+    return raises :class:`TransformError` (``ETL {label} #{index} must return a
+    dict``) rather than writing a corrupt row, so the engine reports the record
+    as ``success=False`` and it is counted as an ``error`` (not ``loaded``).
+    """
+    result = data
+    for index, step in enumerate(steps):
+        out = step(result, context)
+        if inspect.isawaitable(out):
+            out = await out
+        if not isinstance(out, dict):
+            raise TransformError(
+                f"ETL {label} #{index} must return a dict, got "
+                f"{type(out).__name__}"
+            )
+        result = out
+    return result
 
 
 class _ETLTransform(ITransformFunction):
@@ -186,13 +251,14 @@ class _ETLTransform(ITransformFunction):
 
     Wired into the ETL FSM's ``transform`` state as a registered function (the
     proven ``custom_functions=`` idiom). ``field_mappings`` rename keys; each
-    entry of ``transformations`` is then applied in order. A transformation may
-    be sync or async and is **map-style** — it receives the current record dict
-    and must return the transformed dict. A non-dict return (including ``None``)
-    raises a :class:`TransformError` rather than writing a corrupt row: the
-    engine records the failed state and reports the record as a failure
-    (``success=False``), so it is counted as an ``error`` (not ``loaded``) and
-    counts against ``error_threshold``.
+    entry of ``transformations`` is then applied in order via the shared
+    :func:`_apply_record_steps` loop. A transformation may be sync or async and
+    is **map-style** — it receives the current record dict and must return the
+    transformed dict. A non-dict return (including ``None``) raises a
+    :class:`TransformError` rather than writing a corrupt row: the engine records
+    the failed state and reports the record as a failure (``success=False``), so
+    it is counted as an ``error`` (not ``loaded``) and counts against
+    ``error_threshold``.
     """
 
     def __init__(
@@ -202,6 +268,13 @@ class _ETLTransform(ITransformFunction):
     ) -> None:
         self._field_mappings = field_mappings or {}
         self._transformations = transformations or []
+        # Wrap each map-style transformation to the shared loop's
+        # ``(record, context)`` shape, preserving the historical record-only
+        # call (the context is ignored) so transformation arity is unchanged.
+        self._steps: List[Callable[..., Any]] = [
+            (lambda record, _context, fn=fn: fn(record))
+            for fn in self._transformations
+        ]
 
     async def transform(
         self, data: Dict[str, Any], context: Any = None
@@ -210,17 +283,9 @@ class _ETLTransform(ITransformFunction):
         for old_name, new_name in self._field_mappings.items():
             if old_name in result:
                 result[new_name] = result.pop(old_name)
-        for index, fn in enumerate(self._transformations):
-            out = fn(result)
-            if inspect.isawaitable(out):
-                out = await out
-            if not isinstance(out, dict):
-                raise TransformError(
-                    f"ETL transformation #{index} must return a dict, got "
-                    f"{type(out).__name__}"
-                )
-            result = out
-        return result
+        return await _apply_record_steps(
+            self._steps, result, context, label="transformation"
+        )
 
     def get_transform_description(self) -> str:
         return (
@@ -235,10 +300,10 @@ class _ETLEnrich(ITransformFunction):
     The structural twin of :class:`_ETLTransform` for the ``enrich`` state. Each
     enricher is a normalized ``(record, context) -> dict`` callable produced by
     :func:`build_record_enricher` (a field→value map, a reference-table lookup, a
-    library ``ITransformFunction``, or a callable). Enrichers compose in
-    declared order; each may be sync or async and must return a dict. A non-dict
-    return raises :class:`TransformError` so a bad enricher is a counted error
-    (``success=False``), never a corrupt row.
+    library ``ITransformFunction``, or a callable). Enrichers compose in declared
+    order via the shared :func:`_apply_record_steps` loop; each may be sync or
+    async and must return a dict. A non-dict return raises :class:`TransformError`
+    so a bad enricher is a counted error (``success=False``), never a corrupt row.
     """
 
     def __init__(self, enrichers: List[Callable[..., Any]]) -> None:
@@ -247,18 +312,9 @@ class _ETLEnrich(ITransformFunction):
     async def transform(
         self, data: Dict[str, Any], context: Any = None
     ) -> Dict[str, Any]:
-        result = data
-        for index, enricher in enumerate(self._enrichers):
-            out = enricher(result, context)
-            if inspect.isawaitable(out):
-                out = await out
-            if not isinstance(out, dict):
-                raise TransformError(
-                    f"ETL enrichment #{index} must return a dict, got "
-                    f"{type(out).__name__}"
-                )
-            result = out
-        return result
+        return await _apply_record_steps(
+            self._enrichers, data, context, label="enrichment"
+        )
 
     def get_transform_description(self) -> str:
         return f"Apply {len(self._enrichers)} enrichment(s)"
