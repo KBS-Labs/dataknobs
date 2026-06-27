@@ -95,6 +95,18 @@ In JSON/dict configuration, push arcs are distinguished from regular arcs by the
 }
 ```
 
+The `data_isolation` value uses the `DataIsolationMode` enum (below): valid
+values are `"copy"` (default), `"reference"`, and `"serialize"`. The configured
+value is carried through to the runtime `PushArc.isolation_mode`.
+
+> **Migration note.** `data_isolation` previously borrowed the state-level
+> data-handling enum (`copy`/`reference`/**`direct`**). It now uses the push-arc
+> isolation enum (`copy`/`reference`/**`serialize`**): `serialize` is newly
+> expressible, and `direct` — which never had push-arc isolation semantics and was
+> silently dropped at build time — is no longer accepted and raises a validation
+> error at load. For state-level DIRECT data handling, use `StateConfig.data_mode`
+> (a distinct concept from push-arc isolation).
+
 ## DataIsolationMode
 
 `DataIsolationMode` controls how data is handled when pushing to a sub-network. It is defined as an enum in `dataknobs_fsm.core.arc`.
@@ -131,7 +143,17 @@ else:
     context.data = mapped_data
 ```
 
-## ExecutionEngine Subflow Support
+> **Execution status.** The configured `data_isolation` value reaches the runtime
+> `PushArc.isolation_mode`, and `ExecutionEngine._execute_push_arc` (shown above)
+> applies it correctly. However, push arcs are **not yet executed end-to-end with
+> isolation on the production engines**: the async engine
+> (`AsyncSimpleFSM` / `SimpleFSM` / the ETL and file-processing patterns) does not
+> execute push arcs at all (a push arc is treated as a flat transition), and the
+> synchronous `ExecutionEngine.execute()` does not traverse sub-networks. Today the
+> three isolation modes therefore produce the same run-time behavior; selecting
+> `reference` or `serialize` settles the configuration but does not yet change how
+> a full subflow shares data. End-to-end isolation behavior lands when push-arc
+> execution is wired on an engine.
 
 The `ExecutionEngine` (in `dataknobs_fsm.execution.engine`) handles the full lifecycle of subflow execution through three methods: `_execute_push_arc`, `_check_subflow_completion`, and `_pop_subflow`.
 

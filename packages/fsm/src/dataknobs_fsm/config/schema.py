@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from dataknobs_fsm.core.arc import DataIsolationMode
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.transactions import TransactionStrategy
 
@@ -128,7 +129,13 @@ class PushArcConfig(ArcConfig):
 
     target_network: str
     return_state: str | None = None
-    data_isolation: DataHandlingMode = DataHandlingMode.COPY
+    # Push-arc data isolation across the sub-network boundary. Uses the runtime
+    # isolation enum (copy/reference/serialize) so the configured value flows
+    # straight to ``PushArc.isolation_mode`` with no translation. This is a
+    # distinct concept from ``StateConfig.data_mode`` (the state-level data
+    # handling mode, copy/reference/direct); ``direct`` is not a valid push-arc
+    # isolation value.
+    data_isolation: DataIsolationMode = DataIsolationMode.COPY
 
 
 class StateConfig(BaseModel):

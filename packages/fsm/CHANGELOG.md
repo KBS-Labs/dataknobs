@@ -237,6 +237,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Push-arc data isolation declared in FSM config
+  (`copy`/`reference`/`serialize`) is now threaded through to the runtime push
+  arc; previously the configured value was silently dropped at build time and the
+  arc always carried the deep-copy default. The push-arc isolation config value
+  (`PushArcConfig.data_isolation`) now uses the isolation enum
+  (`DataIsolationMode`) rather than the state-level data-handling enum, so it
+  expresses exactly the modes the runtime honors: `serialize` is newly
+  expressible, and `direct` — which never had push-arc isolation semantics and
+  was being dropped — is no longer accepted and raises a validation error at load
+  (use `StateConfig.data_mode` for state-level DIRECT handling). Note: execution
+  of push arcs with isolation is not yet wired on the production engines (the
+  async engine does not execute push arcs; the synchronous engine does not
+  traverse sub-networks), so this change settles the configuration plumbing
+  without yet changing run-time data sharing.
 - `FileProcessingConfig.validation_schema` now also accepts a library
   `IValidationFunction` or a callable predicate, not only a dict schema (the
   three forms the ETL pattern accepts), via the shared `build_record_validator`.

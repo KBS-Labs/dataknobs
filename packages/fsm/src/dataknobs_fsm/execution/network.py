@@ -272,15 +272,6 @@ class NetworkExecutor:
             # Preserve parent state resources in new context
             if parent_state_resources:
                 sub_context.parent_state_resources = parent_state_resources
-        elif hasattr(arc, 'data_isolation_mode') and arc.data_isolation_mode == 'partial':
-            # Partial isolation - clone context
-            sub_context = context.clone()
-            # Preserve parent state resources - this needs to be accessible to all subnetwork states
-            if parent_state_resources:
-                sub_context.parent_state_resources = parent_state_resources
-                # Also ensure resource_manager is available
-                if hasattr(context, 'resource_manager'):
-                    sub_context.resource_manager = context.resource_manager
         else:
             # No isolation - use same context
             sub_context = context
@@ -314,9 +305,9 @@ class NetworkExecutor:
         # back into the parent. failed_states is load-bearing for data integrity:
         # it gates downstream transform persistence (should_skip_state_transforms)
         # and the parent's finalize_single_result. COPY isolation (the default)
-        # gives the sub-network a fresh context, and PARTIAL isolation clones it,
-        # so neither carries failures back on its own; for the no-isolation branch
-        # sub_context IS context, making the union a harmless no-op. Union here,
+        # gives the sub-network a fresh context, so it does not carry failures
+        # back on its own; for the no-isolation branch sub_context IS context,
+        # making the union a harmless no-op. Union here,
         # before entering arc.return_state, so the return state and every later
         # parent state see the failure and skip their transforms. Union regardless
         # of `success`: a failed transform does not halt traversal, so the
