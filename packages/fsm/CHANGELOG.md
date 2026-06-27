@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The **synchronous FSM APIs now run async transforms correctly.** `SimpleFSM`,
+  `FSM.execute`, the sync batch/stream executors, and
+  `AdvancedFSM.execute_step_sync` now execute on the single async engine, so an
+  `async def` transform (e.g. every built-in database transform) is awaited
+  rather than being invoked and discarded as an un-awaited coroutine. Sync FSMs
+  whose states/arcs used async transforms previously silently skipped that work.
+- **Synchronous push arcs now enter the sub-network.** Driving a push arc
+  through a synchronous entry point (`FSM.execute`, sync batch/stream,
+  `AdvancedFSM.execute_step_sync`) previously flat-traversed it — the
+  sub-network was never entered. These paths now run the async engine's full
+  push/pop subflow lifecycle (isolation, `data_mapping`/`result_mapping`,
+  pre-validators), matching the documented intent.
+- A push fired from a **regularly-entered** parent state now inherits that
+  state's resources into the sub-network (inheritance seeds from
+  `current_state_resources`, which the async regular-transition and
+  initial-state entries now populate by routing through the shared state-entry
+  path). A state's acquired resources are now **released when it is left** (a
+  regular transition, or a subflow pop, including the pushing state's resources
+  held through the subflow), closing a held-resource leak.
 - The async execution engine now executes **push arcs**. Previously a push arc
   was treated as a flat transition on the async path, so the sub-network was
   never entered (`SimpleFSM.process()` runs on the async engine, so it was
@@ -23,9 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the synchronous engine — previously the async path only set the state and ran
   transforms, so sub-network pre-validators never ran and state resources were
   never allocated. A rejecting pre-validator now fails the push and rolls it
-  back. (Inheritance of the *pushing* state's resources currently spans nested
-  subflows; a push from a regularly-entered parent inherits none until the async
-  regular-transition path is routed through the shared state-entry path.)
+  back.
 - Push-arc **`result_mapping`** is now applied when a subflow completes (mapping
   the sub-network's result fields back onto the parent's pre-push data). It was
   previously inert on both engines — the pop did not have the originating arc,
@@ -40,6 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **FSM execution now runs on a single async engine; the synchronous APIs are
+  thin wrappers over it.** `FSM.execute`, `SimpleFSM`, the sync batch/stream
+  executors, and `AdvancedFSM.execute_step_sync` drive the one
+  `AsyncExecutionEngine` through a shared async→sync bridge
+  (`dataknobs_common.SyncLoopBridge`, one per FSM via `FSM.get_sync_bridge()`),
+  rather than a parallel synchronous engine. The public sync signatures and
+  semantics are unchanged. `SimpleFSM` dropped its private event-loop thread in
+  favor of the shared bridge; call `FSM.close()` / `SimpleFSM.close()` to stop
+  the bridge thread. The async engine's regular-transition and initial-state
+  entries now route through the shared `enter_state`, so state pre-validators
+  and resource allocation behave identically on every entry path. (The
+  standalone synchronous `ExecutionEngine` is retained but no longer used by any
+  public execution path; its removal follows in a subsequent release.)
 - The push-arc subflow lifecycle is now driven by shared, color-free helpers on
   `BaseExecutionEngine` (target parsing, initial-state resolution, data-mapping
   application, push commit, rollback, result mapping, and subflow-final-state

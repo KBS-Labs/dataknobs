@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, List, Union
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 
 
 @dataclass
@@ -97,8 +96,9 @@ class BatchExecutor:
         self.enable_resource_pooling = enable_resource_pooling
         self.progress_callback = progress_callback
         
-        # Create execution engine
-        self.engine = ExecutionEngine(fsm)
+        # The single async execution engine; sync batch entry points drive it
+        # through the FSM's shared async→sync bridge.
+        self.engine = fsm.get_async_engine()
         
         # Resource pool
         self._resource_pool: Dict[str, List[Any]] = {}
@@ -198,12 +198,14 @@ class BatchExecutor:
             
             # Execute
             try:
-                success, result = self.engine.execute(
-                    context,
-                    None,  # Data is already in context
-                    max_transitions
+                success, result = self.fsm.get_sync_bridge().run(
+                    self.engine.execute(
+                        context,
+                        None,  # Data is already in context
+                        max_transitions
+                    )
                 )
-                
+
                 # Store final state and path in metadata
                 metadata = context.metadata.copy() if context.metadata else {}
                 metadata['final_state'] = context.current_state
@@ -354,10 +356,12 @@ class BatchExecutor:
                 context.set_state(initial_state)
             
             # Execute
-            success, result = self.engine.execute(
-                context,
-                None,  # Data is already in context
-                max_transitions
+            success, result = self.fsm.get_sync_bridge().run(
+                self.engine.execute(
+                    context,
+                    None,  # Data is already in context
+                    max_transitions
+                )
             )
             
             # Store final state and path in metadata

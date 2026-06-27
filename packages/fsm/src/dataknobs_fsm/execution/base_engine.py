@@ -500,6 +500,21 @@ class BaseExecutionEngine(ABC):
             return self.apply_data_mapping(data, push_arc.data_mapping)
         return data
 
+    @staticmethod
+    def _state_resource_owner_for_name(
+        context: ExecutionContext, state_name: str
+    ) -> str:
+        """Owner key for a state's resource acquisitions, keyed by state *name*.
+
+        The key is fully determined by the state name + execution id, so the
+        release-on-exit path can rebuild it from ``context.current_state``
+        without re-resolving the state definition (which may live in a
+        sub-network the default ``get_state`` lookup would not find). Shared so
+        a state's acquire and its later release cannot drift onto two formats.
+        """
+        execution_id = getattr(context, 'execution_id', 'unknown')
+        return f"state_{state_name}_{execution_id}"
+
     def begin_subflow(
         self,
         context: ExecutionContext,
@@ -518,11 +533,24 @@ class BaseExecutionEngine(ABC):
         prev_parent_state_resources = getattr(
             context, 'parent_state_resources', {}
         )
+        # The pushing state's own resources are inherited by the sub-network
+        # while it runs (so the push must not release them); they are released
+        # for the parent level on pop, when the parent resumes at return_state.
+        # Record the pushing state's owner key (only when it owns resources) so
+        # the pop can release exactly that state's acquisitions.
+        pushing_state_owner = (
+            self._state_resource_owner_for_name(context, context.current_state)
+            if getattr(context, 'current_state_owned_resources', None)
+            else None
+        )
         parent_data = context.data
         context.data = isolated_data
         context.push_network(network_name, push_arc.return_state)
         context.push_subflow_frame(
-            push_arc, parent_data, prev_parent_state_resources
+            push_arc,
+            parent_data,
+            prev_parent_state_resources,
+            pushing_state_owner,
         )
         # The sub-network's states inherit the pushing state's resources.
         context.parent_state_resources = parent_state_resources

@@ -122,23 +122,21 @@ Resource Management:
     - Summary via get_resource_summary()
     - Managers set via resource_manager/transaction_manager
 
-Execution Engines:
-    The FSM creates execution engines on demand:
+Execution Engine:
+    Execution runs on a single asynchronous engine
+    (:class:`~dataknobs_fsm.execution.async_engine.AsyncExecutionEngine`,
+    created via ``get_async_engine()``). It supports concurrent state execution,
+    efficient I/O handling, and the traversal strategies (DEPTH_FIRST,
+    BREADTH_FIRST, RESOURCE_OPTIMIZED, STREAM_OPTIMIZED).
 
-    **Synchronous Engine (ExecutionEngine):**
-    - Created via get_engine()
-    - Used by SimpleFSM API
-    - Supports multiple traversal strategies:
-      - DEPTH_FIRST: Deep exploration before backtracking
-      - BREADTH_FIRST: Explore all neighbors before going deeper
-      - RESOURCE_OPTIMIZED: Minimize resource acquisition/release
-      - STREAM_OPTIMIZED: Optimize for streaming workflows
-
-    **Asynchronous Engine (AsyncExecutionEngine):**
-    - Created via get_async_engine()
-    - Used by AsyncSimpleFSM API
-    - Supports concurrent state execution
-    - Efficient I/O handling
+    **Synchronous entry points** (``FSM.execute``, ``SimpleFSM``, the sync
+    batch/stream executors, ``AdvancedFSM.execute_step_sync``) drive this one
+    engine through a shared async→sync bridge — one
+    :class:`~dataknobs_common.SyncLoopBridge` per FSM, obtained via
+    ``get_sync_bridge()`` and released by ``close()`` — rather than a parallel
+    synchronous engine. (``get_engine()`` and the standalone
+    ``ExecutionEngine`` are retained for now but are no longer on any public
+    execution path.)
 
 Validation:
     The FSM can validate its structure before execution:
@@ -180,6 +178,7 @@ from typing import Any, Dict, List, Set, Tuple, Optional, TYPE_CHECKING
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 
 if TYPE_CHECKING:
+    from dataknobs_common import SyncLoopBridge
     from dataknobs_fsm.execution.engine import ExecutionEngine
     from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.core.network import StateNetwork
@@ -354,7 +353,8 @@ class FSM:
         self.transaction_manager = transaction_manager
         self._engine: Any | None = None  # ExecutionEngine
         self._async_engine: Any | None = None  # AsyncExecutionEngine
-    
+        self._sync_bridge: Any | None = None  # SyncLoopBridge for sync entry points
+
     def add_network(
         self,
         network: StateNetwork,
@@ -826,11 +826,42 @@ class FSM:
         """
         if self._async_engine is None:
             from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
-            
+
             self._async_engine = AsyncExecutionEngine(fsm=self)
-        
+
         return self._async_engine
-    
+
+    def get_sync_bridge(self) -> "SyncLoopBridge":
+        """Get or lazily create the shared async→sync bridge for sync APIs.
+
+        FSM execution runs on the single async engine; the synchronous public
+        entry points (:meth:`execute`, ``SimpleFSM.process``, the sync batch /
+        stream executors, ``AdvancedFSM.execute_step_sync``) drive it through
+        this bridge. One :class:`~dataknobs_common.SyncLoopBridge` (a single
+        daemon event-loop thread) is shared per FSM and reused across calls, so
+        repeated sync steps do not each spawn a thread. The bridge is safe to
+        call from within a running event loop (it runs the coroutine on its own
+        thread). Released by :meth:`close`.
+
+        Returns:
+            The shared ``SyncLoopBridge`` for this FSM.
+        """
+        if self._sync_bridge is None:
+            from dataknobs_common import SyncLoopBridge
+
+            self._sync_bridge = SyncLoopBridge()
+        return self._sync_bridge
+
+    def close(self) -> None:
+        """Release engine-thread resources held by this FSM.
+
+        Stops and joins the shared sync bridge's event-loop thread if one was
+        created. Idempotent — safe to call when no bridge was ever started.
+        """
+        if self._sync_bridge is not None:
+            self._sync_bridge.close()
+            self._sync_bridge = None
+
     def _prepare_execution_context(self, initial_data: Dict[str, Any] | None = None):
         """Prepare execution context for FSM execution.
         
@@ -969,26 +1000,29 @@ class FSM:
         import time
         
         try:
-            # Get the execution engine
-            engine = self.get_engine()
-            
+            # Run the single async engine through the shared async→sync bridge
+            # (the synchronous public surface over the one execution engine).
+            engine = self.get_async_engine()
+
             # Prepare execution context
             context = self._prepare_execution_context(initial_data)
-            
+
             # Track execution time
             start_time = time.time()
-            
+
             # Execute the FSM
-            success, result = engine.execute(
-                context, 
-                initial_data if self.data_mode == ProcessingMode.SINGLE else None
+            success, result = self.get_sync_bridge().run(
+                engine.execute(
+                    context,
+                    initial_data if self.data_mode == ProcessingMode.SINGLE else None,
+                )
             )
-            
+
             # Calculate duration
             duration = time.time() - start_time
-            
+
             return self._format_execution_result(success, result, context, duration)
-            
+
         except Exception as e:
             # Handle any exception that occurs during execution
             return self._format_execution_result(

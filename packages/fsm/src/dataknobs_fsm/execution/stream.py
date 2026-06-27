@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, List, Tuple, Union
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.streaming.core import (
     IStreamSink,
     IStreamSource,
@@ -91,8 +90,9 @@ class StreamExecutor:
         self.enable_backpressure = enable_backpressure
         self.progress_callback = progress_callback
         
-        # Create execution engine
-        self.engine = ExecutionEngine(fsm)
+        # The single async execution engine; sync stream entry points drive it
+        # through the FSM's shared async→sync bridge.
+        self.engine = fsm.get_async_engine()
         
         # Memory management
         self._memory_usage = 0
@@ -247,10 +247,12 @@ class StreamExecutor:
                     
                     # Execute FSM
                     try:
-                        success, result = self.engine.execute(
-                            context,
-                            transformed,
-                            max_transitions
+                        success, result = self.fsm.get_sync_bridge().run(
+                            self.engine.execute(
+                                context,
+                                transformed,
+                                max_transitions
+                            )
                         )
                         
                         if success:

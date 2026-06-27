@@ -204,7 +204,6 @@ See Also:
 """
 
 import asyncio
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -231,8 +230,8 @@ class SimpleFSM:
         _async_fsm (AsyncSimpleFSM): Internal async FSM implementation
         _fsm (FSM): Core FSM engine
         _resource_manager (ResourceManager): Resource lifecycle manager
-        _loop (AbstractEventLoop): Dedicated event loop for async operations
-        _loop_thread (Thread): Background thread running the event loop
+        _async_engine (AsyncExecutionEngine): The single execution engine,
+            driven synchronously through the FSM's shared async→sync bridge
 
     Methods:
         process: Process a single record through the FSM
@@ -512,28 +511,12 @@ class SimpleFSM:
         self._resource_manager = self._async_fsm._resource_manager
         self._async_engine = self._async_fsm._async_engine
 
-        # Create synchronous engine for compatibility
-        from ..execution.engine import ExecutionEngine
-        self._engine = ExecutionEngine(self._fsm)
-
-        # Create a dedicated event loop for sync operations
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
-        self._setup_event_loop()
-
-    def _setup_event_loop(self) -> None:
-        """Set up a dedicated event loop in a separate thread."""
-        self._loop = asyncio.new_event_loop()
-
-        def run_loop() -> None:
-            asyncio.set_event_loop(self._loop)
-            self._loop.run_forever()
-
-        self._loop_thread = threading.Thread(target=run_loop, daemon=True)
-        self._loop_thread.start()
-
     def _run_async(self, coro: Any) -> Any:
-        """Run an async operation in the dedicated event loop.
+        """Run an async operation to completion synchronously.
+
+        Drives the single async execution engine through the FSM's shared
+        async→sync bridge (a dedicated daemon event-loop thread), so this is
+        safe even when called from within a running event loop.
 
         Args:
             coro: Coroutine to run
@@ -541,14 +524,7 @@ class SimpleFSM:
         Returns:
             The result of the coroutine
         """
-        if not self._loop or not self._loop.is_running():
-            self._setup_event_loop()
-
-        if self._loop is None:
-            raise RuntimeError("Failed to setup event loop")
-
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result()
+        return self._fsm.get_sync_bridge().run(coro)
 
     def process(
         self,
@@ -754,11 +730,8 @@ class SimpleFSM:
         """Clean up resources and close connections synchronously."""
         self._run_async(self._async_fsm.close())
 
-        # Shut down the event loop
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            if self._loop_thread and self._loop_thread.is_alive():
-                self._loop_thread.join(timeout=1.0)
+        # Stop and join the shared async→sync bridge's event-loop thread.
+        self._fsm.close()
 
     async def aclose(self) -> None:
         """Async version of close for use in async contexts."""
