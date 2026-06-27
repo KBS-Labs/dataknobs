@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-27T18:17:56Z",
+  "timestamp": "2026-06-27T19:04:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/single-async-engine-consolidation",
-  "git_commit": "840c8a41c8c4a1b569c6e94b1c13eb68f738bcb8",
+  "git_branch": "sbk/sync-loop-bridge",
+  "git_commit": "18ee1f78cf98bfbab76aa388be5a90a53eb4307e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
