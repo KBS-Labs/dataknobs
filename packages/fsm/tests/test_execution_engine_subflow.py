@@ -90,7 +90,7 @@ class TestDataMapping:
     """Test data mapping between parent and child contexts."""
 
     def test_apply_data_mapping_helper(self):
-        """Test the _apply_data_mapping helper method directly."""
+        """Test the apply_data_mapping helper method directly."""
         config = FSMConfig(
             name="test_fsm",
             main_network="main",
@@ -126,7 +126,7 @@ class TestDataMapping:
             "user_name": "name"
         }
 
-        result = engine._apply_data_mapping(parent_data, mapping)
+        result = engine.apply_data_mapping(parent_data, mapping)
 
         # Only mapped fields should be present
         assert result.get("id") == 123
@@ -162,7 +162,7 @@ class TestDataMapping:
         original_data = {"field1": "value1", "field2": "value2"}
 
         # Empty mapping should return original
-        result = engine._apply_data_mapping(original_data, {})
+        result = engine.apply_data_mapping(original_data, {})
 
         assert result == original_data
 
@@ -171,7 +171,7 @@ class TestResultMapping:
     """Test result mapping from child back to parent context."""
 
     def test_apply_result_mapping_helper(self):
-        """Test the _apply_result_mapping helper method directly."""
+        """Test the apply_result_mapping helper method directly."""
         config = FSMConfig(
             name="test_fsm",
             main_network="main",
@@ -211,7 +211,7 @@ class TestResultMapping:
             "status": "workflow_status"
         }
 
-        result = engine._apply_result_mapping(child_data, mapping, parent_data)
+        result = engine.apply_result_mapping(child_data, mapping, parent_data)
 
         assert result["output"] == 42
         assert result["workflow_status"] == "complete"
@@ -682,6 +682,300 @@ class TestErrorHandling:
         assert not success
 
 
+class TestResultMappingAppliedOnPop:
+    """A push arc's ``result_mapping`` is applied when the subflow pops.
+
+    Reproduce-first for the dead-``result_mapping`` bug: the pop site called
+    ``_pop_subflow`` without the originating arc and read a ``_parent_data_snapshot``
+    that was never assigned, so ``result_mapping`` was inert on both engines.
+    The fix records the arc + parent snapshot in a ``SubflowFrame`` at push time
+    and consumes it on pop. These tests drive the sync ``ExecutionEngine``
+    directly so the in-stack push/pop path is exercised end to end.
+    """
+
+    @staticmethod
+    def _build_result_mapping_fsm():
+        config = FSMConfig(
+            name="result_map_fsm",
+            main_network="main",
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[
+                        StateConfig(
+                            name="start",
+                            is_start=True,
+                            transforms=[
+                                FunctionReference(
+                                    type="inline",
+                                    code=(
+                                        "def transform(data, context):\n"
+                                        "    data['keep'] = 'me'\n"
+                                        "    return data\n"
+                                    ),
+                                )
+                            ],
+                            arcs=[
+                                PushArcConfig(
+                                    target="after",
+                                    target_network="sub",
+                                    return_state="after",
+                                    result_mapping={"sub_out": "parent_in"},
+                                )
+                            ],
+                        ),
+                        StateConfig(name="after", arcs=[ArcConfig(target="end")]),
+                        StateConfig(name="end", is_end=True),
+                    ],
+                ),
+                NetworkConfig(
+                    name="sub",
+                    states=[
+                        StateConfig(
+                            name="s1",
+                            is_start=True,
+                            arcs=[ArcConfig(target="s2")],
+                            transforms=[
+                                FunctionReference(
+                                    type="inline",
+                                    code=(
+                                        "def transform(data, context):\n"
+                                        "    data['sub_out'] = 99\n"
+                                        "    return data\n"
+                                    ),
+                                )
+                            ],
+                        ),
+                        StateConfig(name="s2", is_end=True),
+                    ],
+                ),
+            ],
+        )
+        return FSMBuilder().build(config)
+
+    def test_pop_applies_result_mapping_onto_parent_data(self):
+        """The sync ``_pop_subflow`` overlays the child result onto parent data.
+
+        Drives the sync orchestrator directly (the sync ``ExecutionEngine.execute``
+        entry flat-traverses push arcs — a separate pre-existing gap — so the
+        in-stack lifecycle is exercised by direct call). With the context at the
+        sub-network's final state, ``_check_subflow_completion`` pops and applies
+        the originating arc's ``result_mapping`` over the parent's pre-push data:
+        ``parent_in`` is present, the parent-only ``keep`` survives, and the
+        unmapped ``sub_out`` does not leak. Before the fix the pop ignored the
+        arc (it was not threaded), so the raw child data flowed through and
+        ``parent_in`` was absent.
+        """
+        fsm = self._build_result_mapping_fsm()
+        engine = ExecutionEngine(fsm)
+        # The runtime push arc now carries the config-authored result_mapping.
+        push_arc = fsm.networks["main"].states["start"].arcs[0]
+        assert push_arc.result_mapping == {"sub_out": "parent_in"}
+
+        context = ExecutionContext()
+        # Simulate being inside the sub-network at its final state with the
+        # child's result, having recorded the push frame at push time.
+        context.data = {"sub_out": 99}
+        context.push_network("sub", "after")
+        context.push_subflow_frame(push_arc, {"keep": "me"}, {})
+        context.set_state("s2")  # final state of the 'sub' network
+
+        popped = engine._check_subflow_completion(context)
+
+        assert popped
+        assert context.current_state == "after"  # returned to the parent state
+        assert context.network_stack == []  # subflow popped
+        assert context.data["parent_in"] == 99  # mapped child field
+        assert context.data["keep"] == "me"  # parent's pre-push field preserved
+        assert "sub_out" not in context.data  # unmapped child field did not leak
+
+
+class TestNestedSubflowCascade:
+    """A subflow whose return state is the parent subflow's final state.
+
+    Reproduce-first for the nested-cascade gap: ``_check_subflow_completion``
+    popped at most one level, so when an inner subflow returned to a state that
+    was itself a final state of the *outer* subflow, the next loop-top global
+    final-state check finalized the whole run there — the outer subflow and the
+    main network's remaining states never ran. The fix drains pops in a loop.
+    """
+
+    @staticmethod
+    def _build_nested_fsm():
+        def _append(name: str) -> FunctionReference:
+            return FunctionReference(
+                type="inline",
+                code=(
+                    "def transform(data, context):\n"
+                    f"    context.variables.setdefault('path', []).append('{name}')\n"
+                    "    return data\n"
+                ),
+            )
+
+        config = FSMConfig(
+            name="nested_fsm",
+            main_network="main",
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[
+                        StateConfig(
+                            name="start",
+                            is_start=True,
+                            transforms=[_append("start")],
+                            arcs=[
+                                PushArcConfig(
+                                    target="after",
+                                    target_network="subA",
+                                    return_state="after",
+                                )
+                            ],
+                        ),
+                        StateConfig(
+                            name="after",
+                            transforms=[_append("after")],
+                            arcs=[ArcConfig(target="end")],
+                        ),
+                        StateConfig(
+                            name="end", is_end=True, transforms=[_append("end")]
+                        ),
+                    ],
+                ),
+                NetworkConfig(
+                    name="subA",
+                    states=[
+                        StateConfig(
+                            name="a1",
+                            is_start=True,
+                            transforms=[_append("a1")],
+                            arcs=[
+                                # Returns to a_end, which is a *final* state of
+                                # subA — the nested-cascade trigger.
+                                PushArcConfig(
+                                    target="a_end",
+                                    target_network="subB",
+                                    return_state="a_end",
+                                )
+                            ],
+                        ),
+                        StateConfig(
+                            name="a_end", is_end=True, transforms=[_append("a_end")]
+                        ),
+                    ],
+                ),
+                NetworkConfig(
+                    name="subB",
+                    states=[
+                        StateConfig(
+                            name="b1",
+                            is_start=True,
+                            transforms=[_append("b1")],
+                            arcs=[ArcConfig(target="b_end")],
+                        ),
+                        StateConfig(
+                            name="b_end", is_end=True, transforms=[_append("b_end")]
+                        ),
+                    ],
+                ),
+            ],
+        )
+        return FSMBuilder().build(config)
+
+    def test_check_completion_drains_nested_levels(self):
+        """A single ``_check_subflow_completion`` drains a nested cascade.
+
+        Drives the sync orchestrator directly (the sync ``execute`` entry
+        flat-traverses push arcs — a separate pre-existing gap). With the
+        context at subB's final state and subB's return state being subA's final
+        state, one ``_check_subflow_completion`` must pop *both* levels and land
+        on the main network's return state. Before the drain fix it popped a
+        single level and stopped on subA's final state, where the next loop-top
+        global final-state check would finalize the whole run prematurely.
+        """
+        fsm = self._build_nested_fsm()
+        engine = ExecutionEngine(fsm)
+        push_a = fsm.networks["main"].states["start"].arcs[0]
+        push_b = fsm.networks["subA"].states["a1"].arcs[0]
+
+        context = ExecutionContext()
+        context.data = {}
+        # Stack as if start pushed subA (return 'after') and a1 pushed subB
+        # (return 'a_end', a final state of subA), now at subB's final state.
+        context.push_network("subA", "after")
+        context.push_subflow_frame(push_a, {}, {})
+        context.push_network("subB", "a_end")
+        context.push_subflow_frame(push_b, {}, {})
+        context.set_state("b_end")  # final state of subB
+
+        popped = engine._check_subflow_completion(context)
+
+        assert popped
+        assert context.current_state == "after"  # drained both levels to main
+        assert context.network_stack == []  # subA and subB both popped
+
+
+class TestFailedPushRollback:
+    """A push whose initial-state entry cannot be resolved leaves no residue.
+
+    Reproduce-first for the rollback gap: the old code replaced ``context.data``
+    with the isolated sub-network view *before* validating the target initial
+    state, so a bad ``network:state`` target popped the network but left
+    ``context.data`` as the orphaned isolated copy. The fix resolves the target
+    before committing the push, so a bad target never mutates the context.
+    """
+
+    @staticmethod
+    def _build_bad_initial_state_fsm():
+        config = FSMConfig(
+            name="bad_init_fsm",
+            main_network="main",
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[
+                        StateConfig(name="start", is_start=True, arcs=[ArcConfig(target="end")]),
+                        StateConfig(name="end", is_end=True),
+                    ],
+                ),
+                NetworkConfig(
+                    name="sub",
+                    states=[
+                        StateConfig(name="s1", is_start=True, arcs=[ArcConfig(target="s2")]),
+                        StateConfig(name="s2", is_end=True),
+                    ],
+                ),
+            ],
+        )
+        return FSMBuilder().build(config)
+
+    def test_failed_push_does_not_mutate_or_strand_context(self):
+        """A push to a nonexistent initial state rolls back cleanly.
+
+        ``_execute_push_arc`` returns False and leaves ``context.data`` as the
+        original object, with an empty network stack and no subflow frame —
+        before the fix the data was replaced by the isolated copy and never
+        restored.
+        """
+        fsm = self._build_bad_initial_state_fsm()
+        engine = ExecutionEngine(fsm)
+        context = ExecutionContext()
+        original = {"id": 1}
+        context.data = original
+
+        push_arc = PushArc(
+            target_state="end",
+            target_network="sub:nonexistent",  # bad explicit initial state
+            return_state="end",
+        )
+
+        ok = engine._execute_push_arc(context, push_arc)
+
+        assert ok is False
+        assert context.data is original  # not replaced by an orphaned copy
+        assert context.network_stack == []  # nothing left on the stack
+        assert context.subflow_frames == []  # no dangling frame
+
+
 class TestExecutionEngineDirectPushArc:
     """Test ExecutionEngine's direct PushArc handling (without NetworkExecutor)."""
 
@@ -760,8 +1054,8 @@ class TestExecutionEngineDirectPushArc:
         fsm = builder.build(config)
         engine = ExecutionEngine(fsm)
 
-        # Verify methods exist
-        assert hasattr(engine, '_apply_data_mapping')
-        assert hasattr(engine, '_apply_result_mapping')
-        assert callable(engine._apply_data_mapping)
-        assert callable(engine._apply_result_mapping)
+        # Verify methods exist (shared on BaseExecutionEngine)
+        assert hasattr(engine, 'apply_data_mapping')
+        assert hasattr(engine, 'apply_result_mapping')
+        assert callable(engine.apply_data_mapping)
+        assert callable(engine.apply_result_mapping)

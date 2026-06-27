@@ -575,11 +575,14 @@ class ExecutionEngine(BaseExecutionEngine):
     ) -> bool:
         """Execute a push arc to transition into a subflow network.
 
-        This method handles the mechanics of pushing execution to a sub-network:
-        1. Validates the target network exists
-        2. Applies data mapping from parent to child context
-        3. Pushes the network onto the context stack
-        4. Sets up execution to continue in the subflow
+        Pushes execution to a sub-network: resolves and validates the target
+        (network + initial state) *before* committing, isolates the parent data
+        via the shared ``DataIsolationMode.apply`` helper, records a
+        :class:`SubflowFrame` (so the pop can apply ``result_mapping`` and a
+        failed entry can roll back), and enters the sub-network's initial state.
+        The main ``_execute_single`` loop pops back via
+        :meth:`_check_subflow_completion` when the sub-network reaches a final
+        state.
 
         Args:
             context: Execution context.
@@ -589,30 +592,17 @@ class ExecutionEngine(BaseExecutionEngine):
         Returns:
             True if push was successful.
         """
-        # Check depth limit to prevent infinite recursion
-        if len(context.network_stack) >= max_subflow_depth:
-            logger.error(
-                "Maximum subflow depth %d exceeded when pushing to network '%s'",
-                max_subflow_depth,
-                push_arc.target_network
-            )
+        if self.subflow_depth_exceeded(context, push_arc, max_subflow_depth):
             return False
 
-        # Parse target network name (may include initial state: "network:state")
-        if ':' in push_arc.target_network:
-            network_name, initial_state = push_arc.target_network.split(':', 1)
-            initial_state = initial_state.strip()
-        else:
-            network_name = push_arc.target_network
-            initial_state = None
+        network_name, explicit_initial_state = self.parse_push_target(push_arc)
 
-        # Validate target network exists
         target_network = self.fsm.networks.get(network_name)
         if not target_network:
             logger.error("Target network '%s' not found for PushArc", network_name)
             return False
 
-        # Save current state resources for potential inheritance
+        # Save current state resources so the sub-network inherits them.
         parent_state_resources = getattr(context, 'current_state_resources', {})
 
         # Fire pre-transition hooks
@@ -620,48 +610,26 @@ class ExecutionEngine(BaseExecutionEngine):
             for hook in self._pre_transition_hooks:
                 hook(context, push_arc)
 
-        # Apply data mapping (parent → child)
-        if push_arc.data_mapping:
-            mapped_data = self._apply_data_mapping(
-                context.data,
-                push_arc.data_mapping
-            )
-        else:
-            mapped_data = context.data
-
-        # Handle data isolation mode (shared helper — single source of truth)
-        context.data = push_arc.isolation_mode.apply(mapped_data)
-
-        # Push the network onto the stack
-        context.push_network(network_name, push_arc.return_state)
-
-        # Store parent resources for subflow state access
-        context.parent_state_resources = parent_state_resources
-
-        # Find and enter the subflow's initial state
-        if initial_state:
-            # Use specified initial state
-            if initial_state not in target_network.states:
-                logger.error(
-                    "Initial state '%s' not found in network '%s'",
-                    initial_state,
-                    network_name
-                )
-                context.pop_network()
-                return False
-            target_state = initial_state
-        elif target_network.initial_states:
-            # Use network's default initial state
-            target_state = next(iter(target_network.initial_states))
-        else:
-            logger.error("No initial state in network '%s'", network_name)
-            context.pop_network()
+        # Resolve the target state BEFORE committing the push, so a bad target
+        # fails cleanly without having mutated the context.
+        target_state = self.resolve_subflow_initial_state(
+            target_network, network_name, explicit_initial_state
+        )
+        if target_state is None:
             return False
 
-        # Enter the subflow's initial state
+        mapped_data = self.prepare_subflow_input(push_arc, context.data)
+        # Data isolation (shared helper — single source of truth).
+        isolated_data = push_arc.isolation_mode.apply(mapped_data)
+
+        # Commit the push (replace data, push network + frame, set parent
+        # resources), then enter the sub-network's initial state.
+        self.begin_subflow(
+            context, push_arc, network_name, parent_state_resources, isolated_data
+        )
         if not self.enter_state(context, target_state, run_validators=True):
             logger.error("Failed to enter subflow initial state '%s'", target_state)
-            context.pop_network()
+            self.rollback_push(context)
             return False
 
         self._transition_count += 1
@@ -679,118 +647,46 @@ class ExecutionEngine(BaseExecutionEngine):
 
         return True
 
-    def _apply_data_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str]
-    ) -> Dict[str, Any]:
-        """Apply data mapping from parent to child context.
-
-        Args:
-            data: Source data (parent context data).
-            mapping: Dict mapping parent_field -> child_field.
-
-        Returns:
-            Mapped data dictionary for child context.
-        """
-        if not mapping:
-            return data if isinstance(data, dict) else {'value': data}
-
-        mapped = {}
-        source_data = data if isinstance(data, dict) else {}
-
-        for parent_field, child_field in mapping.items():
-            if parent_field in source_data:
-                mapped[child_field] = source_data[parent_field]
-            elif hasattr(data, parent_field):
-                mapped[child_field] = getattr(data, parent_field)
-
-        return mapped
-
-    def _apply_result_mapping(
-        self,
-        data: Any,
-        mapping: Dict[str, str],
-        parent_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Apply result mapping from child to parent context.
-
-        Args:
-            data: Source data (child context result).
-            mapping: Dict mapping child_field -> parent_field.
-            parent_data: Parent context data to update.
-
-        Returns:
-            Updated parent data with mapped results.
-        """
-        if not mapping:
-            return data if isinstance(data, dict) else parent_data
-
-        result = dict(parent_data) if parent_data else {}
-        source_data = data if isinstance(data, dict) else {}
-
-        for child_field, parent_field in mapping.items():
-            if child_field in source_data:
-                result[parent_field] = source_data[child_field]
-            elif hasattr(data, child_field):
-                result[parent_field] = getattr(data, child_field)
-
-        return result
-
     def _check_subflow_completion(
         self,
         context: ExecutionContext
     ) -> bool:
-        """Check if we've completed a subflow and handle the return.
+        """Pop back to the parent for every subflow now at a final state.
 
-        This method checks if:
-        1. We're currently in a subflow (network_stack is not empty)
-        2. The current state is a final state in the current network
-
-        If both conditions are true, it pops the subflow and returns
-        to the parent network's return state.
+        Drains nested completions: if popping one level lands on a state that is
+        itself a final state of the *next* network on the stack (e.g. a push
+        arc whose ``return_state`` is a final state of the parent sub-network),
+        that level pops too, and so on until the current state is no longer a
+        subflow final state. A single-level pop would leave such a chain
+        half-unwound and the next loop-top global final-state check would
+        finalize the whole run prematurely.
 
         Args:
             context: Execution context.
 
         Returns:
-            True if a subflow was completed and popped.
+            True if at least one subflow level was completed and popped.
         """
-        # Check if we're in a subflow
-        if not context.network_stack:
-            return False
-
-        # Get current network from stack
-        current_network_name = context.network_stack[-1][0]
-        current_network = self.fsm.networks.get(current_network_name)
-
-        if not current_network:
-            logger.warning(
-                "Network '%s' from stack not found in FSM",
-                current_network_name
-            )
-            return False
-
-        # Check if current state is a final state in this network
-        if not context.current_state:
-            return False
-
-        if context.current_state not in current_network.final_states:
-            return False
-
-        # We're at a final state in a subflow - pop back to parent
-        return self._pop_subflow(context)
+        popped_any = False
+        while self.subflow_at_final_state(context):
+            if not self._pop_subflow(context):
+                break
+            popped_any = True
+        return popped_any
 
     def _pop_subflow(
         self,
-        context: ExecutionContext,
-        push_arc: PushArc | None = None
+        context: ExecutionContext
     ) -> bool:
         """Pop from a subflow back to the parent network.
 
+        Consumes the :class:`SubflowFrame` recorded at push time to restore the
+        parent's inherited-resource view and apply the originating push arc's
+        ``result_mapping`` (mapping the sub-network's result back onto the
+        parent's pre-push data), then enters the parent's return state.
+
         Args:
             context: Execution context.
-            push_arc: Optional PushArc that initiated this subflow (for result mapping).
 
         Returns:
             True if pop was successful.
@@ -798,23 +694,14 @@ class ExecutionEngine(BaseExecutionEngine):
         if not context.network_stack:
             return False
 
-        # Pop the network
+        frame = context.pop_subflow_frame()
         _network_name, return_state = context.pop_network()
 
-        # Clean up parent_state_resources
-        if hasattr(context, 'parent_state_resources'):
-            delattr(context, 'parent_state_resources')
-
-        # Apply result mapping if we have the push arc
-        if push_arc and push_arc.result_mapping:
-            # Get the parent's data snapshot before subflow
-            # (this would need to be stored when pushing)
-            parent_data = getattr(context, '_parent_data_snapshot', {})
-            context.data = self._apply_result_mapping(
-                context.data,
-                push_arc.result_mapping,
-                parent_data
-            )
+        # Restore the parent level's inherited-resource view, then map the
+        # sub-network's result back onto the parent data (before the return
+        # state's transforms run, so they see the mapped data).
+        self.restore_after_pop(context, frame)
+        self.apply_subflow_result_mapping(context, frame)
 
         # Transition to return state if specified
         if return_state:

@@ -44,6 +44,35 @@ class TransactionInfo:
     is_rolled_back: bool = False
 
 
+@dataclass
+class SubflowFrame:
+    """Per-push bookkeeping for a sub-network entered via a ``PushArc``.
+
+    ``network_stack`` carries only ``(network_name, return_state)`` and that
+    two-tuple shape is consumed across both execution engines,
+    ``NetworkExecutor``, and the per-call function contexts, so it cannot also
+    carry the originating arc or the parent's pre-push state. This parallel
+    frame does:
+
+    - ``push_arc`` — the originating arc, so the pop can apply its
+      ``result_mapping`` (which the pop site does not otherwise have).
+    - ``parent_data`` — the parent context's data object *as it was before* the
+      push replaced it with the sub-network's isolated view, so result mapping
+      has a base to overlay onto and a failed push can restore it.
+    - ``prev_parent_state_resources`` — the value of
+      ``context.parent_state_resources`` before this push overwrote it, so the
+      pop restores the correct inherited-resource view for the parent level
+      (correct across nesting, not a single global slot).
+
+    The frames are a stack (one per live push), so nested subflows each restore
+    their own parent state on pop.
+    """
+
+    push_arc: Any
+    parent_data: Any
+    prev_parent_state_resources: Any
+
+
 class ExecutionContext:
     """Execution context for FSM processing with full mode support.
     
@@ -81,6 +110,15 @@ class ExecutionContext:
         self.current_state: str | None = None
         self.previous_state: str | None = None
         self.network_stack: List[Tuple[str, str | None]] = []
+        # Parallel to ``network_stack``: one ``SubflowFrame`` per live push,
+        # carrying the originating ``PushArc`` and the parent's pre-push
+        # data/resource state for result mapping and rollback. ``network_stack``
+        # stays a ``(name, return_state)`` tuple list (its shape is consumed
+        # across the engines, ``NetworkExecutor``, and function contexts); this
+        # is the per-push bookkeeping the tuple cannot carry. Like
+        # ``network_stack`` it starts empty and is not copied into child/cloned
+        # contexts (a fresh sub-path begins with no pushes of its own).
+        self.subflow_frames: List[SubflowFrame] = []
         self.state_history: List[str] = []
         
         # Data management
@@ -156,13 +194,48 @@ class ExecutionContext:
     
     def pop_network(self) -> Tuple[str, str | None]:
         """Pop a network from the execution stack.
-        
+
         Returns:
             Tuple of (network_name, return_state).
         """
         if self.network_stack:
             return self.network_stack.pop()
         return ("", None)
+
+    def push_subflow_frame(
+        self,
+        push_arc: Any,
+        parent_data: Any,
+        prev_parent_state_resources: Any,
+    ) -> None:
+        """Record the per-push state for a sub-network entered via a push arc.
+
+        Pushed alongside :meth:`push_network` when an engine commits a push, and
+        consumed by :meth:`pop_subflow_frame` on completion (for result mapping)
+        or on a failed entry (for rollback). See :class:`SubflowFrame`.
+
+        Args:
+            push_arc: The originating ``PushArc``.
+            parent_data: The parent context's data object before the push
+                replaced it with the sub-network's isolated view.
+            prev_parent_state_resources: ``parent_state_resources`` before this
+                push overwrote it, restored for the parent level on pop.
+        """
+        self.subflow_frames.append(
+            SubflowFrame(push_arc, parent_data, prev_parent_state_resources)
+        )
+
+    def pop_subflow_frame(self) -> SubflowFrame | None:
+        """Pop the most recent subflow frame, or ``None`` if there is none.
+
+        Returns:
+            The popped :class:`SubflowFrame`, or ``None`` when no push frame is
+            recorded (kept tolerant so a pop can never raise on an unexpectedly
+            empty stack).
+        """
+        if self.subflow_frames:
+            return self.subflow_frames.pop()
+        return None
     
     def set_state(self, state_name: str) -> None:
         """Set the current state.
