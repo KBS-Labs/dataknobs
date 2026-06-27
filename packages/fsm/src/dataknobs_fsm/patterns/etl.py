@@ -7,6 +7,7 @@ and loading into target systems.
 
 import inspect
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List, Union
@@ -27,6 +28,10 @@ from ..functions.base import (
     TransformError,
 )
 from ..functions.library.database import DatabaseUpsert
+from ..functions.library.enrichers import (
+    ENRICHMENT_ON_MISSING,
+    build_record_enricher,
+)
 from ..functions.library.validators import build_gate_arcs, build_record_validator
 
 logger = logging.getLogger(__name__)
@@ -83,7 +88,27 @@ class ETLConfig(StructuredConfig):
     # resource-backed predicate raises (→ the record errors). Dict form
     # round-trips through the frozen config.
     validation_resources: Dict[str, Dict[str, Any]] | None = None
-    enrichment_sources: List[Dict[str, Any]] | None = None
+    # Per-record enrichment steps applied (in order) in the ``enrich`` stage.
+    # Each element is any form :func:`build_record_enricher` understands:
+    # a field→value map (static or callable values — the computed/static form),
+    # a reference-table lookup (``{"database": <backend cfg>, "match":
+    # {record_field: reference_field}, "fields": [...], "overwrite": bool}`` —
+    # the looked-up fields are merged into each record), a library
+    # :class:`ITransformFunction`, or a callable ``record -> dict``. When set,
+    # the ``enrich`` stage becomes a real per-record transform; otherwise it is a
+    # passthrough. The dict forms round-trip through the frozen config; the
+    # validator / callable / instance forms are in-process only (like
+    # ``transformations``).
+    enrichment_sources: (
+        List[Dict[str, Any] | ITransformFunction | Callable[..., Any]] | None
+    ) = None
+    # Policy when a reference-table lookup finds no matching row: ``"ignore"``
+    # (default — pass the record through unchanged; enrichment is best-effort and
+    # a missing reference is not a pipeline outage), ``"null"`` (set the looked-up
+    # ``fields`` to ``None``), or ``"error"`` (the record becomes a counted
+    # error). Mirrors the validate gate's ``reject_counts_as_error`` — the one
+    # genuine fork is a documented knob, not a guess.
+    enrichment_on_missing: str = "ignore"
 
     def __post_init__(self) -> None:
         """Validate that field mappings don't rename a key column away.
@@ -127,19 +152,113 @@ class ETLConfig(StructuredConfig):
                 "validation_resources."
             )
 
+        # Validate enrichment configuration eagerly so a misconfigured source
+        # fails at construction rather than silently mis-enriching at run time.
+        if self.enrichment_on_missing not in ENRICHMENT_ON_MISSING:
+            raise InvalidConfigurationError(
+                f"enrichment_on_missing '{self.enrichment_on_missing}' is invalid; "
+                f"expected one of {', '.join(ENRICHMENT_ON_MISSING)}."
+            )
+        for source in self.enrichment_sources or []:
+            if not isinstance(source, Mapping):
+                # Callable / ITransformFunction forms are self-contained.
+                continue
+            if "api" in source:
+                # The http resource is registerable but the per-record API
+                # lookup-and-merge shape (auth, pagination, response→fields
+                # mapping) is not yet wired — reject rather than silently no-op.
+                raise InvalidConfigurationError(
+                    "API enrichment sources are not yet supported. Use a "
+                    "database reference lookup ({'database': <cfg>, 'match': "
+                    "{...}}), a computed field→value map, or a callable."
+                )
+            if "database" in source:
+                match = source.get("match")
+                if not isinstance(match, Mapping) or not match:
+                    raise InvalidConfigurationError(
+                        "a 'database' enrichment source requires a non-empty "
+                        "'match' mapping {record_field: reference_field}."
+                    )
+                # ``fields`` omitted + overwrite would clobber the record's own
+                # key columns (the reference ``id`` replaces the record ``id``),
+                # collapsing rows at load. And ``on_missing='null'`` with no
+                # ``fields`` nulls nothing — a silent no-op. Both mirror
+                # LookupMergeEnricher.__init__; reject at construction so the
+                # destructive / no-op config never reaches a run.
+                if source.get("overwrite") and "fields" not in source:
+                    raise InvalidConfigurationError(
+                        "a 'database' enrichment source with 'overwrite': true "
+                        "requires an explicit 'fields' list — a blanket merge of "
+                        "every reference column with overwrite can clobber the "
+                        "record's own key columns."
+                    )
+                if (
+                    self.enrichment_on_missing == "null"
+                    and "fields" not in source
+                ):
+                    raise InvalidConfigurationError(
+                        "enrichment_on_missing='null' requires each 'database' "
+                        "source to name 'fields' — there are no fields to set to "
+                        "None otherwise."
+                    )
+            elif isinstance(source.get("match"), Mapping):
+                # A ``match`` join spec with no ``database`` source is a
+                # reference lookup missing its backend — NOT a field→value map.
+                # Reinterpreting it as a field-map would add literal ``match`` /
+                # ``fields`` columns to every record and silently mis-enrich.
+                raise InvalidConfigurationError(
+                    "an enrichment source has a 'match' join spec but no "
+                    "'database' source — a reference lookup needs {'database': "
+                    "<cfg>, 'match': {...}}. Add the 'database' backend config, "
+                    "or remove 'match' for a computed field→value map."
+                )
+
+
+async def _apply_record_steps(
+    steps: List[Callable[..., Any]],
+    data: Dict[str, Any],
+    context: Any,
+    *,
+    label: str,
+) -> Dict[str, Any]:
+    """Apply ``(record, context) -> dict`` steps in order, threading the result.
+
+    Shared by :class:`_ETLTransform` and :class:`_ETLEnrich` so the per-record
+    step loop and its non-dict guard cannot drift between the ``transform`` and
+    ``enrich`` stages (their only real difference is the field-mapping prelude
+    and the ``label`` in the error message). Each step is invoked as
+    ``step(record, context)`` (awaited when it returns an awaitable); a non-dict
+    return raises :class:`TransformError` (``ETL {label} #{index} must return a
+    dict``) rather than writing a corrupt row, so the engine reports the record
+    as ``success=False`` and it is counted as an ``error`` (not ``loaded``).
+    """
+    result = data
+    for index, step in enumerate(steps):
+        out = step(result, context)
+        if inspect.isawaitable(out):
+            out = await out
+        if not isinstance(out, dict):
+            raise TransformError(
+                f"ETL {label} #{index} must return a dict, got "
+                f"{type(out).__name__}"
+            )
+        result = out
+    return result
+
 
 class _ETLTransform(ITransformFunction):
     """Per-record transform step: apply field mappings then user callables.
 
     Wired into the ETL FSM's ``transform`` state as a registered function (the
     proven ``custom_functions=`` idiom). ``field_mappings`` rename keys; each
-    entry of ``transformations`` is then applied in order. A transformation may
-    be sync or async and is **map-style** — it receives the current record dict
-    and must return the transformed dict. A non-dict return (including ``None``)
-    raises a :class:`TransformError` rather than writing a corrupt row: the
-    engine records the failed state and reports the record as a failure
-    (``success=False``), so it is counted as an ``error`` (not ``loaded``) and
-    counts against ``error_threshold``.
+    entry of ``transformations`` is then applied in order via the shared
+    :func:`_apply_record_steps` loop. A transformation may be sync or async and
+    is **map-style** — it receives the current record dict and must return the
+    transformed dict. A non-dict return (including ``None``) raises a
+    :class:`TransformError` rather than writing a corrupt row: the engine records
+    the failed state and reports the record as a failure (``success=False``), so
+    it is counted as an ``error`` (not ``loaded``) and counts against
+    ``error_threshold``.
     """
 
     def __init__(
@@ -149,6 +268,13 @@ class _ETLTransform(ITransformFunction):
     ) -> None:
         self._field_mappings = field_mappings or {}
         self._transformations = transformations or []
+        # Wrap each map-style transformation to the shared loop's
+        # ``(record, context)`` shape, preserving the historical record-only
+        # call (the context is ignored) so transformation arity is unchanged.
+        self._steps: List[Callable[..., Any]] = [
+            (lambda record, _context, fn=fn: fn(record))
+            for fn in self._transformations
+        ]
 
     async def transform(
         self, data: Dict[str, Any], context: Any = None
@@ -157,23 +283,41 @@ class _ETLTransform(ITransformFunction):
         for old_name, new_name in self._field_mappings.items():
             if old_name in result:
                 result[new_name] = result.pop(old_name)
-        for index, fn in enumerate(self._transformations):
-            out = fn(result)
-            if inspect.isawaitable(out):
-                out = await out
-            if not isinstance(out, dict):
-                raise TransformError(
-                    f"ETL transformation #{index} must return a dict, got "
-                    f"{type(out).__name__}"
-                )
-            result = out
-        return result
+        return await _apply_record_steps(
+            self._steps, result, context, label="transformation"
+        )
 
     def get_transform_description(self) -> str:
         return (
             f"Apply {len(self._field_mappings)} field mapping(s) and "
             f"{len(self._transformations)} transformation(s)"
         )
+
+
+class _ETLEnrich(ITransformFunction):
+    """Per-record enrich step: apply a list of enrichers in order.
+
+    The structural twin of :class:`_ETLTransform` for the ``enrich`` state. Each
+    enricher is a normalized ``(record, context) -> dict`` callable produced by
+    :func:`build_record_enricher` (a field→value map, a reference-table lookup, a
+    library ``ITransformFunction``, or a callable). Enrichers compose in declared
+    order via the shared :func:`_apply_record_steps` loop; each may be sync or
+    async and must return a dict. A non-dict return raises :class:`TransformError`
+    so a bad enricher is a counted error (``success=False``), never a corrupt row.
+    """
+
+    def __init__(self, enrichers: List[Callable[..., Any]]) -> None:
+        self._enrichers = enrichers
+
+    async def transform(
+        self, data: Dict[str, Any], context: Any = None
+    ) -> Dict[str, Any]:
+        return await _apply_record_steps(
+            self._enrichers, data, context, label="enrichment"
+        )
+
+    def get_transform_description(self) -> str:
+        return f"Apply {len(self._enrichers)} enrichment(s)"
 
 
 class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
@@ -228,26 +372,32 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             for res_name, decl in self.config.validation_resources.items():
                 resources.append({'name': res_name, **decl})
 
-        # Add enrichment resources if configured
+        # Register the reference-lookup enrichment resources and collect their
+        # names so they can be declared ON the enrich state (the engine injects a
+        # state function's ``context.resources`` from the state's declaration, so
+        # an enrichment resource registered only at the FSM top level would be
+        # invisible to the enrich transform — the historical G2 bug). Each is an
+        # ``async_database`` resource (NOT a sync ``database``) so the lookup's
+        # ``await resource.execute_query(...)`` never blocks the event loop (G3).
+        # Only ``database`` sources need a resource; field-map / callable /
+        # instance sources are self-contained. ``api`` sources are rejected at
+        # config validation, so none reach here.
+        enrich_resource_names: List[str] = []
         if self.config.enrichment_sources:
             for i, source in enumerate(self.config.enrichment_sources):
-                if 'database' in source:
+                if isinstance(source, Mapping) and 'database' in source:
+                    name = f'enrichment_db_{i}'
                     resources.append({
-                        'name': f'enrichment_db_{i}',
-                        'type': 'database',
-                        'config': source['database']
+                        'name': name,
+                        'type': 'async_database',
+                        'config': source['database'],
                     })
-                elif 'api' in source:
-                    resources.append({
-                        'name': f'enrichment_api_{i}',
-                        'type': 'http',
-                        'config': source['api']
-                    })
-        
-        # Route through `enrich` only when enrichment is configured. `enrich`
-        # is still an honest passthrough (its config contract —
-        # `enrichment_sources` — is underspecified for real per-record wiring;
-        # see _build_custom_functions).
+                    enrich_resource_names.append(name)
+
+        # Route through `enrich` only when enrichment is configured (otherwise
+        # the enrich state is an unreferenced passthrough, byte-identical to the
+        # pre-wiring behavior). When configured, the enrich state runs the
+        # registered `_ETLEnrich` transform over its declared resources.
         post_transform = 'enrich' if self.config.enrichment_sources else 'load'
 
         states: List[Dict[str, Any]] = [
@@ -267,9 +417,19 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                     'transform': {'type': 'registered', 'name': 'transform'}
                 }
             },
+            # The enrich state runs the registered `_ETLEnrich` transform over
+            # its declared enrichment resources, but only when enrichment is
+            # configured; otherwise it stays an unreferenced passthrough (no
+            # functions, no resources) and `transform` routes straight to `load`.
             {
                 'name': 'enrich',
-                'resources': []
+                'resources': enrich_resource_names,
+                **(
+                    {'functions': {
+                        'transform': {'type': 'registered', 'name': 'enrich'}
+                    }}
+                    if self.config.enrichment_sources else {}
+                ),
             },
             {
                 'name': 'load',
@@ -360,16 +520,18 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
           predicate) via :func:`build_record_validator`. Passing records flow to
           ``transform``; rejected records are diverted to the ``rejected``
           terminal (see :meth:`_build_fsm`).
+        - ``enrich`` — present only when ``enrichment_sources`` is set — is the
+          :class:`_ETLEnrich` step applying each configured enricher in order,
+          built from any supported spec form (field→value map / reference-table
+          lookup / ``ITransformFunction`` / callable) via
+          :func:`build_record_enricher`.
 
         Extraction is owned by ``run()._extract_batches`` (a per-record
         ``DatabaseFetch`` 'fetch all' would be nonsensical), so
         ``DatabaseFetch`` is repaired and exercised at the library layer
-        rather than wired here. The ``enrich`` state is still an honest
-        passthrough: ``enrichment_sources`` has an underspecified per-record
-        DB/API lookup contract that needs its own design before it can be wired
-        without silently doing the wrong thing. The returned callables are
-        passed via ``AsyncSimpleFSM(config, custom_functions=...)`` and
-        referenced from each state's ``functions`` block / arc condition.
+        rather than wired here. The returned callables are passed via
+        ``AsyncSimpleFSM(config, custom_functions=...)`` and referenced from each
+        state's ``functions`` block / arc condition.
         """
         functions: Dict[str, Callable] = {
             'transform': _ETLTransform(
@@ -386,7 +548,42 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             functions['validate_check'] = build_record_validator(
                 self.config.validation_schema
             )
+        if self.config.enrichment_sources:
+            functions['enrich'] = _ETLEnrich([
+                self._build_enricher(source, i)
+                for i, source in enumerate(self.config.enrichment_sources)
+            ])
         return functions
+
+    def _build_enricher(
+        self, source: Any, index: int
+    ) -> Callable[..., Any]:
+        """Build one normalized enricher for an ``enrichment_sources`` element.
+
+        A ``database`` reference-lookup element is rewritten to the library
+        builder's resource-name form: the backend config was registered as the
+        ``enrichment_db_{index}`` async resource in :meth:`_build_fsm`, so here it
+        is replaced by ``{'resource': name, 'match': ..., 'fields': ...,
+        'overwrite': ...}`` — the ETL pattern owns resource *registration*, the
+        library builder owns the lookup *mechanism*. All other forms (field→value
+        map, ``ITransformFunction``, callable) pass straight through to
+        :func:`build_record_enricher`.
+        """
+        if isinstance(source, Mapping) and 'database' in source:
+            lookup_spec = {
+                'resource': f'enrichment_db_{index}',
+                'match': source['match'],
+            }
+            if 'fields' in source:
+                lookup_spec['fields'] = source['fields']
+            if 'overwrite' in source:
+                lookup_spec['overwrite'] = source['overwrite']
+            return build_record_enricher(
+                lookup_spec, on_missing=self.config.enrichment_on_missing
+            )
+        return build_record_enricher(
+            source, on_missing=self.config.enrichment_on_missing
+        )
         
     async def run(
         self,

@@ -13,6 +13,50 @@ from typing import Any, Callable, Dict, List, Union
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 
 
+def _enrichment_collides(
+    result: Dict[str, Any], field: str, *, overwrite: bool
+) -> bool:
+    """Whether an enrichment write to ``field`` must be skipped.
+
+    The single collision predicate shared by both enrichment forms: a write is
+    skipped iff the field is already present and ``overwrite`` is ``False``.
+    :class:`DataEnricher` calls it to short-circuit *before* evaluating a
+    (possibly side-effecting) callable value; :func:`merge_enrichment_field`
+    calls it at the write boundary — so the "does this collide?" decision lives
+    in exactly one place and the two forms cannot diverge.
+    """
+    return field in result and not overwrite
+
+
+def merge_enrichment_field(
+    result: Dict[str, Any], field: str, value: Any, *, overwrite: bool
+) -> bool:
+    """Set ``result[field] = value`` under the shared collision policy.
+
+    The single write primitive for "add an enrichment field unless it is already
+    present and we are not overwriting", gated by the shared
+    :func:`_enrichment_collides` predicate. Shared by :class:`DataEnricher` (the
+    field→value form) and the reference-lookup enricher
+    (:class:`~dataknobs_fsm.functions.library.enrichers.LookupMergeEnricher`) so
+    the two enrichment forms cannot diverge on collision handling.
+
+    Args:
+        result: The record dict to mutate in place.
+        field: The field name to set.
+        value: The value to set.
+        overwrite: When ``False`` a field already present in ``result`` is left
+            untouched; when ``True`` it is replaced.
+
+    Returns:
+        ``True`` if the field was written, ``False`` if it was skipped because it
+        was already present and ``overwrite`` is ``False``.
+    """
+    if _enrichment_collides(result, field, overwrite=overwrite):
+        return False
+    result[field] = value
+    return True
+
+
 class FieldMapper(ITransformFunction):
     """Map fields from source to target names."""
 
@@ -314,23 +358,29 @@ class DataEnricher(ITransformFunction):
             Transformed data with enrichments.
         """
         result = copy.deepcopy(data)
-        
+
         for field, value in self.enrichments.items():
-            # Skip if field exists and not overwriting
-            if field in result and not self.overwrite:
+            # Skip before evaluating a callable so a present-and-not-overwritten
+            # field never triggers (a potentially side-effecting) computation.
+            # Uses the shared collision predicate so the field→value and lookup
+            # forms decide collisions identically.
+            if _enrichment_collides(result, field, overwrite=self.overwrite):
                 continue
-            
+
             # Evaluate value if callable
             if callable(value):
                 try:
-                    result[field] = value(data)
+                    computed = value(data)
                 except Exception as e:
                     raise TransformError(
                         f"Failed to compute enrichment for '{field}': {e}"
                     ) from e
             else:
-                result[field] = value
-        
+                computed = value
+            # The gate is already decided above; merge under the shared policy
+            # (the single set-the-field primitive shared with the lookup form).
+            merge_enrichment_field(result, field, computed, overwrite=True)
+
         return result
     
     def get_transform_description(self) -> str:

@@ -31,9 +31,11 @@ extract ──▶ validate ──▶ transform ──▶ [enrich] ──▶ load
   passthrough. See [Validation](#validation).
 - **transform** — applies `field_mappings` (key renames) and then each
   `transformations` callable, in order. This is a real per-record step.
-- **enrich** — the record routes through this state only when
-  `enrichment_sources` is configured; it is currently a passthrough (see
-  *Current limitations*).
+- **enrich** — when `enrichment_sources` is set, this is a real per-record step:
+  each configured enricher (a computed field map, a reference-table lookup, an
+  `ITransformFunction`, or a callable) is applied in order. When
+  `enrichment_sources` is unset, `enrich` is an unconditional passthrough. See
+  [Enrichment](#enrichment).
 - **load** — a `DatabaseUpsert` upserts the record into the `target_db`
   resource, keyed by `key_columns`.
 
@@ -41,9 +43,9 @@ When the batches are exhausted, `run()` closes the source and **closes the
 FSM**, which flushes and closes the async `target_db` adapter so the upserted
 rows are durably persisted. `run()` returns a metrics dictionary.
 
-The per-record functions (`transform`, `load`) are wired through the FSM's
-`custom_functions=` channel and referenced from each state's `functions` block —
-the same idiom used by `examples/database_etl.py`.
+The per-record functions (`transform`, `load`, and `enrich` when configured) are
+wired through the FSM's `custom_functions=` channel and referenced from each
+state's `functions` block — the same idiom used by `examples/database_etl.py`.
 
 ## Basic usage
 
@@ -101,7 +103,8 @@ not JSON serialization.
 | `validation_schema` | `dict \| IValidationFunction \| Callable \| None` | `None` | Per-record validation gate; see [Validation](#validation) |
 | `reject_counts_as_error` | `bool` | `False` | When `True`, validation rejections count toward `error_threshold` |
 | `validation_resources` | `dict[str, dict] \| None` | `None` | Resources a resource-backed `validation_schema` predicate needs (e.g. a reference table); see [Resource-backed validation](#resource-backed-validation-validate-against-a-reference-table) |
-| `enrichment_sources` | `list[dict] \| None` | `None` | Reserved — not yet applied (see *Current limitations*) |
+| `enrichment_sources` | `list[dict \| ITransformFunction \| Callable] \| None` | `None` | Per-record enrichment steps applied in order in the `enrich` stage; see [Enrichment](#enrichment) |
+| `enrichment_on_missing` | `str` | `"ignore"` | Lookup-miss policy (`"ignore"` / `"null"` / `"error"`); see [Enrichment](#enrichment) |
 
 ### Transformations
 
@@ -234,6 +237,87 @@ data-quality drop. See the
 [Resources guide](../guides/resources.md#resource-backed-arc-conditions) for the
 arc resource-injection contract.
 
+## Enrichment
+
+When `enrichment_sources` is set, the `enrich` stage applies each configured
+enricher to every record, in order, between `transform` and `load`. Unlike the
+validation gate (which reads a record and routes it without mutating), an
+enricher **adds fields** to the record — so it is a per-record state transform,
+the same shape as `transform` and `load`.
+
+Each element of `enrichment_sources` is one of four forms, normalized by the
+shared `build_record_enricher` (the same choose-your-own pattern as
+`build_record_validator`):
+
+```python
+# 1. A computed field→value map (static or callable values). No resource.
+#    A field already present on the record is NOT overwritten (pass a
+#    DataEnricher(..., overwrite=True) instance — form 3 — to overwrite).
+enrichment_sources=[{"tier": "gold", "name_len": lambda r: len(r["name"])}]
+
+# 2. A reference-table lookup: read the reference row whose columns equal the
+#    record's `match` values, and merge the looked-up `fields` into the record.
+#    The `database` backend config is registered as an async resource for you.
+enrichment_sources=[{
+    "database": {"type": "sqlite", "path": "ref.db"},  # reference backend
+    "match": {"country_code": "code"},   # record field → reference column (join)
+    "fields": ["name", "region"],        # columns to merge (omit = all non-match)
+    "overwrite": False,                  # keep existing record fields on collision
+}]
+# A `match` join spec with no `database` is a malformed lookup (it would
+# otherwise be mis-read as a field→value map) and is rejected at construction.
+# `fields` is REQUIRED when `overwrite` is true (a blanket merge-all could
+# overwrite the record's own key columns) or when `enrichment_on_missing` is
+# `"null"` (there would be no named fields to null). Omitting `fields` merges
+# every reference column except the `match` columns — including the reference
+# table's own `id`/storage columns — so name `fields` when the reference shares
+# column names with the record.
+
+# 3. Any library ITransformFunction (a pre-built DataEnricher / your own). Used
+#    directly; its transform may be sync or async.
+from dataknobs_fsm.functions.library.transformers import DataEnricher
+enrichment_sources=[DataEnricher({"name": "REDACTED"}, overwrite=True)]
+
+# 4. A plain callable `record -> dict` or `(record, context) -> dict`
+#    (sync or async).
+enrichment_sources=[lambda r: {**r, "upper": r["name"].upper()}]
+```
+
+The reference lookup is **backend-agnostic**: it compiles the `match` spec to a
+dataknobs `Query` and reads through the async database resource (which reads via
+`Query` + `stream_read`, not raw SQL), so it works against any async backend
+(file, memory, sqlite, postgres). The merge honors `overwrite` (the same policy
+as the computed form). Multiple sources compose in declared order.
+
+### Lookup-miss policy
+
+`enrichment_on_missing` controls what happens when a reference lookup finds no
+matching row:
+
+- `"ignore"` (default) — the record passes through unchanged; enrichment is
+  best-effort and a missing reference is not a pipeline outage.
+- `"null"` — the looked-up `fields` are set to `None` (subject to `overwrite`:
+  a field the record already carries is nulled only when `overwrite` is true,
+  consistent with the hit path).
+- `"error"` — the record becomes a counted **error** (so too many misses can
+  trip `error_threshold`). This is the strict opt-in, parallel to the validation
+  gate's `reject_counts_as_error`.
+
+A successful enrich routes `enrich → load → complete` and counts as `loaded`; a
+failing enricher (a non-dict return, a raised exception, or `on_missing="error"`)
+makes the record a counted **error** — enrichment adds no new terminal or metric
+key (distinct from the validation gate, which adds `rejected`).
+
+> Reference lookups match a **single** row by key. A multi-field `match`
+> AND-combines (every join column must match); when more than one reference row
+> satisfies the join only the first (in backend read order) is merged, so author
+> `match` on a unique key. A record missing a `match` source field joins that
+> column against `None` rather than erroring. Multi-row / fan-out joins and
+> per-record **API** lookups are not yet wired (see *Current limitations*).
+>
+> `enrichment_on_missing` is **global** — it applies to every reference-lookup
+> source in the run (a per-source miss policy is a captured follow-up).
+
 ## ETL modes
 
 ```python
@@ -259,15 +343,16 @@ checkpoint).
 | `transformed` | Records that completed cleanly (transformed and loaded) |
 | `loaded` | Records upserted into the target |
 | `rejected` | Records diverted by validation (data-quality drops, not failures) |
-| `errors` | Records whose `transform` or `load` step raised |
+| `errors` | Records whose `transform`, `enrich`, or `load` step raised |
 | `skipped` | Reserved (currently always `0`) |
 
 A record only counts toward `transformed` + `loaded` when it reached `complete`
 **and** the per-record execution reported success. A record diverted by the
 [validation gate](#validation) reaches the `rejected` terminal and is counted in
-`rejected`. A record whose `transform` or `load` step raised is reported as a
-failure by the engine and counted as an `error` — not as `loaded` — even though
-the FSM still traversed to a final state. This keeps `error_threshold` honest: a
+`rejected`. A record whose `transform`, [`enrich`](#enrichment), or `load` step
+raised is reported as a failure by the engine and counted as an `error` — not as
+`loaded` — even though the FSM still traversed to a final state. This keeps
+`error_threshold` honest: a
 target-write outage surfaces as errors, dirty source data surfaces as
 rejections, and (by default) only the former aborts the run.
 
@@ -318,15 +403,16 @@ pipelines = create_data_warehouse_load(
 
 ## Current limitations
 
-- **`enrich`** is a passthrough. `enrichment_sources` is accepted but the
-  per-record database/API lookup is not yet implemented.
+- **Enrichment lookups match a single row by key.** The reference lookup form
+  ([Enrichment](#enrichment)) merges one matched reference row. Multi-row /
+  fan-out joins (one source record → many output records) change the pattern's
+  one-record-in/one-record-out shape and are not yet wired. Per-record **API**
+  lookups (auth, pagination, response→fields mapping) are also not yet wired — an
+  `api` enrichment source is rejected at config validation rather than silently
+  ignored. Both are tracked separately. (The computed, reference-table, instance,
+  and callable enrichment forms are fully wired — see [Enrichment](#enrichment).)
 
-This is an honest no-op today — it does not silently transform data
-incorrectly. Wiring it requires settling its config contract (per-record lookup
-semantics) and is tracked separately. (The `validate` stage is fully wired — see
-[Validation](#validation).)
-
-- **Failure routing.** A record whose `transform` or `load` step raises is
+- **Failure routing.** A record whose `transform`, `enrich`, or `load` step raises is
   counted as an `error` (and trips `error_threshold`), but it is **not** routed
   to a dedicated error state — there is no conditional error arc. Once a record
   fails a state transform, the engine skips its remaining/downstream transforms,
