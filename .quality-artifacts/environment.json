@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-27T02:48:08Z",
+  "timestamp": "2026-06-27T17:50:23Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/etl-enrich-stage",
-  "git_commit": "b9dc768f42fb3fa0c47299ebe653dfb1c9c710b2",
+  "git_branch": "sbk/pusharc-data-isolation",
+  "git_commit": "8157ff07b04679568f2c3eb454d821b66881830e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -996,7 +996,7 @@ Push arcs are special arcs that transfer execution to a subnetwork:
 arcs:
   - target_network: "validation_subnet"  # Required: target network name
     return_state: "continue_processing"  # Optional: state to return to
-    data_isolation: "copy"                # Data handling mode
+    data_isolation: "copy"                # Push-arc isolation: copy/reference/serialize
     pre_test: "should_validate"           # Optional: condition for push
     transform: "prepare_validation_data"  # Optional: transform before push
     priority: 10                           # Arc priority
@@ -1056,10 +1056,17 @@ flowchart TD
 2. **Arc Transform**: If present, transform executes BEFORE pushing to subnetwork
    - Prepares data for subnetwork processing
    - Can filter, reshape, or augment data
-3. **Data Isolation**: Based on `data_isolation` mode:
-   - `copy`: Subnetwork gets a copy of data (default)
-   - `share`: Subnetwork operates on same data instance
-   - `partial`: Selected fields are copied
+3. **Data Isolation**: Based on `data_isolation` mode (`DataIsolationMode`):
+   - `copy`: Subnetwork gets a deep copy of data (default)
+   - `reference`: Subnetwork operates on the same data instance
+   - `serialize`: Data is isolated via a JSON serialize/deserialize round-trip
+
+   The configured value is carried to the runtime `PushArc.isolation_mode` and
+   applied by the shared `DataIsolationMode.apply` helper. See the "Execution
+   status" note in `FSM_SUBFLOWS.md`: executors that traverse a push arc's
+   sub-network (notably the public `NetworkExecutor`) honor all three modes,
+   while the default high-level engines do not yet execute push arcs through a
+   sub-network traversal.
 4. **Subnetwork Execution**: Subnetwork processes from its start to end states
 5. **Result Integration**: Subnetwork's final data replaces or merges with original
 6. **Return Transition**: Execution continues at `return_state` (if specified)

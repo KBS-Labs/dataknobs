@@ -251,7 +251,7 @@ Push arcs allow transitions to different networks (subnetworks):
     "target": "initial_state",           # Initial state in target network
     "target_network": "validation",      # Required: Target network name
     "return_state": "continue",          # Optional: State to return to after subnetwork
-    "data_isolation": "copy",            # Optional: Data handling mode
+    "data_isolation": "copy",            # Optional: push-arc isolation (copy/reference/serialize)
     "condition": {...},                  # Optional: Condition function
     "transform": {...}                   # Optional: Transform function
 }

@@ -21,6 +21,26 @@ class DataIsolationMode(Enum):
     REFERENCE = "reference"  # Pass data by reference
     SERIALIZE = "serialize"  # Serialize/deserialize for isolation
 
+    def apply(self, data: Any) -> Any:
+        """Produce the sub-network's view of ``data`` under this isolation mode.
+
+        This is the single source of truth for push-arc data isolation, shared
+        by every executor that pushes into a sub-network so they cannot drift:
+
+        - ``COPY`` deep-copies the data (full isolation; the default).
+        - ``SERIALIZE`` round-trips through the project JSON encoder, which
+          handles non-JSON-native types (datetimes, sets, ``FSMData``, …) that
+          stdlib ``json`` would reject.
+        - ``REFERENCE`` shares the data by reference (no isolation).
+        """
+        if self is DataIsolationMode.COPY:
+            import copy
+            return copy.deepcopy(data)
+        if self is DataIsolationMode.SERIALIZE:
+            from dataknobs_fsm.utils.json_encoder import dumps, loads
+            return loads(dumps(data))
+        return data
+
 
 @dataclass
 class TransformSpec:
@@ -658,16 +678,10 @@ class ArcExecution:
         Returns:
             Result from sub-network execution.
         """
-        # Prepare data for sub-network based on isolation mode
-        if push_arc.isolation_mode == DataIsolationMode.COPY:
-            import copy
-            sub_data = copy.deepcopy(data)
-        elif push_arc.isolation_mode == DataIsolationMode.SERIALIZE:
-            import json
-            serialized = json.dumps(data)
-            sub_data = json.loads(serialized)
-        else:
-            sub_data = data
+        # Prepare data for sub-network based on isolation mode (shared helper —
+        # single source of truth, so SERIALIZE uses the project JSON encoder
+        # rather than stdlib json which rejects non-JSON-native types).
+        sub_data = push_arc.isolation_mode.apply(data)
         
         # Apply data mapping
         if push_arc.data_mapping:

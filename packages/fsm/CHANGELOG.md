@@ -237,6 +237,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Push-arc data isolation declared in FSM config
+  (`copy`/`reference`/`serialize`) is now threaded through to the runtime push
+  arc and honored by the executors that traverse a push arc's sub-network;
+  previously the configured value was silently dropped at build time and the arc
+  always carried the deep-copy default. The push-arc isolation config value
+  (`PushArcConfig.data_isolation`) now uses the isolation enum
+  (`DataIsolationMode`) rather than the state-level data-handling enum, so it
+  expresses exactly the modes the runtime honors: `serialize` is newly
+  expressible, and `direct` — which never had push-arc isolation semantics and
+  was being dropped — is no longer accepted and raises a validation error at load
+  on both the typed and the dict/YAML config paths (use `StateConfig.data_mode`
+  for state-level DIRECT handling). Isolation is applied through a single shared
+  `DataIsolationMode.apply` helper, so every executor isolates identically and
+  `serialize` consistently uses the project JSON encoder (serializing the
+  FSM-specific types stdlib `json` rejects: `FSMData`, `ExecutionResult`, and any
+  object exposing `to_dict()`/`__json__()`). The public `NetworkExecutor` now
+  honors all three modes when it runs a push arc's full sub-network (each mode
+  runs the sub-network in a fresh execution context; only the data crossing the
+  boundary varies, and `max_depth` is enforced across nested push arcs). The default high-level
+  engines do not yet execute push arcs through a sub-network traversal (the async
+  engine treats a push arc as a flat transition; the synchronous
+  `ExecutionEngine.execute()` does not traverse sub-networks), so isolation takes
+  effect wherever a sub-network is actually traversed and wiring it into those
+  high-level engines remains future work.
+
+  *Migration note for programmatic consumers:* `PushArcConfig.data_isolation` is
+  now a `DataIsolationMode` member, not a `DataHandlingMode` member. Code that
+  compared it against `DataHandlingMode.COPY`/`.REFERENCE` should compare against
+  the `DataIsolationMode` members of the same name instead.
 - `FileProcessingConfig.validation_schema` now also accepts a library
   `IValidationFunction` or a callable predicate, not only a dict schema (the
   three forms the ETL pattern accepts), via the shared `build_record_validator`.

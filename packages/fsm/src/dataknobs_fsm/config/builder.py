@@ -533,6 +533,7 @@ class FSMBuilder:
                 priority=arc_config.priority,
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
+                isolation_mode=arc_config.data_isolation,
             )
             arc.required_resources = self._normalize_arc_resources(arc_config.resources)
             return arc
