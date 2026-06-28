@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-28T04:26:55Z",
+  "timestamp": "2026-06-28T04:49:24Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/config-authored-function-references",
-  "git_commit": "56d93d159d483e505f94db145c2928dba0e395ec",
+  "git_branch": "sbk/fsm-async-arc-condition-tail",
+  "git_commit": "56b1717f7124001fa994b1035815749adf9c7389",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
