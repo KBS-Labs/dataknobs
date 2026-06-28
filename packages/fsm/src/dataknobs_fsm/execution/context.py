@@ -63,6 +63,13 @@ class SubflowFrame:
       ``context.parent_state_resources`` before this push overwrote it, so the
       pop restores the correct inherited-resource view for the parent level
       (correct across nesting, not a single global slot).
+    - ``pushing_state_owner`` — the resource-ownership key of the *pushing*
+      state (``None`` when it owned no resources). The sub-network inherits the
+      pushing state's resources while it runs, so the push must not release them
+      there; the parent resumes at ``return_state`` (a sibling of the pushing
+      state) on pop, so the pop releases everything acquired under this owner
+      then. Without this the pushing state's owned resources would leak across
+      the push/pop boundary.
 
     The frames are a stack (one per live push), so nested subflows each restore
     their own parent state on pop.
@@ -71,6 +78,7 @@ class SubflowFrame:
     push_arc: Any
     parent_data: Any
     prev_parent_state_resources: Any
+    pushing_state_owner: Any = None
 
 
 class ExecutionContext:
@@ -131,6 +139,7 @@ class ExecutionContext:
         self.resource_limits: Dict[str, Any] = resources or {}
         self.resource_manager: Any = None  # ResourceManager instance
         self.current_state_resources: Dict[str, Any] = {}  # Resources allocated to current state
+        self.current_state_owned_resources: Dict[str, Any] = {}  # Subset of current_state_resources this state acquired itself (released on exit; inherited ones are left to the ancestor that owns them)
         self.parent_state_resources: Dict[str, Any] = {}  # Resources from parent state (in subnetworks)
         
         # Transaction management
@@ -207,6 +216,7 @@ class ExecutionContext:
         push_arc: Any,
         parent_data: Any,
         prev_parent_state_resources: Any,
+        pushing_state_owner: Any = None,
     ) -> None:
         """Record the per-push state for a sub-network entered via a push arc.
 
@@ -220,9 +230,16 @@ class ExecutionContext:
                 replaced it with the sub-network's isolated view.
             prev_parent_state_resources: ``parent_state_resources`` before this
                 push overwrote it, restored for the parent level on pop.
+            pushing_state_owner: The pushing state's resource-ownership key,
+                whose acquisitions are released for the parent level on pop.
         """
         self.subflow_frames.append(
-            SubflowFrame(push_arc, parent_data, prev_parent_state_resources)
+            SubflowFrame(
+                push_arc,
+                parent_data,
+                prev_parent_state_resources,
+                pushing_state_owner,
+            )
         )
 
     def pop_subflow_frame(self) -> SubflowFrame | None:

@@ -176,21 +176,29 @@ through that encoder; types it does not special-case (e.g. a raw `datetime` or
 > — executes push arcs end to end: it pushes the sub-network, isolates the data by
 > mode, applies `data_mapping` on entry and `result_mapping` on completion, runs
 > the sub-network initial state's pre-validators (and allocates its state
-> resources), and unwinds nested subflows back to the parent. `NetworkExecutor`
+> resources), and unwinds nested subflows back to the parent. Every public
+> synchronous entry point — `FSM.execute`, the sync batch/stream executors, and
+> `AdvancedFSM.execute_step_sync` — also runs on this async engine through an
+> async→sync bridge (the explicit-lifecycle `SimpleFSM` / `execute_step_sync`
+> share one long-lived `FSM.get_sync_bridge()`; the one-shot `FSM.execute` and
+> sync batch/stream scope a throwaway bridge to the operation), so push arcs
+> execute the same way from sync and async callers. `NetworkExecutor`
 > (`dataknobs_fsm.execution.network`), a public executor, likewise honors all
 > three modes — `copy` deep-copies, `serialize` round-trips through the JSON
 > encoder, `reference` shares by reference — running each sub-network in a fresh
-> context so its traversal cannot corrupt the parent's stack. The one remaining
-> gap is the **synchronous** `ExecutionEngine.execute()` entry, which still treats
-> a push arc as a flat transition and does not traverse the sub-network; drive
-> subflows through the async engine or `NetworkExecutor`. (Mechanism: the sync
-> `execute()` path reads its candidate arcs through `StateNetwork.arcs`
-> (`dataknobs_fsm.core.network`), which reconstructs every arc as a plain
-> `ArcDefinition` from `target_state`/`pre_test`/`transform` and drops the
-> `PushArc` subtype, so the engine's `isinstance(arc, PushArc)` push dispatch is
-> never reached on that path.)
+> context so its traversal cannot corrupt the parent's stack. The standalone
+> synchronous `ExecutionEngine.execute()` (no longer used by any public path)
+> still treats a push arc as a flat transition and does not traverse the
+> sub-network; it is slated for removal. (Mechanism: that `execute()` path reads
+> its candidate arcs through `StateNetwork.arcs` (`dataknobs_fsm.core.network`),
+> which reconstructs every arc as a plain `ArcDefinition` from
+> `target_state`/`pre_test`/`transform` and drops the `PushArc` subtype, so its
+> `isinstance(arc, PushArc)` push dispatch is never reached.)
 
-The `ExecutionEngine` (in `dataknobs_fsm.execution.engine`) handles the full lifecycle of subflow execution through three methods: `_execute_push_arc`, `_check_subflow_completion`, and `_pop_subflow`.
+The subflow lifecycle (push, completion check, pop) is driven by shared,
+color-free helpers on `BaseExecutionEngine`; the `AsyncExecutionEngine`
+orchestrates them through `_execute_push_arc`, `_check_subflow_completion`, and
+`_pop_subflow`.
 
 ### Network Stack
 

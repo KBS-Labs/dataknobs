@@ -114,7 +114,10 @@ class TestSimpleFSMInitialization:
         assert fsm.config.name == simple_fsm_config['name']
         assert fsm.config.main_network == simple_fsm_config['main_network']
         assert fsm._fsm is not None
-        assert fsm._engine is not None
+        # SimpleFSM runs on the single async execution engine (driven through
+        # the FSM's shared async->sync bridge); it no longer holds a separate
+        # synchronous engine.
+        assert fsm._async_engine is not None
         assert fsm._resource_manager is not None
         
         # Test that FSM was built correctly

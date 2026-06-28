@@ -170,7 +170,7 @@ class TestArcMultiTransform:
 class TestStepSyncMultiTransform:
     """Tests that list transforms work through AdvancedFSM.execute_step_sync().
 
-    These exercise the _execute_arc_transform delegation to ArcExecution,
+    These exercise the _execute_arc_transform_async delegation to ArcExecution,
     which previously stringified list transforms and silently skipped them.
     """
 

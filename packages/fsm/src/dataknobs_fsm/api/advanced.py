@@ -298,7 +298,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_data import Record
 
@@ -310,7 +311,7 @@ from ..core.state import StateInstance
 from ..core.transactions import TransactionManager, TransactionStrategy
 from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.context import ExecutionContext
-from ..execution.engine import ExecutionEngine, TraversalStrategy
+from ..execution.engine import TraversalStrategy
 from ..execution.history import ExecutionHistory
 
 if TYPE_CHECKING:
@@ -408,8 +409,12 @@ class AdvancedFSM:
 
         self.fsm = fsm
         self.execution_mode = execution_mode
-        self._engine = ExecutionEngine(fsm, custom_functions=custom_functions)
         self._async_engine = AsyncExecutionEngine(fsm, custom_functions=custom_functions)
+        # Stepping and execution run on the single async engine. The shared
+        # base-class helpers (transform prep / result handling, failed-state
+        # tracking, strategy) are inherited, and the synchronous step API drives
+        # the async engine through the FSM's shared async→sync bridge.
+        self._engine = self._async_engine
         self._resource_manager = ResourceManager()
         self._transaction_manager = None
         self._history: ExecutionHistory | None = None
@@ -999,20 +1004,6 @@ class AdvancedFSM:
             self._update_state_instance(context, initial_state)
         return None
 
-    def _enter_initial_state_sync(
-        self, context: ExecutionContext
-    ) -> StepResult | None:
-        """Ensure initial state is entered with transforms (sync)."""
-        error = self._prepare_initial_state(context)
-        if error is not None:
-            return error
-        if not context._initial_transforms_executed:
-            self._engine._execute_state_transforms(
-                context, context.current_state
-            )
-            context._initial_transforms_executed = True
-        return None
-
     async def _enter_initial_state_async(
         self, context: ExecutionContext
     ) -> StepResult | None:
@@ -1191,21 +1182,6 @@ class AdvancedFSM:
 
         return ArcExecution(arc_def, source_state, functions)
 
-    def _execute_arc_transform(
-        self,
-        arc: Any,
-        context: ExecutionContext,
-    ) -> tuple[bool, Any]:
-        """Execute arc transform (sync)."""
-        if not arc.transform:
-            return True, context.data
-        arc_exec = self._prepare_arc_execution(arc, context)
-        try:
-            result = arc_exec.execute(context, context.data)
-            return True, result
-        except Exception as e:
-            return False, str(e)
-
     def _update_state_instance(
         self,
         context: ExecutionContext,
@@ -1354,24 +1330,6 @@ class AdvancedFSM:
         """
         self._record_trace_entry(from_state, arc.target_state, arc.name, context)
         self._record_history_step(arc.target_state, arc.name, context)
-
-    def _call_hook_sync(
-        self,
-        hook_name: str,
-        *args: Any
-    ) -> None:
-        """Call a hook synchronously if it exists (shared logic).
-
-        Args:
-            hook_name: Name of hook attribute
-            args: Arguments to pass to hook
-        """
-        hook = getattr(self._hooks, hook_name, None)
-        if hook:
-            try:
-                hook(*args)
-            except Exception:
-                pass  # Silently ignore hook errors
 
     async def _call_hook_async(
         self,
@@ -1527,6 +1485,12 @@ class AdvancedFSM:
     ) -> StepResult:
         """Execute a single transition step synchronously.
 
+        Synchronous wrapper over :meth:`execute_step_async`, run through the
+        FSM's shared async→sync bridge so the sync and async steppers cannot
+        drift (one stepping implementation, on the single async engine). Safe to
+        call from within a running event loop — the bridge runs the coroutine on
+        its own thread.
+
         Args:
             context: Execution context
             arc_name: Optional specific arc to follow
@@ -1534,69 +1498,9 @@ class AdvancedFSM:
         Returns:
             StepResult with transition details
         """
-        start_time = time.time()
-        from_state = context.current_state or "initial"
-        data_before = context.get_data_snapshot()
-
-        try:
-            error_result = self._enter_initial_state_sync(context)
-            if error_result is not None:
-                return error_result
-            from_state = context.current_state or from_state
-
-            transitions = self._get_available_transitions(context, arc_name)
-            if not transitions:
-                return StepResult(
-                    from_state=from_state, to_state=from_state,
-                    transition="none", data_before=data_before,
-                    data_after=context.get_data_snapshot(),
-                    duration=time.time() - start_time, success=True,
-                    is_complete=self._is_at_end_state(context),
-                )
-
-            arc = transitions[0]
-            success, result = self._execute_arc_transform(arc, context)
-            if success:
-                context.data = result
-            else:
-                return StepResult(
-                    from_state=from_state, to_state=from_state,
-                    transition=arc.name or "error", data_before=data_before,
-                    data_after=context.get_data_snapshot(),
-                    duration=time.time() - start_time,
-                    success=False, error=result,
-                )
-
-            at_breakpoint = self._apply_transition(from_state, arc, context)
-            self._engine._execute_state_transforms(context, arc.target_state)
-            self._record_transition(from_state, arc, context)
-            self._call_hook_sync('on_state_exit', from_state)
-            self._call_hook_sync('on_state_enter', arc.target_state)
-
-            success, error, failed_states = self._step_transform_failure(
-                context, arc.target_state
-            )
-            return StepResult(
-                from_state=from_state, to_state=arc.target_state,
-                transition=arc.name or f"{from_state}->{arc.target_state}",
-                data_before=data_before,
-                data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time, success=success,
-                error=error,
-                at_breakpoint=at_breakpoint,
-                is_complete=self._is_at_end_state(context),
-                failed_states=failed_states,
-            )
-
-        except Exception as e:
-            self._call_hook_sync('on_error', e)
-            return StepResult(
-                from_state=from_state, to_state=from_state,
-                transition="error", data_before=data_before,
-                data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time,
-                success=False, error=str(e),
-            )
+        return self.fsm.get_sync_bridge().run(
+            self.execute_step_async(context, arc_name)
+        )
 
     async def execute_step_async(
         self,
@@ -1849,6 +1753,54 @@ class AdvancedFSM:
             'final_state': context.current_state,
             'final_data': context.get_data_snapshot(),
         }
+
+    def close(self) -> None:
+        """Release lifecycle resources held by this FSM. Idempotent.
+
+        Stops and joins the FSM's shared async→sync bridge thread — created
+        lazily by repeated :meth:`execute_step_sync` stepping — and closes the
+        resource manager, releasing any acquired resources, pools, and
+        providers. A sync-only ``AdvancedFSM`` has no other ergonomic way to
+        reach :meth:`FSM.close`; without this, its bridge daemon thread would
+        live until process exit.
+
+        Use :meth:`aclose` (or ``async with``) from async code so providers
+        whose cleanup is a coroutine are awaited rather than skipped.
+        """
+        self._resource_manager.close()
+        self.fsm.close()
+
+    async def aclose(self) -> None:
+        """Async counterpart of :meth:`close` for use in async contexts.
+
+        Awaits the resource manager's async cleanup (so providers exposing an
+        ``aclose`` / ``cleanup`` coroutine are awaited), then stops and joins
+        the shared bridge thread.
+        """
+        await self._resource_manager.cleanup()
+        self.fsm.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 class FSMDebugger:
