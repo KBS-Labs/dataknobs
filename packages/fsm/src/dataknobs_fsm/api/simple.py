@@ -511,7 +511,7 @@ class SimpleFSM:
         self._resource_manager = self._async_fsm._resource_manager
         self._async_engine = self._async_fsm._async_engine
 
-    def _run_async(self, coro: Any) -> Any:
+    def _run_async(self, coro: Any, timeout: float | None = None) -> Any:
         """Run an async operation to completion synchronously.
 
         Drives the single async execution engine through the FSM's shared
@@ -520,11 +520,19 @@ class SimpleFSM:
 
         Args:
             coro: Coroutine to run
+            timeout: Optional maximum seconds to wait. On expiry the bridge
+                cancels the still-running coroutine (best-effort) and raises
+                :class:`TimeoutError` — the caller's wait is bounded, unlike a
+                ``ThreadPoolExecutor.shutdown(wait=True)`` that blocks until the
+                coroutine finishes anyway.
 
         Returns:
             The result of the coroutine
+
+        Raises:
+            TimeoutError: If ``timeout`` elapses before the coroutine finishes.
         """
-        return self._fsm.get_sync_bridge().run(coro)
+        return self._fsm.get_sync_bridge().run(coro, timeout=timeout)
 
     def process(
         self,
@@ -593,22 +601,22 @@ class SimpleFSM:
                 )
 
         if timeout:
-            # Use threading for timeout support
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self._run_async, _process())
-                try:
-                    return future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError:
-                    future.cancel()
-                    # Return an error result instead of raising
-                    return {
-                        'success': False,
-                        'error': f"FSM execution exceeded timeout of {timeout} seconds",
-                        'final_state': None,
-                        'data': data if isinstance(data, dict) else data.data,
-                        'path': []
-                    }
+            # Bound the wait via the bridge timeout: it cancels the still-running
+            # coroutine on expiry and raises TimeoutError to this caller. (The
+            # old ThreadPoolExecutor approach blocked on shutdown(wait=True),
+            # which waited for the coroutine to finish anyway, so the timeout
+            # never actually bounded the wait.)
+            try:
+                return self._run_async(_process(), timeout=timeout)
+            except TimeoutError:
+                # Return an error result instead of raising.
+                return {
+                    'success': False,
+                    'error': f"FSM execution exceeded timeout of {timeout} seconds",
+                    'final_state': None,
+                    'data': data if isinstance(data, dict) else data.data,
+                    'path': []
+                }
         else:
             return self._run_async(_process())
 
@@ -617,7 +625,8 @@ class SimpleFSM:
         data: list[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: Callable | None = None
+        on_progress: Callable | None = None,
+        timeout: float | None = None
     ) -> list[dict[str, Any]]:
         """Process multiple records in parallel batches synchronously.
 
@@ -626,9 +635,15 @@ class SimpleFSM:
             batch_size: Number of records per batch
             max_workers: Maximum parallel workers
             on_progress: Optional callback for progress updates
+            timeout: Optional maximum seconds for the whole batch. On expiry the
+                bridge cancels the in-flight batch coroutine and raises
+                :class:`TimeoutError`.
 
         Returns:
             List of results for each input record
+
+        Raises:
+            TimeoutError: If ``timeout`` elapses before the batch finishes.
         """
         return self._run_async(
             self._async_fsm.process_batch(
@@ -636,7 +651,8 @@ class SimpleFSM:
                 batch_size=batch_size,
                 max_workers=max_workers,
                 on_progress=on_progress
-            )
+            ),
+            timeout=timeout
         )
 
     def process_stream(
@@ -650,7 +666,8 @@ class SimpleFSM:
         csv_delimiter: str = ',',
         csv_has_header: bool = True,
         skip_empty_lines: bool = True,
-        use_streaming: bool = False
+        use_streaming: bool = False,
+        timeout: float | None = None
     ) -> dict[str, Any]:
         """Process a stream of data through the FSM synchronously.
 
@@ -665,9 +682,15 @@ class SimpleFSM:
             csv_has_header: Whether CSV file has header row
             skip_empty_lines: Skip empty lines in text files
             use_streaming: Use memory-efficient streaming for large files
+            timeout: Optional maximum seconds for the whole stream. On expiry the
+                bridge cancels the in-flight stream coroutine and raises
+                :class:`TimeoutError`.
 
         Returns:
             Dict containing stream processing statistics
+
+        Raises:
+            TimeoutError: If ``timeout`` elapses before the stream finishes.
         """
         # If source is a string (file path), use the async version directly
         if isinstance(source, str):
@@ -683,7 +706,8 @@ class SimpleFSM:
                     csv_has_header=csv_has_header,
                     skip_empty_lines=skip_empty_lines,
                     use_streaming=use_streaming
-                )
+                ),
+                timeout=timeout
             )
         else:
             # Source is an async iterator, need to handle it properly
@@ -700,7 +724,7 @@ class SimpleFSM:
                     skip_empty_lines=skip_empty_lines,
                     use_streaming=use_streaming
                 )
-            return self._run_async(_process())
+            return self._run_async(_process(), timeout=timeout)
 
     def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
         """Validate data against FSM's start state schema synchronously.
@@ -769,7 +793,8 @@ def process_file(
     csv_delimiter: str = ',',
     csv_has_header: bool = True,
     skip_empty_lines: bool = True,
-    use_streaming: bool = False
+    use_streaming: bool = False,
+    custom_functions: dict[str, Callable] | None = None
 ) -> dict[str, Any]:
     """Process a file through an FSM with automatic format detection.
 
@@ -779,15 +804,24 @@ def process_file(
         output_file: Optional output file path (format auto-detected from extension)
         input_format: Input format ('auto', 'jsonl', 'json', 'csv', 'text')
         chunk_size: Processing chunk size
-        timeout: Optional timeout in seconds for processing
+        timeout: Optional timeout in seconds. Bounded by the FSM's async->sync
+            bridge: on expiry the in-flight stream coroutine is cancelled
+            (best-effort, at its next await point) and :class:`TimeoutError` is
+            raised — the caller's wait is genuinely bounded. A CPU-bound *sync*
+            transform with no await point cannot be pre-empted by any timeout.
         text_field_name: Field name for text lines when converting to dict
         csv_delimiter: CSV delimiter character
         csv_has_header: Whether CSV file has header row
         skip_empty_lines: Skip empty lines in text files
         use_streaming: Use memory-efficient streaming for large files
+        custom_functions: Optional custom transform/validator functions to
+            register on the FSM (forwarded to :func:`create_fsm`).
 
     Returns:
         Processing statistics
+
+    Raises:
+        TimeoutError: If ``timeout`` elapses before processing finishes.
 
     Examples:
         # Process plain text file
@@ -799,44 +833,27 @@ def process_file(
         # Process with custom text field name
         results = process_file('config.yaml', 'input.txt', text_field_name='content')
     """
-    fsm = create_fsm(fsm_config)
+    fsm = create_fsm(fsm_config, custom_functions=custom_functions)
 
     try:
-        if timeout:
-            # Use threading timeout
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    fsm.process_stream,
-                    source=input_file,
-                    sink=output_file,
-                    chunk_size=chunk_size,
-                    input_format=input_format,
-                    text_field_name=text_field_name,
-                    csv_delimiter=csv_delimiter,
-                    csv_has_header=csv_has_header,
-                    skip_empty_lines=skip_empty_lines,
-                    use_streaming=use_streaming
-                )
-                try:
-                    result = future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError as e:
-                    future.cancel()
-                    raise TimeoutError(f"File processing exceeded timeout of {timeout} seconds") from e
-        else:
-            result = fsm.process_stream(
-                source=input_file,
-                sink=output_file,
-                chunk_size=chunk_size,
-                input_format=input_format,
-                text_field_name=text_field_name,
-                csv_delimiter=csv_delimiter,
-                csv_has_header=csv_has_header,
-                skip_empty_lines=skip_empty_lines,
-                use_streaming=use_streaming
-            )
-        return result
+        return fsm.process_stream(
+            source=input_file,
+            sink=output_file,
+            chunk_size=chunk_size,
+            input_format=input_format,
+            text_field_name=text_field_name,
+            csv_delimiter=csv_delimiter,
+            csv_has_header=csv_has_header,
+            skip_empty_lines=skip_empty_lines,
+            use_streaming=use_streaming,
+            timeout=timeout
+        )
+    except TimeoutError as e:
+        if timeout is not None:
+            raise TimeoutError(
+                f"File processing exceeded timeout of {timeout} seconds"
+            ) from e
+        raise
     finally:
         fsm.close()
 
@@ -870,7 +887,8 @@ def batch_process(
     data: list[dict[str, Any] | Record],
     batch_size: int = 10,
     max_workers: int = 4,
-    timeout: float | None = None
+    timeout: float | None = None,
+    custom_functions: dict[str, Callable] | None = None
 ) -> list[dict[str, Any]]:
     """Process multiple records in parallel.
 
@@ -879,35 +897,35 @@ def batch_process(
         data: List of input records
         batch_size: Batch size for processing
         max_workers: Maximum parallel workers
-        timeout: Optional timeout in seconds for entire batch processing
+        timeout: Optional timeout in seconds for the whole batch. Bounded by the
+            FSM's async->sync bridge: on expiry the in-flight batch coroutine is
+            cancelled (best-effort, at its next await point) and
+            :class:`TimeoutError` is raised — the caller's wait is genuinely
+            bounded. A CPU-bound *sync* transform with no await point cannot be
+            pre-empted by any timeout.
+        custom_functions: Optional custom transform/validator functions to
+            register on the FSM (forwarded to :func:`create_fsm`).
 
     Returns:
         List of processing results
+
+    Raises:
+        TimeoutError: If ``timeout`` elapses before the batch finishes.
     """
-    fsm = create_fsm(fsm_config)
+    fsm = create_fsm(fsm_config, custom_functions=custom_functions)
 
     try:
-        if timeout:
-            # Use threading timeout for batch processing
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    fsm.process_batch,
-                    data=data,
-                    batch_size=batch_size,
-                    max_workers=max_workers
-                )
-                try:
-                    return future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError as e:
-                    future.cancel()
-                    raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds") from e
-        else:
-            return fsm.process_batch(
-                data=data,
-                batch_size=batch_size,
-                max_workers=max_workers
-            )
+        return fsm.process_batch(
+            data=data,
+            batch_size=batch_size,
+            max_workers=max_workers,
+            timeout=timeout
+        )
+    except TimeoutError as e:
+        if timeout is not None:
+            raise TimeoutError(
+                f"Batch processing exceeded timeout of {timeout} seconds"
+            ) from e
+        raise
     finally:
         fsm.close()

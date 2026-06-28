@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The **synchronous FSM APIs now run async transforms correctly.** `SimpleFSM`,
-  `FSM.execute`, the sync batch/stream executors, and
-  `AdvancedFSM.execute_step_sync` now execute on the single async engine, so an
-  `async def` transform (e.g. every built-in database transform) is awaited
+- The **synchronous FSM APIs that ran on the standalone sync engine now run
+  async transforms correctly.** `FSM.execute`, the sync batch/stream executors,
+  and `AdvancedFSM.execute_step_sync` now execute on the single async engine, so
+  an `async def` transform (e.g. every built-in database transform) is awaited
   rather than being invoked and discarded as an un-awaited coroutine. Sync FSMs
   whose states/arcs used async transforms previously silently skipped that work.
+  (`SimpleFSM.process` already ran on the async engine, so it was unaffected.)
 - **Synchronous push arcs now enter the sub-network.** Driving a push arc
   through a synchronous entry point (`FSM.execute`, sync batch/stream,
   `AdvancedFSM.execute_step_sync`) previously flat-traversed it — the
@@ -25,9 +26,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state's resources into the sub-network (inheritance seeds from
   `current_state_resources`, which the async regular-transition and
   initial-state entries now populate by routing through the shared state-entry
-  path). A state's acquired resources are now **released when it is left** (a
-  regular transition, or a subflow pop, including the pushing state's resources
-  held through the subflow), closing a held-resource leak.
+  path). A state's acquired resources are now **released on every exit** — a
+  regular transition, a subflow pop (including the pushing state's resources
+  held through the subflow), and **run completion** (the final/terminal state
+  the run ends on, which is never "left", releases its resources when the run
+  finishes) — closing a held-resource leak.
+- **Batch and stream items now enter their initial state at full parity** with
+  single-record execution. Each batch item / streamed record previously seeded
+  its fresh context with a bare `set_state`, skipping the initial state's
+  pre-validators, resource allocation, and **initial-state transforms**; they now
+  route initial entry through the shared state-entry path, so a start-state
+  transform runs for every item/record.
+- **The synchronous `timeout=` now bounds the wait across the whole Simple
+  API.** It is honored via the bridge (which cancels the in-flight coroutine and
+  returns), instead of the previous `ThreadPoolExecutor` that blocked on
+  `shutdown(wait=True)` until the coroutine finished anyway — so a slow run was
+  cut short only nominally while the caller waited it out. `SimpleFSM.process`,
+  `SimpleFSM.process_batch` / `process_stream`, and the `process_file` /
+  `batch_process` module helpers all now bound the wait through the bridge. The
+  `process_file` / `batch_process` helpers also gained a `custom_functions=`
+  parameter (forwarded to `create_fsm`), so a caller can register transforms on
+  the FSM the helper builds.
 - The async execution engine now executes **push arcs**. Previously a push arc
   was treated as a flat transition on the async path, so the sub-network was
   never entered (`SimpleFSM.process()` runs on the async engine, so it was
@@ -58,18 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **FSM execution now runs on a single async engine; the synchronous APIs are
-  thin wrappers over it.** `FSM.execute`, `SimpleFSM`, the sync batch/stream
-  executors, and `AdvancedFSM.execute_step_sync` drive the one
-  `AsyncExecutionEngine` through a shared async→sync bridge
-  (`dataknobs_common.SyncLoopBridge`, one per FSM via `FSM.get_sync_bridge()`),
-  rather than a parallel synchronous engine. The public sync signatures and
-  semantics are unchanged. `SimpleFSM` dropped its private event-loop thread in
-  favor of the shared bridge; call `FSM.close()` / `SimpleFSM.close()` to stop
-  the bridge thread. The async engine's regular-transition and initial-state
-  entries now route through the shared `enter_state`, so state pre-validators
-  and resource allocation behave identically on every entry path. (The
-  standalone synchronous `ExecutionEngine` is retained but no longer used by any
-  public execution path; its removal follows in a subsequent release.)
+  thin wrappers over it.** All synchronous entry points drive the one
+  `AsyncExecutionEngine` through an async→sync bridge
+  (`dataknobs_common.SyncLoopBridge`) rather than a parallel synchronous engine.
+  The public sync signatures and semantics are unchanged. Explicit-lifecycle
+  objects — `SimpleFSM` and `AdvancedFSM.execute_step_sync` (repeated stepping) —
+  share one long-lived bridge per FSM (obtained via `FSM.get_sync_bridge()`,
+  released by `FSM.close()` / `SimpleFSM.close()`); `SimpleFSM` dropped its
+  private event-loop thread in favor of it. The stateless one-shot surfaces —
+  `FSM.execute` and the sync batch/stream executors — instead scope a throwaway
+  bridge to the operation, so they need no `close()` and leave no
+  process-lifetime thread behind. The async engine's regular-transition and
+  initial-state entries now route through the shared `enter_state`, so state
+  pre-validators and resource allocation behave identically on every entry path.
+  (The standalone synchronous `ExecutionEngine` is retained but no longer used by
+  any public execution path; its removal follows in a subsequent release.)
 - The push-arc subflow lifecycle is now driven by shared, color-free helpers on
   `BaseExecutionEngine` (target parsing, initial-state resolution, data-mapping
   application, push commit, rollback, result mapping, and subflow-final-state

@@ -152,7 +152,9 @@ class SyncLoopBridge:
             Whatever ``coro`` returns.
 
         Raises:
-            RuntimeError: If the bridge has been closed.
+            RuntimeError: If the bridge has been closed, or if called from
+                within a coroutine already running on the bridge's own loop
+                (which would self-deadlock).
             TimeoutError: If ``timeout`` elapses before the coroutine finishes.
             BaseException: Whatever ``coro`` raises, re-raised in the caller.
 
@@ -164,6 +166,19 @@ class SyncLoopBridge:
             not abandoned mid-flight. This mirrors
             :func:`asyncio.run_coroutine_threadsafe` semantics.
         """
+        if threading.current_thread() is self._thread:
+            # Called from a coroutine already running ON the bridge loop (e.g. a
+            # transform re-entering the same synchronous wrapper). Submitting to
+            # this loop and then blocking on the result would wait for a loop
+            # that cannot advance until we return — a self-deadlock. Raise
+            # instead, symmetric with close()'s same-thread guard. Close the
+            # coroutine so it does not warn as never-awaited.
+            coro.close()
+            raise RuntimeError(
+                "SyncLoopBridge.run() must not be called from within a "
+                "coroutine running on the bridge loop (it would deadlock); "
+                "await the coroutine directly instead"
+            )
         if self._closed:
             # Close the coroutine so it does not leak / warn as never-awaited.
             coro.close()

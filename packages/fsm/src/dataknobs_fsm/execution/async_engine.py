@@ -188,94 +188,128 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             Tuple of (success, result).
         """
         transitions = 0
-        
-        while transitions < max_transitions:
-            # Check if we're in a final state
-            if await self._is_final_state(context.current_state):
-                return self.finalize_single_result(context)
 
-            # Get available transitions
-            transitions_available = await self._get_available_transitions(
-                context.current_state,
-                context,
-                arc_name
-            )
-
-            if not transitions_available:
-                # No valid transitions - check if this is a final state
+        try:
+            while transitions < max_transitions:
+                # Check if we're in a final state
                 if await self._is_final_state(context.current_state):
                     return self.finalize_single_result(context)
 
-                # In a subflow at a final state with no transitions - pop back
-                # to the parent and continue (covers a subflow whose initial
-                # state is itself a final state).
+                # Get available transitions
+                transitions_available = await self._get_available_transitions(
+                    context.current_state,
+                    context,
+                    arc_name
+                )
+
+                if not transitions_available:
+                    # No valid transitions - check if this is a final state
+                    if await self._is_final_state(context.current_state):
+                        return self.finalize_single_result(context)
+
+                    # In a subflow at a final state with no transitions - pop back
+                    # to the parent and continue (covers a subflow whose initial
+                    # state is itself a final state).
+                    if context.network_stack:
+                        if await self._check_subflow_completion(context):
+                            continue
+
+                    return False, f"No valid transitions from state: {context.current_state}"
+
+                # Choose transition based on strategy
+                next_transition = await self._choose_transition(
+                    transitions_available,
+                    context
+                )
+
+                if not next_transition:
+                    return False, "No transition selected"
+
+                # Execute transition
+                success = await self._execute_transition(
+                    next_transition,
+                    context
+                )
+
+                if not success:
+                    return False, f"Transition failed: {next_transition}"
+
+                # If that transition completed a subflow (reached the sub-network's
+                # final state), pop back to the parent network now — before the next
+                # loop-top final-state check would otherwise finalize the whole run
+                # on a sub-network final state (is_final_state_common is global).
                 if context.network_stack:
-                    if await self._check_subflow_completion(context):
-                        continue
+                    await self._check_subflow_completion(context)
 
-                return False, f"No valid transitions from state: {context.current_state}"
-            
-            # Choose transition based on strategy
-            next_transition = await self._choose_transition(
-                transitions_available,
-                context
-            )
-            
-            if not next_transition:
-                return False, "No transition selected"
-            
-            # Execute transition
-            success = await self._execute_transition(
-                next_transition,
-                context
-            )
-            
-            if not success:
-                return False, f"Transition failed: {next_transition}"
+                transitions += 1
 
-            # If that transition completed a subflow (reached the sub-network's
-            # final state), pop back to the parent network now — before the next
-            # loop-top final-state check would otherwise finalize the whole run
-            # on a sub-network final state (is_final_state_common is global).
-            if context.network_stack:
-                await self._check_subflow_completion(context)
-
-            transitions += 1
-
-        return False, f"Maximum transitions ({max_transitions}) exceeded"
+            return False, f"Maximum transitions ({max_transitions}) exceeded"
+        finally:
+            # Release the resources owned by the state the run ENDS on. Each
+            # state's own ('owned') resources are released as it is left — a
+            # regular transition (_execute_transition) or a subflow pop
+            # (_pop_subflow) — but the final/terminal state (or a dead-end / max-
+            # transitions stop) is never "left", so without this its acquisitions
+            # would be stranded until the resource manager is torn down. This
+            # completes the "released on every exit path" contract for the run's
+            # last state. Idempotent (clears current_state_owned_resources), and
+            # touches only this state's own resources — any still-inherited
+            # ancestor resources belong to an ancestor that already unwound.
+            self._release_owned_state_resources(context)
     
+    async def _enter_and_execute_child(
+        self,
+        child_context: ExecutionContext,
+        max_transitions: int,
+        arc_name: str | None = None,
+    ) -> Tuple[bool, Any]:
+        """Enter a fresh child's initial state (parity path) then run it.
+
+        Batch and stream both spin up a fresh child :class:`ExecutionContext`
+        per item/record. Routing its initial-state entry through the shared
+        :meth:`_enter_initial_state` (rather than a bare ``set_state``) keeps
+        each item at parity with single-record execution: its initial-state
+        pre-validators run, its initial-state resources are allocated, and its
+        initial-state transforms execute. A rejected/failed initial entry
+        surfaces as that item's ``(False, error)`` result instead of silently
+        skipping the work.
+        """
+        success, error = await self._enter_initial_state(child_context)
+        if not success:
+            return False, error
+        return await self._execute_single(
+            child_context, max_transitions, arc_name
+        )
+
     async def _execute_batch(
         self,
         context: ExecutionContext,
         max_transitions: int
     ) -> Tuple[bool, Any]:
         """Execute in batch mode asynchronously.
-        
+
         Args:
             context: Execution context.
             max_transitions: Maximum transitions per item.
-            
+
         Returns:
             Tuple of (success, results).
         """
         if not context.batch_data:
             return False, "No batch data to process"
-        
+
         # Process items in parallel
         tasks = []
         for i, item in enumerate(context.batch_data):
             # Create child context for this item
             item_context = context.create_child_context(f"batch_{i}")
             item_context.data = item
-            
-            # Reset to initial state for each item
-            initial_state = await self._find_initial_state()
-            if initial_state:
-                item_context.set_state(initial_state)
-            
-            # Create task for this item
+
+            # Enter the item's initial state through the shared parity path
+            # (pre-validators + resource allocation + initial transforms),
+            # then run it — matching single-record execution.
             task = asyncio.create_task(
-                self._execute_single(item_context, max_transitions)
+                self._enter_and_execute_child(item_context, max_transitions)
             )
             tasks.append(task)
         
@@ -337,14 +371,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     f"stream_{chunks_processed}_{total_records}"
                 )
                 record_context.data = record
-                
-                # Reset to initial state
-                initial_state = await self._find_initial_state()
-                if initial_state:
-                    record_context.set_state(initial_state)
-                
-                # Execute for this record
-                success, result = await self._execute_single(
+
+                # Enter the record's initial state through the shared parity path
+                # (pre-validators + resource allocation + initial transforms),
+                # then run it — matching single-record execution.
+                success, result = await self._enter_and_execute_child(
                     record_context,
                     max_transitions
                 )
@@ -684,8 +715,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                             )
 
                     # Leaving the source state: release its owned resources
-                    # (held until now so the arc transform or a push could reach
-                    # them), then enter the target through the shared entry path
+                    # (held until now so a nested push can inherit them, and so a
+                    # transform reading context.current_state_resources can still
+                    # see them — the arc transform itself receives the arc's own
+                    # acquired resources via func_context, not these), then enter
+                    # the target through the shared entry path
                     # so it runs pre-validators and populates
                     # current_state_resources for child inheritance — at parity
                     # with the sync engine's _execute_transition (which calls

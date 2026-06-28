@@ -178,9 +178,11 @@ through that encoder; types it does not special-case (e.g. a raw `datetime` or
 > the sub-network initial state's pre-validators (and allocates its state
 > resources), and unwinds nested subflows back to the parent. Every public
 > synchronous entry point — `FSM.execute`, the sync batch/stream executors, and
-> `AdvancedFSM.execute_step_sync` — also runs on this async engine (through the
-> per-FSM async→sync bridge, `FSM.get_sync_bridge()`), so push arcs execute the
-> same way from sync and async callers. `NetworkExecutor`
+> `AdvancedFSM.execute_step_sync` — also runs on this async engine through an
+> async→sync bridge (the explicit-lifecycle `SimpleFSM` / `execute_step_sync`
+> share one long-lived `FSM.get_sync_bridge()`; the one-shot `FSM.execute` and
+> sync batch/stream scope a throwaway bridge to the operation), so push arcs
+> execute the same way from sync and async callers. `NetworkExecutor`
 > (`dataknobs_fsm.execution.network`), a public executor, likewise honors all
 > three modes — `copy` deep-copies, `serialize` round-trips through the JSON
 > encoder, `reference` shares by reference — running each sub-network in a fresh

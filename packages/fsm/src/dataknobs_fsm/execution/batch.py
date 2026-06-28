@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Union
 
+from dataknobs_common import SyncLoopBridge
+
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -97,7 +99,9 @@ class BatchExecutor:
         self.progress_callback = progress_callback
         
         # The single async execution engine; sync batch entry points drive it
-        # through the FSM's shared async→sync bridge.
+        # through a throwaway async→sync bridge scoped to each execute_batch
+        # operation (created and torn down per call), so a discarded executor
+        # never leaks a process-lifetime bridge thread.
         self.engine = fsm.get_async_engine()
         
         # Resource pool
@@ -133,28 +137,35 @@ class BatchExecutor:
                 transaction_mode=TransactionMode.PER_RECORD
             )
         
-        # Process based on parallelism setting
-        if self.parallelism <= 1:
-            return self._execute_sequential(
-                items,
-                context_template,
-                max_transitions,
-                progress
-            )
-        else:
-            return self._execute_parallel(
-                items,
-                context_template,
-                max_transitions,
-                progress
-            )
-    
+        # One throwaway bridge for the whole operation, shared across the
+        # sequential/parallel workers and torn down when the batch completes —
+        # leak-free without per-item thread churn.
+        with SyncLoopBridge() as bridge:
+            # Process based on parallelism setting
+            if self.parallelism <= 1:
+                return self._execute_sequential(
+                    items,
+                    context_template,
+                    max_transitions,
+                    progress,
+                    bridge
+                )
+            else:
+                return self._execute_parallel(
+                    items,
+                    context_template,
+                    max_transitions,
+                    progress,
+                    bridge
+                )
+
     def _execute_sequential(
         self,
         items: List[Any],
         context_template: ExecutionContext,
         max_transitions: int,
-        progress: BatchProgress
+        progress: BatchProgress,
+        bridge: SyncLoopBridge
     ) -> List[BatchResult]:
         """Execute items sequentially.
         
@@ -198,7 +209,7 @@ class BatchExecutor:
             
             # Execute
             try:
-                success, result = self.fsm.get_sync_bridge().run(
+                success, result = bridge.run(
                     self.engine.execute(
                         context,
                         None,  # Data is already in context
@@ -210,7 +221,7 @@ class BatchExecutor:
                 metadata = context.metadata.copy() if context.metadata else {}
                 metadata['final_state'] = context.current_state
                 metadata['path'] = context.history if hasattr(context, 'history') else []
-                
+
                 batch_result = BatchResult(
                     index=i,
                     success=success,
@@ -248,7 +259,8 @@ class BatchExecutor:
         items: List[Any],
         context_template: ExecutionContext,
         max_transitions: int,
-        progress: BatchProgress
+        progress: BatchProgress,
+        bridge: SyncLoopBridge
     ) -> List[BatchResult]:
         """Execute items in parallel.
         
@@ -272,7 +284,8 @@ class BatchExecutor:
                     i,
                     item,
                     context_template,
-                    max_transitions
+                    max_transitions,
+                    bridge
                 )
                 futures[future] = i
             
@@ -311,7 +324,8 @@ class BatchExecutor:
         index: int,
         item: Any,
         context_template: ExecutionContext,
-        max_transitions: int
+        max_transitions: int,
+        bridge: SyncLoopBridge
     ) -> BatchResult:
         """Process a single item.
         
@@ -356,14 +370,14 @@ class BatchExecutor:
                 context.set_state(initial_state)
             
             # Execute
-            success, result = self.fsm.get_sync_bridge().run(
+            success, result = bridge.run(
                 self.engine.execute(
                     context,
                     None,  # Data is already in context
                     max_transitions
                 )
             )
-            
+
             # Store final state and path in metadata
             metadata = context.metadata.copy() if context.metadata else {}
             metadata['final_state'] = context.current_state

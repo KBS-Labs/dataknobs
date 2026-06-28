@@ -241,6 +241,31 @@ def test_close_from_within_coroutine_raises_clear_error() -> None:
     assert _bridge_threads_alive() == []
 
 
+def test_run_from_within_coroutine_raises_clear_error() -> None:
+    """Re-entrant run() from the loop thread fails loudly instead of deadlocking.
+
+    Reproduce-first: a coroutine running ON the bridge loop calls run() again
+    on the same bridge. Without the same-thread guard the inner run() submits a
+    coroutine to the very loop it is blocking and waits on it forever — a
+    self-deadlock. The outer run() carries a timeout so a regression (guard
+    removed) surfaces as a bounded TimeoutError here rather than hanging the
+    suite; with the guard, the inner call raises RuntimeError which propagates
+    out as the asserted error.
+    """
+    bridge = SyncLoopBridge()
+    try:
+
+        async def reenters() -> None:
+            # Runs on the bridge's own loop thread.
+            bridge.run(asyncio.sleep(0))
+
+        with pytest.raises(RuntimeError, match="must not be called from within"):
+            bridge.run(reenters(), timeout=5)
+    finally:
+        bridge.close()
+    assert _bridge_threads_alive() == []
+
+
 def test_construction_failure_closes_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

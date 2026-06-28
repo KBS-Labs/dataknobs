@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple, Union
 
+from dataknobs_common import SyncLoopBridge
+
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -91,7 +93,9 @@ class StreamExecutor:
         self.progress_callback = progress_callback
         
         # The single async execution engine; sync stream entry points drive it
-        # through the FSM's shared async→sync bridge.
+        # through a throwaway async→sync bridge scoped to each execute_stream
+        # operation (created and torn down per call), so a discarded executor
+        # never leaks a process-lifetime bridge thread.
         self.engine = fsm.get_async_engine()
         
         # Memory management
@@ -134,7 +138,11 @@ class StreamExecutor:
         
         # Set stream context in execution context
         context_template.stream_context = stream_context
-        
+
+        # One throwaway bridge for the whole stream operation, torn down in the
+        # finally below — leak-free without per-record thread churn.
+        bridge = SyncLoopBridge()
+
         # Process stream
         try:
             while True:
@@ -163,7 +171,8 @@ class StreamExecutor:
                     context_template,
                     pipeline.transformations,
                     max_transitions,
-                    progress
+                    progress,
+                    bridge
                 )
                 
                 # Write results to sink if provided
@@ -190,6 +199,9 @@ class StreamExecutor:
                     break
                 
         finally:
+            # Tear down the operation-scoped bridge (joins its loop thread).
+            bridge.close()
+
             # Clean up
             if hasattr(pipeline.source, 'aclose') or hasattr(pipeline.source, 'close'):
                 pipeline.source.close()
@@ -206,7 +218,8 @@ class StreamExecutor:
         context_template: ExecutionContext,
         transformations: List[Callable],
         max_transitions: int,
-        progress: StreamProgress
+        progress: StreamProgress,
+        bridge: SyncLoopBridge
     ) -> List[Any]:
         """Process a single chunk.
         
@@ -247,7 +260,7 @@ class StreamExecutor:
                     
                     # Execute FSM
                     try:
-                        success, result = self.fsm.get_sync_bridge().run(
+                        success, result = bridge.run(
                             self.engine.execute(
                                 context,
                                 transformed,

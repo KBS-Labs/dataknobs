@@ -129,14 +129,15 @@ Execution Engine:
     efficient I/O handling, and the traversal strategies (DEPTH_FIRST,
     BREADTH_FIRST, RESOURCE_OPTIMIZED, STREAM_OPTIMIZED).
 
-    **Synchronous entry points** (``FSM.execute``, ``SimpleFSM``, the sync
-    batch/stream executors, ``AdvancedFSM.execute_step_sync``) drive this one
-    engine through a shared async→sync bridge — one
+    **Synchronous entry points** drive this one engine through an async→sync
+    bridge rather than a parallel synchronous engine. Explicit-lifecycle objects
+    (``SimpleFSM``, ``AdvancedFSM.execute_step_sync``) share one long-lived
     :class:`~dataknobs_common.SyncLoopBridge` per FSM, obtained via
-    ``get_sync_bridge()`` and released by ``close()`` — rather than a parallel
-    synchronous engine. (``get_engine()`` and the standalone
-    ``ExecutionEngine`` are retained for now but are no longer on any public
-    execution path.)
+    ``get_sync_bridge()`` and released by ``close()``. The stateless one-shot
+    surfaces (``FSM.execute``, the sync batch/stream executors) instead scope a
+    throwaway bridge to the operation, so they need no ``close()`` and leak no
+    thread. (``get_engine()`` and the standalone ``ExecutionEngine`` are
+    retained for now but are no longer on any public execution path.)
 
 Validation:
     The FSM can validate its structure before execution:
@@ -834,14 +835,22 @@ class FSM:
     def get_sync_bridge(self) -> "SyncLoopBridge":
         """Get or lazily create the shared async→sync bridge for sync APIs.
 
-        FSM execution runs on the single async engine; the synchronous public
-        entry points (:meth:`execute`, ``SimpleFSM.process``, the sync batch /
-        stream executors, ``AdvancedFSM.execute_step_sync``) drive it through
-        this bridge. One :class:`~dataknobs_common.SyncLoopBridge` (a single
-        daemon event-loop thread) is shared per FSM and reused across calls, so
-        repeated sync steps do not each spawn a thread. The bridge is safe to
-        call from within a running event loop (it runs the coroutine on its own
-        thread). Released by :meth:`close`.
+        FSM execution runs on the single async engine. The synchronous public
+        entry points that belong to an object with an explicit lifecycle —
+        ``SimpleFSM`` and ``AdvancedFSM.execute_step_sync`` (repeated stepping)
+        — drive it through this *shared, long-lived* bridge: one
+        :class:`~dataknobs_common.SyncLoopBridge` (a single daemon event-loop
+        thread) per FSM, reused across calls so repeated sync steps do not each
+        spawn a thread. It is released by :meth:`close`.
+
+        The *stateless* one-shot surfaces (:meth:`execute`, the sync batch /
+        stream executors) deliberately do NOT use this shared bridge — they
+        scope a throwaway bridge to the operation (via
+        :func:`~dataknobs_common.run_coro_sync` or a local bridge) so they need
+        no ``close()`` and never leak a process-lifetime thread.
+
+        The bridge is safe to call from within a running event loop (it runs the
+        coroutine on its own thread).
 
         Returns:
             The shared ``SyncLoopBridge`` for this FSM.
@@ -988,19 +997,29 @@ class FSM:
     
     def execute(self, initial_data: Dict[str, Any] | None = None) -> Any:
         """Execute the FSM synchronously with initial data.
-        
-        This is a simplified API for running the FSM.
-        
+
+        This is a simplified, *stateless* convenience API: it runs the single
+        async engine on a throwaway async→sync bridge (spun up and torn down for
+        this one call via :func:`~dataknobs_common.run_coro_sync`), so a
+        one-shot ``FSM(...).execute(...)`` needs no ``close()`` and leaves no
+        background thread behind. For repeated synchronous runs, prefer
+        :class:`~dataknobs_fsm.api.simple.SimpleFSM` (which owns one shared
+        bridge for its lifetime) over calling this in a loop. Safe to call from
+        within a running event loop — the coroutine runs on the throwaway
+        bridge's own thread.
+
         Args:
             initial_data: Initial data for execution.
-            
+
         Returns:
             Execution result.
         """
         import time
-        
+
+        from dataknobs_common import run_coro_sync
+
         try:
-            # Run the single async engine through the shared async→sync bridge
+            # Run the single async engine on a throwaway bridge for this one call
             # (the synchronous public surface over the one execution engine).
             engine = self.get_async_engine()
 
@@ -1011,7 +1030,7 @@ class FSM:
             start_time = time.time()
 
             # Execute the FSM
-            success, result = self.get_sync_bridge().run(
+            success, result = run_coro_sync(
                 engine.execute(
                     context,
                     initial_data if self.data_mode == ProcessingMode.SINGLE else None,

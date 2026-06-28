@@ -16,7 +16,7 @@ the hard-coded ``success=True`` behavior and PASS once the step reports
 
 Note: this is distinct from an *arc* transform raising (covered by
 ``test_advanced_fsm_async_step.py``), which already failed the step via
-``_execute_arc_transform`` returning ``(False, ...)``.
+``_execute_arc_transform_async`` returning ``(False, ...)``.
 """
 
 from __future__ import annotations
