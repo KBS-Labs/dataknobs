@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-28T02:16:50Z",
+  "timestamp": "2026-06-28T02:49:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fsm-delete-sync-engine",
-  "git_commit": "deb1a62a11755c9cff29960a4d0816553b1bbeae",
+  "git_commit": "6a1cbf9afd10018732adeaeeebf67c04bfd5b022",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
