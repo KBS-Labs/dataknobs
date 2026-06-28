@@ -566,6 +566,105 @@ async def test_async_push_arc_applies_config_authored_result_mapping():
     assert "sub_out" not in data  # unmapped child field did not leak through
 
 
+def _async_data_mapping_config() -> dict:
+    """Config whose push arc carries a ``data_mapping`` (parent_out -> sub_in).
+
+    The mirror of ``_async_result_mapping_config`` for the *inbound* (push-time)
+    direction. The main start state sets ``parent_out`` and a parent-only
+    ``keep`` field; the push arc maps ``parent_out`` onto the child's ``sub_in``.
+    A ``data_mapping`` builds a fresh child shape from *only* the mapped fields,
+    so the child must see ``sub_in`` (the renamed value) and must NOT see either
+    the original ``parent_out`` name or the unmapped ``keep`` field.
+    """
+    return {
+        "name": "dm_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['parent_out'] = 42\n"
+                                    "    data['keep'] = 'me'\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub",
+                                "return_state": "after",
+                                "data_mapping": {"parent_out": "sub_in"},
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "s1",
+                        "is_start": True,
+                        "arcs": [{"target": "s2"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_saw_sub_in'] = data.get('sub_in')\n"
+                                    "    data['sub_saw_parent_out'] = 'parent_out' in data\n"
+                                    "    data['sub_saw_keep'] = 'keep' in data\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "s2", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+async def test_async_push_arc_applies_config_authored_data_mapping():
+    """A config-authored ``data_mapping`` reaches the runtime arc and applies.
+
+    The inbound counterpart to
+    ``test_async_push_arc_applies_config_authored_result_mapping``. The only
+    surviving ``data_mapping`` coverage was a constructor-attribute assertion
+    (``test_network_arc.py``) that never *executes* the mapping, so a push-time
+    field-renaming regression would pass CI. This drives the rename end to end
+    on the async ``AsyncSimpleFSM`` path: the parent's ``parent_out`` arrives in
+    the child under the renamed key ``sub_in`` (with its value), and neither the
+    original ``parent_out`` name nor the unmapped parent-only ``keep`` field
+    crosses into the child (a ``data_mapping`` builds the child shape from only
+    the mapped fields).
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_data_mapping_config())
+    try:
+        result = await fsm.process({})
+    finally:
+        await fsm.close()
+    data = result.get("data", {})
+    assert result.get("success"), f"FSM did not complete cleanly: {result}"
+    assert data.get("sub_saw_sub_in") == 42  # parent_out arrived renamed as sub_in
+    assert data.get("sub_saw_parent_out") is False  # original name did not carry
+    assert data.get("sub_saw_keep") is False  # unmapped parent field did not cross
+
+
 # --- Async subflow state-entry parity: pre-validators run (and can reject) -----
 
 

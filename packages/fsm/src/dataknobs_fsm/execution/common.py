@@ -1,8 +1,10 @@
-"""Common utilities for sync and async execution engines.
+"""Common utilities shared across the execution engine and its helpers.
 
-This module provides shared logic for both synchronous and asynchronous
-execution engines, including network selection, arc scoring, and 
-transition selection strategies.
+This module provides shared logic used by the async execution engine and the
+base engine, including network selection, arc scoring, and transition
+selection strategies (``TraversalStrategy``, ``TransitionSelectionMode``). It
+is the lowest shared module, so it carries these primitives without importing
+the engines that consume them.
 """
 
 import math

@@ -162,6 +162,14 @@ async def test_arc_transform_does_not_block(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 3: Arc condition reads its resource (async)
 # --------------------------------------------------------------------------- #
+#
+# Note: there is intentionally no test exercising a raw ``IStateTestFunction``
+# instance used directly as an arc *condition* (pre-test). On the engine that
+# now runs all execution, an ``IStateTestFunction`` supplied as an arc condition
+# is not dispatched, so the resource-reaching-condition scenario that earlier
+# relied on that dispatch was removed rather than re-homed against the
+# non-dispatching behavior. The arc-condition coverage below uses inline /
+# registered condition functions, which the engine does dispatch.
 
 @pytest.mark.asyncio
 async def test_arc_condition_reads_resource(tmp_path: Path) -> None:

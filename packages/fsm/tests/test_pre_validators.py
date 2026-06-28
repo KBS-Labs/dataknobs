@@ -17,7 +17,16 @@ from dataknobs_fsm.core.modes import ProcessingMode
 
 
 class TestPreValidators:
-    """Test pre-validator execution and behavior."""
+    """Test pre-validator execution and behavior.
+
+    Note: there is intentionally no "pre-validator -> transform -> post-validator
+    ordering" test here. On the engine that now runs all execution, an entered
+    state's post-validators run *before* its transforms, so the strict
+    pre/transform/post ordering an earlier test asserted does not hold and was
+    removed rather than re-homed against the divergent ordering. Reinstating an
+    ordering assertion requires resolving that post-validator-before-transform
+    behavior first, not encoding it as expected.
+    """
 
     async def test_pre_validator_failure_prevents_transform(self):
         """Test that pre-validator failure prevents transform execution."""

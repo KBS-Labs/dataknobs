@@ -232,6 +232,98 @@ async def test_async_push_arc_custom_initial_state() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# push to a non-existent custom initial *state* rolls back cleanly
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_async_push_to_nonexistent_initial_state_rolls_back_clean() -> None:
+    """``target_network: "sub:does_not_exist"`` fails the push and rolls back clean.
+
+    Distinct from the missing-*network* case: here the network ``sub`` exists but
+    the requested custom initial *state* does not, so resolution fails *after*
+    the push has begun — exercising the failed-push rollback path rather than the
+    "target network not found" early return. The run must report failure, no
+    state in ``sub`` may run (its real start ``first`` is never entered), and the
+    parent context must be left clean: the parent's pre-push ``parent_marker``
+    survives and no isolated sub-network data is stranded on it.
+    """
+    config = {
+        "name": "bad_initial_state",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['parent_marker'] = 'intact'\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub:does_not_exist",
+                                "return_state": "after",
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "first",
+                        "is_start": True,
+                        "arcs": [{"target": "done"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_ran'] = True\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "done", "is_end": True},
+                ],
+            },
+        ],
+    }
+    fsm = AsyncSimpleFSM(config, data_mode=DataHandlingMode.COPY)
+    try:
+        result = await fsm.process({"id": 1})
+    finally:
+        await fsm.close()
+
+    assert result["success"] is False, (
+        "a push to a non-existent custom initial state should fail the record, "
+        f"not succeed (got {result})"
+    )
+    data = result.get("data", {})
+    assert data.get("sub_ran") is not True, (
+        "the sub-network ran despite the unresolved custom initial state — the "
+        "failed push was not rolled back cleanly"
+    )
+    assert data.get("parent_marker") == "intact", (
+        "the parent's pre-push data did not survive the failed push — the "
+        "rollback stranded or corrupted the parent context"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # a resource inherited from the pushing state is visible across all sub states
 # --------------------------------------------------------------------------- #
 

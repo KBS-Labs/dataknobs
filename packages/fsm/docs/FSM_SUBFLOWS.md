@@ -153,8 +153,8 @@ class DataIsolationMode(Enum):
         return data                               # REFERENCE — share by reference
 ```
 
-Each executor applies it after data mapping but before entering the sub-network,
-e.g. `ExecutionEngine._execute_push_arc`:
+The engine applies it after data mapping but before entering the sub-network,
+in `AsyncExecutionEngine._execute_push_arc`:
 
 ```python
 # After data_mapping has been applied to produce mapped_data:

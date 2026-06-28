@@ -13,10 +13,10 @@ Architecture:
     - Data Mode Control: Configures how data flows through states (COPY/REFERENCE/DIRECT)
     - Transaction Management: Coordinates transactional state changes
     - Resource Management: Tracks and manages resource requirements
-    - Execution Engines: Creates and manages sync/async execution engines
+    - Execution Engine: Creates and manages the single async execution engine
 
     **Design Philosophy:**
-    - Separation of Concerns: FSM defines structure, engines handle execution
+    - Separation of Concerns: FSM defines structure, the engine handles execution
     - Multiple Networks: Support complex workflows with multiple state graphs
     - Configurable Processing: Data modes adapt to different use cases
     - Resource Awareness: Track dependencies before execution
@@ -218,11 +218,12 @@ class FSM:
         - resource_manager: Manages external resources
         - transaction_manager: Coordinates transactions
 
-        **Execution Engines:**
-        - Created lazily via get_engine() / get_async_engine()
-        - Sync engine for SimpleFSM
-        - Async engine for AsyncSimpleFSM
-        - Cached for reuse
+        **Execution Engine:**
+        - A single ``AsyncExecutionEngine``, created lazily via
+          get_async_engine() and cached for reuse
+        - Runs all execution; the synchronous public APIs (SimpleFSM,
+          FSM.execute, sync batch/stream) drive it through the async->sync
+          bridge rather than a separate synchronous engine
 
     Attributes:
         name (str): Unique identifier for this FSM
