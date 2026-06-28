@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `IStateTestFunction` instance used as an arc condition is now dispatched
+  on every path.** A bare interface instance injected via the low-level
+  `AsyncExecutionEngine(custom_functions=...)` merge was stored un-normalized and
+  called as `instance(data, context)` — raising `TypeError`, since the
+  interface's logic lives on `.test()`, not `__call__`. The arc-condition paths
+  (`AsyncExecutionEngine._evaluate_arc` and `ArcExecution.can_execute_async`) now
+  normalize such an instance to its bound `.test` method (sync or `async def`)
+  before invoking it, matching the normalization the function manager and config
+  builder already applied on their paths. Registered-predicate and
+  config-authored arc conditions were unaffected.
+- **A rejecting initial-state pre-validator now reports *why* it rejected.** When
+  the start state's pre-validator failed, `execute()` returned the generic
+  "Failed to enter initial state 'X'", discarding the specific
+  "Pre-validation failed for state 'X'" reason recorded during entry. The
+  initial-state entry now surfaces the specific reason to the caller.
 - **Config-authored `builtin` and `custom` function references now resolve to a
   working function and run.** A `{"type": "builtin", "name":
   "transformers.map_fields", "params": {...}}` (or `{"type": "custom", "module":

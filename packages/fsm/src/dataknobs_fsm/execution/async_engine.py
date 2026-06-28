@@ -22,6 +22,7 @@ from dataknobs_fsm.execution.common import (
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
+from dataknobs_fsm.functions.base import as_state_test_callable
 from dataknobs_fsm.core.data_wrapper import ensure_dict
 
 logger = logging.getLogger(__name__)
@@ -498,8 +499,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         if arc.pre_test not in functions:
             return False
 
-        # Execute pre-test function
-        pre_test_func = functions[arc.pre_test]
+        # Execute pre-test function. A bare IStateTestFunction instance injected
+        # via the engine's custom_functions merge (which, unlike the manager and
+        # the config builder, stores functions un-normalized) is not callable —
+        # normalize it to its bound .test method so every pre-test is invoked
+        # uniformly as func(data, context).
+        pre_test_func = as_state_test_callable(functions[arc.pre_test])
 
         # Acquire the arc's declared resources and inject them (plus the role
         # map) into the condition's function context, so a resource-aware
@@ -1615,6 +1620,17 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Returns:
             (True, None) on success, (False, error_message) on failure.
         """
+        # Clear any stale ``last_error`` before the entry attempt. On a reused
+        # SINGLE-mode context, ``last_error`` may still hold a reason from a
+        # prior run; because ``_establish_state`` only records the pre-validation
+        # reason when ``last_error`` is unset (the don't-clobber gate), a stale
+        # value would otherwise survive and ``_initial_entry_error`` would
+        # surface *that* instead of this run's actual rejection reason. Clearing
+        # here scopes the specific-reason contract to the current entry while
+        # still letting a pre-validator that records its own error during this
+        # entry win over the generic message.
+        context.last_error = None
+
         # Enter the start state through the shared entry path (pre-validators +
         # current_state_resources population for child inheritance), at parity
         # with the sync engine's _enter_initial_state. When the state is already
@@ -1625,14 +1641,26 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             if not initial_state:
                 return False, "No initial state found"
             if not await self.enter_state(context, initial_state):
-                return False, f"Failed to enter initial state '{initial_state}'"
+                return False, self._initial_entry_error(context, initial_state)
         else:
             if not await self._establish_state(context, context.current_state):
-                return (
-                    False,
-                    f"Failed to enter initial state '{context.current_state}'",
+                return False, self._initial_entry_error(
+                    context, context.current_state
                 )
         return True, None
+
+    @staticmethod
+    def _initial_entry_error(context: ExecutionContext, state_name: str) -> str:
+        """Build the initial-state entry failure message.
+
+        Prefer the specific upstream reason recorded on ``context.last_error``
+        (e.g. "Pre-validation failed for state 'X'", set by ``_establish_state``)
+        over the generic "Failed to enter initial state 'X'" so a rejecting
+        initial-state pre-validator surfaces *why* it rejected, not just that
+        entry failed.
+        """
+        specific = getattr(context, 'last_error', None)
+        return specific or f"Failed to enter initial state '{state_name}'"
 
     async def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.

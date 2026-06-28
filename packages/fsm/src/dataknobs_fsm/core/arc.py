@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
-from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import FunctionContext, as_state_test_callable
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
@@ -170,8 +170,9 @@ class ArcExecution:
     ) -> bool:
         """Check if arc can be executed, awaiting async pre-tests.
 
-        Mirrors can_execute() but awaits the result if the pre-test
-        function is a coroutine.
+        Resolves the arc's ``pre_test`` function, normalizes a bare
+        ``IStateTestFunction`` instance to its bound ``.test`` method, invokes
+        it, and awaits the result when the function is a coroutine.
 
         Args:
             context: Execution context.
@@ -209,6 +210,12 @@ class ArcExecution:
                 context, resources, apply_factory=False
             )
 
+            # A bare IStateTestFunction instance is not callable; normalize it to
+            # its bound .test method so an interface-instance arc condition is
+            # dispatched, not called as func(data, context) (parity with the
+            # async engine's _evaluate_arc).
+            pre_test_func = as_state_test_callable(pre_test_func)
+
             # Execute pre-test
             result = pre_test_func(data, func_context)
             if inspect.isawaitable(result):
@@ -238,8 +245,8 @@ class ArcExecution:
     ) -> Any:
         """Execute the arc transition, awaiting async transforms.
 
-        Mirrors execute() but uses _execute_single_transform_async
-        so that async transform functions are properly awaited.
+        Uses ``_execute_single_transform_async`` so that async transform
+        functions are properly awaited.
 
         Args:
             context: Execution context.
