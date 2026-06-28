@@ -610,3 +610,73 @@ def test_custom_missing_name_is_loud() -> None:
     )
     with pytest.raises(ValueError, match="Custom function not found"):
         SimpleFSM(config)
+
+
+# --------------------------------------------------------------------------- #
+# doc-truth regression guard: the index.md quickstart must build + run
+# --------------------------------------------------------------------------- #
+
+def test_documented_index_quickstart_runs() -> None:
+    """The ``index.md`` "Using Configuration" quickstart builds and runs.
+
+    Mirrors the exact pipeline documented in ``docs/packages/fsm/index.md`` —
+    a built-in ``RequiredFieldsValidator`` pre-validator gate, a built-in
+    ``map_fields`` transform, and an inline transform — so a future edit that
+    re-breaks the headline quickstart (e.g. a fictional built-in name) fails
+    here. The prior quickstart referenced non-existent built-ins
+    (``has_required_fields`` / ``data_valid`` / ``add_metadata``).
+    """
+    config = {
+        "name": "data_processor",
+        "data_mode": "COPY",
+        "states": [
+            {
+                "name": "validate",
+                "is_start": True,
+                "pre_validators": [
+                    {
+                        "type": "builtin",
+                        "name": "validators.RequiredFieldsValidator",
+                        "params": {"fields": ["user_id", "data"]},
+                    }
+                ],
+                "transforms": [
+                    {
+                        "type": "builtin",
+                        "name": "transformers.map_fields",
+                        "params": {"mapping": {"data": "payload"}},
+                    }
+                ],
+            },
+            {
+                "name": "process",
+                "transforms": [
+                    {
+                        "type": "inline",
+                        "code": (
+                            "def transform(data, context):\n"
+                            "    data['processed'] = True\n"
+                            "    return data\n"
+                        ),
+                    }
+                ],
+            },
+            {"name": "done", "is_end": True},
+        ],
+        "arcs": [
+            {"from": "validate", "to": "process"},
+            {"from": "process", "to": "done"},
+        ],
+    }
+
+    ok = _run(config, {"user_id": "123", "data": "input"})
+    assert ok["success"], f"documented quickstart failed on a valid record: {ok}"
+    assert ok["data"] == {"user_id": "123", "payload": "input", "processed": True}, (
+        f"documented quickstart produced unexpected data: {ok['data']}"
+    )
+
+    gated = _run(config, {"data": "input"})
+    assert not gated["success"], (
+        "documented quickstart should gate a record missing 'user_id', but it "
+        f"succeeded: {gated}"
+    )
