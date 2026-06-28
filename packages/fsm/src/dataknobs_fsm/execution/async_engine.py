@@ -14,10 +14,10 @@ from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import TraversalStrategy
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
-    TransitionSelectionMode
+    TransitionSelectionMode,
+    TraversalStrategy
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
@@ -560,8 +560,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # routing the record to the fall-through reject terminal — which
                 # would hide an infrastructure outage as a data-quality drop.
                 # _get_available_transitions propagates this; engine.execute()
-                # converts it to a failed record result. (Parity with the sync
-                # engine's _evaluate_pre_test.)
+                # converts it to a failed record result.
                 logger.warning(
                     "Arc condition %r raised; surfacing as an evaluation error "
                     "(arc %s->%s)",
@@ -787,13 +786,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
     ) -> bool:
         """Execute a push arc to transition into a subflow network.
 
-        Async counterpart to ``ExecutionEngine._execute_push_arc``, driving the
-        same shared subflow lifecycle (``base_engine`` helpers): resolves and
-        validates the target before committing, isolates the parent data via
+        Drives the shared subflow lifecycle (``base_engine`` helpers): resolves
+        and validates the target before committing, isolates the parent data via
         the shared ``DataIsolationMode.apply`` helper (the single source of
-        truth, so the sync engine, ``NetworkExecutor``, and this path cannot
-        drift), records a :class:`SubflowFrame` (for the pop's ``result_mapping``
-        and a failed entry's rollback), and enters the sub-network's initial
+        truth for data isolation), records a :class:`SubflowFrame` (for the
+        pop's ``result_mapping`` and a failed entry's rollback), and enters the
+        sub-network's initial
         state via the async :meth:`enter_state` — which runs pre-validators and
         allocates the sub-network state's own resources, at parity with the sync
         engine. The isolation deepcopy / serialize is offloaded off the event
@@ -1281,11 +1279,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
     def _coalesce_transform_result(result: Any, current_data: Any) -> Any:
         """Resolve an arc transform's return into the next ``context.data``.
 
-        Mirrors the sync ``ArcExecution._execute_single_transform`` contract:
+        Matches ``ArcExecution._execute_single_transform_async``'s contract:
         unwrap an ``ExecutionResult`` (success → its data; failure → raise
         ``FunctionError``), and treat a ``None`` return as an in-place mutation
         (preserve the input data). Applied uniformly to interface and
-        non-interface arc transforms so both engines behave identically.
+        non-interface arc transforms.
         """
         from dataknobs_fsm.functions.base import ExecutionResult
 

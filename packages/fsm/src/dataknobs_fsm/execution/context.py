@@ -49,10 +49,9 @@ class SubflowFrame:
     """Per-push bookkeeping for a sub-network entered via a ``PushArc``.
 
     ``network_stack`` carries only ``(network_name, return_state)`` and that
-    two-tuple shape is consumed across both execution engines,
-    ``NetworkExecutor``, and the per-call function contexts, so it cannot also
-    carry the originating arc or the parent's pre-push state. This parallel
-    frame does:
+    two-tuple shape is consumed across the execution engine and the per-call
+    function contexts, so it cannot also carry the originating arc or the
+    parent's pre-push state. This parallel frame does:
 
     - ``push_arc`` — the originating arc, so the pop can apply its
       ``result_mapping`` (which the pop site does not otherwise have).
@@ -122,7 +121,7 @@ class ExecutionContext:
         # carrying the originating ``PushArc`` and the parent's pre-push
         # data/resource state for result mapping and rollback. ``network_stack``
         # stays a ``(name, return_state)`` tuple list (its shape is consumed
-        # across the engines, ``NetworkExecutor``, and function contexts); this
+        # across the engine and function contexts); this
         # is the per-push bookkeeping the tuple cannot carry. Like
         # ``network_stack`` it starts empty and is not copied into child/cloned
         # contexts (a fresh sub-path begins with no pushes of its own).
@@ -501,8 +500,8 @@ class ExecutionContext:
         # load-bearing for data integrity (it gates persistence and the parent's
         # finalize_single_result), so a failure on a parallel/batch path must
         # surface in the parent's result rather than being lost on merge.
-        # (Sub-network/push-arc failures use a separate isolation boundary and
-        # are merged back in NetworkExecutor._handle_push_arc, not here.)
+        # (Sub-network/push-arc failures are handled on the engine's subflow
+        # path, which runs in this same context, not on this merge.)
         self.failed_states |= getattr(child, 'failed_states', set())
 
         # Merge metadata

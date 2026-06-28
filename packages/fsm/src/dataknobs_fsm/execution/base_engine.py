@@ -7,7 +7,7 @@ implementations, reducing code duplication and ensuring feature parity.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Tuple
 from types import SimpleNamespace
 
 from dataknobs_fsm.core.data_wrapper import (
@@ -23,11 +23,9 @@ from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelector,
-    TransitionSelectionMode
+    TransitionSelectionMode,
+    TraversalStrategy
 )
-
-if TYPE_CHECKING:
-    from dataknobs_fsm.execution.engine import TraversalStrategy
 
 logger = logging.getLogger(__name__)
 

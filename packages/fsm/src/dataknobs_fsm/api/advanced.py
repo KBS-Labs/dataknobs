@@ -178,7 +178,7 @@ Advanced Use Cases:
     Implement custom traversal strategies for special workflow patterns:
 
     ```python
-    from dataknobs_fsm.execution.engine import TraversalStrategy
+    from dataknobs_fsm.execution.common import TraversalStrategy
 
     class PriorityTraversal(TraversalStrategy):
         \"\"\"Execute high-priority states first.\"\"\"
@@ -286,7 +286,7 @@ See Also:
     - :class:`AsyncSimpleFSM`: Async production API
     - :class:`ExecutionMode`: Available execution modes
     - :class:`ExecutionHook`: Hook system for monitoring
-    - :mod:`dataknobs_fsm.execution.engine`: Execution engine
+    - :mod:`dataknobs_fsm.execution.async_engine`: Execution engine
     - :mod:`dataknobs_fsm.execution.history`: Execution history tracking
 """
 
@@ -310,8 +310,8 @@ from ..core.modes import ProcessingMode
 from ..core.state import StateInstance
 from ..core.transactions import TransactionManager, TransactionStrategy
 from ..execution.async_engine import AsyncExecutionEngine
+from ..execution.common import TraversalStrategy
 from ..execution.context import ExecutionContext
-from ..execution.engine import TraversalStrategy
 from ..execution.history import ExecutionHistory
 
 if TYPE_CHECKING:

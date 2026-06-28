@@ -12,7 +12,7 @@ from dataknobs_fsm.execution.common import (
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import TraversalStrategy
+from dataknobs_fsm.execution.common import TraversalStrategy
 
 
 class TestNetworkSelector:

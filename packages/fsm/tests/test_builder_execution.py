@@ -19,7 +19,6 @@ from dataknobs_fsm.core.modes import TransactionMode, ProcessingMode
 from dataknobs_fsm.core.fsm import FSM as CoreFSM
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 
 
 class TestFSMExecute:

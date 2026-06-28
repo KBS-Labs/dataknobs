@@ -1063,10 +1063,9 @@ flowchart TD
 
    The configured value is carried to the runtime `PushArc.isolation_mode` and
    applied by the shared `DataIsolationMode.apply` helper. See the "Execution
-   status" note in `FSM_SUBFLOWS.md`: executors that traverse a push arc's
-   sub-network (notably the public `NetworkExecutor`) honor all three modes,
-   while the default high-level engines do not yet execute push arcs through a
-   sub-network traversal.
+   status" note in `FSM_SUBFLOWS.md`: the single async engine traverses a push
+   arc's sub-network and honors all three isolation modes on every entry point
+   (sync and async).
 4. **Subnetwork Execution**: Subnetwork processes from its start to end states
 5. **Result Integration**: Subnetwork's final data replaces or merges with original
 6. **Return Transition**: Execution continues at `return_state` (if specified)

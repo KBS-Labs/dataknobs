@@ -414,15 +414,15 @@ class TestArcExecution:
             "fail_function": fail_function
         }
     
-    def test_can_execute_no_pretest(self):
+    async def test_can_execute_no_pretest(self):
         """Test can_execute with no pre-test."""
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # Should always return True without pre-test
-        assert arc_exec.can_execute(ExecutionContext(), self.test_data) is True
+        assert await arc_exec.can_execute_async(ExecutionContext(), self.test_data) is True
 
-    def test_can_execute_with_pretest(self):
+    async def test_can_execute_with_pretest(self):
         """Test can_execute with pre-test function."""
         # Arc with pre-test that returns True
         arc_def1 = ArcDefinition(
@@ -431,7 +431,7 @@ class TestArcExecution:
         )
         arc_exec1 = ArcExecution(arc_def1, "current", self.function_registry)
 
-        assert arc_exec1.can_execute(ExecutionContext(), self.test_data) is True
+        assert await arc_exec1.can_execute_async(ExecutionContext(), self.test_data) is True
 
         # Arc with pre-test that returns False
         arc_def2 = ArcDefinition(
@@ -440,9 +440,9 @@ class TestArcExecution:
         )
         arc_exec2 = ArcExecution(arc_def2, "current", self.function_registry)
 
-        assert arc_exec2.can_execute(ExecutionContext(), self.test_data) is False
+        assert await arc_exec2.can_execute_async(ExecutionContext(), self.test_data) is False
 
-    def test_can_execute_missing_function(self):
+    async def test_can_execute_missing_function(self):
         """Test can_execute with missing pre-test function."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -451,15 +451,15 @@ class TestArcExecution:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.can_execute(ExecutionContext(), self.test_data)
+            await arc_exec.can_execute_async(ExecutionContext(), self.test_data)
 
-    def test_execute_no_transform(self):
+    async def test_execute_no_transform(self):
         """Test execute with no transform function."""
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # Should pass data through unchanged
-        result = arc_exec.execute(ExecutionContext(), self.test_data)
+        result = await arc_exec.execute_async(ExecutionContext(), self.test_data)
         assert result == self.test_data
 
         # Check statistics
@@ -467,7 +467,7 @@ class TestArcExecution:
         assert arc_exec.success_count == 1
         assert arc_exec.failure_count == 0
 
-    def test_execute_with_transform(self):
+    async def test_execute_with_transform(self):
         """Test execute with transform function."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -476,13 +476,13 @@ class TestArcExecution:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         data = {"value": 10}
-        result = arc_exec.execute(ExecutionContext(), data)
+        result = await arc_exec.execute_async(ExecutionContext(), data)
 
         assert result["value"] == 20
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
 
-    def test_execute_with_failure(self):
+    async def test_execute_with_failure(self):
         """Test execute with failing transform."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -491,43 +491,13 @@ class TestArcExecution:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="Arc execution failed"):
-            arc_exec.execute(ExecutionContext(), self.test_data)
+            await arc_exec.execute_async(ExecutionContext(), self.test_data)
 
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 0
         assert arc_exec.failure_count == 1
-    
-    def test_execute_push_arc(self):
-        """Test executing push arc."""
-        push_arc = PushArc(
-            target_state="sub_start",
-            target_network="sub_network",
-            return_state="continue",
-            isolation_mode=DataIsolationMode.COPY,
-            data_mapping={"value": "input_value"},
-            result_mapping={"output_value": "result"}
-        )
-        
-        arc_exec = ArcExecution(push_arc, "current", self.function_registry)
-        
-        class MockContext:
-            def push_network(self, network, return_state):
-                self.pushed_network = network
-                self.return_state = return_state
-        
-        context = MockContext()
-        data = {"value": 100}
-        
-        # Execute push (simplified version)
-        result = arc_exec.execute_push(push_arc, context, data)
-        
-        assert context.pushed_network == "sub_network"
-        assert context.return_state == "continue"
-        
-        # In real implementation, this would handle sub-network execution
-        assert result is not None
-    
-    def test_statistics_tracking(self):
+
+    async def test_statistics_tracking(self):
         """Test execution statistics tracking."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -537,7 +507,7 @@ class TestArcExecution:
 
         # Execute multiple times
         for i in range(5):
-            arc_exec.execute(ExecutionContext(), {"value": i})
+            await arc_exec.execute_async(ExecutionContext(), {"value": i})
         
         stats = arc_exec.get_statistics()
         

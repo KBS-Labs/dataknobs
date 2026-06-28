@@ -136,8 +136,7 @@ Execution Engine:
     ``get_sync_bridge()`` and released by ``close()``. The stateless one-shot
     surfaces (``FSM.execute``, the sync batch/stream executors) instead scope a
     throwaway bridge to the operation, so they need no ``close()`` and leak no
-    thread. (``get_engine()`` and the standalone ``ExecutionEngine`` are
-    retained for now but are no longer on any public execution path.)
+    thread. There is no longer a standalone synchronous execution engine.
 
 Validation:
     The FSM can validate its structure before execution:
@@ -170,7 +169,6 @@ See Also:
     - :class:`~dataknobs_fsm.api.async_simple.AsyncSimpleFSM`: Async API wrapper
     - :class:`~dataknobs_fsm.api.advanced.AdvancedFSM`: Advanced debugging API
     - :class:`~dataknobs_fsm.core.network.StateNetwork`: State graph container
-    - :class:`~dataknobs_fsm.execution.engine.ExecutionEngine`: Sync execution engine
     - :class:`~dataknobs_fsm.execution.async_engine.AsyncExecutionEngine`: Async execution engine
 """
 
@@ -180,7 +178,6 @@ from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 
 if TYPE_CHECKING:
     from dataknobs_common import SyncLoopBridge
-    from dataknobs_fsm.execution.engine import ExecutionEngine
     from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
@@ -352,7 +349,6 @@ class FSM:
         # Execution support (from builder FSM wrapper)
         self.resource_manager = resource_manager
         self.transaction_manager = transaction_manager
-        self._engine: Any | None = None  # ExecutionEngine
         self._async_engine: Any | None = None  # AsyncExecutionEngine
         self._sync_bridge: Any | None = None  # SyncLoopBridge for sync entry points
 
@@ -784,37 +780,6 @@ class FSM:
         if network:
             return network.get_arcs_from_state(state_name)
         return []
-    
-    def get_engine(self, strategy: str | None = None) -> "ExecutionEngine":
-        """Get or create the execution engine.
-
-        Args:
-            strategy: Optional execution strategy override
-
-        Returns:
-            ExecutionEngine instance.
-        """
-        if self._engine is None:
-            from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
-            
-            # Map strategy strings to enum
-            strategy_map = {
-                "depth_first": TraversalStrategy.DEPTH_FIRST,
-                "breadth_first": TraversalStrategy.BREADTH_FIRST,
-                "resource_optimized": TraversalStrategy.RESOURCE_OPTIMIZED,
-                "stream_optimized": TraversalStrategy.STREAM_OPTIMIZED,
-            }
-            
-            strat = TraversalStrategy.DEPTH_FIRST  # Default
-            if strategy and strategy in strategy_map:
-                strat = strategy_map[strategy]
-            
-            self._engine = ExecutionEngine(
-                fsm=self,
-                strategy=strat,
-            )
-        
-        return self._engine
     
     def get_async_engine(self, strategy: str | None = None) -> "AsyncExecutionEngine":
         """Get or create the async execution engine.

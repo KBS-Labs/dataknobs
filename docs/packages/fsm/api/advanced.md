@@ -767,7 +767,7 @@ def debug_fsm(config, test_data):
 Set custom execution strategies:
 
 ```python
-from dataknobs_fsm.execution.engine import TraversalStrategy
+from dataknobs_fsm.execution.common import TraversalStrategy
 
 # Set execution strategy
 advanced_fsm.set_execution_strategy(TraversalStrategy.DEPTH_FIRST)

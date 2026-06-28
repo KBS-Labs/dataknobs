@@ -161,7 +161,7 @@ e.g. `ExecutionEngine._execute_push_arc`:
 context.data = push_arc.isolation_mode.apply(mapped_data)
 ```
 
-`NetworkExecutor` uses the same helper to produce the sub-network context's data.
+The execution engine uses this helper to produce the sub-network context's data.
 `SERIALIZE` round-trips the data through the project JSON encoder
 (`dataknobs_fsm.utils.json_encoder`), which serializes the FSM-specific types
 stdlib `json` rejects — `FSMData`, `ExecutionResult`, and any object exposing
@@ -170,30 +170,20 @@ through that encoder; types it does not special-case (e.g. a raw `datetime` or
 `set`) still raise, so use `COPY` for data that isn't JSON-round-trippable.
 
 > **Execution status.** The configured `data_isolation` value reaches the runtime
-> `PushArc.isolation_mode`, and every executor that traverses a push arc's
-> sub-network applies it through the shared `DataIsolationMode.apply` helper. The
-> **async execution engine** — which `AsyncSimpleFSM` and `SimpleFSM` both run on
-> — executes push arcs end to end: it pushes the sub-network, isolates the data by
-> mode, applies `data_mapping` on entry and `result_mapping` on completion, runs
-> the sub-network initial state's pre-validators (and allocates its state
-> resources), and unwinds nested subflows back to the parent. Every public
-> synchronous entry point — `FSM.execute`, the sync batch/stream executors, and
-> `AdvancedFSM.execute_step_sync` — also runs on this async engine through an
-> async→sync bridge (the explicit-lifecycle `SimpleFSM` / `execute_step_sync`
-> share one long-lived `FSM.get_sync_bridge()`; the one-shot `FSM.execute` and
-> sync batch/stream scope a throwaway bridge to the operation), so push arcs
-> execute the same way from sync and async callers. `NetworkExecutor`
-> (`dataknobs_fsm.execution.network`), a public executor, likewise honors all
-> three modes — `copy` deep-copies, `serialize` round-trips through the JSON
-> encoder, `reference` shares by reference — running each sub-network in a fresh
-> context so its traversal cannot corrupt the parent's stack. The standalone
-> synchronous `ExecutionEngine.execute()` (no longer used by any public path)
-> still treats a push arc as a flat transition and does not traverse the
-> sub-network; it is slated for removal. (Mechanism: that `execute()` path reads
-> its candidate arcs through `StateNetwork.arcs` (`dataknobs_fsm.core.network`),
-> which reconstructs every arc as a plain `ArcDefinition` from
-> `target_state`/`pre_test`/`transform` and drops the `PushArc` subtype, so its
-> `isinstance(arc, PushArc)` push dispatch is never reached.)
+> `PushArc.isolation_mode`, and is applied through the shared
+> `DataIsolationMode.apply` helper. FSM execution runs on a **single async engine**
+> (`AsyncExecutionEngine`); there is no longer a separate synchronous execution
+> engine. The engine executes push arcs end to end: it pushes the sub-network,
+> isolates the data by mode, applies `data_mapping` on entry and `result_mapping`
+> on completion, runs the sub-network initial state's pre-validators (and allocates
+> its state resources), enforces the nesting `max_depth`, supports a
+> `network:state` custom-initial-state target, and unwinds nested subflows back to
+> the parent. Every public synchronous entry point — `FSM.execute`, the sync
+> batch/stream executors, and `AdvancedFSM.execute_step_sync` — runs on this same
+> engine through an async→sync bridge (the explicit-lifecycle `SimpleFSM` /
+> `execute_step_sync` share one long-lived `FSM.get_sync_bridge()`; the one-shot
+> `FSM.execute` and sync batch/stream scope a throwaway bridge to the operation),
+> so push arcs execute identically from sync and async callers.
 
 The subflow lifecycle (push, completion check, pop) is driven by shared,
 color-free helpers on `BaseExecutionEngine`; the `AsyncExecutionEngine`

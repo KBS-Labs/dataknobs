@@ -144,8 +144,8 @@ class TestTransformContextFactory:
 class TestNoneReturnPreservation:
     """Transforms returning None should preserve input data."""
 
-    def test_sync_none_return_preserves_data(self) -> None:
-        """Sync transform returning None → input data preserved."""
+    async def test_sync_none_return_preserves_data(self) -> None:
+        """Sync transform returning None → input data preserved (via the async path)."""
 
         def mutating_transform(data: dict, ctx: Any) -> None:
             data["added"] = True
@@ -160,7 +160,7 @@ class TestNoneReturnPreservation:
         ctx = ExecutionContext()
 
         func_ctx = arc._create_function_context(ctx)
-        result = arc._execute_single_transform("mutate", {"x": 1}, func_ctx)
+        result = await arc._execute_single_transform_async("mutate", {"x": 1}, func_ctx)
 
         assert result == {"x": 1, "added": True}
 
@@ -186,8 +186,8 @@ class TestNoneReturnPreservation:
 
         assert result == {"x": 1, "added": True}
 
-    def test_sync_explicit_return_used(self) -> None:
-        """Sync transform with explicit return → return value used."""
+    async def test_sync_explicit_return_used(self) -> None:
+        """Sync transform with explicit return → return value used (via the async path)."""
 
         def replacing_transform(data: dict, ctx: Any) -> dict:
             return {"replaced": True}
@@ -201,6 +201,6 @@ class TestNoneReturnPreservation:
         ctx = ExecutionContext()
 
         func_ctx = arc._create_function_context(ctx)
-        result = arc._execute_single_transform("replace", {"x": 1}, func_ctx)
+        result = await arc._execute_single_transform_async("replace", {"x": 1}, func_ctx)
 
         assert result == {"replaced": True}
