@@ -387,23 +387,61 @@ Functions define the processing logic for states and transitions. They receive s
 }
 ```
 
-3. **Built-in Functions** - Framework-provided functions
+3. **Built-in Functions** - Framework-provided functions from the FSM library
 ```python
 {
     "type": "builtin",
-    "name": "validators.validate_json",
-    "params": {"schema": {...}}
+    "name": "transformers.map_fields",
+    "params": {"mapping": {"source_id": "id"}}
 }
 ```
 
-4. **Custom Functions** - Functions from external modules
+4. **Custom Functions** - Functions or classes from external modules
 ```python
 {
     "type": "custom",
-    "module": "my_module",
-    "name": "my_function"
+    "module": "my_package.my_module",
+    "name": "MyTransform",
+    "params": {"key": "value"}
 }
 ```
+
+#### Referencing built-in functions
+
+The FSM ships a library of validators and transformers in
+`dataknobs_fsm.functions.library`. They are registered automatically by
+introspection under the names **`validators.<Name>`** and
+**`transformers.<Name>`**, where `<Name>` is the exact public class or factory
+name in that module. `params` are passed to the class constructor (or factory)
+as keyword arguments to configure the function.
+
+The library exposes each capability as **both a class and a keyword factory**:
+
+| `name` | Kind | Example `params` |
+|---|---|---|
+| `transformers.map_fields` | factory → `FieldMapper` | `{"mapping": {"a": "b"}}` |
+| `transformers.FieldMapper` | class | `{"field_map": {"a": "b"}}` |
+| `transformers.normalize` | factory → `ValueNormalizer` | `{"name": "lowercase"}` |
+| `validators.RequiredFieldsValidator` | class | `{"fields": ["a", "b"]}` |
+| `validators.range_check` | factory → `RangeValidator` | `{"age": {"min": 0, "max": 150}}` |
+
+> **`params` must be keyword arguments.** A factory whose signature is
+> positional-only (e.g. `validators.required_fields(*fields)`) cannot be
+> configured through the `params` dict — reference its class form instead
+> (`validators.RequiredFieldsValidator` with `{"fields": [...]}`).
+
+Built-in (and custom) **validators** gate state entry only when declared under
+`pre_validators`; a `validators` (post-entry) entry whose result is a dict is
+merged into the record. A built-in name that does not exist fails loudly at
+build time with `ValueError: Built-in function not found: <name>`.
+
+#### The bare-string shorthand resolves to `registered`/`inline` only
+
+In the state-sugar form, a bare string (e.g. `"transform": "data['x'] = 1"`)
+resolves **only** to a pre-`registered` function (when the string matches a
+registered name) or to `inline` code otherwise. It is **never** promoted to a
+`builtin` or `custom` reference. To reference a built-in or external-module
+function, use the full dict form shown above.
 
 ### Function Interfaces and Parameters
 

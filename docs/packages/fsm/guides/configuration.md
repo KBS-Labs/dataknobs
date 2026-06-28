@@ -133,13 +133,30 @@ Functions define processing logic:
     "name": "process_data"
 }
 
-# Built-in function
+# Built-in function (from the FSM library)
 {
     "type": "builtin",
-    "name": "validate_json",
-    "params": {"schema": {...}}
+    "name": "transformers.map_fields",
+    "params": {"mapping": {"source_id": "id"}}
+}
+
+# Custom function (class or function from an external module)
+{
+    "type": "custom",
+    "module": "my_package.my_module",
+    "name": "MyTransform",
+    "params": {"key": "value"}
 }
 ```
+
+Built-in functions are registered by introspection under `validators.<Name>` /
+`transformers.<Name>` (each library capability is exposed as both a class and a
+keyword factory, e.g. `transformers.map_fields` / `transformers.FieldMapper`,
+`validators.range_check` / `validators.RequiredFieldsValidator`); `params` are
+the constructor/factory keyword arguments. A built-in/custom **validator** gates
+state entry only when declared under `pre_validators`. A bare string in the
+state-sugar form resolves only to a `registered` or `inline` function — use the
+dict form above for `builtin`/`custom`.
 
 ### 3. Data Modes
 
