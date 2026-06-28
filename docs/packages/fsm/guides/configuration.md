@@ -158,6 +158,12 @@ state entry only when declared under `pre_validators`. A bare string in the
 state-sugar form resolves only to a `registered` or `inline` function — use the
 dict form above for `builtin`/`custom`.
 
+A `custom` reference resolves to either a **class** implementing an FSM function
+interface (constructed with `params`, like a built-in class) or a plain
+`(data, context)` **function** (no `params`); a custom *factory* function is not
+supported. The interface method may be synchronous or `async def` (async methods
+are awaited). A missing module/attribute fails loudly with a `ValueError`.
+
 ### 3. Data Modes
 
 Control how data flows through states:

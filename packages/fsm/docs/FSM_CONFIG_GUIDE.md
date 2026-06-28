@@ -421,7 +421,7 @@ The library exposes each capability as **both a class and a keyword factory**:
 |---|---|---|
 | `transformers.map_fields` | factory → `FieldMapper` | `{"mapping": {"a": "b"}}` |
 | `transformers.FieldMapper` | class | `{"field_map": {"a": "b"}}` |
-| `transformers.normalize` | factory → `ValueNormalizer` | `{"name": "lowercase"}` |
+| `transformers.normalize` | factory → `ValueNormalizer` | `{"email": "lowercase"}` |
 | `validators.RequiredFieldsValidator` | class | `{"fields": ["a", "b"]}` |
 | `validators.range_check` | factory → `RangeValidator` | `{"age": {"min": 0, "max": 150}}` |
 
@@ -434,6 +434,24 @@ Built-in (and custom) **validators** gate state entry only when declared under
 `pre_validators`; a `validators` (post-entry) entry whose result is a dict is
 merged into the record. A built-in name that does not exist fails loudly at
 build time with `ValueError: Built-in function not found: <name>`.
+
+#### Referencing custom functions
+
+A `custom` reference (`{"type": "custom", "module": ..., "name": ...}`) resolves
+in one of two shapes:
+
+- a **class** implementing an FSM function interface (`ITransformFunction`,
+  `IValidationFunction`, `IStateTestFunction`) — constructed with `params` as
+  constructor keyword arguments, exactly like a built-in class; or
+- a plain **function** with the `(data, context)` signature — resolved through
+  the standard wrapper path (it takes no `params`).
+
+The interface method (`transform` / `validate` / `test`) may be **synchronous or
+`async def`** — async custom methods are awaited. Unlike built-ins, a custom
+*factory* function (one that returns a function-instance) is not supported; pass
+the class directly to configure it with `params`. A missing module or attribute
+fails loudly at build time with `ValueError: Custom function module not found:
+<module>` or `ValueError: Custom function not found: <module>.<name>`.
 
 #### The bare-string shorthand resolves to `registered`/`inline` only
 

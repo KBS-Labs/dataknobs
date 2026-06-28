@@ -202,6 +202,33 @@ def test_custom_function_reference_imports_and_runs() -> None:
     )
 
 
+def test_custom_plain_function_reference_resolves_through_standard_path() -> None:
+    """A plain custom ``(data, context)`` *function* (no params) resolves + runs.
+
+    ``stamp_processed`` is a plain function, not a class. ``classes_only`` must
+    keep it from being mis-invoked as a zero-arg factory at build time; it then
+    resolves through the standard wrapper path (byte-identical to the
+    pre-adapter behavior) and runs.
+    """
+    config = _single_state_config(
+        {
+            "transforms": [
+                {
+                    "type": "custom",
+                    "module": "tests.custom_fns_fixture",
+                    "name": "stamp_processed",
+                }
+            ]
+        }
+    )
+    result = _run(config, {"id": 1})
+
+    assert result["success"], f"plain custom function did not run: {result}"
+    assert result["data"].get("processed") is True, (
+        f"plain custom (data, context) function did not run: {result['data']}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # loud failure modes
 # --------------------------------------------------------------------------- #
@@ -290,3 +317,296 @@ def test_documented_config_guide_builtin_example_runs() -> None:
     assert result["data"].get("id") == "abc", (
         f"documented builtin example did not apply its mapping: {result['data']}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# arc transforms — per-arc params must stay distinct (no shared-name collision)
+# --------------------------------------------------------------------------- #
+
+def test_arc_transforms_referencing_same_builtin_keep_distinct_params() -> None:
+    """Two arcs using the same builtin transform class run their *own* params.
+
+    A materialized library adapter names itself by the wrapped class (every
+    ``transformers.map_fields`` reference is a ``FieldMapper``). If the builder
+    registered arc transforms under that class name, the second arc would reuse
+    the first arc's registered adapter — silently running the first arc's
+    mapping. Here arc 1 maps ``a -> b`` and arc 2 maps ``b -> c``; a record
+    ``{a: 1}`` must end as ``{c: 1}``. Under the collision it would end ``{b: 1}``
+    (arc 2 re-running arc 1's ``a -> b`` on a record with no ``a``).
+    """
+    config = {
+        "name": "arc_collision_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "mid",
+                                "transform": {
+                                    "type": "builtin",
+                                    "name": "transformers.map_fields",
+                                    "params": {"mapping": {"a": "b"}},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "name": "mid",
+                        "arcs": [
+                            {
+                                "target": "end",
+                                "transform": {
+                                    "type": "builtin",
+                                    "name": "transformers.map_fields",
+                                    "params": {"mapping": {"b": "c"}},
+                                },
+                            }
+                        ],
+                    },
+                    {"name": "end", "is_end": True},
+                ],
+            }
+        ],
+    }
+    result = _run(config, {"a": 1})
+
+    assert result["success"], f"two-arc map pipeline did not complete: {result}"
+    data = result["data"]
+    assert data.get("c") == 1, (
+        "second arc's own mapping (b -> c) did not apply — arc transforms "
+        f"collided on a shared registered name: {data}"
+    )
+    assert "b" not in data, f"intermediate field 'b' should be renamed away: {data}"
+    assert "a" not in data, f"source field 'a' should be gone: {data}"
+
+
+# --------------------------------------------------------------------------- #
+# async custom functions — the adapter must await, not store the coroutine
+# --------------------------------------------------------------------------- #
+
+def test_custom_async_transform_is_awaited() -> None:
+    """A custom class with ``async def transform`` is awaited and applied.
+
+    The async adapter must await the coroutine; a regression that ran the method
+    synchronously would store the un-awaited coroutine as the record data and
+    the marker would be absent (or the record malformed).
+    """
+    config = _single_state_config(
+        {
+            "transforms": [
+                {
+                    "type": "custom",
+                    "module": "tests.custom_fns_fixture",
+                    "name": "AsyncAddMarker",
+                    "params": {"key": "amark", "value": "ok"},
+                }
+            ]
+        }
+    )
+    result = _run(config, {"id": 1})
+
+    assert result["success"], f"async custom transform did not run: {result}"
+    assert result["data"].get("amark") == "ok", (
+        f"async custom transform was not awaited/applied: {result['data']}"
+    )
+
+
+def test_custom_async_validator_gates_via_pre_validators() -> None:
+    """A custom ``async def validate`` pre-validator is awaited and gates entry.
+
+    The async validator returns ``False`` when the field is missing. The adapter
+    must await it so the boolean gates the record; an un-awaited coroutine is
+    truthy and would let the bad record through.
+    """
+    config = _single_state_config(
+        {
+            "pre_validators": [
+                {
+                    "type": "custom",
+                    "module": "tests.custom_fns_fixture",
+                    "name": "AsyncRequireField",
+                    "params": {"field": "needed"},
+                }
+            ]
+        }
+    )
+
+    ok = _run(config, {"needed": 1})
+    assert ok["success"], f"valid record was rejected by async validator: {ok}"
+
+    bad = _run(config, {"other": 1})
+    assert not bad["success"], (
+        "a record missing the required field should be failed by the async "
+        f"custom pre-validator, but it succeeded: {bad}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# post-entry validators: phase + custom test-interface arc condition
+# --------------------------------------------------------------------------- #
+
+def test_custom_validator_under_validators_phase_merges_result() -> None:
+    """A custom validator under ``validators:`` has its dict result merged.
+
+    The post-entry ``validators:`` phase (distinct from gating
+    ``pre_validators:``) calls ``validate(state_obj)`` single-arg and merges a
+    returned dict into the record. Exercises the adapter on that dispatch path.
+    """
+    config = _single_state_config(
+        {
+            "validators": [
+                {
+                    "type": "custom",
+                    "module": "tests.custom_fns_fixture",
+                    "name": "EnrichViaValidate",
+                    "params": {"key": "enriched", "value": "yes"},
+                }
+            ]
+        }
+    )
+    result = _run(config, {"id": 1})
+
+    assert result["success"], f"post-entry validator path failed: {result}"
+    assert result["data"].get("enriched") == "yes", (
+        f"post-entry validator's dict result was not merged: {result['data']}"
+    )
+
+
+def test_custom_test_interface_arc_condition_gates_transition() -> None:
+    """A custom ``IStateTestFunction`` used as an arc *condition* gates the arc.
+
+    Exercises the ``test`` adapter on the arc-condition dispatch path (returning
+    ``(passed, reason)``), which no built-in library function covers. The record
+    with the field reaches the end state; without it, the arc is not taken and
+    the record cannot complete.
+    """
+    config = {
+        "name": "arc_condition_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "end",
+                                "condition": {
+                                    "type": "custom",
+                                    "module": "tests.custom_fns_fixture",
+                                    "name": "HasField",
+                                    "params": {"field": "gate"},
+                                },
+                            }
+                        ],
+                    },
+                    {"name": "end", "is_end": True},
+                ],
+            }
+        ],
+    }
+
+    ok = _run(config, {"gate": 1})
+    assert ok["success"], (
+        f"record satisfying the custom arc condition did not complete: {ok}"
+    )
+
+    blocked = _run(config, {"other": 1})
+    assert not blocked["success"], (
+        "a record failing the custom arc condition should not reach the end "
+        f"state, but the run reported success: {blocked}"
+    )
+
+
+def test_custom_async_test_interface_arc_condition_is_awaited() -> None:
+    """A custom ``async def test`` arc condition is awaited and gates the arc.
+
+    Exercises the *async* adapter on the ``IStateTestFunction`` arc-condition
+    path. If the engine failed to await the coroutine, the un-awaited coroutine
+    object is truthy, so *every* record would pass the arc — the blocked record
+    below would wrongly report success. Awaiting it correctly gates on the real
+    ``(passed, reason)`` result.
+    """
+    config = {
+        "name": "async_arc_condition_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "end",
+                                "condition": {
+                                    "type": "custom",
+                                    "module": "tests.custom_fns_fixture",
+                                    "name": "AsyncHasField",
+                                    "params": {"field": "gate"},
+                                },
+                            }
+                        ],
+                    },
+                    {"name": "end", "is_end": True},
+                ],
+            }
+        ],
+    }
+
+    ok = _run(config, {"gate": 1})
+    assert ok["success"], (
+        f"record satisfying the async arc condition did not complete: {ok}"
+    )
+
+    blocked = _run(config, {"other": 1})
+    assert not blocked["success"], (
+        "a record failing the async arc condition should not reach the end "
+        f"state, but the run reported success: {blocked}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# custom resolution failure modes — loud, targeted ValueErrors
+# --------------------------------------------------------------------------- #
+
+def test_custom_missing_module_is_loud() -> None:
+    """An unimportable custom module raises a clear ``ValueError`` at build time."""
+    config = _single_state_config(
+        {
+            "transforms": [
+                {
+                    "type": "custom",
+                    "module": "tests.no_such_module_xyz",
+                    "name": "Whatever",
+                }
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="Custom function module not found"):
+        SimpleFSM(config)
+
+
+def test_custom_missing_name_is_loud() -> None:
+    """A missing attribute in a real custom module raises a clear ``ValueError``."""
+    config = _single_state_config(
+        {
+            "transforms": [
+                {
+                    "type": "custom",
+                    "module": "tests.custom_fns_fixture",
+                    "name": "DoesNotExist",
+                }
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="Custom function not found"):
+        SimpleFSM(config)

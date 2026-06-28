@@ -247,7 +247,10 @@ def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper, Any]) -> 
     elif isinstance(data, FSMData):
         return data.to_dict()
     elif isinstance(data, StateDataWrapper):
-        return data.data.to_dict()
+        # StateDataWrapper.data always stores the raw dict (see its class
+        # invariant), so it is already in the target shape — calling .to_dict()
+        # on it would raise AttributeError.
+        return data.data
     elif hasattr(data, '_data'):
         # Handle other wrapper types
         return data._data
