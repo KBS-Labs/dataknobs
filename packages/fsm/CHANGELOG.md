@@ -83,8 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The public sync signatures and semantics are unchanged. Explicit-lifecycle
   objects — `SimpleFSM` and `AdvancedFSM.execute_step_sync` (repeated stepping) —
   share one long-lived bridge per FSM (obtained via `FSM.get_sync_bridge()`,
-  released by `FSM.close()` / `SimpleFSM.close()`); `SimpleFSM` dropped its
-  private event-loop thread in favor of it. The stateless one-shot surfaces —
+  released by `FSM.close()` / `SimpleFSM.close()` / `AdvancedFSM.close()`);
+  `SimpleFSM` dropped its private event-loop thread in favor of it. The stateless one-shot surfaces —
   `FSM.execute` and the sync batch/stream executors — instead scope a throwaway
   bridge to the operation, so they need no `close()` and leave no
   process-lifetime thread behind. The async engine's regular-transition and
@@ -103,6 +103,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AdvancedFSM` gained a **lifecycle close**: `close()` (sync), `aclose()`
+  (async), and sync/async context-manager support (`with` / `async with`).
+  These stop and join the FSM's shared async→sync bridge thread (created lazily
+  by repeated `execute_step_sync` stepping) and release the resource manager —
+  so an `AdvancedFSM` that only ever stepped synchronously can release its
+  bridge thread instead of leaving it alive until process exit.
 - Push arcs now honor config-authored **`data_mapping`** and **`result_mapping`**
   (`PushArcConfig.data_mapping` / `result_mapping`). These thread through the
   builder to the runtime `PushArc`; previously the fields could not be expressed

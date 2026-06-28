@@ -147,11 +147,24 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         if data is not None:
             context.data = data
         
-        # Enter initial state (handles both pre-set and not-set cases)
-        success, error = await self._enter_initial_state(context)
-        if not success:
-            return False, error
-        
+        # Enter the initial state on the parent context ONLY for single-record
+        # mode. Batch and stream spin up a fresh child context per item/record
+        # and route each through ``_enter_and_execute_child`` ->
+        # ``_enter_initial_state`` — which runs the child's initial-state entry
+        # AND releases its owned resources in ``_execute_single``'s finally.
+        # Entering the initial state on the parent *aggregate* context here would
+        # allocate the start state's resources on a context that is never run
+        # through ``_execute_single``, so they would never be released (a leak on
+        # every batch/stream run), and would spuriously run the start-state
+        # transform / pre-validators once on the aggregate context. The parent's
+        # ``current_state`` is unused by ``_execute_batch`` / ``_execute_stream``
+        # (they read ``batch_data`` / ``stream_context`` and operate on
+        # children), so skipping its entry is safe.
+        if context.data_mode == ProcessingMode.SINGLE:
+            success, error = await self._enter_initial_state(context)
+            if not success:
+                return False, error
+
         try:
             # Execute based on data mode
             if context.data_mode == ProcessingMode.SINGLE:

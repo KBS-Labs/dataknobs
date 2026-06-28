@@ -298,7 +298,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_data import Record
 
@@ -1752,6 +1753,54 @@ class AdvancedFSM:
             'final_state': context.current_state,
             'final_data': context.get_data_snapshot(),
         }
+
+    def close(self) -> None:
+        """Release lifecycle resources held by this FSM. Idempotent.
+
+        Stops and joins the FSM's shared async→sync bridge thread — created
+        lazily by repeated :meth:`execute_step_sync` stepping — and closes the
+        resource manager, releasing any acquired resources, pools, and
+        providers. A sync-only ``AdvancedFSM`` has no other ergonomic way to
+        reach :meth:`FSM.close`; without this, its bridge daemon thread would
+        live until process exit.
+
+        Use :meth:`aclose` (or ``async with``) from async code so providers
+        whose cleanup is a coroutine are awaited rather than skipped.
+        """
+        self._resource_manager.close()
+        self.fsm.close()
+
+    async def aclose(self) -> None:
+        """Async counterpart of :meth:`close` for use in async contexts.
+
+        Awaits the resource manager's async cleanup (so providers exposing an
+        ``aclose`` / ``cleanup`` coroutine are awaited), then stops and joins
+        the shared bridge thread.
+        """
+        await self._resource_manager.cleanup()
+        self.fsm.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 class FSMDebugger:
