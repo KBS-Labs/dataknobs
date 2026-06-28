@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook, StepResult
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.execution.engine import TraversalStrategy
+from dataknobs_fsm.execution.common import TraversalStrategy
 from dataknobs_fsm.core.transactions import TransactionStrategy
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_data import Record

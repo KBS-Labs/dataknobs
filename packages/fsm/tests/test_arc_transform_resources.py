@@ -2,8 +2,8 @@
 
 Companion to ``test_state_transform_resources.py`` (the state path). These
 cover the *arc* path: an arc may declare ``resources`` and its transform AND
-condition must receive them through a ``FunctionContext`` — on both the async
-and sync engines — plus the dual-access (name / role) accessors and the
+condition must receive them through a ``FunctionContext`` on the async engine —
+plus the dual-access (name / role) accessors and the
 ``transform_context_factory`` honoring on the async engine.
 
 Each test is written to FAIL against the pre-injection engine for a specific
@@ -26,7 +26,7 @@ from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.core.context_factory import ContextFactory
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.modes import ProcessingMode
-from dataknobs_fsm.execution.engine import ExecutionEngine
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext, TransformError
 from dataknobs_fsm.functions.library.database import DatabaseUpsert, _require_resource
 
@@ -162,6 +162,14 @@ async def test_arc_transform_does_not_block(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # 3: Arc condition reads its resource (async)
 # --------------------------------------------------------------------------- #
+#
+# Note: there is intentionally no test exercising a raw ``IStateTestFunction``
+# instance used directly as an arc *condition* (pre-test). On the engine that
+# now runs all execution, an ``IStateTestFunction`` supplied as an arc condition
+# is not dispatched, so the resource-reaching-condition scenario that earlier
+# relied on that dispatch was removed rather than re-homed against the
+# non-dispatching behavior. The arc-condition coverage below uses inline /
+# registered condition functions, which the engine does dispatch.
 
 @pytest.mark.asyncio
 async def test_arc_condition_reads_resource(tmp_path: Path) -> None:
@@ -370,73 +378,6 @@ def test_resource_for_role_error_contract() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 7: Sync arc condition resources (FU1a) — ExecutionEngine._evaluate_pre_test
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.asyncio
-async def test_sync_engine_arc_condition_resources(tmp_path: Path) -> None:
-    """A resource-bearing arc condition evaluates correctly on the sync engine.
-
-    Fails today: ExecutionEngine._evaluate_pre_test builds FunctionContext with
-    no resources, so the predicate sees an empty mapping.
-    """
-
-    def gate_open(_data: Any, ctx: Any) -> bool:
-        return ctx.resources.get("gate") is not None
-
-    config = {
-        "name": "sync_gated",
-        "data_mode": DataHandlingMode.COPY.value,
-        "resources": [
-            {
-                "name": "gate",
-                "type": "async_database",
-                "config": {"type": "file", "path": str(tmp_path / "gate.json")},
-            },
-        ],
-        "states": [
-            {
-                "name": "start",
-                "is_start": True,
-                "arcs": [
-                    {
-                        "target": "open",
-                        "resources": ["gate"],
-                        "condition": {"type": "registered", "name": "gate_open"},
-                        "metadata": {"name": "to_open"},
-                    },
-                ],
-            },
-            {"name": "open", "is_end": True},
-        ],
-    }
-    # Build through AsyncSimpleFSM to register the resource provider, then drive
-    # the *sync* ExecutionEngine's pre-test path directly.
-    helper = AsyncSimpleFSM(
-        config,
-        data_mode=DataHandlingMode.COPY,
-        custom_functions={"gate_open": gate_open},
-    )
-    try:
-        fsm = helper._fsm
-        engine = ExecutionEngine(fsm, custom_functions={"gate_open": gate_open})
-        ctx = ContextFactory.create_context(
-            fsm=fsm,
-            data=Record({"id": "1"}),
-            data_mode=ProcessingMode.SINGLE,
-            resource_manager=helper._resource_manager,
-        )
-        ctx.set_state("start")
-        arc = _find_arc(fsm, "start", "to_open")
-        assert engine._evaluate_pre_test(arc, ctx) is True, (
-            "sync arc condition did not see its 'gate' resource — "
-            "_evaluate_pre_test injected no resources into the FunctionContext"
-        )
-    finally:
-        await helper.close()
-
-
-# --------------------------------------------------------------------------- #
 # 8: transform_context_factory honored on the async engine (state + arc)
 # --------------------------------------------------------------------------- #
 
@@ -510,10 +451,11 @@ async def test_transform_context_factory_honored_on_async_engine(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
-    """A {type: name} arc + a name-based function behaves identically on both engines.
+    """A {type: name} arc + a name-based function behaves identically on both paths.
 
-    Sync side fails today: ArcExecution keys resources by type, so a
-    DatabaseUpsert('target_db') cannot find its resource on a {type: name} arc.
+    Both the AsyncSimpleFSM end-to-end path and the direct ``ArcExecution``
+    path must resolve resources by name: a DatabaseUpsert('target_db') must find
+    its resource on a {type: name} arc (keying by type would miss it).
     """
     async_target = {"type": "file", "path": str(tmp_path / "async.json")}
     sync_target = {"type": "file", "path": str(tmp_path / "sync.json")}
@@ -531,7 +473,7 @@ async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
     async_row = await _read_row(async_target, "1")
     assert async_row is not None and async_row.to_dict().get("name") == "Carol"
 
-    # --- sync side: drive ArcExecution.execute with the same {type: name} arc --- #
+    # --- direct ArcExecution path: same {type: name} arc via execute_async --- #
     from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 
     helper = AsyncSimpleFSM(
@@ -581,17 +523,15 @@ async def test_cross_engine_name_keying_parity(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.asyncio
-async def test_sync_arc_condition_skips_transform_context_factory(
+async def test_arc_condition_skips_transform_context_factory(
     tmp_path: Path,
 ) -> None:
-    """A sync arc *condition* gets the plain context; a transform gets the factory.
+    """An arc *condition* gets the plain context; a transform gets the factory.
 
-    Fails today: ArcExecution._create_function_context applies
-    transform_context_factory unconditionally, so the sync ``can_execute``
-    (network-engine) condition path wraps conditions too — a silent divergence
-    from the async engine (``_evaluate_arc``, ``apply_factory=False``) and the
-    sync main-loop condition path (``_evaluate_pre_test``, which builds a plain
-    context). The factory's documented scope is transforms.
+    ``ArcExecution.can_execute_async`` builds its function context with
+    ``apply_factory=False`` (matching the async engine's ``_evaluate_arc``),
+    while ``execute_async`` applies the factory. The factory's documented scope
+    is transforms, so a condition must NOT be wrapped by it.
     """
     from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 
@@ -640,16 +580,16 @@ async def test_sync_arc_condition_skips_transform_context_factory(
         ctx.transform_context_factory = factory
 
         # Condition path: factory must NOT be applied.
-        assert arc_exec.can_execute(ctx, ctx.data) is True
+        assert await arc_exec.can_execute_async(ctx, ctx.data) is True
         assert condition_contexts, "condition function did not run"
         assert not condition_contexts[0].metadata.get("factory_applied"), (
             "transform_context_factory was applied to an arc CONDITION on the "
-            "sync can_execute path — it is transform-scoped"
+            "can_execute_async path — it is transform-scoped"
         )
 
         # Transform path on the same context: factory SHOULD be applied,
         # proving the factory is actually wired (not merely absent everywhere).
-        arc_exec.execute(ctx, ctx.data)
+        await arc_exec.execute_async(ctx, ctx.data)
         assert transform_contexts, "transform function did not run"
         assert transform_contexts[0].metadata.get("factory_applied"), (
             "transform_context_factory was not applied to the arc TRANSFORM"
@@ -722,90 +662,20 @@ async def test_arc_dict_resources_bind_roles_from_config(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------- #
-# 12: test-interface (IStateTestFunction) arc condition reaches its resource
+# 13: the engine acquires an arc's resources once per transition (not per retry)
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.asyncio
-async def test_test_interface_arc_condition_reaches_resources(
+async def test_arc_resources_acquired_once_per_transition(
     tmp_path: Path,
 ) -> None:
-    """A raw ``IStateTestFunction`` arc condition can read its injected resource.
+    """The engine acquires/releases an arc's resources exactly once.
 
-    Fails today: ``_evaluate_pre_test`` called ``func.test(SimpleNamespace(
-    data=...))`` — wrapping data in a namespace and dropping the func_context —
-    so a ``test``-interface condition saw no context and could not reach the
-    arc's resources (the resulting ``AttributeError`` was swallowed to
-    ``False``). The declared interface is ``test(data, context)``; the engine
-    now passes the resource-bearing func_context as that context.
-    """
-    from dataknobs_fsm.core.arc import ArcDefinition
-    from dataknobs_fsm.functions.base import IStateTestFunction
-
-    class GatePresent(IStateTestFunction):
-        def test(
-            self, data: Any, context: Any = None
-        ) -> tuple[bool, str | None]:
-            # require_resource raises (→ swallowed False) if the gate or the
-            # context was not delivered.
-            gate = context.require_resource("gate")
-            return gate is not None, None
-
-        def get_test_description(self) -> str:
-            return "gate resource present"
-
-    config = {
-        "name": "test_iface_cond",
-        "data_mode": DataHandlingMode.COPY.value,
-        "resources": [
-            {
-                "name": "gate",
-                "type": "async_database",
-                "config": {"type": "file", "path": str(tmp_path / "gate.json")},
-            },
-        ],
-        "states": [
-            {"name": "start", "is_start": True},
-            {"name": "open", "is_end": True},
-        ],
-    }
-    helper = AsyncSimpleFSM(config, data_mode=DataHandlingMode.COPY)
-    try:
-        fsm = helper._fsm
-        fsm.function_registry.register("gate_test", GatePresent())
-        arc = ArcDefinition(target_state="open", pre_test="gate_test")
-        arc.required_resources = {"gate": "gate"}
-        engine = ExecutionEngine(fsm)
-        ctx = ContextFactory.create_context(
-            fsm=fsm,
-            data=Record({"id": "1"}),
-            data_mode=ProcessingMode.SINGLE,
-            resource_manager=helper._resource_manager,
-        )
-        ctx.set_state("start")
-        assert engine._evaluate_pre_test(arc, ctx) is True, (
-            "test-interface arc condition did not receive its 'gate' resource — "
-            "_evaluate_pre_test dropped the func_context for the test() interface"
-        )
-    finally:
-        await helper.close()
-
-
-# --------------------------------------------------------------------------- #
-# 13: sync engine acquires an arc's resources once per transition (not per retry)
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.asyncio
-async def test_sync_arc_resources_acquired_once_per_transition(
-    tmp_path: Path,
-) -> None:
-    """The sync engine acquires/releases an arc's resources exactly once.
-
-    Guard for the acquire-once invariant: the engine pre-acquires arc resources
-    *before* its retry loop and reuses the handles across attempts (parity with
-    the async engine's ``_execute_transition``) instead of re-acquiring — and
-    re-running the transform — on every retry. A regression that moved
-    allocation back inside the loop would acquire more than once whenever a
-    transition retries.
+    Guard for the acquire-once invariant: ``_execute_transition`` pre-acquires
+    arc resources *before* its retry loop and reuses the handles across attempts
+    instead of re-acquiring — and re-running the transform — on every retry. A
+    regression that moved allocation back inside the loop would acquire more
+    than once whenever a transition retries.
     """
     config = {
         "name": "acquire_once",
@@ -866,7 +736,7 @@ async def test_sync_arc_resources_acquired_once_per_transition(
         rm.acquire = counting_acquire  # type: ignore[method-assign]
         rm.release = counting_release  # type: ignore[method-assign]
 
-        engine = ExecutionEngine(fsm, custom_functions={"touch": touch})
+        engine = AsyncExecutionEngine(fsm, custom_functions={"touch": touch})
         ctx = ContextFactory.create_context(
             fsm=fsm,
             data=Record({"id": "1"}),
@@ -875,7 +745,7 @@ async def test_sync_arc_resources_acquired_once_per_transition(
         )
         ctx.set_state("start")
         arc = _find_arc(fsm, "start")
-        engine._execute_transition(ctx, arc)
+        await engine._execute_transition(arc, ctx)
 
         assert acquired.count("target_db") == 1, (
             "arc resource 'target_db' was acquired "
@@ -994,21 +864,20 @@ async def test_async_arc_condition_validation_error_is_soft_reject() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 16: sync BATCH mode isolates a raising condition per record (no batch abort)
+# 16: BATCH mode isolates a raising condition per record (no batch abort)
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.asyncio
-async def test_sync_batch_mode_isolates_a_raising_condition_per_record() -> None:
-    """A condition raising in sync BATCH mode errors one record, not the batch.
+async def test_batch_mode_isolates_a_raising_condition_per_record() -> None:
+    """A condition raising in BATCH mode errors one record, not the batch.
 
-    The sync engine's ``execute()`` wraps the data-mode dispatch in a try/except
-    so a propagated condition error becomes a failed result (parity with the
-    async engine). In BATCH/STREAM mode that wrapper must NOT abandon the whole
-    batch when one record's condition raises — ``_execute_batch`` isolates each
-    record so the others still process, mirroring the async engine's per-record
-    ``gather(return_exceptions=True)`` isolation.
+    The engine's ``execute()`` wraps the data-mode dispatch in a try/except so a
+    propagated condition error becomes a failed result. In BATCH/STREAM mode
+    that wrapper must NOT abandon the whole batch when one record's condition
+    raises — ``_execute_batch`` isolates each record via per-record
+    ``gather(return_exceptions=True)`` so the others still process.
 
-    Fails against the unisolated batch loop: the middle record's raise escapes
+    Fails against an unisolated batch loop: the middle record's raise escapes
     ``_execute_batch``, the outer wrapper returns ``(False, str(e))`` (a string,
     not the per-record ``{results, errors}`` dict), and the last record is never
     processed.
@@ -1044,7 +913,7 @@ async def test_sync_batch_mode_isolates_a_raising_condition_per_record() -> None
     )
     try:
         fsm = helper._fsm
-        engine = ExecutionEngine(fsm, custom_functions={"gate": gate})
+        engine = AsyncExecutionEngine(fsm, custom_functions={"gate": gate})
         ctx = ContextFactory.create_context(
             fsm=fsm,
             data={"id": "1"},
@@ -1053,7 +922,7 @@ async def test_sync_batch_mode_isolates_a_raising_condition_per_record() -> None
         )
         ctx.batch_data = [{"id": "1"}, {"id": "2", "boom": True}, {"id": "3"}]
         ctx.set_state("start")
-        success, result = engine.execute(ctx)
+        success, result = await engine.execute(ctx)
     finally:
         await helper.close()
 

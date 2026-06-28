@@ -331,10 +331,10 @@ built-in [database functions](database-functions.md) use. (You can also read
 ### State vs arc declaration
 
 The same function works whether the resource is declared on a **state** or on
-an **arc**. On both engines the arc **transform** and the arc **condition**
-(pre-test) receive the arc's resources; resources are acquired once for the
-scope of the invocation (the sync engine acquires before its retry loop and
-reuses the handles across attempts) and released afterward.
+an **arc**. The arc **transform** and the arc **condition** (pre-test) receive
+the arc's resources; resources are acquired once for the scope of the
+invocation (acquired before the retry loop and reused across attempts) and
+released afterward.
 
 ```yaml
 resources:

@@ -90,8 +90,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process-lifetime thread behind. The async engine's regular-transition and
   initial-state entries now route through the shared `enter_state`, so state
   pre-validators and resource allocation behave identically on every entry path.
-  (The standalone synchronous `ExecutionEngine` is retained but no longer used by
-  any public execution path; its removal follows in a subsequent release.)
 - The push-arc subflow lifecycle is now driven by shared, color-free helpers on
   `BaseExecutionEngine` (target parsing, initial-state resolution, data-mapping
   application, push commit, rollback, result mapping, and subflow-final-state
@@ -100,6 +98,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asynchronous engines now share one implementation of the push/pop logic and
   cannot drift; the per-push state needed for result mapping and rollback is
   tracked on a `SubflowFrame` stack on `ExecutionContext`.
+
+### Removed
+
+- **The standalone synchronous execution engine has been removed.** FSM
+  execution now runs entirely on the single `AsyncExecutionEngine`; the public
+  sync APIs remain and run on it through the async→sync bridge (see Changed). The
+  deleted internals were the `ExecutionEngine` class
+  (`dataknobs_fsm.execution.engine`) and the `NetworkExecutor`
+  (`dataknobs_fsm.execution.network`), along with the synchronous, `*_async`-paired
+  methods on `ArcExecution` — `execute()`, `can_execute()`, and the
+  `execute_push()` stub (use `execute_async()` / `can_execute_async()`). The
+  unused `ArcExecution.execute_with_transaction()` wrapper and `FSM.get_engine()`
+  were also removed (`FSM.get_async_engine()` is the engine accessor). The
+  `TraversalStrategy` enum moved from `dataknobs_fsm.execution.engine` to
+  `dataknobs_fsm.execution.common`; it is still re-exported from
+  `dataknobs_fsm.execution`, so `from dataknobs_fsm.execution import
+  TraversalStrategy` is unaffected.
 
 ### Added
 

@@ -1,12 +1,14 @@
-"""Common utilities for sync and async execution engines.
+"""Common utilities shared across the execution engine and its helpers.
 
-This module provides shared logic for both synchronous and asynchronous
-execution engines, including network selection, arc scoring, and 
-transition selection strategies.
+This module provides shared logic used by the async execution engine and the
+base engine, including network selection, arc scoring, and transition
+selection strategies (``TraversalStrategy``, ``TransitionSelectionMode``). It
+is the lowest shared module, so it carries these primitives without importing
+the engines that consume them.
 """
 
 import math
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 from enum import Enum
 
 from dataknobs_fsm.core.arc import ArcDefinition
@@ -14,8 +16,13 @@ from dataknobs_fsm.core.fsm import FSM, StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
 
-if TYPE_CHECKING:
-    from dataknobs_fsm.execution.engine import TraversalStrategy
+
+class TraversalStrategy(Enum):
+    """Execution traversal strategy."""
+    DEPTH_FIRST = "depth_first"
+    BREADTH_FIRST = "breadth_first"
+    RESOURCE_OPTIMIZED = "resource_optimized"
+    STREAM_OPTIMIZED = "stream_optimized"
 
 
 class TransitionSelectionMode(Enum):
@@ -285,8 +292,6 @@ class TransitionSelector:
         Returns:
             Selected arc or None.
         """
-        from dataknobs_fsm.execution.engine import TraversalStrategy
-        
         selected = None
         
         if strategy == TraversalStrategy.DEPTH_FIRST:

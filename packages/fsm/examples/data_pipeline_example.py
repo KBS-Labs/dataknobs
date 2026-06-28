@@ -20,7 +20,7 @@ from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.state import State
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode
-from dataknobs_fsm.execution.engine import ExecutionEngine
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import ITransformFunction, FunctionContext
 from dataknobs_fsm.functions.manager import FunctionManager
@@ -242,9 +242,10 @@ def run_simple_pipeline_example():
     fsm.resource_manager = resource_manager
     print("   Resources configured\n")
 
-    # Test with sample data
+    # Test with sample data. FSM execution runs on the single async engine; a
+    # synchronous caller drives it through the FSM's shared async->sync bridge.
     print("3. Processing sample data...")
-    engine = ExecutionEngine(fsm)
+    engine = fsm.get_async_engine()
 
     # Test data
     test_records = [
@@ -262,7 +263,7 @@ def run_simple_pipeline_example():
         context.resources = {'properties': props_handle}
 
         try:
-            success, result = engine.execute(context, record)
+            success, result = fsm.get_sync_bridge().run(engine.execute(context, record))
             if success:
                 results.append(result)
                 print(f"   Processed record {record['id']}: value={record['value']}")
@@ -271,6 +272,9 @@ def run_simple_pipeline_example():
         finally:
             # Release resources
             resource_manager.release('properties', props_handle)
+
+    # Stop the shared bridge thread now that all records are processed.
+    fsm.close()
 
     print(f"\n   Successfully processed {len(results)} records")
 

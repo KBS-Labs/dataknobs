@@ -13,16 +13,14 @@ the one that matters for the "``direct`` fails loud at load" migration
 guarantee -- a raw dict whose ``PushArcConfig`` fails validation must raise,
 not silently degrade to a plain ``ArcConfig`` that drops ``target_network``.
 
-Execution-status note: the async ``AsyncExecutionEngine`` now executes push
-arcs -- it pushes the sub-network, isolates the data via the shared
-``DataIsolationMode.apply`` helper, enters the sub-network, and pops back on
-completion (proven below on the ``AsyncSimpleFSM`` path). ``NetworkExecutor`` --
-a public, exported executor -- also traverses sub-networks and honors all three
-modes at the data-input boundary (proven below). The sync ``ExecutionEngine``
-likewise traverses sub-networks via its own push/pop path.
+Execution-status note: the async ``AsyncExecutionEngine`` is the single engine
+behind every entry point. It executes push arcs -- it pushes the sub-network,
+isolates the data via the shared ``DataIsolationMode.apply`` helper, enters the
+sub-network, and pops back on completion (proven below on the ``AsyncSimpleFSM``
+path). Push-arc/subflow behaviors (entry, max-depth, custom initial state,
+resource inheritance) are exercised on the async path in
+``test_async_subflow_behaviors.py`` and ``test_async_subflow_resource_lifecycle.py``.
 """
-
-import inspect
 
 import pytest
 from pydantic import ValidationError
@@ -31,7 +29,6 @@ from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
     ArcConfig,
     FSMConfig,
-    FunctionReference,
     NetworkConfig,
     PushArcConfig,
     StateConfig,
@@ -39,8 +36,6 @@ from dataknobs_fsm.config.schema import (
 from dataknobs_fsm.core.arc import DataIsolationMode, PushArc
 from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.network import NetworkExecutor
-from dataknobs_fsm.functions.base import StateTransitionError
 
 
 def _build_fsm_with_push(isolation_value: str):
@@ -241,174 +236,6 @@ def test_dict_load_path_rejects_direct_migration():
         )
 
 
-def test_no_dead_isolation_branch_in_network_executor():
-    """The push-isolation handler has no unreachable mode branch.
-
-    Guards against the regression where the handler referenced a non-existent
-    arc attribute (``data_isolation_mode``) and compared against a string that
-    is not an isolation-enum member -- a branch that could never execute and a
-    comment describing behavior no code path produced.
-    """
-    source = inspect.getsource(NetworkExecutor._handle_push_arc)
-    assert "data_isolation_mode" not in source
-    assert "'partial'" not in source
-    assert '"partial"' not in source
-
-
-def test_network_executor_copy_push_still_enters_subflow():
-    """The live push branches still traverse the sub-network after the
-    dead-branch removal (regression guard for W2).
-
-    Sub-network entry is proven by a marker the sub start-state transform sets,
-    since ``state_history`` records only main-network states.
-    """
-    mark_sub = FunctionReference(
-        type="inline",
-        code=(
-            "def transform(data, context):\n"
-            "    context.variables.setdefault('visited', []).append('s1')\n"
-            "    return data\n"
-        ),
-    )
-    config = FSMConfig(
-        name="iso_fsm",
-        main_network="main",
-        networks=[
-            NetworkConfig(
-                name="main",
-                states=[
-                    StateConfig(
-                        name="start",
-                        is_start=True,
-                        arcs=[
-                            PushArcConfig(
-                                target="after",
-                                target_network="sub",
-                                return_state="after",
-                                data_isolation="copy",
-                            )
-                        ],
-                    ),
-                    StateConfig(name="after", arcs=[ArcConfig(target="end")]),
-                    StateConfig(name="end", is_end=True),
-                ],
-            ),
-            NetworkConfig(
-                name="sub",
-                states=[
-                    StateConfig(
-                        name="s1",
-                        is_start=True,
-                        arcs=[ArcConfig(target="s2")],
-                        transforms=[mark_sub],
-                    ),
-                    StateConfig(name="s2", is_end=True),
-                ],
-            ),
-        ],
-    )
-    fsm = FSMBuilder().build(config)
-    executor = NetworkExecutor(fsm)
-    context = ExecutionContext()
-    context.data = {"id": 1}
-    success, _result = executor.execute_network("main", context, context.data)
-    # The sub-network's start state transform must have run (subflow traversed).
-    assert "s1" in context.variables.get("visited", [])
-    assert success is True
-
-
-def _run_network_push_isolation(isolation_value: str):
-    """Run a push through ``NetworkExecutor`` whose sub start-state transform
-    mutates the data, and report whether the parent's *original* data object was
-    touched.
-
-    Returns ``(original_obj, parent_context, success)``. Under data-isolating
-    modes the sub-network mutates an isolated snapshot, so the parent's original
-    object is left untouched; under REFERENCE the sub shares the parent's object
-    and mutates it in place.
-    """
-    touch_sub = FunctionReference(
-        type="inline",
-        code=(
-            "def transform(data, context):\n"
-            "    data['sub_touched'] = True\n"
-            "    return data\n"
-        ),
-    )
-    config = FSMConfig(
-        name="iso_fsm",
-        main_network="main",
-        networks=[
-            NetworkConfig(
-                name="main",
-                states=[
-                    StateConfig(
-                        name="start",
-                        is_start=True,
-                        arcs=[
-                            PushArcConfig(
-                                target="after",
-                                target_network="sub",
-                                return_state="after",
-                                data_isolation=isolation_value,
-                            )
-                        ],
-                    ),
-                    StateConfig(name="after", arcs=[ArcConfig(target="end")]),
-                    StateConfig(name="end", is_end=True),
-                ],
-            ),
-            NetworkConfig(
-                name="sub",
-                states=[
-                    StateConfig(
-                        name="s1",
-                        is_start=True,
-                        arcs=[ArcConfig(target="s2")],
-                        transforms=[touch_sub],
-                    ),
-                    StateConfig(name="s2", is_end=True),
-                ],
-            ),
-        ],
-    )
-    fsm = FSMBuilder().build(config)
-    executor = NetworkExecutor(fsm)
-    context = ExecutionContext()
-    original = {"id": 1}
-    context.data = original
-    success, _result = executor.execute_network("main", context, context.data)
-    return original, context, success
-
-
-@pytest.mark.parametrize("value", ["copy", "serialize"])
-def test_network_executor_isolating_modes_leave_parent_data_untouched(value):
-    """COPY/SERIALIZE give the sub-network an isolated snapshot of the data.
-
-    A sub-network mutation does not leak into the parent's original data object;
-    the result is merged back onto ``context.data`` (a distinct object) on
-    success. This is the behavioral payoff of threading ``data_isolation``
-    through to a public, sub-network-traversing executor.
-    """
-    original, context, success = _run_network_push_isolation(value)
-    assert success is True
-    assert "sub_touched" not in original  # parent's original object untouched
-    assert context.data is not original  # merged-back result is a fresh object
-    assert context.data.get("sub_touched") is True  # result still propagates
-
-
-def test_network_executor_reference_mode_shares_parent_data():
-    """REFERENCE shares the parent's data object with the sub-network.
-
-    The contrast case to the isolating modes: the sub mutates the parent's
-    object in place, so the marker appears on the original object.
-    """
-    original, context, success = _run_network_push_isolation("reference")
-    assert success is True
-    assert original.get("sub_touched") is True  # mutated in place
-    assert context.data is original  # same object, no snapshot
-
-
 def test_serialize_apply_uses_project_encoder_not_stdlib_json():
     """SERIALIZE round-trips through the *project* JSON encoder, not stdlib json.
 
@@ -434,68 +261,6 @@ def test_serialize_apply_uses_project_encoder_not_stdlib_json():
     out = DataIsolationMode.SERIALIZE.apply(payload)
     assert out == {"id": 1, "obj": {"kind": "widget", "n": 3}}
     assert out is not payload  # a fresh, isolated snapshot
-
-
-def test_network_executor_enforces_max_depth_across_nested_push_arcs():
-    """``max_depth`` is enforced across nested push arcs, not just within one
-    context's stack.
-
-    Each sub-network now runs in a *fresh* ``ExecutionContext`` whose
-    ``network_stack`` starts empty, so a stack-length depth check would see 0 at
-    every nesting level and never fire -- an unconditionally self-recursive push
-    network would recurse until Python's own recursion limit (``RecursionError``)
-    instead of failing loud at the configured ceiling. Depth is carried forward
-    on an explicit counter so the bounded ``StateTransitionError`` is raised at
-    ``max_depth``.
-    """
-    config = FSMConfig(
-        name="recur_fsm",
-        main_network="main",
-        networks=[
-            NetworkConfig(
-                name="main",
-                states=[
-                    StateConfig(
-                        name="s0",
-                        is_start=True,
-                        arcs=[
-                            PushArcConfig(
-                                target="end",
-                                target_network="loop",
-                                return_state="end",
-                            )
-                        ],
-                    ),
-                    StateConfig(name="end", is_end=True),
-                ],
-            ),
-            NetworkConfig(
-                name="loop",
-                states=[
-                    StateConfig(
-                        name="p",
-                        is_start=True,
-                        arcs=[
-                            # Unconditionally pushes back into itself -> would
-                            # recurse without bound absent depth enforcement.
-                            PushArcConfig(
-                                target="done",
-                                target_network="loop",
-                                return_state="done",
-                            )
-                        ],
-                    ),
-                    StateConfig(name="done", is_end=True),
-                ],
-            ),
-        ],
-    )
-    fsm = FSMBuilder().build(config)
-    executor = NetworkExecutor(fsm, max_depth=3)
-    context = ExecutionContext()
-    context.data = {"id": 1}
-    with pytest.raises(StateTransitionError, match="depth"):
-        executor.execute_network("main", context, context.data)
 
 
 async def test_async_push_arc_enters_subflow():
@@ -799,6 +564,105 @@ async def test_async_push_arc_applies_config_authored_result_mapping():
     assert data.get("parent_in") == 99  # mapped child field reached the parent
     assert data.get("keep") == "me"  # parent's pre-push field preserved
     assert "sub_out" not in data  # unmapped child field did not leak through
+
+
+def _async_data_mapping_config() -> dict:
+    """Config whose push arc carries a ``data_mapping`` (parent_out -> sub_in).
+
+    The mirror of ``_async_result_mapping_config`` for the *inbound* (push-time)
+    direction. The main start state sets ``parent_out`` and a parent-only
+    ``keep`` field; the push arc maps ``parent_out`` onto the child's ``sub_in``.
+    A ``data_mapping`` builds a fresh child shape from *only* the mapped fields,
+    so the child must see ``sub_in`` (the renamed value) and must NOT see either
+    the original ``parent_out`` name or the unmapped ``keep`` field.
+    """
+    return {
+        "name": "dm_fsm",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['parent_out'] = 42\n"
+                                    "    data['keep'] = 'me'\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub",
+                                "return_state": "after",
+                                "data_mapping": {"parent_out": "sub_in"},
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {
+                        "name": "s1",
+                        "is_start": True,
+                        "arcs": [{"target": "s2"}],
+                        "transforms": [
+                            {
+                                "type": "inline",
+                                "code": (
+                                    "def transform(data, context):\n"
+                                    "    data['sub_saw_sub_in'] = data.get('sub_in')\n"
+                                    "    data['sub_saw_parent_out'] = 'parent_out' in data\n"
+                                    "    data['sub_saw_keep'] = 'keep' in data\n"
+                                    "    return data\n"
+                                ),
+                            }
+                        ],
+                    },
+                    {"name": "s2", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+
+async def test_async_push_arc_applies_config_authored_data_mapping():
+    """A config-authored ``data_mapping`` reaches the runtime arc and applies.
+
+    The inbound counterpart to
+    ``test_async_push_arc_applies_config_authored_result_mapping``. The only
+    surviving ``data_mapping`` coverage was a constructor-attribute assertion
+    (``test_network_arc.py``) that never *executes* the mapping, so a push-time
+    field-renaming regression would pass CI. This drives the rename end to end
+    on the async ``AsyncSimpleFSM`` path: the parent's ``parent_out`` arrives in
+    the child under the renamed key ``sub_in`` (with its value), and neither the
+    original ``parent_out`` name nor the unmapped parent-only ``keep`` field
+    crosses into the child (a ``data_mapping`` builds the child shape from only
+    the mapped fields).
+    """
+    from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+
+    fsm = AsyncSimpleFSM(_async_data_mapping_config())
+    try:
+        result = await fsm.process({})
+    finally:
+        await fsm.close()
+    data = result.get("data", {})
+    assert result.get("success"), f"FSM did not complete cleanly: {result}"
+    assert data.get("sub_saw_sub_in") == 42  # parent_out arrived renamed as sub_in
+    assert data.get("sub_saw_parent_out") is False  # original name did not carry
+    assert data.get("sub_saw_keep") is False  # unmapped parent field did not cross
 
 
 # --- Async subflow state-entry parity: pre-validators run (and can reject) -----

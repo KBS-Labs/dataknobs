@@ -14,8 +14,8 @@ exact:
 * ``merge_child_context()`` unions the child's failures back into the parent, so
   a failure on a parallel / batch sub-path is not lost from the parent's result.
 
-(Isolated sub-network/push-arc failures cross a separate isolation boundary and
-are merged back in ``NetworkExecutor._handle_push_arc`` — covered by
+(Sub-network/push-arc failures are handled on the engine's subflow path, which
+runs in the same execution context — covered by
 ``test_state_transform_skip_on_failure.py``, not here.)
 
 The merge assertion is reproduce-first: before the union was added,

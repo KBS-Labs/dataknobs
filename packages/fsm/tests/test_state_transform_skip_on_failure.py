@@ -39,7 +39,7 @@ from dataknobs_fsm.config.schema import (
     StateConfig,
 )
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.network import NetworkExecutor
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 
 
 def _boom(*_args, **_kwargs):
@@ -269,40 +269,33 @@ def _subnetwork_failure_config() -> FSMConfig:
     )
 
 
-def test_subnetwork_transform_failure_propagates_to_parent() -> None:
-    """A transform failure inside an (isolated) sub-network must reach the parent.
+async def test_subnetwork_transform_failure_propagates_to_parent() -> None:
+    """A transform failure inside a sub-network must reach the parent.
 
-    Reproduce-first for the isolated-sub-network data-integrity hole: a default
-    ``PushArc`` uses COPY isolation, so the sub-network runs in a fresh context
-    with its own ``failed_states``. Before the merge-back, a sub-network
-    transform that raised was recorded only in the sub-context and dropped on
-    return — the parent's ``failed_states`` stayed empty, so it finalized as a
-    success and ran its downstream (return-state) transforms against
-    indeterminate data: the same silent-persistence class the skip contract
-    exists to prevent.
+    Data-integrity guard: a default ``PushArc`` uses COPY isolation, so a
+    sub-network transform that raises must still surface to the parent's
+    ``failed_states`` — otherwise the parent finalizes as a success and runs its
+    downstream (return-state) transforms against indeterminate data, the same
+    silent-persistence class the skip contract exists to prevent.
 
-    This FAILS pre-fix (``sub_start`` absent from the parent's ``failed_states``;
-    the parent's ``after`` transform ran) and PASSES once ``_handle_push_arc``
-    unions the sub-network failures back into the parent before entering the
-    return state. Real constructs only — a config-built FSM driven through the
-    real ``NetworkExecutor``.
+    The async engine runs the subflow in the *same* execution context, so the
+    sub-network's failure is recorded directly on the parent's ``failed_states``;
+    the parent's downstream ``after`` transform is then skipped. Driven through
+    the async engine end-to-end (real constructs only — a config-built FSM).
     """
     fsm = FSMBuilder().build(_subnetwork_failure_config())
-    executor = NetworkExecutor(fsm)
+    engine = AsyncExecutionEngine(fsm)
     context = ExecutionContext()
     context.data = {"id": "1"}
 
-    executor.execute_network("main", context, context.data)
+    await engine.execute(context, context.data)
 
     assert "sub_start" in context.failed_states, (
-        "an isolated sub-network's transform failure was lost on return to the "
-        "parent"
+        "a sub-network's transform failure was lost on return to the parent"
     )
-    # The `after_ran` assertion is valid because, even under COPY isolation, the
-    # sub-context shares the parent's `variables` dict (NetworkExecutor sets
-    # sub_context.variables = context.variables), so a write from the `after`
-    # transform would be visible here. Its absence proves the transform was
-    # skipped, not merely that the write landed in an isolated dict.
+    # The async engine runs the subflow in the same context, so a write from the
+    # parent's `after` transform would be visible on `context.variables`. Its
+    # absence proves the transform was skipped after the sub-network failure.
     assert context.variables.get("after_ran") is None, (
         "the parent's downstream (return-state) transform ran against a record "
         "that failed inside the sub-network"

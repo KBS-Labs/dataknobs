@@ -141,8 +141,9 @@ test_records = [
     {'id': 3, 'timestamp': '2024-01-03', 'value': 75.0}
 ]
 
-# Process each record
-engine = ExecutionEngine(fsm)
+# Process each record. FSM execution runs on the single async engine; a
+# synchronous caller drives it through the FSM's shared async->sync bridge.
+engine = fsm.get_async_engine()
 results = []
 
 for record in test_records:
@@ -153,12 +154,15 @@ for record in test_records:
     context.resources = {'properties': props_handle}
 
     try:
-        success, result = engine.execute(context, record)
+        success, result = fsm.get_sync_bridge().run(engine.execute(context, record))
         if success:
             results.append(result)
     finally:
         # Release resources
         resource_manager.release('properties', props_handle)
+
+# Stop the shared bridge thread once all records are processed.
+fsm.close()
 ```
 
 ## Running the Example
@@ -226,18 +230,22 @@ Illustrates common data processing patterns:
 
 ## Integration with Testing
 
-The example includes comprehensive tests in `test_data_pipeline_example.py`:
+The pipeline can be exercised end to end with a synchronous test. Execution runs
+on the single async engine, driven through the FSM's shared async->sync bridge:
 
 ```python
 def test_pipeline_with_valid_data():
     """Test pipeline with valid input data."""
     fsm = create_simple_pipeline_fsm()
-    engine = ExecutionEngine(fsm)
+    engine = fsm.get_async_engine()
 
     test_data = {'id': 1, 'timestamp': '2024-01-01', 'value': 42.0}
     context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
 
-    success, result = engine.execute(context, test_data)
+    try:
+        success, result = fsm.get_sync_bridge().run(engine.execute(context, test_data))
+    finally:
+        fsm.close()
 
     assert success
     assert result['validated'] is True

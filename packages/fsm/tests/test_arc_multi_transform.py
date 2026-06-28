@@ -49,15 +49,15 @@ class TestArcMultiTransform:
             "return_failure": return_failure,
         }
 
-    def test_single_transform_executes(self) -> None:
+    async def test_single_transform_executes(self) -> None:
         """A single string transform works normally."""
         arc_def = ArcDefinition(target_state="next", transform="add_ten")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        result = arc_exec.execute(ExecutionContext(), {"value": 5})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 5})
         assert result["value"] == 15
 
-    def test_multi_transform_chained(self) -> None:
+    async def test_multi_transform_chained(self) -> None:
         """List of transforms pipe data sequentially."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -66,10 +66,10 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # value=5 → add_ten → 15 → double → 30
-        result = arc_exec.execute(ExecutionContext(), {"value": 5})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 5})
         assert result["value"] == 30
 
-    def test_multi_transform_reverse_order(self) -> None:
+    async def test_multi_transform_reverse_order(self) -> None:
         """Transform order matters: double then add_ten gives different result."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -78,10 +78,10 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # value=5 → double → 10 → add_ten → 20
-        result = arc_exec.execute(ExecutionContext(), {"value": 5})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 5})
         assert result["value"] == 20
 
-    def test_multi_transform_error_propagates(self) -> None:
+    async def test_multi_transform_error_propagates(self) -> None:
         """Error in second transform raises FunctionError."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -90,9 +90,9 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError):
-            arc_exec.execute(ExecutionContext(), {"value": 5})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 5})
 
-    def test_transform_missing_raises(self) -> None:
+    async def test_transform_missing_raises(self) -> None:
         """Non-existent transform name raises FunctionError."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -101,34 +101,34 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.execute(ExecutionContext(), {"value": 1})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 1})
 
-    def test_transform_returns_execution_result_success(self) -> None:
+    async def test_transform_returns_execution_result_success(self) -> None:
         """ExecutionResult with success unwraps to .data."""
         arc_def = ArcDefinition(target_state="next", transform="return_success")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        result = arc_exec.execute(ExecutionContext(), {"value": 1})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 1})
         assert result == {"value": 999}
 
-    def test_transform_returns_execution_result_failure(self) -> None:
+    async def test_transform_returns_execution_result_failure(self) -> None:
         """ExecutionResult with failure raises FunctionError."""
         arc_def = ArcDefinition(target_state="next", transform="return_failure")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="deliberate failure"):
-            arc_exec.execute(ExecutionContext(), {"value": 1})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 1})
 
-    def test_no_transform_passthrough(self) -> None:
+    async def test_no_transform_passthrough(self) -> None:
         """Null transform passes data through unchanged."""
         arc_def = ArcDefinition(target_state="next", transform=None)
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         data = {"value": 42}
-        result = arc_exec.execute(ExecutionContext(), data)
+        result = await arc_exec.execute_async(ExecutionContext(), data)
         assert result is data
 
-    def test_multi_transform_updates_statistics(self) -> None:
+    async def test_multi_transform_updates_statistics(self) -> None:
         """Multi-transform arc tracks execution count and success count."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -136,12 +136,12 @@ class TestArcMultiTransform:
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        arc_exec.execute(ExecutionContext(), {"value": 1})
+        await arc_exec.execute_async(ExecutionContext(), {"value": 1})
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
         assert arc_exec.failure_count == 0
 
-    def test_multi_transform_failure_updates_statistics(self) -> None:
+    async def test_multi_transform_failure_updates_statistics(self) -> None:
         """Failed multi-transform arc tracks failure count."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -150,12 +150,12 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError):
-            arc_exec.execute(ExecutionContext(), {"value": 1})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 1})
         assert arc_exec.execution_count == 1
         assert arc_exec.failure_count == 1
         assert arc_exec.success_count == 0
 
-    def test_missing_in_multi_transform_chain_raises(self) -> None:
+    async def test_missing_in_multi_transform_chain_raises(self) -> None:
         """Missing function in a multi-transform chain raises FunctionError."""
         arc_def = ArcDefinition(
             target_state="next",
@@ -164,7 +164,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.execute(ExecutionContext(), {"value": 5})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 5})
 
 
 class TestStepSyncMultiTransform:

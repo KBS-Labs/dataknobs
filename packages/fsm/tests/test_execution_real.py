@@ -9,7 +9,6 @@ from pathlib import Path
 
 from dataknobs_fsm.config.loader import ConfigLoader
 from dataknobs_fsm.config.builder import FSMBuilder
-from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.batch import BatchExecutor
 from dataknobs_fsm.execution.stream import StreamExecutor
@@ -94,7 +93,7 @@ class TestExecutionEngineReal:
             ]
         }
 
-    def test_simple_execution(self, simple_fsm_config):
+    async def test_simple_execution(self, simple_fsm_config):
         """Test simple FSM execution."""
         # Create FSM from config
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
@@ -109,7 +108,7 @@ class TestExecutionEngineReal:
             fsm = builder.build(config)
 
             # Create execution engine
-            engine = ExecutionEngine(fsm)
+            engine = fsm.get_async_engine()
 
             # Create context with data
             context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
@@ -117,7 +116,7 @@ class TestExecutionEngineReal:
             context.current_state = 'start'
 
             # Execute
-            success, result = engine.execute(context)
+            success, result = await engine.execute(context)
 
             # Verify execution
             assert success

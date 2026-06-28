@@ -163,234 +163,6 @@ class ArcExecution:
         """
         logger.error(message)
     
-    def can_execute(
-        self,
-        context: "ExecutionContext",
-        data: Any = None
-    ) -> bool:
-        """Check if arc can be executed.
-        
-        This runs the pre-test function if defined.
-        
-        Args:
-            context: Execution context.
-            data: Current data.
-            
-        Returns:
-            True if arc can be executed.
-        """
-        if not self.arc_def.pre_test:
-            return True
-        
-        # Handle both FunctionRegistry and dict for pre-test function lookup
-        if hasattr(self.function_registry, 'get_function'):
-            # FunctionRegistry object
-            pre_test_func = self.function_registry.get_function(self.arc_def.pre_test)
-        elif isinstance(self.function_registry, dict):
-            # Plain dictionary
-            pre_test_func = self.function_registry.get(self.arc_def.pre_test)
-        else:
-            pre_test_func = None
-        
-        if pre_test_func is None:
-            raise FunctionError(
-                f"Pre-test function '{self.arc_def.pre_test}' not found",
-                from_state=self.source_state,
-                to_state=self.arc_def.target_state
-            )
-        
-        resources: Dict[str, Any] = {}
-        try:
-            # Allocate the arc's declared resources (merging state resources) so
-            # a resource-bearing pre-test condition can reach them, then build
-            # the function context carrying them (+ the role map).
-            state_resources = getattr(context, 'current_state_resources', None)
-            resources = self._allocate_resources(context, state_resources)
-            func_context = self._create_function_context(
-                context, resources, apply_factory=False
-            )
-
-            # Execute pre-test
-            result = pre_test_func(data, func_context)
-
-            # Handle tuple return from InterfaceWrapper (returns (result, error))
-            if isinstance(result, tuple) and len(result) == 2:
-                return bool(result[0])
-            return bool(result)
-
-        except Exception as e:
-            raise FunctionError(
-                f"Pre-test execution failed: {e}",
-                from_state=self.source_state,
-                to_state=self.arc_def.target_state
-            ) from e
-        finally:
-            self._release_resources(context)
-
-    def execute(
-        self,
-        context: "ExecutionContext",
-        data: Any = None,
-        stream_enabled: bool = False,
-        *,
-        arc_resources: Dict[str, Any] | None = None,
-    ) -> Any:
-        """Execute the arc transition.
-
-        This runs the transform function if defined and
-        manages resource allocation.
-
-        Args:
-            context: Execution context.
-            data: Current data.
-            stream_enabled: Whether streaming is enabled.
-            arc_resources: Pre-acquired, caller-owned resources. When provided
-                (the engine acquires once before its retry loop and reuses the
-                same handles across attempts — parity with the async engine),
-                this method neither acquires nor releases resources; the caller
-                owns their lifecycle. When ``None`` (the default, e.g. the
-                standalone ``ArcExecution`` API), this method allocates and
-                releases them itself.
-
-        Returns:
-            Transformed data.
-        """
-        import time
-        start_time = time.time()
-
-        # When the caller hands in pre-acquired resources it owns their
-        # lifecycle; we must not allocate or release them here.
-        owns_resources = arc_resources is None
-
-        try:
-            if owns_resources:
-                # Get state resources from context if available
-                state_resources = getattr(context, 'current_state_resources', None)
-                # Allocate required resources (merging with state resources)
-                resources = self._allocate_resources(context, state_resources)
-            else:
-                resources = arc_resources
-
-            # Execute transform(s) if defined
-            if self.arc_def.transform:
-                # Normalize to list for uniform handling
-                transform_refs = (
-                    self.arc_def.transform
-                    if isinstance(self.arc_def.transform, list)
-                    else [self.arc_def.transform]
-                )
-
-                # Create function context with resources (shared across all transforms)
-                func_context = self._create_function_context(
-                    context,
-                    resources,
-                    stream_enabled
-                )
-
-                result = data
-                for transform_ref in transform_refs:
-                    name = transform_ref.name if isinstance(transform_ref, TransformSpec) else transform_ref
-                    result = self._execute_single_transform(
-                        name, result, func_context, stream_enabled,
-                        transform_ref=transform_ref,
-                    )
-            else:
-                # No transform, pass data through
-                result = data
-
-            # Update statistics
-            self.execution_count += 1
-            self.success_count += 1
-
-            return result
-
-        except Exception as e:
-            self.execution_count += 1
-            self.failure_count += 1
-
-            raise FunctionError(
-                f"Arc execution failed: {e}",
-                from_state=self.source_state,
-                to_state=self.arc_def.target_state
-            ) from e
-        finally:
-            elapsed = time.time() - start_time
-            self.total_execution_time += elapsed
-
-            # Release only resources we allocated; caller-owned (pre-acquired)
-            # resources are released by the caller.
-            if owns_resources and 'resources' in locals():
-                self._release_resources(context)
-
-    def _execute_single_transform(
-        self,
-        transform_name: str,
-        data: Any,
-        func_context: FunctionContext,
-        stream_enabled: bool = False,
-        transform_ref: str | TransformSpec | None = None,
-    ) -> Any:
-        """Execute a single transform function by name.
-
-        Args:
-            transform_name: Registered name of the transform function.
-            data: Input data to transform.
-            func_context: Function context with resources and metadata.
-            stream_enabled: Whether streaming is enabled.
-
-        Returns:
-            Transformed data.
-
-        Raises:
-            FunctionError: If the transform function is not found or fails.
-        """
-        # Look up the transform function
-        if hasattr(self.function_registry, 'get_function'):
-            transform_func = self.function_registry.get_function(transform_name)
-        elif isinstance(self.function_registry, dict):
-            transform_func = self.function_registry.get(transform_name)
-        else:
-            transform_func = None
-
-        if transform_func is None:
-            raise FunctionError(
-                f"Transform function '{transform_name}' not found",
-                from_state=self.source_state,
-                to_state=self.arc_def.target_state
-            )
-
-        # Resolve params from TransformSpec if present
-        params = transform_ref.params if isinstance(transform_ref, TransformSpec) and transform_ref.params else {}
-
-        # Handle streaming vs non-streaming execution
-        if stream_enabled and hasattr(transform_func, 'stream_capable'):
-            return self._execute_streaming(transform_func, data, func_context)
-
-        # Call the transform function, passing params as kwargs if present
-        if hasattr(transform_func, 'transform'):
-            result = transform_func.transform(data, func_context, **params) if params else transform_func.transform(data, func_context)
-        elif callable(transform_func):
-            result = transform_func(data, func_context, **params) if params else transform_func(data, func_context)
-        else:
-            raise ValueError(f"Transform {transform_name} is not callable")
-
-        # Handle ExecutionResult objects
-        from dataknobs_fsm.functions.base import ExecutionResult
-        if isinstance(result, ExecutionResult):
-            if result.success:
-                return result.data
-            raise FunctionError(
-                result.error or "Transform failed",
-                from_state=self.source_state,
-                to_state=self.arc_def.target_state
-            )
-
-        # Transforms that mutate data in-place return None;
-        # preserve input data for the next transform in the chain.
-        if result is None:
-            return data
-        return result
-
     async def can_execute_async(
         self,
         context: "ExecutionContext",
@@ -558,8 +330,8 @@ class ArcExecution:
     ) -> Any:
         """Execute a single transform function, awaiting if async.
 
-        Mirrors _execute_single_transform() but awaits the result
-        when the transform function returns a coroutine.
+        Awaits the result when the transform function returns a coroutine, so
+        both sync and async transform callables are supported.
 
         Args:
             transform_name: Registered name of the transform function.
@@ -624,93 +396,6 @@ class ArcExecution:
             return data
         return result
 
-    def execute_with_transaction(
-        self,
-        context: "ExecutionContext",
-        data: Any = None,
-        transaction_id: str | None = None
-    ) -> Any:
-        """Execute arc within a transaction context.
-        
-        Args:
-            context: Execution context.
-            data: Current data.
-            transaction_id: Transaction identifier.
-            
-        Returns:
-            Transformed data.
-        """
-        # Get or create transaction
-        if transaction_id is None:
-            import uuid
-            transaction_id = str(uuid.uuid4())
-        
-        try:
-            # Begin transaction on required resources
-            self._begin_transaction(context, transaction_id)
-            
-            # Execute arc
-            result = self.execute(context, data)
-            
-            # Commit transaction
-            self._commit_transaction(context, transaction_id)
-            
-            return result
-            
-        except Exception:
-            # Rollback transaction
-            self._rollback_transaction(context, transaction_id)
-            raise
-    
-    def execute_push(
-        self,
-        push_arc: PushArc,
-        context: "ExecutionContext",
-        data: Any = None
-    ) -> Any:
-        """Execute a push arc to a sub-network.
-        
-        Args:
-            push_arc: Push arc definition.
-            context: Execution context.
-            data: Current data.
-            
-        Returns:
-            Result from sub-network execution.
-        """
-        # Prepare data for sub-network based on isolation mode (shared helper —
-        # single source of truth, so SERIALIZE uses the project JSON encoder
-        # rather than stdlib json which rejects non-JSON-native types).
-        sub_data = push_arc.isolation_mode.apply(data)
-        
-        # Apply data mapping
-        if push_arc.data_mapping:
-            mapped_data = {}
-            for parent_field, child_field in push_arc.data_mapping.items():
-                if hasattr(data, parent_field):
-                    mapped_data[child_field] = getattr(data, parent_field)
-                elif isinstance(data, dict) and parent_field in data:
-                    mapped_data[child_field] = data[parent_field]
-            sub_data = mapped_data
-        
-        # Push context to sub-network
-        context.push_network(push_arc.target_network, push_arc.return_state)
-        
-        # Execute sub-network (this would be handled by execution engine)
-        # For now, we just return the data
-        result = sub_data
-        
-        # Apply result mapping
-        if push_arc.result_mapping:
-            for child_field, parent_field in push_arc.result_mapping.items():
-                if isinstance(result, dict) and child_field in result:
-                    if isinstance(data, dict):
-                        data[parent_field] = result[child_field]
-                    elif hasattr(data, parent_field):
-                        setattr(data, parent_field, result[child_field])
-        
-        return result
-    
     def _create_function_context(
         self,
         exec_context: "ExecutionContext",
@@ -729,10 +414,10 @@ class ArcExecution:
         Arc *condition* (pre-test) paths pass ``apply_factory=False``: the factory's
         documented scope is transforms, so a condition receives the plain
         resource-bearing context — matching the async engine (``apply_factory=False``
-        in ``_evaluate_arc``) and the sync engine's main-loop condition path
-        (``_evaluate_pre_test``). Without this gate the factory would wrap arc
-        conditions only on the sync ``can_execute`` path (network engine), a silent
-        cross-engine divergence.
+        in ``_evaluate_arc``). ``can_execute_async`` (the condition path) builds the
+        context with ``apply_factory=False`` while ``execute_async`` (the transform
+        path) applies the factory; without this gate the factory would wrap arc
+        conditions too.
 
         Args:
             exec_context: Execution context.
@@ -918,48 +603,6 @@ class ArcExecution:
         # This would integrate with the streaming system
         # For now, we just execute normally
         return func(data, context)
-    
-    def _begin_transaction(
-        self,
-        context: "ExecutionContext",
-        transaction_id: str
-    ) -> None:
-        """Begin transaction on required resources.
-        
-        Args:
-            context: Execution context.
-            transaction_id: Transaction ID.
-        """
-        # This would interface with transactional resources
-        pass
-    
-    def _commit_transaction(
-        self,
-        context: "ExecutionContext",
-        transaction_id: str
-    ) -> None:
-        """Commit transaction on resources.
-        
-        Args:
-            context: Execution context.
-            transaction_id: Transaction ID.
-        """
-        # This would interface with transactional resources
-        pass
-    
-    def _rollback_transaction(
-        self,
-        context: "ExecutionContext",
-        transaction_id: str
-    ) -> None:
-        """Rollback transaction on resources.
-        
-        Args:
-            context: Execution context.
-            transaction_id: Transaction ID.
-        """
-        # This would interface with transactional resources
-        pass
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get execution statistics.

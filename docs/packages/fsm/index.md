@@ -273,9 +273,9 @@ The FSM package is built with a modular, layered architecture:
 - `ArcExecution`: Runtime arc execution with resource management
 - `PushArc`: Hierarchical composition for sub-networks
 
-#### Execution Engines
-- `ExecutionEngine`: Synchronous execution with strategy support
-- `AsyncExecutionEngine`: Asynchronous execution with concurrency
+#### Execution Engine
+- `AsyncExecutionEngine`: The single engine that runs all execution; the
+  synchronous public APIs drive it through an async→sync bridge
 - `BatchExecutor`: Optimized batch processing
 - `StreamExecutor`: Stream processing with backpressure
 

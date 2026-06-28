@@ -167,9 +167,9 @@ advanced_fsm.set_hooks(hooks)
 
 ### Engine-Level Transition Hooks
 
-Monitor individual transitions via the execution engines. Both `ExecutionEngine` and
-`AsyncExecutionEngine` support pre-transition, post-transition, and error hooks.
-Hooks can be sync or async functions (async hooks are automatically awaited):
+Monitor individual transitions via the execution engine. `AsyncExecutionEngine`
+supports pre-transition, post-transition, and error hooks. Hooks can be sync or
+async functions (async hooks are automatically awaited):
 
 ```python
 from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
@@ -767,7 +767,7 @@ def debug_fsm(config, test_data):
 Set custom execution strategies:
 
 ```python
-from dataknobs_fsm.execution.engine import TraversalStrategy
+from dataknobs_fsm.execution.common import TraversalStrategy
 
 # Set execution strategy
 advanced_fsm.set_execution_strategy(TraversalStrategy.DEPTH_FIRST)
