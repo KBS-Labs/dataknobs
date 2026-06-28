@@ -1620,6 +1620,17 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Returns:
             (True, None) on success, (False, error_message) on failure.
         """
+        # Clear any stale ``last_error`` before the entry attempt. On a reused
+        # SINGLE-mode context, ``last_error`` may still hold a reason from a
+        # prior run; because ``_establish_state`` only records the pre-validation
+        # reason when ``last_error`` is unset (the don't-clobber gate), a stale
+        # value would otherwise survive and ``_initial_entry_error`` would
+        # surface *that* instead of this run's actual rejection reason. Clearing
+        # here scopes the specific-reason contract to the current entry while
+        # still letting a pre-validator that records its own error during this
+        # entry win over the generic message.
+        context.last_error = None
+
         # Enter the start state through the shared entry path (pre-validators +
         # current_state_resources population for child inheritance), at parity
         # with the sync engine's _enter_initial_state. When the state is already

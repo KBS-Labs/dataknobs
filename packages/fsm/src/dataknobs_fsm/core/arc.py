@@ -170,8 +170,9 @@ class ArcExecution:
     ) -> bool:
         """Check if arc can be executed, awaiting async pre-tests.
 
-        Mirrors can_execute() but awaits the result if the pre-test
-        function is a coroutine.
+        Resolves the arc's ``pre_test`` function, normalizes a bare
+        ``IStateTestFunction`` instance to its bound ``.test`` method, invokes
+        it, and awaits the result when the function is a coroutine.
 
         Args:
             context: Execution context.
@@ -244,8 +245,8 @@ class ArcExecution:
     ) -> Any:
         """Execute the arc transition, awaiting async transforms.
 
-        Mirrors execute() but uses _execute_single_transform_async
-        so that async transform functions are properly awaited.
+        Uses ``_execute_single_transform_async`` so that async transform
+        functions are properly awaited.
 
         Args:
             context: Execution context.

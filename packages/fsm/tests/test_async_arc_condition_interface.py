@@ -158,6 +158,25 @@ class TestBareStateTestInstanceArcCondition:
         assert await arc_exec.can_execute_async(ctx, {"flag": 1}) is True
         assert await arc_exec.can_execute_async(ctx, {"other": 1}) is False
 
+    @pytest.mark.asyncio
+    async def test_arc_execution_can_execute_async_awaits_async_instance(self):
+        """``ArcExecution.can_execute_async`` awaits a bare ``async def test``.
+
+        The async branch (``inspect.isawaitable(result)`` → ``await``) on the
+        public ``ArcExecution`` API is otherwise only exercised transitively via
+        ``_evaluate_arc``. ``AsyncHasField`` forces a real suspension point, so a
+        "dispatched but not awaited" regression — an un-awaited coroutine is
+        always truthy — would wrongly pass the blocked record and fail this test.
+        """
+        arc_def = ArcDefinition(target_state="end", pre_test="gate")
+        arc_exec = ArcExecution(arc_def, "start", {"gate": AsyncHasField("flag")})
+
+        ctx = ExecutionContext()
+        ctx.current_state = "start"
+
+        assert await arc_exec.can_execute_async(ctx, {"flag": 1}) is True
+        assert await arc_exec.can_execute_async(ctx, {"other": 1}) is False
+
 
 class TestInitialStatePreValidationErrorFidelity:
     """FU8c-3: rejecting initial-state pre-validator surfaces the specific reason."""
@@ -210,4 +229,63 @@ class TestInitialStatePreValidationErrorFidelity:
         assert "Pre-validation failed" in error_text, (
             "initial-state pre-validation rejection should surface the specific "
             f"reason to the caller, got: {error_text!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_last_error_does_not_mask_current_reason(self):
+        """A reused context's stale ``last_error`` must not surface as the reason.
+
+        ``_initial_entry_error`` prefers ``context.last_error`` to report the
+        specific rejection reason. But ``_establish_state`` only records that
+        reason when ``last_error`` is unset (the don't-clobber gate), so a stale
+        value left on a reused SINGLE-mode context would survive and be returned
+        in place of this run's actual reason — making the "specific" message
+        *less* accurate than the generic one. ``_enter_initial_state`` clears
+        ``last_error`` before the entry attempt to scope the contract to the
+        current run; without that clear this asserts the stale string.
+        """
+        config = {
+            "name": "reject_initial_fsm",
+            "main_network": "main",
+            "networks": [
+                {
+                    "name": "main",
+                    "states": [
+                        {
+                            "name": "start",
+                            "is_start": True,
+                            "pre_validators": [
+                                {
+                                    "type": "inline",
+                                    "code": "lambda data: 'required' in data",
+                                }
+                            ],
+                        },
+                        {"name": "end", "is_end": True},
+                    ],
+                    "arcs": [{"from": "start", "to": "end", "name": "go"}],
+                }
+            ],
+        }
+        loader = ConfigLoader()
+        fsm_config = loader.load_from_dict(config)
+        fsm = FSMBuilder().build(fsm_config)
+        engine = AsyncExecutionEngine(fsm)
+
+        ctx = ExecutionContext()
+        # Simulate a reused context carrying a reason from a prior turn.
+        ctx.last_error = "stale reason from a prior run"
+        ctx.data = {"other": 1}
+
+        success, error = await engine.execute(ctx)
+
+        assert not success
+        error_text = str(error or "")
+        assert "stale reason from a prior run" not in error_text, (
+            "a stale last_error from a prior run must not surface as this run's "
+            f"initial-entry reason, got: {error_text!r}"
+        )
+        assert "Pre-validation failed" in error_text, (
+            "the current run's specific rejection reason should surface, got: "
+            f"{error_text!r}"
         )

@@ -311,6 +311,14 @@ def as_state_test_callable(func: Any) -> Any:
     (``_is_interface_transform``/``_invoke_state_transform``), so normalizing
     other interfaces here would convert a bare transform instance into a bound
     method and silently bypass that resource-injecting dispatch.
+
+    A bare ``IValidationFunction`` used directly as an arc condition is likewise
+    not normalized here. That shape is unusual — validators belong on a state's
+    ``(pre_)validators``, where the manager build path normalizes all four
+    interfaces — so an interface-as-condition reference is expected to be an
+    ``IStateTestFunction``. A bare validator instance reaching this path stays
+    non-callable and surfaces as a record error rather than being silently
+    reinterpreted as a condition.
     """
     if isinstance(func, IStateTestFunction):
         return func.test
