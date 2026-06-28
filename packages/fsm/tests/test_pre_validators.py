@@ -82,8 +82,10 @@ class TestPreValidators:
         assert execution_log == []
         assert not success
         # The failing pre-validator blocks entry into the start state, so the
-        # run reports a failure to enter it (the transform never runs).
-        assert "Failed to enter initial state" in str(result)
+        # run reports the specific pre-validation failure (the transform never
+        # runs) — the engine surfaces *why* entry failed to the caller, not the
+        # generic "Failed to enter initial state".
+        assert "Pre-validation failed" in str(result)
 
     async def test_pre_validators_receive_state_resources(self):
         """Test that pre-validators and other state functions receive state resources."""

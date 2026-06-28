@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
-from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import FunctionContext, as_state_test_callable
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
@@ -208,6 +208,12 @@ class ArcExecution:
             func_context = self._create_function_context(
                 context, resources, apply_factory=False
             )
+
+            # A bare IStateTestFunction instance is not callable; normalize it to
+            # its bound .test method so an interface-instance arc condition is
+            # dispatched, not called as func(data, context) (parity with the
+            # async engine's _evaluate_arc).
+            pre_test_func = as_state_test_callable(pre_test_func)
 
             # Execute pre-test
             result = pre_test_func(data, func_context)

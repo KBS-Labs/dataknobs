@@ -285,11 +285,36 @@ class IEndStateTestFunction(ABC):
     @abstractmethod
     def get_end_condition(self) -> str:
         """Get a description of the end condition.
-        
+
         Returns:
             String describing when processing ends.
         """
         pass
+
+
+def as_state_test_callable(func: Any) -> Any:
+    """Return the callable form of a resolved arc-condition / pre-test function.
+
+    A bare ``IStateTestFunction`` instance carries its condition logic on
+    ``.test(data, context) -> (passed, reason)`` and is not itself callable, so
+    the execution engines (which invoke every pre-test uniformly as
+    ``func(data, context)``) cannot dispatch it. Return the bound ``.test``
+    method for a bare interface instance; every already-callable form — plain
+    predicates, :class:`FunctionWrapper`/``InterfaceWrapper``, and the config
+    builder's resolved adapters — passes through unchanged.
+
+    This mirrors ``FunctionWrapper._normalize_interface_callable`` for the one
+    path that bypasses it: the async engine's ``custom_functions`` merge
+    (``AsyncExecutionEngine._get_merged_functions``) stores engine-injected
+    functions raw. It is deliberately scoped to ``IStateTestFunction`` only —
+    the transform path has its own deterministic ``ITransformFunction`` dispatch
+    (``_is_interface_transform``/``_invoke_state_transform``), so normalizing
+    other interfaces here would convert a bare transform instance into a bound
+    method and silently bypass that resource-injecting dispatch.
+    """
+    if isinstance(func, IStateTestFunction):
+        return func.test
+    return func
 
 
 class ResourceStatus(Enum):
