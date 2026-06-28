@@ -534,7 +534,7 @@ networks:
         resources: ["main_db", "cache"]  # Resources for state transforms
         pre_validators:  # Validate incoming data before transforms
           - type: "builtin"
-            name: "validate_input_schema"
+            name: "validators.SchemaValidator"
             params:
               schema: {...}
         transforms:
@@ -543,7 +543,7 @@ networks:
             name: "process_transform"
         validators:  # Post-validators: validate after transforms
           - type: "builtin"
-            name: "validate_output_schema"
+            name: "validators.SchemaValidator"
             params:
               schema: {...}
         arcs:  # Arcs defined under the source state
@@ -553,7 +553,9 @@ networks:
               code: "lambda state: state.data.get('ready', False)"
             transform:
               type: "builtin"
-              name: "add_metadata"
+              name: "transformers.map_fields"
+              params:
+                mapping: {...}
             priority: 10
             resources: ["api_client"]  # Arc-specific resources
 ```

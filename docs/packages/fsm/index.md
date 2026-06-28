@@ -196,65 +196,61 @@ asyncio.run(run_workflow())
 
 ### Using Configuration
 
+This pipeline gates entry on required fields with a built-in **validator**,
+renames a field with a built-in **transformer**, then applies an **inline**
+transform — using only the in-tree function library (no external resources, so
+it runs as-is). Built-in functions are referenced as `validators.<Name>` /
+`transformers.<Name>`; `params` are their constructor/factory keyword arguments.
+
 ```yaml
 # fsm_config.yaml
 name: data_processor
 data_mode: COPY  # or REFERENCE or DIRECT
-execution_strategy: DEPTH_FIRST  # or BREADTH_FIRST, RESOURCE_OPTIMIZED, STREAM_OPTIMIZED
 
 states:
-  - name: start
-    is_start: true
   - name: validate
-    functions:
-      state_test:
-        type: builtin
-        name: has_required_fields
+    is_start: true
+    # A pre-validator gates entry: records missing a required field are failed.
+    pre_validators:
+      - type: builtin
+        name: validators.RequiredFieldsValidator
         params:
           fields: ["user_id", "data"]
+    # A built-in transformer renames data -> payload.
+    transforms:
+      - type: builtin
+        name: transformers.map_fields
+        params:
+          mapping: {data: payload}
   - name: process
-    functions:
-      transform:
-        type: inline
+    transforms:
+      - type: inline
         code: |
-          lambda state: {
-              **state.data,
-              'processed': True,
-              'timestamp': datetime.now().isoformat()
-          }
-    resources:
-      - type: database
-        name: main_db
-  - name: end
+          def transform(data, context):
+              data["processed"] = True
+              return data
+  - name: done
     is_end: true
 
 arcs:
-  - from: start
-    to: validate
   - from: validate
     to: process
-    pre_test:
-      type: builtin
-      name: data_valid
   - from: process
-    to: end
-    transform:
-      type: builtin
-      name: add_metadata
-
-resources:
-  database:
-    main_db:
-      provider: postgresql
-      connection_string: ${DATABASE_URL}
-      pool_size: 10
+    to: done
 ```
 
 ```python
 from dataknobs_fsm.api.simple import SimpleFSM
 
 fsm = SimpleFSM("fsm_config.yaml")
-result = fsm.process({"user_id": "123", "data": "input"})
+
+ok = fsm.process({"user_id": "123", "data": "input"})
+# ok["success"] is True; ok["data"] == {"user_id": "123", "payload": "input", "processed": True}
+
+missing = fsm.process({"data": "input"})
+# missing["success"] is False — the required-field validator gated entry
+
+fsm.close()
 ```
 
 ## Architecture
@@ -399,8 +395,8 @@ Functions can be registered and used throughout the FSM:
 | Type | Description | Example |
 |------|-------------|---------|
 | **inline** | Lambda expressions or code strings | `"lambda state: state.data.upper()"` |
-| **builtin** | Pre-registered library functions | `{"type": "builtin", "name": "validate_email"}` |
-| **custom** | Functions from Python modules | `{"type": "custom", "module": "myapp.transforms"}` |
+| **builtin** | Library functions (`validators.<Name>` / `transformers.<Name>`) | `{"type": "builtin", "name": "transformers.map_fields", "params": {"mapping": {"a": "b"}}}` |
+| **custom** | Functions/classes from Python modules | `{"type": "custom", "module": "myapp.transforms", "name": "MyTransform"}` |
 | **registered** | Runtime-registered functions | `{"type": "registered", "name": "process_data"}` |
 
 ## Next Steps

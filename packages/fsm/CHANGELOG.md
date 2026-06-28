@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Config-authored `builtin` and `custom` function references now resolve to a
+  working function and run.** A `{"type": "builtin", "name":
+  "transformers.map_fields", "params": {...}}` (or `{"type": "custom", "module":
+  ..., "name": ..., "params": {...}}`) reference now materializes the library
+  class/factory with its `params` and adapts it to the engine's invocation
+  contract — previously the reference was bound with `functools.partial`, so the
+  engine called the *constructor/factory* with the record and the transform never
+  ran. Built-in functions are referenced by their introspected names
+  (`validators.<Name>` / `transformers.<Name>`); a built-in/custom validator
+  gates state entry when declared under `pre_validators`. The bare-string
+  state-sugar shorthand still resolves only to `registered`/`inline` (use the
+  dict form for `builtin`/`custom`). The config guide's built-in example (which
+  named a non-existent function) is corrected and every function-type example is
+  verified against the resolver.
 - The **synchronous FSM APIs that ran on the standalone sync engine now run
   async transforms correctly.** `FSM.execute`, the sync batch/stream executors,
   and `AdvancedFSM.execute_step_sync` now execute on the single async engine, so

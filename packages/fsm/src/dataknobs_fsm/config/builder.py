@@ -11,7 +11,9 @@ It also provides :func:`build_fsm`, the standard way to create an FSM from
 raw configuration with optional custom functions.
 """
 
+import asyncio
 import importlib
+import inspect
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
@@ -28,6 +30,7 @@ from dataknobs_fsm.config.schema import (
 )
 from dataknobs_fsm.core.arc import ArcDefinition, PushArc, TransformSpec
 from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode, get_data_handler
+from dataknobs_fsm.core.data_wrapper import ensure_dict
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.core.transactions import (
@@ -40,6 +43,7 @@ from dataknobs_fsm.core.transactions import (
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
+    IEndStateTestFunction,
     IResource,
     IStateTestFunction,
     ITransformFunction,
@@ -52,6 +56,152 @@ from dataknobs_fsm.functions.manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Interface -> the method the engine ultimately invokes on a function instance.
+_INTERFACE_METHODS: Dict[type, str] = {
+    ITransformFunction: "transform",
+    IValidationFunction: "validate",
+    IStateTestFunction: "test",
+    IEndStateTestFunction: "should_end",
+}
+
+
+class _ResolvedLibraryFunction:
+    """Engine-invocation adapter over a materialized FSM library function.
+
+    The built-in / custom function library follows a ``(data) -> dict | bool``
+    (optionally ``(data, context)``) convention, while the engine invokes a
+    resolved function either as ``obj.transform(data, ctx)`` /
+    ``obj.validate(data, ctx)`` (method style) or as ``obj(data, ctx)``
+    (callable style), and routes ``ITransformFunction`` transforms by an
+    ``interface`` marker (see ``AsyncExecutionEngine._is_interface_transform``).
+
+    This adapter exposes that contract over a materialized instance (e.g. a
+    ``FieldMapper`` from ``transformers.map_fields(mapping=...)`` or a
+    ``RequiredFieldsValidator(fields=...)``): it forwards to the instance's
+    interface method with a plain ``dict`` (never a ``StateDataWrapper``),
+    supplies ``context`` only when the implementation accepts it, and leaves the
+    return value for the engine to normalize (it already handles
+    ``ExecutionResult`` / ``dict`` / ``bool``). Returned directly by
+    :meth:`FSMBuilder._resolve_function` with ``_is_wrapped`` set, so the builder
+    does not re-wrap it and the shared function manager is left untouched.
+    """
+
+    def __init__(self, instance: Any, interface: type) -> None:
+        self._instance = instance
+        # Read by AsyncExecutionEngine._is_interface_transform to dispatch the
+        # deterministic (dict, context) signature for transforms.
+        self.interface = interface
+        self._method_name = _INTERFACE_METHODS[interface]
+        self._impl = getattr(instance, self._method_name)
+        self._accepts_context = self._impl_accepts_context(self._impl)
+        self.__name__ = type(instance).__name__
+        # Tell FSMBuilder._resolve_function not to re-wrap this object.
+        self._is_wrapped = True
+
+    @staticmethod
+    def _impl_accepts_context(impl: Callable) -> bool:
+        """Whether the library method takes the execution context beyond ``data``.
+
+        Library functions are a mix of ``transform(self, data)`` (1-arg) and
+        ``transform(self, data, context=None)`` (2-arg). ``impl`` is a bound
+        method, so ``self`` is already excluded from the signature.
+        """
+        try:
+            params = list(inspect.signature(impl).parameters.values())
+        except (TypeError, ValueError):
+            return True
+        if any(
+            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            for p in params
+        ):
+            return True
+        return len(params) >= 2
+
+    def _invoke(self, data: Any, context: Any) -> Any:
+        plain = ensure_dict(data)
+        if self._accepts_context:
+            return self._impl(plain, context)
+        return self._impl(plain)
+
+    def transform(self, data: Any, context: Any = None, **_: Any) -> Any:
+        return self._invoke(data, context)
+
+    def validate(self, data: Any, context: Any = None, **_: Any) -> Any:
+        return self._invoke(data, context)
+
+    def test(self, data: Any, context: Any = None, **_: Any) -> Any:
+        result = self._invoke(data, context)
+        return result if isinstance(result, tuple) else (bool(result), None)
+
+    def should_end(self, data: Any, context: Any = None, **_: Any) -> Any:
+        result = self._invoke(data, context)
+        return result if isinstance(result, tuple) else (bool(result), None)
+
+    def __call__(self, data: Any, context: Any = None, **kwargs: Any) -> Any:
+        return getattr(self, self._method_name)(data, context, **kwargs)
+
+    def get_transform_description(self) -> str:
+        return f"Library transform: {self.__name__}"
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        return {"name": self.__name__}
+
+    def get_test_description(self) -> str:
+        return f"Library test: {self.__name__}"
+
+    def get_end_condition(self) -> str:
+        return f"Library end test: {self.__name__}"
+
+
+class _AsyncResolvedLibraryFunction(_ResolvedLibraryFunction):
+    """Async adapter for a materialized library method that is ``async def``.
+
+    A *custom* class may implement ``async def transform`` /
+    ``async def validate`` / ``async def test`` / ``async def should_end``. The
+    synchronous :class:`_ResolvedLibraryFunction` would call such an impl and
+    return the *un-awaited coroutine*, which the engine would silently store as
+    transform data / coerce to a bool — a quietly wrong result. This variant
+    exposes genuine ``async def`` interface methods (and an async ``__call__``)
+    so every engine dispatch path awaits the coroutine: the state-transform
+    path detects ``_is_async``; the arc-transform, pre-validator, and
+    arc-condition paths await any returned coroutine; and the post-entry
+    validator path detects the coroutine-function ``validate``.
+
+    The sync adapter remains the default so a synchronous library transform is
+    still dispatched off the event loop (the engine's executor offload),
+    preserving non-blocking behavior; only genuinely async impls take this path.
+    """
+
+    def __init__(self, instance: Any, interface: type) -> None:
+        super().__init__(instance, interface)
+        # Read by AsyncExecutionEngine._invoke_state_transform's async detection
+        # so the interface-transform path awaits rather than offloading.
+        self._is_async = True
+
+    async def _ainvoke(self, data: Any, context: Any) -> Any:
+        plain = ensure_dict(data)
+        if self._accepts_context:
+            return await self._impl(plain, context)
+        return await self._impl(plain)
+
+    async def transform(self, data: Any, context: Any = None, **_: Any) -> Any:
+        return await self._ainvoke(data, context)
+
+    async def validate(self, data: Any, context: Any = None, **_: Any) -> Any:
+        return await self._ainvoke(data, context)
+
+    async def test(self, data: Any, context: Any = None, **_: Any) -> Any:
+        result = await self._ainvoke(data, context)
+        return result if isinstance(result, tuple) else (bool(result), None)
+
+    async def should_end(self, data: Any, context: Any = None, **_: Any) -> Any:
+        result = await self._ainvoke(data, context)
+        return result if isinstance(result, tuple) else (bool(result), None)
+
+    async def __call__(self, data: Any, context: Any = None, **kwargs: Any) -> Any:
+        return await getattr(self, self._method_name)(data, context, **kwargs)
 
 
 class FSMBuilder:
@@ -412,6 +562,16 @@ class FSMBuilder:
         if not func:
             return None
 
+        # A materialized library adapter is a *param-specific instance* (its
+        # ``params`` are baked into the wrapped instance), and it names itself by
+        # the wrapped class (e.g. every ``transformers.map_fields`` reference is a
+        # ``FieldMapper``). Returning that class name would make two arcs that
+        # reference the same library function under different params collide on
+        # one registered name — the second arc would silently run the first's
+        # params. Force the caller's unique-name branch (id-suffixed, per arc).
+        if isinstance(func, _ResolvedLibraryFunction):
+            return None
+
         # Check for various name attributes
         if hasattr(func, 'name'):
             return func.name
@@ -513,8 +673,13 @@ class FSMBuilder:
                         t_name = f"transform_{source_state.name}_{arc_config.target}_{t_idx}_{id(transform)}"
                 if t_name and not self._function_manager.has_function(t_name):
                     self._function_manager.register_function(t_name, transform, FunctionSource.INLINE)
-                # Preserve params from FunctionReference as TransformSpec
-                if t_ref.params:
+                # Preserve params from FunctionReference as a TransformSpec so the
+                # engine re-passes them as kwargs at execution — but NOT for a
+                # materialized library adapter, whose params are already baked
+                # into the instance. Re-attaching them there is at best inert
+                # (the adapter swallows the kwargs) and at worst a TypeError if a
+                # param key shadows ``data``/``context``; the adapter just runs.
+                if t_ref.params and not isinstance(transform, _ResolvedLibraryFunction):
                     resolved_specs.append(TransformSpec(name=t_name, params=t_ref.params))
                 else:
                     resolved_specs.append(t_name)
@@ -636,6 +801,61 @@ class FSMBuilder:
         
         return JSONSchemaValidator(schema_config)
 
+    def _materialize_library_function(
+        self,
+        raw: Any,
+        params: Dict[str, Any] | None,
+        expected_type: Type | None,
+        *,
+        classes_only: bool = False,
+    ) -> "_ResolvedLibraryFunction | None":
+        """Build an FSM-function instance from a library class/factory + params.
+
+        The built-in/custom function libraries expose classes (constructed with
+        ``params``) and keyword factory functions (called with ``params``) that
+        return an FSM-function instance. This constructs/calls ``raw`` with the
+        configured ``params`` and wraps the resulting instance in a
+        :class:`_ResolvedLibraryFunction` adapter so the engine can invoke it.
+
+        Args:
+            raw: The library member — a class or a factory callable.
+            params: Configuration kwargs for the class/factory.
+            expected_type: The FSM interface the resolved function must satisfy.
+            classes_only: When True, only a class is materialized (a factory
+                function is left for the caller's standard path) — used for
+                ``custom`` references so an ordinary ``(data, context)`` function
+                is never mis-invoked as a factory.
+
+        Returns:
+            The adapter, or ``None`` when ``raw`` is not a class/factory yielding
+            an instance of ``expected_type`` (caller falls back to its standard
+            wrapper path).
+        """
+        if expected_type not in _INTERFACE_METHODS:
+            return None
+        kwargs = params or {}
+        if inspect.isclass(raw):
+            instance = raw(**kwargs)
+        elif classes_only or not callable(raw):
+            return None
+        else:
+            # A keyword factory function (e.g. transformers.map_fields). Calling
+            # it with the configured params yields the FSM-function instance.
+            instance = raw(**kwargs)
+        if not isinstance(instance, tuple(_INTERFACE_METHODS)):
+            return None
+        # A custom class may implement the interface method as ``async def``;
+        # pick the async adapter so the engine awaits it rather than storing an
+        # un-awaited coroutine. The built-in library is entirely synchronous, so
+        # builtin references always take the sync adapter (executor-offloaded).
+        impl = getattr(instance, _INTERFACE_METHODS[expected_type], None)
+        adapter_cls = (
+            _AsyncResolvedLibraryFunction
+            if asyncio.iscoroutinefunction(impl)
+            else _ResolvedLibraryFunction
+        )
+        return adapter_cls(instance, expected_type)
+
     def _resolve_function(
         self,
         func_ref: FunctionReference,
@@ -658,8 +878,18 @@ class FSMBuilder:
             wrapper = self._function_manager.get_function(func_ref.name)
             if not wrapper:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
+            # The built-in library is classes (e.g. RequiredFieldsValidator) and
+            # factory functions (e.g. transformers.map_fields) configured by
+            # ``params``. Materialize the FSM-function instance and adapt it to
+            # the engine's invocation contract; a plain-function builtin (no
+            # interface instance) falls through to the standard wrapper path.
+            materialized = self._materialize_library_function(
+                wrapper.func, func_ref.params, expected_type
+            )
+            if materialized is not None:
+                return materialized
             func = wrapper
-        
+
         elif func_ref.type == "registered":
             # Look up registered function
             wrapper = self._function_manager.get_function(func_ref.name)
@@ -673,12 +903,40 @@ class FSMBuilder:
             if wrapper:
                 func = wrapper
             else:
-                # Import custom function
-                module = importlib.import_module(func_ref.module)
-                func = getattr(module, func_ref.name)
+                # Import custom function — surface a missing module / missing
+                # attribute as a clear ValueError (parity with the builtin
+                # "not found" message), not a bare ModuleNotFoundError /
+                # AttributeError leaking from importlib.
+                try:
+                    module = importlib.import_module(func_ref.module)
+                except ImportError as exc:
+                    raise ValueError(
+                        f"Custom function module not found: {func_ref.module}"
+                    ) from exc
+                try:
+                    raw = getattr(module, func_ref.name)
+                except AttributeError as exc:
+                    raise ValueError(
+                        f"Custom function not found: {func_ref.module}.{func_ref.name}"
+                    ) from exc
                 # Register it for future use
-                self._function_manager.register_function(func_ref.name, func, FunctionSource.REGISTERED)
-        
+                self._function_manager.register_function(func_ref.name, raw, FunctionSource.REGISTERED)
+                # A custom *class* implementing an FSM function interface is
+                # configured by ``params`` (constructor args) the same way a
+                # built-in class is; materialize + adapt it. A plain custom
+                # function keeps the standard wrapper path (``classes_only`` so
+                # an ordinary (data, context) function is never mis-called as a
+                # factory).
+                materialized = self._materialize_library_function(
+                    raw, func_ref.params, expected_type, classes_only=True
+                )
+                if materialized is not None:
+                    return materialized
+                # Plain custom function: keep the raw callable (byte-identical to
+                # the pre-adapter path) so the standard partial + wrap path below
+                # wraps the function itself, not the manager's FunctionWrapper.
+                func = raw
+
         elif func_ref.type == "inline":
             # Use function manager's inline handling
             wrapper = self._function_manager.resolve_function(func_ref.code, expected_type)
