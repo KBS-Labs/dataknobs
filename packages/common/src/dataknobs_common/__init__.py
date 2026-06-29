@@ -229,7 +229,7 @@ from dataknobs_common.testing import (
     requires_redis,
 )
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 __all__ = [
     # Version

@@ -5,6 +5,54 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-06-29
+
+### dataknobs-common [1.5.1]
+
+#### Added
+- feat(common): add async->sync bridge for running coroutines from sync code
+
+#### Fixed
+- fix(common): address SyncLoopBridge deep-review findings
+- fix(common): address SyncLoopBridge deep-review findings
+- fix(common): atomic PluginRegistry init + numpy 2.5 mypy stub compat
+
+### dataknobs-config [0.4.1]
+
+#### Changed
+- bumped versions, updated release notes
+
+#### Fixed
+- fix(common): atomic PluginRegistry init + numpy 2.5 mypy stub compat
+
+### dataknobs-structures [1.0.12]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-xization [1.3.10]
+
+#### Fixed
+- fix(common): atomic PluginRegistry init + numpy 2.5 mypy stub compat
+
+### dataknobs-data [0.5.4]
+
+#### Added
+- feat(data,fsm): add AsyncDatabase buffered transaction; make DatabaseTransaction real
+
+#### Fixed
+- fix(data,fsm): make BufferedTransaction.is_atomic composition-aware
+
+### dataknobs-fsm [0.2.4]
+
+#### Added
+- feat(fsm): wire config-authored builtin/custom function references end-to-end
+- feat(fsm): delete the standalone sync execution engine; one async engine
+- fix(fsm): release start-state resources on batch/stream runs; add AdvancedFSM lifecycle close
+- feat(fsm): run sync FSM APIs on the single async engine via a shared bridge
+- feat(fsm): execute push arcs on the async engine
+
+
 ## Release - 2026-06-23
 
 ### dataknobs-data [0.5.3]
