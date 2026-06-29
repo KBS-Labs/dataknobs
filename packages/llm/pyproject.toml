@@ -8,9 +8,9 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common>=1.5.0",
-    "dataknobs-config>=0.4.0",
-    "dataknobs-data>=0.5.3",
+    "dataknobs-common>=1.5.1",
+    "dataknobs-config>=0.4.1",
+    "dataknobs-data>=0.5.4",
     "dataknobs-utils>=1.2.14",
     "pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
     "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6

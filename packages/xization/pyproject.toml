@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-xization"
-version = "1.3.9"
+version = "1.3.10"
 description = "Text normalization and tokenization tools"
 readme = "README.md"
 authors = [
@@ -8,8 +8,8 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common>=1.5.0",
-    "dataknobs-structures>=1.0.11",
+    "dataknobs-common>=1.5.1",
+    "dataknobs-structures>=1.0.12",
     "dataknobs-utils>=1.2.14",
     "beautifulsoup4>=4.12.0",
     "nltk>=3.9.4",  # GHSA-rf74-v2fm-23pw, CVE-2026-33230, CVE-2026-33231 fixed in 3.9.4. GHSA-p4gq-832x-fm9v (CVSS 7.5, path traversal in nltk.data.find() via url-encoded nltk:-scheme resource names) affects all versions through 3.9.4 with no upstream fix as of 2026-06-22 — accepted: this codebase loads only fixed corpus names (wordnet/omw-1.4/wordnet_ic) and never passes caller-controlled strings into nltk.data.find()

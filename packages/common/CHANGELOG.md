@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.5.1 - 2026-06-29
+
 ### Added
 - `SyncLoopBridge` and the `run_coro_sync` convenience function in
   `dataknobs_common.sync_bridge` (exported from the package root). They run
