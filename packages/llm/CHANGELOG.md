@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `transformers` requirement (extra: `embeddings`) from
+  `>=5.0.0` to `>=5.3.0` to exclude GHSA-29pf-2h5f-8g72 (CVSS 7.8),
+  fixed in 5.3.0 and flagged at the floor resolve by the
+  `dependency-update` workflow. The bump preserves the prior
+  GHSA-69w3-r845-3855 (CVSS 6.5) floor and the earlier CVE sweep
+  (highest CVSS 9.0: PYSEC-2023-300). The inline floor comment in
+  `pyproject.toml` records the rationale.
+
 ## v0.6.4 - 2026-06-23
 
 ## v0.6.3 - 2026-06-22
