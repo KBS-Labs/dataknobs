@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Acknowledged GHSA-p4gq-832x-fm9v and PYSEC-2026-597 / CVE-2026-12243
+  (both CVSS 7.5, path traversal in `nltk.data.find()` / `load()` via
+  percent-encoded `..%2f` sequences that bypass the `../` regex check
+  once `url2pathname()` decodes them) against the `nltk>=3.9.4` floor,
+  flagged at the floor resolve by the `dependency-update` workflow.
+  Both affect all `nltk` versions through 3.9.4 with no upstream fix.
+  Not reachable from this codebase: `resource_utils` loads only the
+  fixed corpus names (`wordnet` / `omw-1.4` / `wordnet_ic`) and never
+  passes caller-controlled strings into `nltk.data.find()`. The inline
+  floor comment in `pyproject.toml` records the rationale.
+
 ## v1.2.14 - 2026-06-22
 
 ## v1.2.13 - 2026-05-26

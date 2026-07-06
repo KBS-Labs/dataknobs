@@ -44,7 +44,7 @@ http = [
 vector = [
     "pgvector>=0.2.0",
     "faiss-cpu>=1.7.4",
-    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-06-08 — not exposed via the dataknobs-data ChromaVectorStore client (embedded/persistent modes only)
+    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. GHSA-f4j7-r4q5-qw2c/PYSEC-2026-311 (CVSS 9.3, pre-auth code injection via /api/v2/... endpoint) affects 1.0.0–1.5.9 with no upstream fix as of 2026-07-06 — not exposed via the dataknobs-data ChromaVectorStore client (embedded/persistent modes only)
 ]
 all = [
     "dataknobs-fsm[llm,http,vector]",

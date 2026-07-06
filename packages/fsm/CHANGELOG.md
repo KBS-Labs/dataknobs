@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Acknowledged GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311 (CVSS 9.3, pre-auth
+  code injection via the `/api/v2/...` endpoint) against the
+  `chromadb>=1.0.0` floor, flagged at the floor resolve by the
+  `dependency-update` workflow. Affects chromadb 1.0.0–1.5.9 with no
+  upstream fix. Not exposed via the dataknobs-data `ChromaVectorStore`
+  client used here (embedded/persistent modes only; no `HttpClient` or
+  server mode). The inline floor comment in `pyproject.toml` records the
+  rationale.
+
 ## v0.2.4 - 2026-06-29
 
 ### Fixed

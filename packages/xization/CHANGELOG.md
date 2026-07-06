@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Acknowledged GHSA-p4gq-832x-fm9v and PYSEC-2026-597 / CVE-2026-12243
+  (both CVSS 7.5, path traversal in `nltk.data.find()` / `load()` via
+  percent-encoded `..%2f` sequences that bypass the `../` regex check
+  once `url2pathname()` decodes them) against the `nltk>=3.9.4` floor,
+  flagged at the floor resolve by the `dependency-update` workflow.
+  Both affect all `nltk` versions through 3.9.4 with no upstream fix.
+  Not reachable from this codebase: no `nltk.data.find()` / `load()`
+  call site takes caller-controlled input. The inline floor comment in
+  `pyproject.toml` records the rationale.
+
 ## v1.3.10 - 2026-06-29
 
 ## v1.3.9 - 2026-06-22
