@@ -64,11 +64,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
+from dataknobs_common.exceptions import ConfigurationError
 
 from ..base import (
     AsyncLLMProvider,
@@ -88,6 +90,13 @@ if TYPE_CHECKING:
     from dataknobs_llm.prompts import AsyncPromptBuilder
 
 logger = logging.getLogger(__name__)
+
+
+# Fixed connect timeout (seconds) for bedrock-runtime clients — fail fast on a
+# stalled TCP connect rather than hang on boto's 60s default. The *read*
+# timeout is per-request (``LLMConfig.timeout``), sized to the generation
+# budget; see :meth:`BedrockProvider._client_kwargs`.
+_CONNECT_TIMEOUT_SECONDS = 10
 
 
 # Region / cross-region inference-profile prefixes prepended to a base model
@@ -368,28 +377,93 @@ class BedrockConverseAdapter(LLMAdapter):
         )
 
 
+# Default input type for Cohere embeddings when ``options["input_type"]`` is
+# unset. ``search_document`` is the corpus/ingest side; query-time embeddings
+# should pass ``search_query`` so retrieval scoring is not skewed (Cohere
+# embeds the two asymmetrically).
+_COHERE_DEFAULT_INPUT_TYPE = "search_document"
+
+
+def _bool_option(
+    options: dict[str, Any] | None, key: str, default: bool
+) -> bool:
+    """Read a boolean ``options`` value, parsing strings correctly.
+
+    ``bool("False")`` is ``True`` in Python (any non-empty string is truthy),
+    so a raw ``bool()`` coercion of a string option is a footgun. This treats
+    ``"false"``/``"0"``/``"no"``/``"off"`` (case-insensitive) as ``False`` and
+    passes real bools through unchanged.
+    """
+    raw = (options or {}).get(key, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("false", "0", "no", "off", "")
+    return bool(raw)
+
+
+def _numeric_option(
+    options: dict[str, Any] | None,
+    key: str,
+    default: float | None,
+    cast: Callable[[Any], float],
+) -> float | None:
+    """Read a numeric ``options`` value or return ``default`` when unset.
+
+    A present-but-uncoercible value (e.g. ``embed_max_concurrency: "auto"``)
+    raises :class:`ConfigurationError` naming the option — the project
+    convention — rather than a bare ``ValueError`` with no context.
+    """
+    raw = (options or {}).get(key)
+    if raw is None:
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(
+            f"Bedrock option {key!r} must be {cast.__name__}-coercible, "
+            f"got {raw!r}"
+        ) from exc
+
+
 # Embedding families: (model-id prefix, async embed function). Each function
-# takes (client, model, texts, config) and returns ``list[list[float]]``.
-# Titan embeds one text per ``invoke_model`` call (a list is gathered
-# concurrently); Cohere embeds the whole list in one call. Keeping the
-# per-family body/parse shaping here — rather than branching inline in
-# ``embed()`` — puts family knowledge in one place.
+# takes (client, model, texts, config, *, max_concurrency) and returns
+# ``list[list[float]]``. Titan embeds one text per ``invoke_model`` call (a
+# list is gathered under a concurrency bound); Cohere embeds the whole list in
+# one call. Keeping the per-family body/parse shaping here — rather than
+# branching inline in ``embed()`` — puts family knowledge in one place.
 
 
 async def _embed_titan(
-    client: Any, model: str, texts: list[str], config: LLMConfig
+    client: Any,
+    model: str,
+    texts: list[str],
+    config: LLMConfig,
+    *,
+    max_concurrency: int,
 ) -> list[list[float]]:
-    """Embed each text via a Titan ``invoke_model`` call (one per text)."""
+    """Embed each text via a Titan ``invoke_model`` call (one per text).
+
+    Titan has no batch endpoint, so a list of N texts issues N calls. They
+    run concurrently but bounded by ``max_concurrency`` (an
+    :class:`asyncio.Semaphore`) so a large ingest batch cannot fan out
+    unbounded ``invoke_model`` calls and trip Bedrock throttling or exhaust
+    the client's connection pool. ``normalize`` defaults to ``True`` and is
+    overridable via ``options["normalize"]``.
+    """
     dimensions = config.dimensions
+    normalize = _bool_option(config.options, "normalize", True)
+    semaphore = asyncio.Semaphore(max_concurrency)
 
     async def _one(text: str) -> list[float]:
-        body: dict[str, Any] = {"inputText": text, "normalize": True}
+        body: dict[str, Any] = {"inputText": text, "normalize": normalize}
         if dimensions:
             body["dimensions"] = dimensions
-        result = await client.invoke_model(
-            modelId=model, body=json.dumps(body)
-        )
-        raw = await result["body"].read()
+        async with semaphore:
+            result = await client.invoke_model(
+                modelId=model, body=json.dumps(body)
+            )
+            raw = await result["body"].read()
         parsed = json.loads(raw)
         return parsed["embedding"]
 
@@ -397,10 +471,24 @@ async def _embed_titan(
 
 
 async def _embed_cohere(
-    client: Any, model: str, texts: list[str], config: LLMConfig
+    client: Any,
+    model: str,
+    texts: list[str],
+    config: LLMConfig,
+    *,
+    max_concurrency: int,
 ) -> list[list[float]]:
-    """Embed the whole list via one Cohere ``invoke_model`` call."""
-    body = {"texts": texts, "input_type": "search_document"}
+    """Embed the whole list via one Cohere ``invoke_model`` call.
+
+    Cohere embeds the full batch in a single request, so ``max_concurrency``
+    is accepted for a uniform family signature but unused. ``input_type``
+    defaults to :data:`_COHERE_DEFAULT_INPUT_TYPE` and is overridable via
+    ``options["input_type"]`` (e.g. ``"search_query"`` at query time).
+    """
+    input_type = (config.options or {}).get(
+        "input_type", _COHERE_DEFAULT_INPUT_TYPE
+    )
+    body = {"texts": texts, "input_type": input_type}
     result = await client.invoke_model(modelId=model, body=json.dumps(body))
     raw = await result["body"].read()
     parsed = json.loads(raw)
@@ -421,9 +509,24 @@ class BedrockProvider(AsyncLLMProvider):
     and Bedrock guardrail settings are supplied via ``LLMConfig.options``:
 
     - ``region_name`` (or ``region``): AWS region for the client.
-    - ``endpoint_url``: custom endpoint (PrivateLink / VPC endpoint).
+    - ``endpoint_url``: custom endpoint (PrivateLink / VPC endpoint). This
+      is the Bedrock endpoint knob — ``LLMConfig.api_base`` (an
+      OpenAI/Anthropic-style base URL) is intentionally not consulted, since
+      Bedrock addressing is region- and endpoint-resolved, not base-URL
+      based.
     - ``aws_access_key_id`` / ``aws_secret_access_key`` /
       ``aws_session_token``: explicit credentials (omit to use the chain).
+    - ``normalize`` (Titan embeddings, default ``True``) / ``input_type``
+      (Cohere embeddings, default ``"search_document"``; use
+      ``"search_query"`` at query time) / ``embed_max_concurrency`` (bound
+      on Titan's per-text ``invoke_model`` fan-out; default
+      ``max_pool_connections``).
+    - ``stream_read_timeout``: per-socket-read (inter-chunk) timeout for
+      ``stream_complete``, in seconds. Streaming has no total-duration knob
+      in botocore, so ``LLMConfig.timeout`` (the whole-response budget used by
+      ``complete``) is *not* applied to streaming — a long inter-token pause
+      must not kill the stream. Defaults to boto's 60s read timeout; raise it
+      for slow-thinking models.
     - ``guardrail_identifier`` / ``guardrail_version`` (+ optional
       ``guardrail_trace``): applied to Converse requests when both are set.
 
@@ -454,7 +557,12 @@ class BedrockProvider(AsyncLLMProvider):
         super().__init__(llm_config, prompt_builder=prompt_builder)
         self.adapter = BedrockConverseAdapter()
         self._session: Any = None  # aioboto3.Session
-        self._endpoint_url: str | None = None
+        # Normalized AWS session config (region / credentials / endpoint /
+        # retry+pool tuning) built once from LLMConfig.options and reused by
+        # ``initialize`` (session build) and ``_client_kwargs`` (per-client
+        # kwargs). Partial explicit credentials fail closed here at
+        # construction via ``AwsSessionConfig.__post_init__``.
+        self._session_config = AwsSessionConfig.from_dict(self.config.options)
 
     async def initialize(self) -> None:
         """Build and cache the shared aioboto3 session for Bedrock.
@@ -478,11 +586,9 @@ class BedrockProvider(AsyncLLMProvider):
                 "Install it with: pip install 'dataknobs-llm[bedrock]'"
             )
 
-        sess_cfg = AwsSessionConfig.from_dict(self.config.options)
         self._session = await create_aioboto3_session(
-            sess_cfg, warm_service="bedrock-runtime"
+            self._session_config, warm_service="bedrock-runtime"
         )
-        self._endpoint_url = sess_cfg.endpoint_url
         self._is_initialized = True
 
     async def _close_client(self) -> None:
@@ -494,15 +600,44 @@ class BedrockProvider(AsyncLLMProvider):
         nothing to close here.
         """
 
-    def _client_kwargs(self) -> dict[str, Any]:
-        """Per-client kwargs — only ``endpoint_url`` when configured.
+    def _client_kwargs(
+        self, *, read_timeout: float | None = None
+    ) -> dict[str, Any]:
+        """Per-client kwargs for a ``bedrock-runtime`` client from the session.
 
-        Region and credentials are carried on the session (built from
-        ``AwsSessionConfig``); ``endpoint_url`` is a per-client kwarg.
+        Delegates to the shared
+        :meth:`AwsSessionConfig.to_session_client_kwargs` builder so retry /
+        pool tuning, ``endpoint_url`` + ``use_ssl`` inference, an explicit
+        connect timeout, and the ``extra_client_kwargs`` passthrough all match
+        every other AWS consumer (``SqsEventBus`` et al.) instead of a
+        hand-rolled subset. Region and credentials ride on the session, so
+        they are deliberately absent here.
+
+        Args:
+            read_timeout: The per-request generation budget
+                (``LLMConfig.timeout``) applied as the socket read timeout
+                (security rule 2). ``None`` defers to boto's default.
         """
-        if self._endpoint_url:
-            return {"endpoint_url": self._endpoint_url}
-        return {}
+        return self._session_config.to_session_client_kwargs(
+            connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=read_timeout,
+        )
+
+    def _stream_read_timeout(self) -> float | None:
+        """Resolve the per-socket-read timeout for ``converse_stream``.
+
+        botocore's ``read_timeout`` is a *per-read* (inter-chunk) timeout, not
+        a total-stream-duration budget — and streaming has no total-duration
+        knob. Reusing ``LLMConfig.timeout`` (the whole-response budget for
+        ``complete``) here would kill a stream whenever the model pauses
+        between tokens longer than that budget, so streaming is decoupled: the
+        inter-chunk timeout comes from ``options["stream_read_timeout"]`` and
+        defaults to ``None`` (boto's 60s default), which is a sane
+        silence/stall detector independent of the generation budget.
+        """
+        return _numeric_option(
+            self.config.options, "stream_read_timeout", None, float
+        )
 
     @staticmethod
     def _guardrail_config(config: LLMConfig) -> dict[str, Any] | None:
@@ -568,21 +703,29 @@ class BedrockProvider(AsyncLLMProvider):
         return self.config.model.startswith(_KNOWN_MODEL_PREFIXES)
 
     def _detect_capabilities(self) -> list[ModelCapability]:
-        """Auto-detect Bedrock model capabilities from the model id."""
+        """Auto-detect Bedrock model capabilities from the model id.
+
+        Embedding models advertise **only** ``EMBEDDINGS`` — they cannot
+        chat, stream, or call tools, so reporting those would let
+        capability-driven routing send a chat request to an embed-only
+        model. Chat / generation models advertise text generation, chat,
+        streaming, and function calling (plus ``VISION`` for multimodal
+        Claude 3+ / Nova).
+        """
         model = _canonical_model_id(self.config.model.lower())
-        capabilities = [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.CHAT,
-            ModelCapability.STREAMING,
-        ]
+
         if any(
             token in model
             for token in ("titan-embed", "cohere.embed", "-embed-")
         ):
-            capabilities.append(ModelCapability.EMBEDDINGS)
-        else:
-            capabilities.append(ModelCapability.FUNCTION_CALLING)
+            return [ModelCapability.EMBEDDINGS]
 
+        capabilities = [
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.CHAT,
+            ModelCapability.STREAMING,
+            ModelCapability.FUNCTION_CALLING,
+        ]
         # Multimodal Claude 3+ / Nova models accept image content.
         if any(
             token in model
@@ -619,14 +762,25 @@ class BedrockProvider(AsyncLLMProvider):
         request = self._build_converse_request(messages, runtime_config, tools)
         request.update(kwargs)
 
+        start = time.perf_counter()
         async with self._session.client(
-            "bedrock-runtime", **self._client_kwargs()
+            "bedrock-runtime",
+            **self._client_kwargs(read_timeout=runtime_config.timeout),
         ) as client:
             response = await client.converse(**request)
 
-        return self._analyze_response(
+        result = self._analyze_response(
             self.adapter.adapt_response(response, model=runtime_config.model)
         )
+        logger.debug(
+            "Bedrock converse complete (model=%s, finish=%s, tokens=%s, "
+            "latency_ms=%d)",
+            runtime_config.model,
+            result.finish_reason,
+            (result.usage or {}).get("total_tokens"),
+            int((time.perf_counter() - start) * 1000),
+        )
+        return result
 
     async def stream_complete(
         self,
@@ -656,8 +810,13 @@ class BedrockProvider(AsyncLLMProvider):
         request = self._build_converse_request(messages, runtime_config, tools)
         request.update(kwargs)
 
+        logger.debug(
+            "Bedrock converse_stream start (model=%s)", runtime_config.model
+        )
+        stream_start = time.perf_counter()
         async with self._session.client(
-            "bedrock-runtime", **self._client_kwargs()
+            "bedrock-runtime",
+            **self._client_kwargs(read_timeout=self._stream_read_timeout()),
         ) as client:
             response = await client.converse_stream(**request)
 
@@ -716,6 +875,14 @@ class BedrockProvider(AsyncLLMProvider):
                     for _, acc in sorted(tool_accumulators.items())
                 ]
 
+            logger.debug(
+                "Bedrock converse_stream done (model=%s, finish=%s, "
+                "tokens=%s, latency_ms=%d)",
+                runtime_config.model,
+                stop_reason,
+                (usage or {}).get("total_tokens"),
+                int((time.perf_counter() - stream_start) * 1000),
+            )
             yield LLMStreamResponse(
                 delta="",
                 is_final=True,
@@ -760,12 +927,43 @@ class BedrockProvider(AsyncLLMProvider):
                 "('cohere.embed*')."
             )
 
+        max_concurrency = self._embed_max_concurrency()
+        start = time.perf_counter()
         async with self._session.client(
-            "bedrock-runtime", **self._client_kwargs()
+            "bedrock-runtime",
+            **self._client_kwargs(read_timeout=self.config.timeout),
         ) as client:
-            vectors = await embed_fn(client, model, text_list, self.config)
+            vectors = await embed_fn(
+                client,
+                model,
+                text_list,
+                self.config,
+                max_concurrency=max_concurrency,
+            )
 
+        logger.debug(
+            "Bedrock embed complete (model=%s, count=%d, latency_ms=%d)",
+            model,
+            len(text_list),
+            int((time.perf_counter() - start) * 1000),
+        )
         return vectors[0] if single else vectors
+
+    def _embed_max_concurrency(self) -> int:
+        """Resolve the max concurrent ``invoke_model`` calls for embeddings.
+
+        Defaults to the session's ``max_pool_connections`` (no point issuing
+        more concurrent requests than the connection pool can carry) and is
+        overridable via ``options["embed_max_concurrency"]``. Floored at 1.
+        Bounds Titan's per-text fan-out (see :func:`_embed_titan`).
+        """
+        limit = _numeric_option(
+            self.config.options,
+            "embed_max_concurrency",
+            self._session_config.max_pool_connections,
+            int,
+        )
+        return max(1, int(limit))
 
     async def function_call(
         self,
@@ -793,7 +991,8 @@ class BedrockProvider(AsyncLLMProvider):
         }
 
         async with self._session.client(
-            "bedrock-runtime", **self._client_kwargs()
+            "bedrock-runtime",
+            **self._client_kwargs(read_timeout=runtime_config.timeout),
         ) as client:
             response = await client.converse(**request)
 

@@ -30,6 +30,12 @@ import stability.
   an `AwsSessionConfig` and calls `create_aioboto3_session` with
   `warm_service="sqs"`, so the first SQS client creation is a warmed
   cache hit rather than a blocking data-file load on the event loop.
+  Opens its client via `to_session_client_kwargs()`.
+- `dataknobs_llm.llm.providers.bedrock.BedrockProvider` (async
+  `aioboto3`) — builds an `AwsSessionConfig` from `LLMConfig.options` and
+  calls `create_aioboto3_session` with `warm_service="bedrock-runtime"`;
+  opens per-operation `bedrock-runtime` clients via
+  `to_session_client_kwargs(read_timeout=LLMConfig.timeout)`.
 - `dataknobs_data.backends.s3.SyncS3Database` (sync `boto3`) — calls
   `create_boto3_s3_client` directly with its `AwsSessionConfig`.
 - `dataknobs_data.backends.s3_async.AsyncS3Database` (async
@@ -228,6 +234,16 @@ Methods:
   is a per-client kwarg). This is the single builder shared by
   `create_aioboto3_session` and every consumer that constructs a
   session from an `AwsSessionConfig` (e.g. `SqsEventBus`).
+- `to_session_client_kwargs(*, connect_timeout=None, read_timeout=None)`
+  — the session-based counterpart to `to_client_kwargs()`, for consumers
+  that open `session.client(service, ...)`. Credentials + region already
+  ride on the session, so this returns only the per-client knobs: a
+  `botocore.config.Config` carrying retry / pool tuning plus the given
+  timeouts (security rule 2), `endpoint_url` + the `use_ssl` inference,
+  and `extra_client_kwargs` (applied last). This is the single builder
+  shared by every async consumer that opens a client from a session
+  (`SqsEventBus`, the Bedrock LLM provider), so retry / pool / endpoint /
+  SSL / timeout handling cannot drift per consumer.
 
 ### `create_boto3_s3_client(config=None)`
 

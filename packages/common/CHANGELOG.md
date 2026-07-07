@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning `False` (skip, never fail) otherwise. Amazon Bedrock has no
   faithful local emulator, so live tests are opt-in only; the marker joins
   `requires_ollama` / `requires_localstack` for cross-package reuse.
+- `AwsSessionConfig.to_session_client_kwargs(*, connect_timeout=None,
+  read_timeout=None)` — the session-based counterpart to
+  `to_client_kwargs()` for consumers that open `session.client(service,
+  ...)`. Since credentials and region ride on the session, it returns only
+  the per-client knobs: a `botocore.config.Config` carrying retry / pool
+  tuning plus explicit timeouts, `endpoint_url` with the `http://` →
+  `use_ssl=False` inference, and the `extra_client_kwargs` passthrough. It
+  is the single builder every async consumer that opens a client from a
+  session shares (`SqsEventBus`, the Bedrock LLM provider), so retry / pool
+  / endpoint / SSL / timeout handling cannot drift per consumer.
+  `to_boto_config_kwargs()` gained optional `connect_timeout` /
+  `read_timeout` keywords (omitted when unset).
 
 ### Changed
 
@@ -56,7 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   botocore's bundled data files on the loop) and removes the local
   session-kwarg reinvention that stood in for an illegal `dataknobs-data`
   import. Session/region/credential normalization is now shared with
-  every other AWS consumer via `AwsSessionConfig`.
+  every other AWS consumer via `AwsSessionConfig`, and its per-client
+  kwargs (endpoint, timeouts, retry / pool `Config`) now route through the
+  shared `AwsSessionConfig.to_session_client_kwargs()` builder rather than
+  a local one — adding the `http://` → `use_ssl=False` inference for
+  LocalStack / MinIO endpoints.
 
 ## v1.5.1 - 2026-06-29
 

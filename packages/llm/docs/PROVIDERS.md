@@ -240,9 +240,22 @@ the other providers.
 | Key | Purpose |
 |-----|---------|
 | `region_name` (or `region`) | AWS region for the client |
-| `endpoint_url` | Custom endpoint (PrivateLink / VPC endpoint) |
-| `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token` | Explicit credentials (omit to use the credential chain) |
+| `endpoint_url` | Custom endpoint (PrivateLink / VPC endpoint). Bedrock's endpoint knob — `LLMConfig.api_base` is not consulted |
+| `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token` | Explicit credentials (omit to use the credential chain). A partial pair fails closed at construction |
+| `normalize` | Titan embeddings only — L2-normalize the vector (default `True`) |
+| `input_type` | Cohere embeddings only — `"search_document"` (default) or `"search_query"` at query time |
+| `embed_max_concurrency` | Bound on Titan's per-text `invoke_model` fan-out (default: `max_pool_connections`, i.e. `10`) |
+| `stream_read_timeout` | Per-socket-read (inter-chunk) timeout for `stream_complete`, in seconds (default: boto's `60`s). See the timeout note below |
 | `guardrail_identifier` + `guardrail_version` | Applied to Converse requests when both are set (optional `guardrail_trace`) |
+
+The `complete()` / `function_call()` socket read timeout is `LLMConfig.timeout`
+(default `60`s); retry and connection-pool tuning follow the shared
+`AwsSessionConfig` defaults. **Streaming is different:** botocore's
+`read_timeout` is a per-read (inter-chunk) timeout, and there is no
+total-stream-duration knob, so `LLMConfig.timeout` is *not* applied to
+`stream_complete` — otherwise a long inter-token pause would kill the stream.
+Streaming uses `stream_read_timeout` instead (default: boto's `60`s); raise it
+for slow-thinking models.
 
 ### Embeddings
 
@@ -264,8 +277,8 @@ Two embedding families are supported:
 
 | Family | Model ids | Notes |
 |--------|-----------|-------|
-| Amazon Titan | `amazon.titan-embed-text-v2:0` | `dimensions` selects 256 / 512 / 1024 (default 1024); embeds one text per call |
-| Cohere | `cohere.embed-english-v3`, `cohere.embed-multilingual-v3` | embeds the whole list in one call |
+| Amazon Titan | `amazon.titan-embed-text-v2:0` | `dimensions` selects 256 / 512 / 1024 (default 1024); embeds one text per call, bounded by `embed_max_concurrency`; `normalize` via options |
+| Cohere | `cohere.embed-english-v3`, `cohere.embed-multilingual-v3` | embeds the whole list in one call; `input_type` via options (`search_query` at query time) |
 
 An unrecognized embedding-model id raises `ValueError` naming the two supported
 families.

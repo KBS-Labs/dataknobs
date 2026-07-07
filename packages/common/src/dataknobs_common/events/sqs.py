@@ -154,37 +154,38 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
         defaults every field to ``None``). Routing through the shared
         session shape — rather than the old local passthrough — is what
         lets ``connect()`` reuse the warmed-off-loop session factory in
-        :mod:`dataknobs_common.aws` that every other AWS consumer uses.
+        :mod:`dataknobs_common.aws` that every other AWS consumer uses, and
+        lets :meth:`_client_kwargs` reuse the shared per-client builder.
 
-        Both credential fields are carried whenever set; the session
-        factory's :meth:`AwsSessionConfig.to_session_kwargs` applies the
-        same "only what's present" rule the previous inline builder did.
+        ``endpoint_url`` is carried too so the shared client builder can
+        apply the ``http://`` → ``use_ssl=False`` inference (LocalStack /
+        MinIO); it is excluded from the session-level kwargs
+        (:meth:`AwsSessionConfig.to_session_kwargs`), so the warmed-session
+        cache key is unaffected. Both credential fields are carried whenever
+        set; the "only what's present" rule lives in the shared config.
         """
         return AwsSessionConfig(
             region_name=self._config.region,
+            endpoint_url=self._config.endpoint_url,
             aws_access_key_id=self._config.aws_access_key_id,
             aws_secret_access_key=self._config.aws_secret_access_key,
         )
 
     def _client_kwargs(self) -> dict[str, Any]:
-        """Build SQS client kwargs (endpoint + explicit timeouts).
+        """Build SQS client kwargs via the shared per-client builder.
 
-        Read timeout exceeds the long-poll wait so a full
-        ``WaitTimeSeconds`` receive never trips the socket read timeout
-        (security rule 2 — every external call has an explicit timeout).
+        Delegates to :meth:`AwsSessionConfig.to_session_client_kwargs` so
+        retry / pool tuning, ``endpoint_url`` + ``use_ssl`` inference, and
+        the explicit timeouts all match every other AWS consumer instead of
+        a hand-rolled subset. The read timeout exceeds the long-poll wait so
+        a full ``WaitTimeSeconds`` receive never trips the socket read
+        timeout (security rule 2 — every external call has an explicit
+        timeout).
         """
-        from botocore.config import Config
-
-        kwargs: dict[str, Any] = {
-            "config": Config(
-                connect_timeout=10,
-                read_timeout=self._config.wait_time_seconds + 10,
-                retries={"max_attempts": 3, "mode": "standard"},
-            )
-        }
-        if self._config.endpoint_url:
-            kwargs["endpoint_url"] = self._config.endpoint_url
-        return kwargs
+        return self._aws_session_config().to_session_client_kwargs(
+            connect_timeout=10,
+            read_timeout=self._config.wait_time_seconds + 10,
+        )
 
     async def connect(self) -> None:
         """Create the SQS client. Idempotent.
