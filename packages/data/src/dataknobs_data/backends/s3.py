@@ -10,10 +10,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
-from dataknobs_data.pooling.s3 import S3SessionConfig, create_boto3_s3_client
+from dataknobs_data.pooling.s3 import create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
@@ -80,7 +81,7 @@ class SyncS3Database(  # type: ignore[misc]
         # Single normalized session config built from the typed (canonical)
         # fields. Alias acceptance (``region``, ``max_workers`` …) happened
         # in ``SyncS3DatabaseConfig._normalize_dict``.
-        self._session_config = S3SessionConfig(
+        self._session_config = AwsSessionConfig(
             region_name=cfg.region_name,
             endpoint_url=cfg.endpoint_url,
             aws_access_key_id=cfg.aws_access_key_id,

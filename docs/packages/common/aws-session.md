@@ -1,0 +1,1 @@
+--8<-- "packages/common/docs/AWS_SESSION.md"

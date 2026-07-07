@@ -418,7 +418,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     """Shared S3 configuration for the sync and async backends.
 
     Both S3 backends route region/credential/endpoint resolution through
-    :class:`~dataknobs_data.pooling.s3.S3SessionConfig` /
+    :class:`~dataknobs_common.aws.AwsSessionConfig` /
     :class:`~dataknobs_data.pooling.s3.S3PoolConfig`. This base captures
     the connection surface those normalizers consume and maps the legacy
     aliases (``region``, ``access_key_id`` / ``secret_access_key`` /
@@ -456,7 +456,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         # Map the legacy region/credential aliases onto the canonical keys
         # so the typed config is canonical (the canonical key wins when
-        # both are present, matching ``S3SessionConfig.from_dict``).
+        # both are present, matching ``AwsSessionConfig.from_dict``).
         for alias, canonical in (
             ("region", "region_name"),
             ("access_key_id", "aws_access_key_id"),
@@ -479,7 +479,7 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
     """Configuration for ``SyncS3Database``.
 
     Adds the sync-only client tuning knobs consumed by
-    :class:`~dataknobs_data.pooling.s3.S3SessionConfig` (``max_workers`` /
+    :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_workers`` /
     ``max_retries`` are accepted as aliases for ``max_pool_connections`` /
     ``max_attempts``) plus the multipart thresholds. ``prefix`` defaults
     to ``"records/"`` and is normalized to a single trailing slash, matching
@@ -523,7 +523,7 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
         # Normalize the prefix to a single trailing slash (legacy behavior).
         object.__setattr__(self, "prefix", self.prefix.rstrip("/") + "/")
         # Coerce the int knobs so YAML/env string values behave as they did
-        # when ``S3SessionConfig.from_dict`` applied ``int(...)``.
+        # when ``AwsSessionConfig.from_dict`` applied ``int(...)``.
         object.__setattr__(
             self, "max_pool_connections", int(self.max_pool_connections)
         )

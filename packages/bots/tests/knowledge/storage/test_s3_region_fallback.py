@@ -3,7 +3,7 @@
 The discovery defect: ``S3KnowledgeBackend`` hardcoded its region to
 ``us-east-1``, silently overriding ``AWS_DEFAULT_REGION`` env / IAM-role
 metadata for any consumer deployed elsewhere. The fix routes client
-construction through the shared :class:`S3SessionConfig` factory so the
+construction through the shared :class:`AwsSessionConfig` factory so the
 region defaults to ``None`` and boto's resolution chain takes over.
 
 These assertions target the **normalized session config and the client
@@ -11,7 +11,7 @@ kwargs it produces** — the values that flow into the aioboto3 session
 (:func:`create_aioboto3_session`) and into every per-operation
 ``session.client("s3", **client_kwargs)`` call. After the move to
 aioboto3 there is no persistent ``_client`` to inspect; the region
-contract lives entirely in :class:`S3SessionConfig`, so that is where
+contract lives entirely in :class:`AwsSessionConfig`, so that is where
 the regression guard belongs. No moto / LocalStack needed — region
 *resolution* (env var → client) is botocore's job and is covered by the
 LocalStack integration suite; these tests pin only that the backend
@@ -25,8 +25,8 @@ backend ``region_name`` was forced to ``"us-east-1"``; post-fix it is
 
 from __future__ import annotations
 
+from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
-from dataknobs_data.pooling.s3 import S3SessionConfig
 
 
 def test_no_region_defers_to_boto_chain() -> None:
@@ -73,7 +73,7 @@ def test_region_via_from_config() -> None:
 
 def test_session_config_injection_wins_over_kwargs() -> None:
     """A pre-built session_config beats individual region/credential kwargs."""
-    session_config = S3SessionConfig(region_name="eu-west-1")
+    session_config = AwsSessionConfig(region_name="eu-west-1")
     backend = S3KnowledgeBackend(
         bucket="injected-bucket",
         region="us-east-2",  # ignored: session_config takes precedence

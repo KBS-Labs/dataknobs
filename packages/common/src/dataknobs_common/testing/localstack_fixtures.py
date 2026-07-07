@@ -81,7 +81,7 @@ try:
         - ``region``: ``"us-east-1"`` (LocalStack default)
         - ``aws_access_key_id`` / ``aws_secret_access_key``: ``"test"``
           / ``"test"`` (LocalStack accepts any credentials). Canonical
-          boto form — ``S3SessionConfig.from_dict`` also accepts the
+          boto form — ``AwsSessionConfig.from_dict`` also accepts the
           legacy short aliases ``access_key_id`` / ``secret_access_key``.
 
         No teardown — the bucket persists for the LocalStack session.

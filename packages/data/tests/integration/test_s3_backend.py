@@ -529,7 +529,7 @@ class TestS3Configuration:
 
 
 class TestS3RegionFallback:
-    """Tests for the shared ``S3SessionConfig`` factory routing.
+    """Tests for the shared ``AwsSessionConfig`` factory routing.
 
     Covers the bug-fix path where ``region`` is unset in config and the
     effective region must be resolved from the boto chain

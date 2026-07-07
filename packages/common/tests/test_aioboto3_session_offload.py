@@ -30,17 +30,22 @@ no network — it just loads data, and with the warm done it is a cache hit.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Self
 
 import pytest
-from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
-from dataknobs_data.pooling.s3 import (
-    S3SessionConfig,
+from dataknobs_common.aws import (
+    AwsSessionConfig,
     clear_aioboto3_session_cache,
     create_aioboto3_session,
 )
+from dataknobs_common.testing import (
+    assert_no_blocking,
+    requires_blockbuster,
+    requires_package,
+)
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, requires_package("aioboto3")]
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +95,7 @@ def _isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # isolates the concern the warm DOES fix: the one-time botocore data-file
 # load (endpoints / service model). Mirrors a realistic consumer whose
 # credentials come from config/env.
-_CREDS = S3SessionConfig(
+_CREDS = AwsSessionConfig(
     aws_access_key_id="testing",
     aws_secret_access_key="testing",
     region_name="us-east-1",
@@ -136,7 +141,7 @@ async def test_repeated_calls_reuse_one_warmed_session() -> None:
 
 async def test_distinct_configs_get_distinct_sessions() -> None:
     """Different session kwargs key to different cached sessions."""
-    other = S3SessionConfig(
+    other = AwsSessionConfig(
         aws_access_key_id="testing",
         aws_secret_access_key="testing",
         region_name="us-west-2",
@@ -152,3 +157,81 @@ async def test_clear_cache_forces_rebuild() -> None:
     clear_aioboto3_session_cache()
     second = await create_aioboto3_session(_CREDS)
     assert first is not second
+
+
+async def test_distinct_warm_service_gets_distinct_sessions() -> None:
+    """Same creds but different ``warm_service`` → distinct cached sessions.
+
+    ``warm_service`` is part of the cache key because the warm pre-loads
+    that service's botocore data files; an ``s3``-warmed session would
+    still block on the loop the first time a ``bedrock-runtime`` client
+    is created from it. Distinct services must therefore key to distinct
+    warmed sessions.
+    """
+    s3_session = await create_aioboto3_session(_CREDS)  # default "s3"
+    bedrock_session = await create_aioboto3_session(
+        _CREDS, warm_service="bedrock-runtime"
+    )
+    assert s3_session is not bedrock_session
+
+
+async def test_warm_only_loads_paginator_for_s3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The warm touches the S3 paginator only for ``warm_service="s3"``.
+
+    The paginator pre-load (``list_objects_v2``) is S3-specific; a
+    non-S3 service (``bedrock-runtime``) warms only the client. Patches
+    the external ``aioboto3.Session`` (not our own code) at the SDK
+    boundary with an async-signature fake so a missing ``await`` in the
+    warm cannot hide, then drives the real ``_build_aioboto3_session``
+    branch logic on a worker thread (via ``to_thread``, exactly as
+    :func:`create_aioboto3_session` does — the builder runs its own
+    private loop there).
+    """
+    import asyncio
+
+    import aioboto3
+
+    from dataknobs_common import aws as aws_mod
+
+    clients: list[str] = []
+    paginators: list[tuple[str, str]] = []
+
+    class _FakeClient:
+        def __init__(self, service: str) -> None:
+            self._service = service
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        def get_paginator(self, name: str) -> None:
+            paginators.append((self._service, name))
+
+    class _FakeSession:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def client(self, service: str, **_kwargs: object) -> _FakeClient:
+            clients.append(service)
+            return _FakeClient(service)
+
+    monkeypatch.setattr(aioboto3, "Session", _FakeSession)
+
+    await asyncio.to_thread(
+        aws_mod._build_aioboto3_session,
+        {"region_name": "us-east-1"},
+        "bedrock-runtime",
+    )
+    assert clients == ["bedrock-runtime"]
+    assert paginators == []
+
+    clients.clear()
+    await asyncio.to_thread(
+        aws_mod._build_aioboto3_session, {"region_name": "us-east-1"}, "s3"
+    )
+    assert clients == ["s3"]
+    assert paginators == [("s3", "list_objects_v2")]

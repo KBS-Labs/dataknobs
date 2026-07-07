@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 
 from botocore.exceptions import ClientError
 
+from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
-from dataknobs_data.pooling.s3 import S3SessionConfig, create_aioboto3_session
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -121,7 +121,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         aws_secret_access_key: str | None = None,
         aws_session_token: str | None = None,
         *,
-        session_config: S3SessionConfig | None = None,
+        session_config: AwsSessionConfig | None = None,
         change_detection_mode: str = "snapshot",
     ) -> None:
         """Initialize the S3 backend.
@@ -139,7 +139,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             aws_secret_access_key: AWS secret key (optional, uses default chain).
             aws_session_token: AWS session token for temporary credentials
                 (optional, uses default chain when unset).
-            session_config: Pre-built :class:`S3SessionConfig`. When
+            session_config: Pre-built :class:`AwsSessionConfig`. When
                 provided, it wins over the individual kwargs above —
                 useful for sharing one config across multiple backends.
             change_detection_mode: How per-version snapshots are
@@ -173,7 +173,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         self._bucket = bucket
         self._prefix = prefix.rstrip("/") + "/" if prefix else ""
         if session_config is None:
-            session_config = S3SessionConfig(
+            session_config = AwsSessionConfig(
                 region_name=region,
                 endpoint_url=endpoint_url,
                 aws_access_key_id=aws_access_key_id,
@@ -194,14 +194,14 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         Accepts both ``region`` (legacy) and ``region_name``
         (boto-native) keys, plus the canonical ``aws_*`` credential
-        keys. Routes through :meth:`S3SessionConfig.from_dict` so the
+        keys. Routes through :meth:`AwsSessionConfig.from_dict` so the
         accepted shape stays in sync with the rest of dataknobs' S3
         constructs.
         """
         return cls(
             bucket=config["bucket"],
             prefix=config.get("prefix", "knowledge/"),
-            session_config=S3SessionConfig.from_dict(config),
+            session_config=AwsSessionConfig.from_dict(config),
             change_detection_mode=config.get(
                 "change_detection_mode", "snapshot"
             ),

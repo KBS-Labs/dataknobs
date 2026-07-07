@@ -90,10 +90,13 @@ present.
 ### S3 Credentials & Region
 
 S3 session configuration (region, credentials) follows the canonical
-`S3SessionConfig` contract — passing keys through the backend config
+`AwsSessionConfig` contract — passing keys through the backend config
 dict is equivalent to setting them on the session. See the
 `dataknobs-data` reference for the full key list and environment
 precedence.
+
+> The former name `S3SessionConfig` remains importable as a deprecated
+> alias for `AwsSessionConfig`.
 
 ## Path 3 — Event-Driven (Manager + Orchestrator)
 

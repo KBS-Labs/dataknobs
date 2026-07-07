@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `dataknobs_common.aws`: the shared AWS session-construction layer,
+  exported from the package root. `AwsSessionConfig` is the normalized,
+  frozen session config (region, credentials, endpoint, retry/pool
+  tuning) accepting both boto-native and dataknobs-legacy alias keys;
+  `create_aioboto3_session(config, *, warm_service="s3")` builds an
+  `aioboto3.Session` and warms its botocore data-file caches on a worker
+  thread (via `asyncio.to_thread`) so the first client creation by any
+  consumer is a cache hit rather than a blocking data-file load on the
+  event loop, with a process-wide cache keyed by session kwargs **and**
+  `warm_service`; `clear_aioboto3_session_cache()` resets it (test
+  isolation). This is the single source of truth every AWS consumer
+  routes through — `SqsEventBus` here, and the S3 data backends and
+  `S3KnowledgeBackend` — with future AWS services (e.g. a
+  `bedrock-runtime` LLM provider) routing through the same surface. It
+  lives in `dataknobs-common` (the lowest layer) precisely so
+  `SqsEventBus` can share it without an illegal upward dependency on
+  `dataknobs-data`. `aioboto3` is lazy-imported inside the factory's
+  worker thread, so the base install stays `dependencies = []`; the new
+  `aws` optional extra (`pip install 'dataknobs-common[aws]'`) declares
+  the transport.
+- `AwsSessionConfig` now validates credential completeness at
+  construction (fail closed): a partial explicit credential — an access
+  key without its secret (or vice versa), or a session token without
+  both — raises `ConfigurationError` naming the missing field, instead of
+  botocore's deferred `PartialCredentialsError` at first client use (which
+  for the offloaded async factory would surface from a worker thread).
+  Supplying neither credential stays valid and defers to boto's default
+  chain. This also closes a silent-fallback hazard in the former SQS
+  session path, where a lone credential was dropped and the caller
+  silently authenticated as a different ambient identity.
+
+### Changed
+
+- `SqsEventBus.connect()` now builds its session through the shared
+  `create_aioboto3_session(warm_service="sqs")` factory instead of an
+  inline `aioboto3.Session(...)`. This fixes a blocking-I/O-on-the-event-
+  loop issue (the first `session.client("sqs")` synchronously loaded
+  botocore's bundled data files on the loop) and removes the local
+  session-kwarg reinvention that stood in for an illegal `dataknobs-data`
+  import. Session/region/credential normalization is now shared with
+  every other AWS consumer via `AwsSessionConfig`.
+
 ## v1.5.1 - 2026-06-29
 
 ### Added

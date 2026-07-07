@@ -27,6 +27,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ._resilient_loop import run_supervised_loop
@@ -145,22 +146,25 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
         """
         return self._config.require_topic_attribute
 
-    def _session_kwargs(self) -> dict[str, Any]:
-        """Build ``aioboto3.Session`` kwargs.
+    def _aws_session_config(self) -> AwsSessionConfig:
+        """Project the bus config onto the shared :class:`AwsSessionConfig`.
 
-        Only explicitly provided values are set; everything else is left
-        to boto's default region/credential chain. This is the minimal
-        local passthrough that replaces an (illegal) ``dataknobs-data``
-        import — ``dataknobs-common`` is the lowest layer and must not
-        depend on a higher one.
+        Only explicitly provided values are carried; everything else is
+        left to boto's default region/credential chain (``AwsSessionConfig``
+        defaults every field to ``None``). Routing through the shared
+        session shape — rather than the old local passthrough — is what
+        lets ``connect()`` reuse the warmed-off-loop session factory in
+        :mod:`dataknobs_common.aws` that every other AWS consumer uses.
+
+        Both credential fields are carried whenever set; the session
+        factory's :meth:`AwsSessionConfig.to_session_kwargs` applies the
+        same "only what's present" rule the previous inline builder did.
         """
-        kwargs: dict[str, Any] = {}
-        if self._config.region:
-            kwargs["region_name"] = self._config.region
-        if self._config.aws_access_key_id and self._config.aws_secret_access_key:
-            kwargs["aws_access_key_id"] = self._config.aws_access_key_id
-            kwargs["aws_secret_access_key"] = self._config.aws_secret_access_key
-        return kwargs
+        return AwsSessionConfig(
+            region_name=self._config.region,
+            aws_access_key_id=self._config.aws_access_key_id,
+            aws_secret_access_key=self._config.aws_secret_access_key,
+        )
 
     def _client_kwargs(self) -> dict[str, Any]:
         """Build SQS client kwargs (endpoint + explicit timeouts).
@@ -192,18 +196,30 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
         if self._connected:
             return
 
-        try:
-            import aioboto3
-        except ImportError as e:
+        # Probe the optional dependency up front so callers get this
+        # actionable message rather than an opaque ImportError surfacing
+        # from the session factory's worker thread. The factory imports
+        # aioboto3 lazily; here we only check availability.
+        import importlib.util
+
+        if importlib.util.find_spec("aioboto3") is None:
             raise ImportError(
                 "aioboto3 is required for SqsEventBus. "
                 "Install it with: pip install 'dataknobs-common[sqs]'"
-            ) from e
+            )
 
         async with self._lock:
             if self._connected:
                 return
-            self._session = aioboto3.Session(**self._session_kwargs())
+            # Route through the shared session factory: it builds the
+            # ``aioboto3.Session`` and warms botocore's data-file caches on
+            # a worker thread, so the first ``session.client("sqs")`` below
+            # is a cache hit and does not block the event loop (the loader
+            # would otherwise stat/read botocore's bundled data files on the
+            # loop during first client creation).
+            self._session = await create_aioboto3_session(
+                self._aws_session_config(), warm_service="sqs"
+            )
             self._exit_stack = contextlib.AsyncExitStack()
             self._client = await self._exit_stack.enter_async_context(
                 self._session.client("sqs", **self._client_kwargs())
