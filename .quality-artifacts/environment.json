@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-07T01:41:22Z",
-  "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.11.23 (Homebrew 2026-06-19 aarch64-apple-darwin)",
-  "os": "Darwin",
-  "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "4bed437f72a0467be0016ec4f78062c4d16d8c77",
+  "timestamp": "2026-07-07T16:26:15Z",
+  "python_version": "Python 3.12.3",
+  "uv_version": "uv 0.9.14",
+  "os": "Linux",
+  "os_version": "6.8.0-124-generic",
+  "git_branch": "sbk/aws-session-refactor",
+  "git_commit": "9fa38f821b848c91071e8d6aa6ccdee79ca0b5e4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
