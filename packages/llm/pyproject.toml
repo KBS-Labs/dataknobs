@@ -36,8 +36,16 @@ embeddings = [
 sqlite-cache = [
     "aiosqlite>=0.19.0",
 ]
+# Amazon Bedrock provider (Converse chat + Titan/Cohere embeddings). The
+# async bedrock-runtime transport is aioboto3, pulled via the shared
+# ``dataknobs-common[aws]`` session-factory extra rather than re-pinning it
+# here — single source of the aioboto3 version floor. aioboto3 is
+# lazy-imported, so the base install never requires it.
+bedrock = [
+    "dataknobs-common[aws]",
+]
 all = [
-    "dataknobs-llm[openai,anthropic,ollama,huggingface,embeddings,sqlite-cache]",
+    "dataknobs-llm[openai,anthropic,bedrock,ollama,huggingface,embeddings,sqlite-cache]",
 ]
 
 [tool.uv.sources]
@@ -75,6 +83,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests (requires external services)",
     "ollama: marks tests as requiring Ollama LLM server",
+    "bedrock: marks tests as requiring live Amazon Bedrock access",
     "slow: marks tests as slow running",
 ]
 

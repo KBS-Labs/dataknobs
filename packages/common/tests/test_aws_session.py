@@ -13,6 +13,7 @@ import pytest
 
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.testing import requires_package
 
 # ---------------------------------------------------------------------------
 # AwsSessionConfig.from_dict — region key parity
@@ -137,6 +138,104 @@ def test_to_boto_config_kwargs_uses_max_workers_alias() -> None:
 def test_to_boto_config_kwargs_uses_max_retries_alias() -> None:
     cfg = AwsSessionConfig.from_dict({"max_retries": 7})
     assert cfg.max_attempts == 7
+
+
+# ---------------------------------------------------------------------------
+# to_boto_config_kwargs — timeout passthrough
+# ---------------------------------------------------------------------------
+
+
+def test_to_boto_config_kwargs_omits_timeouts_by_default() -> None:
+    """No timeout args → neither key emitted (boto defaults apply)."""
+    kwargs = AwsSessionConfig().to_boto_config_kwargs()
+    assert "connect_timeout" not in kwargs
+    assert "read_timeout" not in kwargs
+
+
+def test_to_boto_config_kwargs_includes_timeouts_when_given() -> None:
+    """Explicit timeouts flow through to the botocore Config kwargs."""
+    kwargs = AwsSessionConfig().to_boto_config_kwargs(
+        connect_timeout=10, read_timeout=70
+    )
+    assert kwargs["connect_timeout"] == 10
+    assert kwargs["read_timeout"] == 70
+
+
+# ---------------------------------------------------------------------------
+# to_session_client_kwargs — per-client kwargs for a session-based client
+# ---------------------------------------------------------------------------
+
+
+class TestSessionClientKwargs:
+    """The shared builder for ``session.client(service, ...)`` kwargs.
+
+    Requires ``botocore`` (the ``Config`` object it builds); guarded so a
+    botocore-less environment skips rather than errors — the same contract
+    as the aioboto3-guarded offload tests.
+    """
+
+    pytestmark = requires_package("botocore")
+
+    def test_builds_config_with_retry_and_pool(self) -> None:
+        """Retry/pool tuning rides on the botocore Config, not raw kwargs.
+
+        Reproduces the security-rule-2 / drift gap: a consumer that only
+        returned ``{"endpoint_url": ...}`` shipped NO retry, pool, or
+        timeout config. This shared builder makes the full set the default.
+        """
+        cfg = AwsSessionConfig(max_pool_connections=25, max_attempts=7)
+        kwargs = cfg.to_session_client_kwargs()
+        boto_config = kwargs["config"]
+        assert boto_config.max_pool_connections == 25
+        assert boto_config.retries == {"max_attempts": 7, "mode": "standard"}
+
+    def test_applies_timeouts(self) -> None:
+        """Read timeout wires the consumer's budget onto the client (rule 2)."""
+        kwargs = AwsSessionConfig().to_session_client_kwargs(
+            connect_timeout=10, read_timeout=60.0
+        )
+        boto_config = kwargs["config"]
+        assert boto_config.connect_timeout == 10
+        assert boto_config.read_timeout == 60.0
+
+    def test_omits_credentials_and_region(self) -> None:
+        """Creds + region ride on the session, never repeated on the client."""
+        cfg = AwsSessionConfig(
+            region_name="eu-west-1",
+            aws_access_key_id="AK",
+            aws_secret_access_key="SK",
+        )
+        kwargs = cfg.to_session_client_kwargs()
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
+        assert "region_name" not in kwargs
+
+    def test_includes_endpoint_and_http_ssl(self) -> None:
+        """http:// endpoint → endpoint_url + use_ssl=False (LocalStack/MinIO)."""
+        cfg = AwsSessionConfig(endpoint_url="http://localhost:4566")
+        kwargs = cfg.to_session_client_kwargs()
+        assert kwargs["endpoint_url"] == "http://localhost:4566"
+        assert kwargs["use_ssl"] is False
+
+    def test_https_endpoint_leaves_ssl_unset(self) -> None:
+        cfg = AwsSessionConfig(endpoint_url="https://bedrock.example.com")
+        kwargs = cfg.to_session_client_kwargs()
+        assert kwargs["endpoint_url"] == "https://bedrock.example.com"
+        assert "use_ssl" not in kwargs
+
+    def test_omits_endpoint_when_unset(self) -> None:
+        kwargs = AwsSessionConfig().to_session_client_kwargs()
+        assert "endpoint_url" not in kwargs
+        assert "use_ssl" not in kwargs
+
+    def test_extra_client_kwargs_applied_last(self) -> None:
+        """extra_client_kwargs override the inferred values."""
+        cfg = AwsSessionConfig(
+            endpoint_url="http://localhost:4566",
+            extra_client_kwargs={"use_ssl": True},
+        )
+        kwargs = cfg.to_session_client_kwargs()
+        assert kwargs["use_ssl"] is True
 
 
 # ---------------------------------------------------------------------------

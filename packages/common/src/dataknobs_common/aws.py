@@ -7,8 +7,10 @@ retry/pool defaults. Every AWS consumer across the stack routes through
 this module so session/credential/region behavior stays aligned. Current
 consumers: ``SqsEventBus`` (:mod:`dataknobs_common.events.sqs`),
 ``SyncS3Database`` / ``AsyncS3Database`` / ``S3KnowledgeBackend`` (via
-:mod:`dataknobs_data.pooling.s3`). Future AWS services (e.g. a
-``bedrock-runtime`` LLM provider) route through the same surface.
+:mod:`dataknobs_data.pooling.s3`), and the Bedrock LLM provider
+(``dataknobs_llm.llm.providers.bedrock``, ``warm_service="bedrock-runtime"``).
+Async consumers additionally share :meth:`AwsSessionConfig.to_session_client_kwargs`
+for per-client retry / pool / endpoint / timeout shaping.
 
 This lives in ``dataknobs-common`` — the lowest layer — precisely so that
 ``dataknobs-common``'s own AWS consumer (``SqsEventBus``) can share it
@@ -203,22 +205,43 @@ class AwsSessionConfig:
             extra_client_kwargs=dict(cfg.get("extra_client_kwargs", {}) or {}),
         )
 
-    def to_boto_config_kwargs(self) -> dict[str, Any]:
+    def to_boto_config_kwargs(
+        self,
+        *,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Return kwargs for ``botocore.config.Config(...)``.
 
-        Only retry / pool-connection settings belong here. ``region_name``
+        Carries retry / pool-connection settings and — when the consumer
+        supplies them — explicit ``connect_timeout`` / ``read_timeout``
+        values (security rule 2 — every external call gets an explicit
+        timeout when the consumer has a sensible one to set; each is
+        omitted when ``None`` so boto's default applies). ``region_name``
         is carried on the client kwargs (see :meth:`to_client_kwargs`)
         rather than ``BotoConfig`` to avoid passing it through both
         channels — the direct client kwarg wins, so the ``BotoConfig``
         copy was dead weight.
+
+        Args:
+            connect_timeout: Socket connect timeout in seconds, or ``None``
+                to defer to boto's default.
+            read_timeout: Socket read timeout in seconds, or ``None`` to
+                defer to boto's default. Consumers that long-poll (SQS) or
+                stream (Bedrock) size this to their own wait/timeout budget.
         """
-        return {
+        kwargs: dict[str, Any] = {
             "retries": {
                 "max_attempts": self.max_attempts,
                 "mode": self.retry_mode,
             },
             "max_pool_connections": self.max_pool_connections,
         }
+        if connect_timeout is not None:
+            kwargs["connect_timeout"] = connect_timeout
+        if read_timeout is not None:
+            kwargs["read_timeout"] = read_timeout
+        return kwargs
 
     def to_client_kwargs(self) -> dict[str, Any]:
         """Return kwargs for ``boto3.client(service, ...)`` / aioboto3 client.
@@ -273,6 +296,60 @@ class AwsSessionConfig:
             kwargs["aws_session_token"] = self.aws_session_token
         if self.region_name:
             kwargs["region_name"] = self.region_name
+        return kwargs
+
+    def to_session_client_kwargs(
+        self,
+        *,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Return kwargs for a client opened *from* a session.
+
+        The session-based counterpart to :meth:`to_client_kwargs`, for
+        consumers that call ``session.client(service, ...)`` on an
+        ``aioboto3`` / ``boto3`` session built via :meth:`to_session_kwargs`.
+        Credentials and region already ride on the session, so this does
+        **not** repeat them; it returns only the per-client knobs:
+
+        - ``config``: a ``botocore.config.Config`` carrying retry / pool
+          tuning (:meth:`to_boto_config_kwargs`) plus the given
+          ``connect_timeout`` / ``read_timeout`` (security rule 2 — every
+          external call gets an explicit timeout when the consumer supplies
+          one);
+        - ``endpoint_url`` and the ``use_ssl=False`` inference for
+          ``http://`` endpoints (LocalStack / MinIO), when set;
+        - ``extra_client_kwargs``, applied last so a caller can override any
+          of the above (e.g. force ``use_ssl=True``).
+
+        This is the single builder shared by every async consumer that opens
+        a client from a session (``SqsEventBus``, ``BedrockProvider``), so
+        retry / pool / endpoint / SSL / timeout handling stays aligned
+        instead of each consumer hand-rolling a subset. ``botocore`` is
+        imported lazily so merely constructing an :class:`AwsSessionConfig`
+        never requires it (the client cannot be opened without it anyway).
+
+        Args:
+            connect_timeout: Socket connect timeout in seconds, or ``None``
+                to defer to boto's default.
+            read_timeout: Socket read timeout in seconds, or ``None`` to
+                defer to boto's default.
+        """
+        from botocore.config import Config
+
+        kwargs: dict[str, Any] = {
+            "config": Config(
+                **self.to_boto_config_kwargs(
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
+                )
+            )
+        }
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+            kwargs.update(_use_ssl_for_endpoint(self.endpoint_url))
+        if self.extra_client_kwargs:
+            kwargs.update(self.extra_client_kwargs)
         return kwargs
 
 

@@ -28,6 +28,7 @@ from dataknobs_common.testing import (
 from dataknobs_llm.llm.base import LLMConfig
 from dataknobs_llm.llm.providers import (
     AnthropicProvider,
+    BedrockProvider,
     EchoProvider,
     HuggingFaceProvider,
     OllamaProvider,
@@ -37,6 +38,7 @@ from dataknobs_llm.llm.providers import (
 PROVIDERS = [
     ("openai", OpenAIProvider),
     ("anthropic", AnthropicProvider),
+    ("bedrock", BedrockProvider),
     ("ollama", OllamaProvider),
     ("huggingface", HuggingFaceProvider),
     ("echo", EchoProvider),

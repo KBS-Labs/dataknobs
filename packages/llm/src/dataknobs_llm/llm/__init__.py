@@ -20,6 +20,8 @@ from .base import (
 from .providers import (
     OpenAIProvider,
     AnthropicProvider,
+    BedrockProvider,
+    BedrockConverseAdapter,
     OllamaProvider,
     HuggingFaceProvider,
     EchoProvider,
@@ -59,6 +61,8 @@ __all__ = [
     # Providers
     'OpenAIProvider',
     'AnthropicProvider',
+    'BedrockProvider',
+    'BedrockConverseAdapter',
     'OllamaProvider',
     'HuggingFaceProvider',
     'EchoProvider',
