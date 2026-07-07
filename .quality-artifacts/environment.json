@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-07T18:03:36Z",
-  "python_version": "Python 3.12.3",
-  "uv_version": "uv 0.9.14",
-  "os": "Linux",
-  "os_version": "6.8.0-124-generic",
-  "git_branch": "sbk/aws-session-refactor",
-  "git_commit": "8c560ed1a0124babca6e47ebc8a22ac648a1013a",
+  "timestamp": "2026-07-07T18:52:50Z",
+  "python_version": "Python 3.12.12",
+  "uv_version": "uv 0.11.27 (Homebrew 2026-07-06 aarch64-apple-darwin)",
+  "os": "Darwin",
+  "os_version": "24.6.0",
+  "git_branch": "sbk/bedrock-llm-provider",
+  "git_commit": "b86a6b2489c8c91d31a74df298d5cf76c6494401",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
