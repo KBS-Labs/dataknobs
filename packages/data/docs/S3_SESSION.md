@@ -1,28 +1,42 @@
-# S3 Session Configuration
+# AWS Session Configuration
 
-`S3SessionConfig` is the canonical helper for constructing
-`boto3` / `aioboto3` S3 clients across all dataknobs S3-using
-constructs. It owns the rules for region resolution, `endpoint_url`
-handling, credential passthrough, and retry / pool defaults so every
-S3 consumer sees identical defaults.
+`AwsSessionConfig` is the canonical helper for constructing
+`boto3` / `aioboto3` AWS clients across all dataknobs AWS-using
+constructs (S3 today, `bedrock-runtime` and future services next). It
+owns the rules for region resolution, `endpoint_url` handling,
+credential passthrough, and retry / pool defaults so every AWS consumer
+sees identical defaults.
+
+It lives in `dataknobs_data.pooling.aws` alongside
+`create_aioboto3_session` and `clear_aioboto3_session_cache`. The
+S3-specific surface (`S3PoolConfig`, `create_boto3_s3_client`,
+`validate_s3_session`) stays in `dataknobs_data.pooling.s3`.
+
+> **Deprecated alias.** The former name `S3SessionConfig` remains
+> importable — `from dataknobs_data.pooling import S3SessionConfig`
+> resolves to `AwsSessionConfig` with no warning, and
+> `from dataknobs_data.pooling.s3 import S3SessionConfig` resolves with a
+> `DeprecationWarning`. Prefer `AwsSessionConfig` from
+> `dataknobs_data.pooling.aws`.
 
 **Routes through this layer:**
 
 - `dataknobs_data.backends.s3.SyncS3Database` (sync `boto3`) — calls
-  `create_boto3_s3_client` directly with its `S3SessionConfig`.
+  `create_boto3_s3_client` directly with its `AwsSessionConfig`.
 - `dataknobs_data.backends.s3_async.AsyncS3Database` (async
   `aioboto3`) — passes its `S3PoolConfig` to `create_aioboto3_session`,
-  which projects onto `S3SessionConfig` internally via
+  which projects onto `AwsSessionConfig` internally via
   `S3PoolConfig.to_session_config()`.
-- `dataknobs_bots.knowledge.storage.s3.S3KnowledgeBackend` (sync
-  `boto3`) — calls `create_boto3_s3_client` directly.
+- `dataknobs_bots.knowledge.storage.s3.S3KnowledgeBackend` (async
+  `aioboto3`) — builds an `AwsSessionConfig` and calls
+  `create_aioboto3_session`.
 - `dataknobs_data.pooling.s3.validate_s3_session` (async client used
   for pool validation) — reuses the same kwarg-shaping helper as
-  `S3SessionConfig.to_client_kwargs()`.
+  `AwsSessionConfig.to_client_kwargs()`.
 
 ## Accepted Input Shapes
 
-`S3SessionConfig.from_dict(config)` accepts any of these keys
+`AwsSessionConfig.from_dict(config)` accepts any of these keys
 (unrecognized keys are ignored):
 
 | Concern | Canonical key | Aliases | Notes |
@@ -43,7 +57,7 @@ the value at client-construction time.
 ## Default Region Resolution
 
 When `region_name` is unset (which is now the default for all
-dataknobs S3 constructs), `botocore` resolves the region in this
+dataknobs AWS constructs), `botocore` resolves the region in this
 order:
 
 1. `AWS_DEFAULT_REGION` environment variable
@@ -93,10 +107,8 @@ s3 = create_boto3_s3_client(
 ### Async — `aioboto3` session via `S3PoolConfig`
 
 ```python
-from dataknobs_data.pooling.s3 import (
-    S3PoolConfig,
-    create_aioboto3_session,
-)
+from dataknobs_data.pooling.aws import create_aioboto3_session
+from dataknobs_data.pooling.s3 import S3PoolConfig
 
 pool_cfg = S3PoolConfig.from_dict(
     {"bucket": "my-bucket", "region": "eu-west-1"}
@@ -106,13 +118,30 @@ async with session.client("s3") as s3:
     await s3.head_bucket(Bucket=pool_cfg.bucket)
 ```
 
+### Async — a non-S3 service (`warm_service`)
+
+`create_aioboto3_session` warms an `s3` client by default. Pass
+`warm_service` to pre-warm a different service's botocore data files
+(the returned session is service-agnostic — open any client from it):
+
+```python
+from dataknobs_data.pooling.aws import AwsSessionConfig, create_aioboto3_session
+
+sess_cfg = AwsSessionConfig(region_name="us-west-2")
+session = await create_aioboto3_session(
+    sess_cfg, warm_service="bedrock-runtime"
+)
+async with session.client("bedrock-runtime") as client:
+    ...
+```
+
 ### Sharing one config across multiple consumers
 
 ```python
-from dataknobs_data.pooling.s3 import S3SessionConfig
+from dataknobs_data.pooling.aws import AwsSessionConfig
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
 
-shared = S3SessionConfig.from_dict(
+shared = AwsSessionConfig.from_dict(
     {"region": "eu-west-1", "endpoint_url": "http://localhost:4566"}
 )
 backend_a = S3KnowledgeBackend(
@@ -125,7 +154,7 @@ backend_b = S3KnowledgeBackend(
 
 ### Same config for sync + async
 
-Because `S3SessionConfig.from_dict` and `S3PoolConfig.from_dict`
+Because `AwsSessionConfig.from_dict` and `S3PoolConfig.from_dict`
 both accept `region` and `region_name`, one config dict feeds both
 constructs without rename.
 
@@ -141,9 +170,9 @@ async_db = AsyncS3Database(cfg)
 
 ## API Reference
 
-### `S3SessionConfig`
+### `AwsSessionConfig`
 
-Frozen dataclass holding the normalized configuration for an S3
+Frozen dataclass holding the normalized configuration for an AWS
 session.
 
 | Field | Type | Default | Notes |
@@ -164,32 +193,41 @@ Methods:
   keys listed above.
 - `to_boto_config_kwargs()` — kwargs for
   `botocore.config.Config(...)`.
-- `to_client_kwargs()` — kwargs for `boto3.client("s3", ...)` /
-  `session.client("s3", ...)`. Omits unset optional fields.
+- `to_client_kwargs()` — kwargs for `boto3.client(service, ...)` /
+  `session.client(service, ...)`. Omits unset optional fields.
 
 ### `create_boto3_s3_client(config=None)`
 
-Sync factory. Accepts an `S3SessionConfig`, a raw dict (normalized
-internally), or `None` (full default chain). Returns a configured
-`boto3` S3 client.
+Sync factory (in `dataknobs_data.pooling.s3`). Accepts an
+`AwsSessionConfig`, a raw dict (normalized internally), or `None`
+(full default chain). Returns a configured `boto3` S3 client.
 
-### `create_aioboto3_session(config)`
+### `create_aioboto3_session(config, *, warm_service="s3")`
 
-Async factory. Accepts an `S3PoolConfig` (existing async-pool
-callers) or `S3SessionConfig` (new shared shape). Returns an
+Async factory (in `dataknobs_data.pooling.aws`). Accepts an
+`AwsSessionConfig` (the shared shape) or any per-service pool config
+exposing `to_session_config()` (e.g. `S3PoolConfig`). Returns an
 `aioboto3.Session`. Note: `endpoint_url` is per-client in aioboto3,
-so it is applied at `session.client("s3", ...)` time, not at
+so it is applied at `session.client(service, ...)` time, not at
 session construction.
+
+`warm_service` selects which service's client is warmed off the event
+loop (default `"s3"`, which additionally pre-loads the S3
+`list_objects_v2` paginator model). The warmed session is cached
+process-wide keyed by the normalized session kwargs **and**
+`warm_service`, so distinct services key to distinct warmed sessions.
 
 ### `S3PoolConfig`
 
-Existing pool-manager configuration. Adds:
+Existing pool-manager configuration (in `dataknobs_data.pooling.s3`).
+Adds:
 
 - `region` accepted as alias for `region_name` in `from_dict`.
-- `to_session_config()` — projects to the shared `S3SessionConfig`
+- `to_session_config()` — projects to the shared `AwsSessionConfig`
   shape (drops `bucket`/`prefix`).
 
-### `validate_s3_session(session, config)`
+### `validate_s3_session(session, bucket, config=None)`
 
-Async pool validation. Omits `endpoint_url` from client kwargs when
-none is configured (no longer passes empty-string overrides).
+Async pool validation (in `dataknobs_data.pooling.s3`). Omits
+`endpoint_url` from client kwargs when none is configured (no longer
+passes empty-string overrides).

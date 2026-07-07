@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `S3KnowledgeBackend`'s `session_config` parameter is now typed as
+  `AwsSessionConfig` (renamed from `S3SessionConfig` in `dataknobs-data`).
+  The deprecated `S3SessionConfig` alias still resolves, so external
+  callers passing one keep working; prefer `AwsSessionConfig` from
+  `dataknobs_data.pooling.aws`.
+
 ## v0.8.2 - 2026-06-29
 
 ## v0.8.1 - 2026-06-23
