@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
-from dataknobs_data.pooling.aws import AwsSessionConfig
 from dataknobs_data.pooling.s3 import create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record

@@ -2,25 +2,34 @@
 
 `AwsSessionConfig` is the canonical helper for constructing
 `boto3` / `aioboto3` AWS clients across all dataknobs AWS-using
-constructs (S3 today, `bedrock-runtime` and future services next). It
-owns the rules for region resolution, `endpoint_url` handling,
-credential passthrough, and retry / pool defaults so every AWS consumer
-sees identical defaults.
+constructs (S3, SQS, `bedrock-runtime`, and future services). It owns the
+rules for region resolution, `endpoint_url` handling, credential
+passthrough, and retry / pool defaults so every AWS consumer sees
+identical defaults.
 
-It lives in `dataknobs_data.pooling.aws` alongside
-`create_aioboto3_session` and `clear_aioboto3_session_cache`. The
+It lives in `dataknobs_common.aws` — the lowest layer — alongside
+`create_aioboto3_session` and `clear_aioboto3_session_cache`, precisely
+so that `dataknobs-common`'s own AWS consumer (`SqsEventBus`) can share
+it without an illegal upward dependency on `dataknobs-data`. The
 S3-specific surface (`S3PoolConfig`, `create_boto3_s3_client`,
-`validate_s3_session`) stays in `dataknobs_data.pooling.s3`.
+`validate_s3_session`) stays one layer up in
+`dataknobs_data.pooling.s3`, which also re-exports the generic names for
+import stability.
 
 > **Deprecated alias.** The former name `S3SessionConfig` remains
 > importable — `from dataknobs_data.pooling import S3SessionConfig`
-> resolves to `AwsSessionConfig` with no warning, and
+> resolves to `AwsSessionConfig` with no warning (a permanent
+> compatibility alias), and
 > `from dataknobs_data.pooling.s3 import S3SessionConfig` resolves with a
 > `DeprecationWarning`. Prefer `AwsSessionConfig` from
-> `dataknobs_data.pooling.aws`.
+> `dataknobs_common.aws`.
 
 **Routes through this layer:**
 
+- `dataknobs_common.events.sqs.SqsEventBus` (async `aioboto3`) — builds
+  an `AwsSessionConfig` and calls `create_aioboto3_session` with
+  `warm_service="sqs"`, so the first SQS client creation is a warmed
+  cache hit rather than a blocking data-file load on the event loop.
 - `dataknobs_data.backends.s3.SyncS3Database` (sync `boto3`) — calls
   `create_boto3_s3_client` directly with its `AwsSessionConfig`.
 - `dataknobs_data.backends.s3_async.AsyncS3Database` (async
@@ -107,7 +116,7 @@ s3 = create_boto3_s3_client(
 ### Async — `aioboto3` session via `S3PoolConfig`
 
 ```python
-from dataknobs_data.pooling.aws import create_aioboto3_session
+from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_data.pooling.s3 import S3PoolConfig
 
 pool_cfg = S3PoolConfig.from_dict(
@@ -122,10 +131,12 @@ async with session.client("s3") as s3:
 
 `create_aioboto3_session` warms an `s3` client by default. Pass
 `warm_service` to pre-warm a different service's botocore data files
-(the returned session is service-agnostic — open any client from it):
+(the returned session is service-agnostic — open any client from it).
+`SqsEventBus` uses `warm_service="sqs"`; a Bedrock provider would use
+`"bedrock-runtime"`:
 
 ```python
-from dataknobs_data.pooling.aws import AwsSessionConfig, create_aioboto3_session
+from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 
 sess_cfg = AwsSessionConfig(region_name="us-west-2")
 session = await create_aioboto3_session(
@@ -138,7 +149,7 @@ async with session.client("bedrock-runtime") as client:
 ### Sharing one config across multiple consumers
 
 ```python
-from dataknobs_data.pooling.aws import AwsSessionConfig
+from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
 
 shared = AwsSessionConfig.from_dict(
@@ -172,8 +183,8 @@ async_db = AsyncS3Database(cfg)
 
 ### `AwsSessionConfig`
 
-Frozen dataclass holding the normalized configuration for an AWS
-session.
+Frozen dataclass (in `dataknobs_common.aws`) holding the normalized
+configuration for an AWS session.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -195,6 +206,12 @@ Methods:
   `botocore.config.Config(...)`.
 - `to_client_kwargs()` — kwargs for `boto3.client(service, ...)` /
   `session.client(service, ...)`. Omits unset optional fields.
+- `to_session_kwargs()` — session-level kwargs for
+  `aioboto3.Session(...)` / `boto3.Session(...)`: credentials + region
+  only, and only when set. `endpoint_url` is deliberately excluded (it
+  is a per-client kwarg). This is the single builder shared by
+  `create_aioboto3_session` and every consumer that constructs a
+  session from an `AwsSessionConfig` (e.g. `SqsEventBus`).
 
 ### `create_boto3_s3_client(config=None)`
 
@@ -204,7 +221,7 @@ Sync factory (in `dataknobs_data.pooling.s3`). Accepts an
 
 ### `create_aioboto3_session(config, *, warm_service="s3")`
 
-Async factory (in `dataknobs_data.pooling.aws`). Accepts an
+Async factory (in `dataknobs_common.aws`). Accepts an
 `AwsSessionConfig` (the shared shape) or any per-service pool config
 exposing `to_session_config()` (e.g. `S3PoolConfig`). Returns an
 `aioboto3.Session`. Note: `endpoint_url` is per-client in aioboto3,
@@ -213,8 +230,9 @@ session construction.
 
 `warm_service` selects which service's client is warmed off the event
 loop (default `"s3"`, which additionally pre-loads the S3
-`list_objects_v2` paginator model). The warmed session is cached
-process-wide keyed by the normalized session kwargs **and**
+`list_objects_v2` paginator model; `"sqs"` for `SqsEventBus`,
+`"bedrock-runtime"` for a Bedrock provider). The warmed session is
+cached process-wide keyed by the normalized session kwargs **and**
 `warm_service`, so distinct services key to distinct warmed sessions.
 
 ### `S3PoolConfig`

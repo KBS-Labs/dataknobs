@@ -628,7 +628,7 @@ Production S3 storage. `region` (or its `region_name` alias) is
 optional — when omitted, boto's default chain
 (`AWS_DEFAULT_REGION` env, `~/.aws/config`, IMDS, then `us-east-1`
 terminal fallback) resolves the value. See
-[S3 Session Configuration](../../data/s3-session.md) for the full
+[AWS Session Configuration](../../data/aws-session.md) for the full
 chain and unified config shape:
 
 ```python

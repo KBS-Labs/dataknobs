@@ -64,6 +64,12 @@ from dataknobs_common.callbacks import (
 from dataknobs_common.async_iter import (
     aiter_sync_in_thread,
 )
+from dataknobs_common.aws import (
+    AwsSessionConfig,
+    SupportsToSessionConfig,
+    clear_aioboto3_session_cache,
+    create_aioboto3_session,
+)
 from dataknobs_common.sync_bridge import (
     SyncLoopBridge,
     run_coro_sync,
@@ -248,6 +254,11 @@ __all__ = [
     "Subscription",
     "create_event_bus",
     "create_event_bus_async",
+    # AWS session
+    "AwsSessionConfig",
+    "SupportsToSessionConfig",
+    "clear_aioboto3_session_cache",
+    "create_aioboto3_session",
     # Exceptions
     "DataknobsError",
     "ValidationError",

@@ -25,10 +25,18 @@ postgres = ["asyncpg>=0.29.0"]
 # Redis-bucket rate limiter. Lazy-imported at each use site, so the
 # base install stays ``dependencies = []``.
 redis = ["redis>=5.0.0"]
+# Async AWS transport for the shared session factory
+# (``dataknobs_common.aws.create_aioboto3_session``, used by every AWS
+# consumer: SqsEventBus, the S3 data backends, the Bedrock LLM provider).
+# aioboto3 is lazy-imported inside the factory's worker thread, so the
+# base install stays ``dependencies = []`` and importing
+# ``dataknobs_common.aws`` never requires it.
+aws = ["aioboto3>=12.0.0"]
 # AWS SQS-backed EventBus (``SqsEventBus`` / the ``"sqs"`` backend).
 # Lazy-imported inside the backend and its registry wrapper, so the
 # base install stays ``dependencies = []`` and importing
-# ``dataknobs_common.events`` never requires aioboto3.
+# ``dataknobs_common.events`` never requires aioboto3. Superset of the
+# ``aws`` transport extra (SqsEventBus routes through the shared factory).
 sqs = ["aioboto3>=12.0.0"]
 
 [project.entry-points.pytest11]

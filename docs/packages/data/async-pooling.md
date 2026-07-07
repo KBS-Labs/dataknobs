@@ -162,7 +162,7 @@ Each backend has its own configuration class:
     )
     ```
 
-    See [S3 Session Configuration](s3-session.md) for the full
+    See [AWS Session Configuration](aws-session.md) for the full
     region resolution chain and the unified config shape used by
     both sync (`SyncS3Database`, `S3KnowledgeBackend`) and async
     (`AsyncS3Database`) S3 constructs.

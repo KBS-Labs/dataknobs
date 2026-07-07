@@ -11,11 +11,11 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
-from ..pooling.aws import create_aioboto3_session
 from ..pooling.s3 import S3PoolConfig, validate_s3_session
 from ..query import Operator, Query
 from ..records import Record

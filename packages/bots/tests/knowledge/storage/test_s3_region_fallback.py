@@ -25,8 +25,8 @@ backend ``region_name`` was forced to ``"us-east-1"``; post-fix it is
 
 from __future__ import annotations
 
+from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
-from dataknobs_data.pooling.aws import AwsSessionConfig
 
 
 def test_no_region_defers_to_boto_chain() -> None:

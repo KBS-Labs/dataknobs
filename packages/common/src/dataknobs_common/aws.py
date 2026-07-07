@@ -1,15 +1,26 @@
 """Shared boto3 / aioboto3 AWS session construction for dataknobs.
 
 Single source of truth for how dataknobs initializes AWS clients (S3,
-``bedrock-runtime``, and any future service). Owns region resolution,
-``endpoint_url`` handling, credential passthrough, and retry/pool
-defaults. Both sync (``boto3``) and async (``aioboto3``) paths route
-through this module so behavior stays aligned across ``S3KnowledgeBackend``,
-``SyncS3Database``, ``AsyncS3Database``, the Bedrock LLM provider, and any
-future AWS consumer.
+``sqs``, ``bedrock-runtime``, and any future service). Owns region
+resolution, ``endpoint_url`` handling, credential passthrough, and
+retry/pool defaults. Every AWS consumer across the stack routes through
+this module so session/credential/region behavior stays aligned:
+``SqsEventBus`` (:mod:`dataknobs_common.events.sqs`), ``SyncS3Database`` /
+``AsyncS3Database`` / ``S3KnowledgeBackend`` (via
+:mod:`dataknobs_data.pooling.s3`), and the Bedrock LLM provider.
 
-The S3-specific pieces (``S3PoolConfig``, ``create_boto3_s3_client``,
-``validate_s3_session``) live in :mod:`dataknobs_data.pooling.s3`.
+This lives in ``dataknobs-common`` — the lowest layer — precisely so that
+``dataknobs-common``'s own AWS consumer (``SqsEventBus``) can share it
+without an illegal upward dependency on ``dataknobs-data``. The
+S3-specific pieces (``S3PoolConfig``, ``create_boto3_s3_client``,
+``validate_s3_session``) live one layer up in
+:mod:`dataknobs_data.pooling.s3`.
+
+``aioboto3`` is an *optional* dependency, imported lazily inside
+:func:`create_aioboto3_session`'s worker thread, so importing this module
+(or constructing an :class:`AwsSessionConfig`) never requires it. Install
+the async transport with ``pip install 'dataknobs-common[aws]'`` (or any
+consumer extra that pulls it, e.g. ``[sqs]``).
 """
 
 from __future__ import annotations
@@ -18,10 +29,7 @@ import asyncio
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .s3 import S3PoolConfig
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +50,22 @@ logger = logging.getLogger(__name__)
 # the kwargs rather than the kwargs themselves so credentials are never
 # held as plaintext dict keys.
 _SESSION_CACHE: dict[str, Any] = {}
+
+
+@runtime_checkable
+class SupportsToSessionConfig(Protocol):
+    """A per-service pool config that projects onto :class:`AwsSessionConfig`.
+
+    :func:`create_aioboto3_session` accepts either an
+    :class:`AwsSessionConfig` directly or any object exposing
+    ``to_session_config()`` (e.g.
+    :class:`dataknobs_data.pooling.s3.S3PoolConfig`). Declaring the
+    projection as a structural Protocol lets ``dataknobs-common`` type the
+    factory without importing the higher-layer ``dataknobs-data`` pool
+    configs.
+    """
+
+    def to_session_config(self) -> AwsSessionConfig: ...
 
 
 def _session_cache_key(
@@ -188,6 +212,30 @@ class AwsSessionConfig:
             kwargs.update(self.extra_client_kwargs)
         return kwargs
 
+    def to_session_kwargs(self) -> dict[str, Any]:
+        """Return kwargs for ``aioboto3.Session(...)`` / ``boto3.Session(...)``.
+
+        Only the session-level knobs boto accepts — credentials and
+        ``region_name`` — and only when set (unset fields defer to boto's
+        default chain). ``endpoint_url`` is deliberately excluded: it is a
+        per-*client* kwarg (applied at ``session.client(service, ...)``
+        time), not a session-level option. This is the single builder
+        shared by :func:`create_aioboto3_session` and every consumer that
+        constructs a session from an :class:`AwsSessionConfig` (e.g.
+        ``SqsEventBus``), so the "only set what's present" rule lives in
+        exactly one place.
+        """
+        kwargs: dict[str, Any] = {}
+        if self.aws_access_key_id:
+            kwargs["aws_access_key_id"] = self.aws_access_key_id
+        if self.aws_secret_access_key:
+            kwargs["aws_secret_access_key"] = self.aws_secret_access_key
+        if self.aws_session_token:
+            kwargs["aws_session_token"] = self.aws_session_token
+        if self.region_name:
+            kwargs["region_name"] = self.region_name
+        return kwargs
+
 
 def _use_ssl_for_endpoint(endpoint_url: str | None) -> dict[str, Any]:
     """Return ``{'use_ssl': False}`` for plain ``http://`` endpoints.
@@ -203,7 +251,7 @@ def _use_ssl_for_endpoint(endpoint_url: str | None) -> dict[str, Any]:
 
 
 async def create_aioboto3_session(
-    config: S3PoolConfig | AwsSessionConfig,
+    config: AwsSessionConfig | SupportsToSessionConfig,
     *,
     warm_service: str = "s3",
 ) -> Any:
@@ -211,9 +259,9 @@ async def create_aioboto3_session(
 
     Accepts an :class:`AwsSessionConfig` (the shared session shape) or
     any per-service pool config exposing ``to_session_config()`` (e.g.
-    :class:`~dataknobs_data.pooling.s3.S3PoolConfig`), which is projected
+    :class:`dataknobs_data.pooling.s3.S3PoolConfig`), which is projected
     onto :class:`AwsSessionConfig` internally so kwarg shaping is
-    identical to :func:`create_boto3_s3_client`.
+    identical to ``create_boto3_s3_client``.
 
     Both the synchronous ``aioboto3.Session(...)`` construction (botocore
     loader setup + ``~/.aws`` read) and aiobotocore's lazy, synchronous
@@ -227,9 +275,10 @@ async def create_aioboto3_session(
 
     ``warm_service`` selects which service's client is warmed (default
     ``"s3"``, which additionally pre-loads the S3 ``list_objects_v2``
-    paginator model). Pass ``warm_service="bedrock-runtime"`` for the
-    Bedrock provider; the returned session is service-agnostic — the
-    consumer opens ``session.client(service, ...)`` per operation.
+    paginator model). Pass ``warm_service="sqs"`` for ``SqsEventBus`` or
+    ``warm_service="bedrock-runtime"`` for the Bedrock provider; the
+    returned session is service-agnostic — the consumer opens
+    ``session.client(service, ...)`` per operation.
 
     The warmed session is cached process-wide keyed by the normalized
     session kwargs plus ``warm_service`` (see :data:`_SESSION_CACHE`), so
@@ -244,15 +293,7 @@ async def create_aioboto3_session(
     # aioboto3 sessions accept credentials and region; ``endpoint_url``
     # is a per-client kwarg (applied at ``session.client(service, ...)``
     # time), not a session-level option.
-    session_kwargs: dict[str, Any] = {}
-    if sess_cfg.aws_access_key_id:
-        session_kwargs["aws_access_key_id"] = sess_cfg.aws_access_key_id
-    if sess_cfg.aws_secret_access_key:
-        session_kwargs["aws_secret_access_key"] = sess_cfg.aws_secret_access_key
-    if sess_cfg.aws_session_token:
-        session_kwargs["aws_session_token"] = sess_cfg.aws_session_token
-    if sess_cfg.region_name:
-        session_kwargs["region_name"] = sess_cfg.region_name
+    session_kwargs = sess_cfg.to_session_kwargs()
 
     cache_key = _session_cache_key(session_kwargs, warm_service)
     cached = _SESSION_CACHE.get(cache_key)

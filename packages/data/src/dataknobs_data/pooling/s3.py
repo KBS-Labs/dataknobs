@@ -2,18 +2,20 @@
 
 The AWS-session-generic pieces — :class:`AwsSessionConfig`,
 :func:`create_aioboto3_session`, :func:`clear_aioboto3_session_cache` —
-live in :mod:`dataknobs_data.pooling.aws` (they are shared by every AWS
-consumer: S3, ``bedrock-runtime``, etc.). This module keeps the
+live in :mod:`dataknobs_common.aws` (they are shared by every AWS
+consumer across the stack: ``SqsEventBus`` in ``dataknobs-common``, the
+S3 backends here, and the Bedrock LLM provider). This module keeps the
 genuinely S3-specific surface: the S3 connection-pool config
 (:class:`S3PoolConfig`), the sync S3 client factory
 (:func:`create_boto3_s3_client`), and S3 session validation
-(:func:`validate_s3_session`).
+(:func:`validate_s3_session`). The generic names are re-exported here for
+import stability.
 
 .. deprecated::
    ``S3SessionConfig`` is a deprecated alias for
-   :class:`dataknobs_data.pooling.aws.AwsSessionConfig`. Accessing it
-   from this module emits a :class:`DeprecationWarning`. Import
-   ``AwsSessionConfig`` from :mod:`dataknobs_data.pooling.aws` (or the
+   :class:`dataknobs_common.aws.AwsSessionConfig`. Accessing it from this
+   module emits a :class:`DeprecationWarning`. Import ``AwsSessionConfig``
+   from :mod:`dataknobs_common.aws` (or the
    :mod:`dataknobs_data.pooling` package root) instead.
 """
 
@@ -24,12 +26,13 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
-from .aws import (
+from dataknobs_common.aws import (
     AwsSessionConfig,
     _use_ssl_for_endpoint,
     clear_aioboto3_session_cache,  # noqa: F401  (re-export for import stability)
     create_aioboto3_session,  # noqa: F401  (re-export for import stability)
 )
+
 from .base import BasePoolConfig
 
 logger = logging.getLogger(__name__)
@@ -162,7 +165,7 @@ def __getattr__(name: str) -> Any:
     """Resolve deprecated names, warning on access.
 
     ``S3SessionConfig`` was renamed to :class:`AwsSessionConfig` and
-    relocated to :mod:`dataknobs_data.pooling.aws`. The old name keeps
+    relocated to :mod:`dataknobs_common.aws`. The old name keeps
     resolving here (returning ``AwsSessionConfig``) but emits a
     :class:`DeprecationWarning`, mirroring the ``VariableSubstitution``
     warn-on-use precedent.
@@ -171,7 +174,7 @@ def __getattr__(name: str) -> Any:
     if target is not None:
         warnings.warn(
             f"{name} is deprecated; import AwsSessionConfig from "
-            "dataknobs_data.pooling.aws (or dataknobs_data.pooling) instead.",
+            "dataknobs_common.aws (or dataknobs_data.pooling) instead.",
             DeprecationWarning,
             stacklevel=2,
         )

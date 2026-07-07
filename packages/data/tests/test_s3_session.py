@@ -1,20 +1,22 @@
-"""Unit tests for the shared S3 session-construction layer.
+"""Tests for the S3-specific session helpers in ``pooling.s3``.
 
-Covers :class:`AwsSessionConfig`, :func:`create_boto3_s3_client`,
-:func:`create_aioboto3_session` (via the ``S3PoolConfig``-projection
-path), and :func:`validate_s3_session` (endpoint_url omission).
+Covers :func:`create_boto3_s3_client` (sync client + boto default-region
+chain via ``moto``), :class:`S3PoolConfig` normalization + its projection
+onto the shared :class:`AwsSessionConfig`, :func:`validate_s3_session`
+kwarg shaping, and the deprecated ``S3SessionConfig`` alias.
 
-Most tests are pure kwarg-shaping checks and need no network. Two
-client-construction tests use ``moto.mock_aws`` to confirm boto's
-default-region chain resolves correctly when no region is configured.
+The pure :class:`AwsSessionConfig` kwarg-shaping / alias-normalization
+unit tests live with the config in
+``packages/common/tests/test_aws_session.py`` (the class was relocated to
+:mod:`dataknobs_common.aws`).
 """
 
 from __future__ import annotations
 
 import pytest
+from dataknobs_common.aws import AwsSessionConfig
 from moto import mock_aws
 
-from dataknobs_data.pooling.aws import AwsSessionConfig
 from dataknobs_data.pooling.s3 import (
     S3PoolConfig,
     create_boto3_s3_client,
@@ -56,150 +58,6 @@ def _isolate_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-
-
-# ---------------------------------------------------------------------------
-# AwsSessionConfig.from_dict — region key parity
-# ---------------------------------------------------------------------------
-
-
-def test_session_config_from_dict_accepts_region() -> None:
-    cfg = AwsSessionConfig.from_dict({"region": "eu-west-1"})
-    assert cfg.region_name == "eu-west-1"
-
-
-def test_session_config_from_dict_accepts_region_name() -> None:
-    cfg = AwsSessionConfig.from_dict({"region_name": "eu-west-1"})
-    assert cfg.region_name == "eu-west-1"
-
-
-def test_region_name_wins_over_region_when_both_present() -> None:
-    cfg = AwsSessionConfig.from_dict(
-        {"region": "us-east-1", "region_name": "eu-west-1"}
-    )
-    assert cfg.region_name == "eu-west-1"
-
-
-def test_missing_region_yields_none() -> None:
-    cfg = AwsSessionConfig.from_dict({})
-    assert cfg.region_name is None
-
-
-# ---------------------------------------------------------------------------
-# AwsSessionConfig.from_dict — credential / pool / retry aliasing
-# ---------------------------------------------------------------------------
-
-
-def test_legacy_credential_keys_accepted() -> None:
-    cfg = AwsSessionConfig.from_dict(
-        {
-            "access_key_id": "AK",
-            "secret_access_key": "SK",
-            "session_token": "ST",
-        }
-    )
-    assert cfg.aws_access_key_id == "AK"
-    assert cfg.aws_secret_access_key == "SK"
-    assert cfg.aws_session_token == "ST"
-
-
-def test_to_boto_config_kwargs_uses_max_workers_alias() -> None:
-    cfg = AwsSessionConfig.from_dict({"max_workers": 25})
-    assert cfg.max_pool_connections == 25
-
-
-def test_to_boto_config_kwargs_uses_max_retries_alias() -> None:
-    cfg = AwsSessionConfig.from_dict({"max_retries": 7})
-    assert cfg.max_attempts == 7
-
-
-# ---------------------------------------------------------------------------
-# to_client_kwargs / to_boto_config_kwargs — shape assertions
-# ---------------------------------------------------------------------------
-
-
-def test_to_client_kwargs_omits_unset_fields() -> None:
-    kwargs = AwsSessionConfig().to_client_kwargs()
-    assert kwargs == {}
-
-
-def test_to_client_kwargs_includes_set_fields() -> None:
-    cfg = AwsSessionConfig(
-        region_name="eu-west-1",
-        endpoint_url="https://example.com",
-        aws_access_key_id="AK",
-        aws_secret_access_key="SK",
-        aws_session_token="ST",
-    )
-    kwargs = cfg.to_client_kwargs()
-    assert kwargs == {
-        "region_name": "eu-west-1",
-        "endpoint_url": "https://example.com",
-        "aws_access_key_id": "AK",
-        "aws_secret_access_key": "SK",
-        "aws_session_token": "ST",
-    }
-
-
-def test_to_boto_config_kwargs_omits_region_when_none() -> None:
-    kwargs = AwsSessionConfig().to_boto_config_kwargs()
-    assert "region_name" not in kwargs
-    assert kwargs["max_pool_connections"] == 10
-    assert kwargs["retries"] == {"max_attempts": 3, "mode": "standard"}
-
-
-def test_to_boto_config_kwargs_never_includes_region_name() -> None:
-    """``region_name`` belongs on the client kwargs, not ``BotoConfig``.
-
-    Passing it via both channels is redundant — the direct client
-    kwarg wins, so the ``BotoConfig`` copy is dead weight. This test
-    locks in that ``to_boto_config_kwargs`` never emits it, even when
-    the session config has a region set.
-    """
-    kwargs = AwsSessionConfig(region_name="eu-west-1").to_boto_config_kwargs()
-    assert "region_name" not in kwargs
-
-
-def test_extra_client_kwargs_passthrough() -> None:
-    cfg = AwsSessionConfig.from_dict({"extra_client_kwargs": {"verify": False}})
-    assert cfg.to_client_kwargs() == {"verify": False}
-
-
-# ---------------------------------------------------------------------------
-# use_ssl inference for http:// endpoints
-# ---------------------------------------------------------------------------
-
-
-def test_http_endpoint_disables_ssl() -> None:
-    """``http://`` endpoint (LocalStack, MinIO) → ``use_ssl=False``."""
-    cfg = AwsSessionConfig(endpoint_url="http://localhost:4566")
-    kwargs = cfg.to_client_kwargs()
-    assert kwargs["endpoint_url"] == "http://localhost:4566"
-    assert kwargs["use_ssl"] is False
-
-
-def test_https_endpoint_leaves_use_ssl_unset() -> None:
-    """``https://`` endpoint → ``use_ssl`` not set (boto default ``True``)."""
-    cfg = AwsSessionConfig(endpoint_url="https://example.com")
-    kwargs = cfg.to_client_kwargs()
-    assert kwargs["endpoint_url"] == "https://example.com"
-    assert "use_ssl" not in kwargs
-
-
-def test_no_endpoint_leaves_use_ssl_unset() -> None:
-    """No endpoint → ``use_ssl`` not set."""
-    kwargs = AwsSessionConfig().to_client_kwargs()
-    assert "use_ssl" not in kwargs
-
-
-def test_extra_client_kwargs_can_override_use_ssl() -> None:
-    """Caller can force ``use_ssl=True`` via ``extra_client_kwargs``."""
-    cfg = AwsSessionConfig(
-        endpoint_url="http://localhost:4566",
-        extra_client_kwargs={"use_ssl": True},
-    )
-    kwargs = cfg.to_client_kwargs()
-    assert kwargs["use_ssl"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +167,8 @@ async def test_validate_s3_session_kwarg_shaping() -> None:
     construction kwargs, and the project rule (testing-practices.md)
     permits a fake when the real dependency lacks a clean way to
     observe the value under test. Behavioral coverage of the actual
-    boto round-trip lives in ``test_s3_session.py`` (sync) and the
-    ``AwsSessionConfig`` parity tests.
+    boto round-trip lives in the sync ``create_boto3_s3_client`` tests
+    above and the ``AwsSessionConfig`` parity tests.
     """
     from contextlib import asynccontextmanager
 
@@ -379,8 +237,8 @@ async def test_validate_s3_session_kwarg_shaping() -> None:
 def test_deprecated_s3_session_config_alias_warns_and_resolves() -> None:
     """``pooling.s3.S3SessionConfig`` warns and resolves to ``AwsSessionConfig``.
 
-    The class was renamed and relocated to ``pooling.aws``. The old
-    module-path access keeps working via a PEP 562 ``__getattr__`` but
+    The class was renamed and relocated to ``dataknobs_common.aws``. The
+    old module-path access keeps working via a PEP 562 ``__getattr__`` but
     emits a ``DeprecationWarning`` so external stragglers get a migration
     signal while their imports stay green.
     """

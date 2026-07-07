@@ -9,25 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The AWS session helper is now AWS-generic rather than S3-named. The
-  normalized session config is `AwsSessionConfig` (region, credentials,
-  endpoint, retry/pool tuning) and lives in
-  `dataknobs_data.pooling.aws` alongside `create_aioboto3_session` and
-  `clear_aioboto3_session_cache`. The S3-specific surface — `S3PoolConfig`,
-  `create_boto3_s3_client`, `validate_s3_session` — stays in
-  `dataknobs_data.pooling.s3`. `create_aioboto3_session` gains a
-  keyword-only `warm_service` parameter (default `"s3"`) selecting which
-  service's botocore data files are warmed off the event loop; the
-  process-wide warmed-session cache is keyed by session kwargs **and**
-  `warm_service`, so distinct services key to distinct warmed sessions.
+- The AWS session helper is now AWS-generic rather than S3-named, and has
+  been relocated to `dataknobs-common` so every AWS consumer across the
+  stack shares one implementation. The normalized session config is
+  `AwsSessionConfig` (region, credentials, endpoint, retry/pool tuning)
+  and now lives in `dataknobs_common.aws` alongside
+  `create_aioboto3_session` and `clear_aioboto3_session_cache`. The
+  S3-specific surface — `S3PoolConfig`, `create_boto3_s3_client`,
+  `validate_s3_session` — stays in `dataknobs_data.pooling.s3`, which
+  re-exports the generic names for import stability.
+  `create_aioboto3_session` gains a keyword-only `warm_service` parameter
+  (default `"s3"`) selecting which service's botocore data files are
+  warmed off the event loop; the process-wide warmed-session cache is
+  keyed by session kwargs **and** `warm_service`, so distinct services key
+  to distinct warmed sessions.
 
 ### Deprecated
 
 - `S3SessionConfig` is a deprecated alias for `AwsSessionConfig`.
   Importing it from `dataknobs_data.pooling.s3` emits a
   `DeprecationWarning`; the `dataknobs_data.pooling` package-root alias
-  resolves without one. Import `AwsSessionConfig` from
-  `dataknobs_data.pooling.aws` (or the package root) instead.
+  resolves without one (a permanent compatibility alias). Import
+  `AwsSessionConfig` from `dataknobs_common.aws` (or the
+  `dataknobs_data.pooling` package root) instead.
 
 ### Security
 

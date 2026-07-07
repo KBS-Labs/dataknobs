@@ -30,15 +30,15 @@ no network — it just loads data, and with the warm done it is a cache hit.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Self
 
 import pytest
-from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
-
-from dataknobs_data.pooling.aws import (
+from dataknobs_common.aws import (
     AwsSessionConfig,
     clear_aioboto3_session_cache,
     create_aioboto3_session,
 )
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 pytestmark = pytest.mark.asyncio
 
@@ -188,7 +188,7 @@ async def test_warm_only_loads_paginator_for_s3(
 
     import aioboto3
 
-    from dataknobs_data.pooling import aws as aws_mod
+    from dataknobs_common import aws as aws_mod
 
     clients: list[str] = []
     paginators: list[tuple[str, str]] = []
@@ -197,7 +197,7 @@ async def test_warm_only_loads_paginator_for_s3(
         def __init__(self, service: str) -> None:
             self._service = service
 
-        async def __aenter__(self) -> _FakeClient:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *exc: object) -> bool:

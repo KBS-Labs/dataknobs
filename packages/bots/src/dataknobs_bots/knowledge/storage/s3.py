@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 
 from botocore.exceptions import ClientError
 
+from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
-from dataknobs_data.pooling.aws import AwsSessionConfig, create_aioboto3_session
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
