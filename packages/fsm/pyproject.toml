@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-fsm"
-version = "0.2.4"
+version = "0.2.5"
 description = "Finite State Machine framework with data modes, resource management, and streaming support"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,10 +19,10 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0.0",
-    "dataknobs-common>=1.5.1",
-    "dataknobs-data>=0.5.4",
+    "dataknobs-common>=1.5.2",
+    "dataknobs-data>=0.5.5",
     "dataknobs-structures>=1.0.12",
-    "dataknobs-utils>=1.2.14",
+    "dataknobs-utils>=1.2.15",
     "dataknobs-config>=0.4.1",
     "aiofiles>=23.0.0",
     "click>=8.1.0",
