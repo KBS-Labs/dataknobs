@@ -1152,7 +1152,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.8.2"
+version = "0.8.3"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1230,7 +1230,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.5.1"
+version = "1.5.2"
 source = { editable = "packages/common" }
 
 [package.optional-dependencies]
@@ -1324,7 +1324,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.5.4"
+version = "0.5.5"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1457,7 +1457,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1570,7 +1570,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.6.4"
+version = "0.6.5"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1675,7 +1675,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.2.14"
+version = "1.2.15"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1803,7 +1803,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.3.10"
+version = "1.3.11"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "beautifulsoup4" },

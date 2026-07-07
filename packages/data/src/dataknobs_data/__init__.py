@@ -122,7 +122,7 @@ from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
 from .streaming import StreamConfig, StreamProcessor, StreamResult
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
-__version__ = "0.5.4"
+__version__ = "0.5.5"
 
 __all__ = [
     # Core classes

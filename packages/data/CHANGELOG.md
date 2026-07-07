@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.5.5 - 2026-07-07
+
 ### Changed
 
 - The AWS session helper is now AWS-generic rather than S3-named, and has

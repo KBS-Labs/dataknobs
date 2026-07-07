@@ -5,6 +5,47 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-07-07
+
+### dataknobs-common [1.5.2]
+
+#### Added
+- added AWS session abstraction (was S3 session)
+
+### dataknobs-utils [1.2.15]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-xization [1.3.11]
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-data [0.5.5]
+
+#### Changed
+- bump transformers floor; acknowledge remaining floor CVEs
+
+### dataknobs-fsm [0.2.5]
+
+#### Changed
+- bump transformers floor; acknowledge remaining floor CVEs
+
+### dataknobs-llm [0.6.5]
+
+#### Added
+- add Amazon Bedrock LLM + embedding provider
+
+#### Changed
+- bumped versions, updated release notes
+
+### dataknobs-bots [0.8.3]
+
+#### Changed
+- Renamed S3SessionConfig to AwsSessionConfig and relocated to dataknobs-common
+
+
 ## Release - 2026-06-29
 
 ### dataknobs-common [1.5.1]

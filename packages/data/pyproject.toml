@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-data"
-version = "0.5.4"
+version = "0.5.5"
 description = "Unified data abstraction layer for consistent database operations across multiple storage technologies"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,8 +21,8 @@ dependencies = [
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
     "aiofiles>=23.0.0",
-    "dataknobs-common>=1.5.1",
-    "dataknobs-utils>=1.2.14",
+    "dataknobs-common>=1.5.2",
+    "dataknobs-utils>=1.2.15",
     "dataknobs-config>=0.4.1",
     "numpy>=1.24.0",
 ]

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.5 - 2026-07-07
+
 ### Added
 
 - `BedrockProvider` — an Amazon Bedrock LLM provider registered as
