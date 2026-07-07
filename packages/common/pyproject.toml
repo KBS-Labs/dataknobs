@@ -26,18 +26,21 @@ postgres = ["asyncpg>=0.29.0"]
 # base install stays ``dependencies = []``.
 redis = ["redis>=5.0.0"]
 # Async AWS transport for the shared session factory
-# (``dataknobs_common.aws.create_aioboto3_session``, used by every AWS
-# consumer: SqsEventBus, the S3 data backends, the Bedrock LLM provider).
-# aioboto3 is lazy-imported inside the factory's worker thread, so the
-# base install stays ``dependencies = []`` and importing
-# ``dataknobs_common.aws`` never requires it.
+# (``dataknobs_common.aws.create_aioboto3_session``), used by every AWS
+# consumer: SqsEventBus and the S3 data backends today, and future AWS
+# services (e.g. a bedrock-runtime LLM provider). aioboto3 is
+# lazy-imported inside the factory's worker thread, so the base install
+# stays ``dependencies = []`` and importing ``dataknobs_common.aws``
+# never requires it.
 aws = ["aioboto3>=12.0.0"]
 # AWS SQS-backed EventBus (``SqsEventBus`` / the ``"sqs"`` backend).
 # Lazy-imported inside the backend and its registry wrapper, so the
 # base install stays ``dependencies = []`` and importing
-# ``dataknobs_common.events`` never requires aioboto3. Superset of the
-# ``aws`` transport extra (SqsEventBus routes through the shared factory).
-sqs = ["aioboto3>=12.0.0"]
+# ``dataknobs_common.events`` never requires aioboto3. SqsEventBus routes
+# through the shared session factory, so this composes the ``aws``
+# transport extra rather than re-pinning aioboto3 (single source of the
+# version floor).
+sqs = ["dataknobs-common[aws]"]
 
 [project.entry-points.pytest11]
 dataknobs_common_postgres = "dataknobs_common.testing.postgres_fixtures"

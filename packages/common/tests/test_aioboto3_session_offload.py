@@ -33,14 +33,19 @@ from collections.abc import Iterator
 from typing import Self
 
 import pytest
+
 from dataknobs_common.aws import (
     AwsSessionConfig,
     clear_aioboto3_session_cache,
     create_aioboto3_session,
 )
-from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
+from dataknobs_common.testing import (
+    assert_no_blocking,
+    requires_blockbuster,
+    requires_package,
+)
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, requires_package("aioboto3")]
 
 
 @pytest.fixture(autouse=True)

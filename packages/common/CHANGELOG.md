@@ -20,13 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event loop, with a process-wide cache keyed by session kwargs **and**
   `warm_service`; `clear_aioboto3_session_cache()` resets it (test
   isolation). This is the single source of truth every AWS consumer
-  routes through — `SqsEventBus` here, the S3 data backends and
-  `S3KnowledgeBackend`, and the Bedrock LLM provider. It lives in
-  `dataknobs-common` (the lowest layer) precisely so `SqsEventBus` can
-  share it without an illegal upward dependency on `dataknobs-data`.
-  `aioboto3` is lazy-imported inside the factory's worker thread, so the
-  base install stays `dependencies = []`; the new `aws` optional extra
-  (`pip install 'dataknobs-common[aws]'`) declares the transport.
+  routes through — `SqsEventBus` here, and the S3 data backends and
+  `S3KnowledgeBackend` — with future AWS services (e.g. a
+  `bedrock-runtime` LLM provider) routing through the same surface. It
+  lives in `dataknobs-common` (the lowest layer) precisely so
+  `SqsEventBus` can share it without an illegal upward dependency on
+  `dataknobs-data`. `aioboto3` is lazy-imported inside the factory's
+  worker thread, so the base install stays `dependencies = []`; the new
+  `aws` optional extra (`pip install 'dataknobs-common[aws]'`) declares
+  the transport.
+- `AwsSessionConfig` now validates credential completeness at
+  construction (fail closed): a partial explicit credential — an access
+  key without its secret (or vice versa), or a session token without
+  both — raises `ConfigurationError` naming the missing field, instead of
+  botocore's deferred `PartialCredentialsError` at first client use (which
+  for the offloaded async factory would surface from a worker thread).
+  Supplying neither credential stays valid and defers to boto's default
+  chain. This also closes a silent-fallback hazard in the former SQS
+  session path, where a lone credential was dropped and the caller
+  silently authenticated as a different ambient identity.
 
 ### Changed
 

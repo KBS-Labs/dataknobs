@@ -4,10 +4,11 @@ Single source of truth for how dataknobs initializes AWS clients (S3,
 ``sqs``, ``bedrock-runtime``, and any future service). Owns region
 resolution, ``endpoint_url`` handling, credential passthrough, and
 retry/pool defaults. Every AWS consumer across the stack routes through
-this module so session/credential/region behavior stays aligned:
-``SqsEventBus`` (:mod:`dataknobs_common.events.sqs`), ``SyncS3Database`` /
-``AsyncS3Database`` / ``S3KnowledgeBackend`` (via
-:mod:`dataknobs_data.pooling.s3`), and the Bedrock LLM provider.
+this module so session/credential/region behavior stays aligned. Current
+consumers: ``SqsEventBus`` (:mod:`dataknobs_common.events.sqs`),
+``SyncS3Database`` / ``AsyncS3Database`` / ``S3KnowledgeBackend`` (via
+:mod:`dataknobs_data.pooling.s3`). Future AWS services (e.g. a
+``bedrock-runtime`` LLM provider) route through the same surface.
 
 This lives in ``dataknobs-common`` — the lowest layer — precisely so that
 ``dataknobs-common``'s own AWS consumer (``SqsEventBus``) can share it
@@ -30,6 +31,8 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+from dataknobs_common.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,42 @@ class AwsSessionConfig:
     max_attempts: int = 3
     retry_mode: str = "standard"
     extra_client_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Reject partial explicit credentials at construction (fail closed).
+
+        An access key without its secret (or vice versa), or a session
+        token without both, is a misconfiguration: botocore would raise
+        ``PartialCredentialsError`` — but only later, at first client use,
+        and for the offloaded async factory (:func:`create_aioboto3_session`)
+        that error surfaces from a worker thread rather than the call site.
+        Worse, an *earlier* SQS-only code path silently dropped *both*
+        credentials when only one was set, falling through to boto's
+        default chain — so a typo authenticated the caller as an entirely
+        different (ambient env / IAM-role) identity with no signal.
+
+        Validating here gives every AWS consumer (the S3 backends,
+        ``SqsEventBus``, a future Bedrock provider) one clear, early
+        :class:`~dataknobs_common.exceptions.ConfigurationError` naming the
+        missing field. Supplying *neither* credential is valid — it defers
+        to boto's default credential chain — and makes the "only what's
+        present" rule in :meth:`to_client_kwargs` / :meth:`to_session_kwargs`
+        correct by construction (a lone credential can never reach them).
+        """
+        has_key = bool(self.aws_access_key_id)
+        has_secret = bool(self.aws_secret_access_key)
+        if has_key != has_secret:
+            missing = "aws_secret_access_key" if has_key else "aws_access_key_id"
+            raise ConfigurationError(
+                f"Incomplete AWS credentials: {missing} is required when its "
+                "counterpart is set. Supply both (explicit credentials) or "
+                "neither (defer to boto's default credential chain)."
+            )
+        if self.aws_session_token and not (has_key and has_secret):
+            raise ConfigurationError(
+                "aws_session_token requires both aws_access_key_id and "
+                "aws_secret_access_key to be set."
+            )
 
     @classmethod
     def from_dict(cls, config: dict[str, Any] | None = None) -> AwsSessionConfig:
@@ -275,10 +314,10 @@ async def create_aioboto3_session(
 
     ``warm_service`` selects which service's client is warmed (default
     ``"s3"``, which additionally pre-loads the S3 ``list_objects_v2``
-    paginator model). Pass ``warm_service="sqs"`` for ``SqsEventBus`` or
-    ``warm_service="bedrock-runtime"`` for the Bedrock provider; the
-    returned session is service-agnostic — the consumer opens
-    ``session.client(service, ...)`` per operation.
+    paginator model). Pass ``warm_service="sqs"`` for ``SqsEventBus`` (or,
+    e.g., ``warm_service="bedrock-runtime"`` for a future Bedrock
+    provider); the returned session is service-agnostic — the consumer
+    opens ``session.client(service, ...)`` per operation.
 
     The warmed session is cached process-wide keyed by the normalized
     session kwargs plus ``warm_service`` (see :data:`_SESSION_CACHE`), so

@@ -25,7 +25,7 @@ pip install dataknobs-data[s3]
 `None`. When unset, the backend defers to boto's resolution chain:
 `AWS_DEFAULT_REGION` env → `~/.aws/config` → EC2/ECS metadata →
 `us-east-1` as boto's terminal fallback. See
-[AWS Session Configuration](aws-session.md) for the full chain and
+[AWS Session Configuration](../common/aws-session.md) for the full chain and
 configuration shape.
 
 > **Behavior change:** Older versions hardcoded `region` to

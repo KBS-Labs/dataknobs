@@ -2,10 +2,10 @@
 
 `AwsSessionConfig` is the canonical helper for constructing
 `boto3` / `aioboto3` AWS clients across all dataknobs AWS-using
-constructs (S3, SQS, `bedrock-runtime`, and future services). It owns the
-rules for region resolution, `endpoint_url` handling, credential
-passthrough, and retry / pool defaults so every AWS consumer sees
-identical defaults.
+constructs (S3 and SQS today, and future AWS services such as
+`bedrock-runtime`). It owns the rules for region resolution,
+`endpoint_url` handling, credential passthrough, and retry / pool
+defaults so every AWS consumer sees identical defaults.
 
 It lives in `dataknobs_common.aws` — the lowest layer — alongside
 `create_aioboto3_session` and `clear_aioboto3_session_cache`, precisely
@@ -62,6 +62,22 @@ import stability.
 
 Missing keys default to `None` so boto's resolution chain decides
 the value at client-construction time.
+
+## Credential Completeness (Fail Closed)
+
+Explicit credentials are validated at `AwsSessionConfig` construction:
+
+- Supply **both** `aws_access_key_id` and `aws_secret_access_key`, or
+  **neither** (deferring to boto's default credential chain).
+- A `aws_session_token` requires both of the above.
+
+A partial credential — one key without its counterpart — raises
+`ConfigurationError` immediately, naming the missing field, rather than
+surfacing later as botocore's deferred `PartialCredentialsError` (which,
+for the offloaded async factory, would arrive from a worker thread). This
+also closes a silent-fallback hazard: a lone credential must never drop
+through to boto's ambient chain and authenticate the caller as a
+different (env / IAM-role) identity without any signal.
 
 ## Default Region Resolution
 

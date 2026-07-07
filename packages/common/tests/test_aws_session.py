@@ -9,7 +9,10 @@ caching behavior by ``test_aioboto3_session_offload.py``.
 
 from __future__ import annotations
 
+import pytest
+
 from dataknobs_common.aws import AwsSessionConfig
+from dataknobs_common.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
 # AwsSessionConfig.from_dict — region key parity
@@ -54,6 +57,76 @@ def test_legacy_credential_keys_accepted() -> None:
     assert cfg.aws_access_key_id == "AK"
     assert cfg.aws_secret_access_key == "SK"
     assert cfg.aws_session_token == "ST"
+
+
+# ---------------------------------------------------------------------------
+# Credential-completeness invariant (fail closed on partial credentials)
+# ---------------------------------------------------------------------------
+
+
+def test_no_credentials_is_valid() -> None:
+    """Neither key set → defers to boto's default chain, no error."""
+    cfg = AwsSessionConfig(region_name="eu-west-1")
+    assert cfg.aws_access_key_id is None
+    assert cfg.aws_secret_access_key is None
+
+
+def test_both_credentials_is_valid() -> None:
+    """Complete explicit pair constructs cleanly."""
+    cfg = AwsSessionConfig(aws_access_key_id="AK", aws_secret_access_key="SK")
+    assert cfg.aws_access_key_id == "AK"
+    assert cfg.aws_secret_access_key == "SK"
+
+
+def test_access_key_without_secret_raises() -> None:
+    """A lone access key is a misconfiguration — reject at construction.
+
+    The old SQS session builder silently dropped both credentials in this
+    case and fell through to boto's ambient chain (authenticating as a
+    different identity with no signal). The shared config now fails closed
+    with an actionable error naming the missing field.
+    """
+    with pytest.raises(ConfigurationError, match="aws_secret_access_key"):
+        AwsSessionConfig(aws_access_key_id="AK")
+
+
+def test_secret_without_access_key_raises() -> None:
+    """A lone secret key is the symmetric misconfiguration."""
+    with pytest.raises(ConfigurationError, match="aws_access_key_id"):
+        AwsSessionConfig(aws_secret_access_key="SK")
+
+
+def test_session_token_without_pair_raises() -> None:
+    """A session token requires both access key and secret."""
+    with pytest.raises(ConfigurationError, match="aws_session_token"):
+        AwsSessionConfig(aws_session_token="ST")
+
+
+def test_session_token_with_only_access_key_raises() -> None:
+    """Token + one-of-the-pair is still incomplete.
+
+    The key-pair check fires first (missing secret), so the error names
+    the missing pair member rather than the token — but the construction
+    must still be rejected. Covers the partial-pair-plus-token shape.
+    """
+    with pytest.raises(ConfigurationError, match="aws_secret_access_key"):
+        AwsSessionConfig(aws_access_key_id="AK", aws_session_token="ST")
+
+
+def test_session_token_with_full_pair_is_valid() -> None:
+    """Temporary-credential triple (key + secret + token) is valid."""
+    cfg = AwsSessionConfig(
+        aws_access_key_id="AK",
+        aws_secret_access_key="SK",
+        aws_session_token="ST",
+    )
+    assert cfg.aws_session_token == "ST"
+
+
+def test_from_dict_partial_credentials_raises() -> None:
+    """The invariant holds through the ``from_dict`` construction path too."""
+    with pytest.raises(ConfigurationError, match="aws_secret_access_key"):
+        AwsSessionConfig.from_dict({"access_key_id": "AK"})
 
 
 def test_to_boto_config_kwargs_uses_max_workers_alias() -> None:

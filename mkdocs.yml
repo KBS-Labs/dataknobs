@@ -68,6 +68,7 @@ nav:
       - packages/common/config-loading.md
       - packages/common/expressions.md
       - packages/common/events.md
+      - packages/common/aws-session.md
       - packages/common/postgres-config.md
       - packages/common/ratelimit.md
       - packages/common/locks.md
@@ -106,7 +107,6 @@ nav:
       - Advanced Features:
         - packages/data/async-pooling-quickstart.md
         - packages/data/async-pooling.md
-        - packages/data/aws-session.md
         - packages/data/keyed-record-store.md
         - packages/data/transactions.md
         - packages/data/hybrid-search.md
