@@ -11,6 +11,7 @@ from dataknobs_llm.llm import (
     normalize_llm_config,
     OpenAIProvider,
     AnthropicProvider,
+    BedrockProvider,
     OllamaProvider,
     HuggingFaceProvider,
     EchoProvider,
@@ -101,6 +102,7 @@ __all__ = [
     # Providers
     "OpenAIProvider",
     "AnthropicProvider",
+    "BedrockProvider",
     "OllamaProvider",
     "HuggingFaceProvider",
     "EchoProvider",

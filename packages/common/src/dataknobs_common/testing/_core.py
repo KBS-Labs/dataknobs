@@ -386,6 +386,37 @@ async def ensure_localstack_s3_bucket(
                 raise
 
 
+def is_bedrock_available() -> bool:
+    """Check whether live Amazon Bedrock tests should run.
+
+    Conservative by design and never makes a paid API call: Bedrock has no
+    faithful local emulator (LocalStack community / moto do not implement
+    ``bedrock-runtime`` inference), so any "reachable" probe would hit the
+    paid API. This gates on an explicit opt-in env var — ``DK_TEST_BEDROCK``
+    truthy (``1`` / ``true`` / ``yes``) — AND resolvable AWS credentials via
+    a lazy botocore session. Absent the opt-in, botocore, or credentials it
+    returns ``False`` (skip, never fail) — the same fail-soft contract as
+    the other service probes.
+
+    Requiring the opt-in keeps CI from ever invoking Bedrock by accident.
+
+    Returns:
+        True if ``DK_TEST_BEDROCK`` is truthy and AWS credentials resolve.
+    """
+    if os.environ.get("DK_TEST_BEDROCK", "").lower() not in {"1", "true", "yes"}:
+        return False
+    try:
+        import botocore.session
+    except ImportError:
+        return False
+    try:
+        credentials = botocore.session.get_session().get_credentials()
+    except Exception:
+        # Any credential-resolution error → treat as unavailable (skip).
+        return False
+    return credentials is not None
+
+
 def is_package_available(package_name: str) -> bool:
     """Check if a Python package is available.
 
@@ -434,6 +465,12 @@ try:
         reason="LocalStack not available",
     )
 
+    requires_bedrock = pytest.mark.skipif(
+        not is_bedrock_available(),
+        reason="Amazon Bedrock live tests require DK_TEST_BEDROCK=true and "
+        "resolvable AWS credentials",
+    )
+
     requires_real_postgres = pytest.mark.skipif(
         not is_postgres_available()
         or os.environ.get("TEST_POSTGRES", "").lower() != "true"
@@ -479,6 +516,7 @@ except ImportError:
     requires_postgres = None  # type: ignore
     requires_real_postgres = None  # type: ignore
     requires_localstack = None  # type: ignore
+    requires_bedrock = None  # type: ignore
 
     def requires_package(package_name: str) -> Any:  # type: ignore
         return None

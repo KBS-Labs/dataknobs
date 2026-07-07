@@ -12,7 +12,7 @@ The `dataknobs-llm` package provides two factory functions for creating provider
 | `create_embedding_provider()` | Create an embedding provider (initialized, mode forced) |
 
 Both use `LLMProviderFactory` internally and support all registered provider
-backends (Ollama, OpenAI, Anthropic, HuggingFace, Echo).
+backends (Ollama, OpenAI, Anthropic, Amazon Bedrock, HuggingFace, Echo).
 
 ## create_llm_provider()
 
@@ -194,8 +194,84 @@ Both factory functions support all registered providers:
 | Ollama | `"ollama"` | Built-in |
 | OpenAI | `"openai"` | Built-in |
 | Anthropic | `"anthropic"` | Built-in |
+| Amazon Bedrock | `"bedrock"` | Built-in (needs `[bedrock]` extra) |
 | HuggingFace | `"huggingface"` | Built-in |
 | Echo | `"echo"` | Built-in (testing) |
+
+## Amazon Bedrock
+
+Amazon Bedrock is registered as the `"bedrock"` provider. A single
+`BedrockProvider` serves **both** chat/completion (via the unified Converse
+API) and embeddings (Titan / Cohere via `invoke_model`).
+
+**Authentication is via the AWS credential chain — there is no API key.**
+Credentials resolve from the environment, the `~/.aws` shared config, or an
+EC2/ECS instance or task IAM role. Region, endpoint, explicit credentials, and
+Bedrock guardrail settings are supplied through `LLMConfig.options`.
+
+Install the async Bedrock transport (`aioboto3`, pulled via the shared
+`dataknobs-common[aws]` session factory):
+
+```bash
+pip install 'dataknobs-llm[bedrock]'
+```
+
+### Chat / completion
+
+```python
+from dataknobs_llm import create_llm_provider
+
+provider = create_llm_provider({
+    "provider": "bedrock",
+    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "temperature": 0.7,
+    "max_tokens": 1024,
+    "options": {"region_name": "us-west-2"},  # credentials via the IAM chain
+})
+await provider.initialize()
+response = await provider.complete("Explain quantum computing")
+```
+
+The model id is a Bedrock foundation-model id
+(`anthropic.claude-3-5-sonnet-20240620-v1:0`) or a cross-region
+inference-profile id (`us.anthropic.claude-3-5-sonnet-20240620-v1:0`).
+Streaming (`stream_complete`) and tool use (`complete(tools=...)`) work as with
+the other providers.
+
+### `options` keys
+
+| Key | Purpose |
+|-----|---------|
+| `region_name` (or `region`) | AWS region for the client |
+| `endpoint_url` | Custom endpoint (PrivateLink / VPC endpoint) |
+| `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token` | Explicit credentials (omit to use the credential chain) |
+| `guardrail_identifier` + `guardrail_version` | Applied to Converse requests when both are set (optional `guardrail_trace`) |
+
+### Embeddings
+
+```python
+from dataknobs_llm import create_embedding_provider
+
+provider = await create_embedding_provider({
+    "embedding": {
+        "provider": "bedrock",
+        "model": "amazon.titan-embed-text-v2:0",
+        "dimensions": 1024,
+        "options": {"region_name": "us-west-2"},
+    },
+})
+vector = await provider.embed("hello world")
+```
+
+Two embedding families are supported:
+
+| Family | Model ids | Notes |
+|--------|-----------|-------|
+| Amazon Titan | `amazon.titan-embed-text-v2:0` | `dimensions` selects 256 / 512 / 1024 (default 1024); embeds one text per call |
+| Cohere | `cohere.embed-english-v3`, `cohere.embed-multilingual-v3` | embeds the whole list in one call |
+
+An unrecognized embedding-model id raises `ValueError` naming the two supported
+families.
 
 ## Testing
 

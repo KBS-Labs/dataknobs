@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `BedrockProvider` — an Amazon Bedrock LLM provider registered as
+  `"bedrock"`, serving **both** chat/completion (via the unified Converse
+  API) and embeddings (Amazon Titan / Cohere via `invoke_model`) from a
+  single provider. Authentication is via the AWS credential chain (IAM
+  role, environment, or shared config) — there is no API key; region,
+  endpoint, explicit credentials, and Bedrock guardrail settings are
+  supplied through `LLMConfig.options`. Streaming, tool use, and
+  cross-region inference-profile model ids are supported. The provider
+  reuses the shared, loop-safe `dataknobs_common.aws.create_aioboto3_session`
+  factory (warmed for `bedrock-runtime`), so session construction never
+  blocks the event loop. `BedrockProvider` is exported from the package
+  root; `BedrockConverseAdapter` from `dataknobs_llm.llm`. Install the
+  async transport with
+  `pip install 'dataknobs-llm[bedrock]'` (composes
+  `dataknobs-common[aws]`; `aioboto3` is lazy-imported, so the base install
+  is unaffected).
+
 ### Security
 
 - Bumped minimum `transformers` requirement (extra: `embeddings`) from

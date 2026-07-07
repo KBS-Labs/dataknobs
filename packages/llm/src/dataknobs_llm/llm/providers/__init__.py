@@ -26,6 +26,7 @@ from ..base import (
 # Import adapters and providers
 from .anthropic import AnthropicProvider
 from .base import SyncProviderAdapter
+from .bedrock import BedrockConverseAdapter, BedrockProvider
 from .caching import (
     CachingEmbedProvider,
     EmbeddingCache,
@@ -50,6 +51,7 @@ def _register_builtin_providers(
     for name, cls in [
         ("openai", OpenAIProvider),
         ("anthropic", AnthropicProvider),
+        ("bedrock", BedrockProvider),
         ("ollama", OllamaProvider),
         ("huggingface", HuggingFaceProvider),
         ("echo", EchoProvider),
@@ -386,9 +388,11 @@ __all__ = [
     # Adapters
     'SyncProviderAdapter',
     'OpenAIAdapter',
+    'BedrockConverseAdapter',
     # Providers
     'OpenAIProvider',
     'AnthropicProvider',
+    'BedrockProvider',
     'OllamaProvider',
     'HuggingFaceProvider',
     'EchoProvider',

@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain. This also closes a silent-fallback hazard in the former SQS
   session path, where a lone credential was dropped and the caller
   silently authenticated as a different ambient identity.
+- `dataknobs_common.testing.is_bedrock_available()` and the
+  `requires_bedrock` pytest marker. The probe is conservative and never
+  makes a paid API call: it gates on the `DK_TEST_BEDROCK` opt-in env var
+  (truthy) **and** resolvable AWS credentials via a lazy botocore session,
+  returning `False` (skip, never fail) otherwise. Amazon Bedrock has no
+  faithful local emulator, so live tests are opt-in only; the marker joins
+  `requires_ollama` / `requires_localstack` for cross-package reuse.
 
 ### Changed
 
