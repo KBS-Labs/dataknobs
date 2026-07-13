@@ -13,7 +13,7 @@ from uuid import uuid4
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from dataknobs_data.database import SyncDatabase
+from dataknobs_data.database import SyncDatabase, version_conflict_error
 from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
 from dataknobs_data.query import Query
@@ -260,8 +260,33 @@ class SyncS3Database(  # type: ignore[misc]
                 return None
             raise
 
-    def update(self, id: str, record: Record) -> bool:
-        """Update an existing record in S3."""
+    def get_version(self, id: str) -> str | None:
+        """Return the object's S3 ``ETag`` as the version token.
+
+        The ETag changes whenever the object's bytes change, and S3 enforces
+        it server-side via ``If-Match`` on the conditional PUT, so it is a
+        native version token — overrides the base content-hash default.
+        """
+        self._check_connection()
+        key = self._get_object_key(id)
+        try:
+            response = self.s3_client.head_object(Bucket=self.bucket, Key=key)
+        except self.ClientError as e:
+            if e.response['Error']['Code'] in ('404', 'NoSuchKey'):
+                return None
+            raise
+        return response.get('ETag')
+
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
+        """Update an existing record in S3.
+
+        When ``expected_version`` is provided the PUT carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError``. When ``None`` the update is
+        unconditional, byte-identical to prior behavior. The compare-and-set
+        holds against any S3 implementation that honors conditional writes
+        (real AWS S3, recent LocalStack).
+        """
         self._check_connection()
 
         key = self._get_object_key(id)
@@ -286,12 +311,26 @@ class SyncS3Database(  # type: ignore[misc]
         obj_data = self._record_to_s3_object(record)
         body = json.dumps(obj_data)
 
-        self.s3_client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=body,
-            ContentType='application/json'
-        )
+        put_kwargs: dict[str, Any] = {
+            "Bucket": self.bucket,
+            "Key": key,
+            "Body": body,
+            "ContentType": "application/json",
+        }
+        if expected_version is not None:
+            put_kwargs["IfMatch"] = expected_version
+
+        try:
+            self.s3_client.put_object(**put_kwargs)
+        except self.ClientError as e:
+            if expected_version is not None and is_s3_conditional_conflict(e):
+                # The guarded PUT lost: either the object is gone (update never
+                # inserts -> False) or the ETag is stale (-> raise).
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
+            raise
 
         # Invalidate cache
         self._cache_dirty = True

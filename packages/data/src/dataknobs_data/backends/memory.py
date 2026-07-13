@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
@@ -50,6 +50,11 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Monotonic per-key optimistic-concurrency counter. A counter (rather
+        # than the base content hash) makes the token ABA-safe: an A->B->A
+        # mutation cycle still advances the version, so a stale conditional
+        # write is always detected.
+        self._versions: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
         cfg = self.config
@@ -72,7 +77,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
             # Store the record
             self._storage[storage_id] = record_copy
+            self._versions[storage_id] = 1
             return storage_id
+
+    async def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        async with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     async def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -81,19 +93,27 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         async with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = str(self._versions[id])
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._versions.get(id, 0) + 1
+            return True
 
     async def delete(self, id: str) -> bool:
         """Delete a record from memory."""
         async with self._lock:
             if id in self._storage:
                 del self._storage[id]
+                self._versions.pop(id, None)
                 return True
             return False
 
@@ -102,9 +122,15 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             return id in self._storage
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -122,7 +148,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         async with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = str(self._versions[id]) if id in self._storage else None
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._versions.get(id, 0) + 1
             return id
 
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -163,6 +196,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
     async def create_batch(self, records: list[Record]) -> list[str]:
@@ -175,6 +209,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
                 # Store the record
                 self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._versions.get(storage_id, 0) + 1
                 ids.append(storage_id)
             return ids
 
@@ -195,6 +230,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)
@@ -278,6 +314,9 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Monotonic per-key optimistic-concurrency counter (ABA-safe); see the
+        # async counterpart for rationale.
+        self._versions: dict[str, int] = {}
         self._lock = threading.RLock()
 
         cfg = self.config
@@ -297,7 +336,14 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             if id in self._storage:
                 raise DuplicateRecordError(id)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = 1
             return id
+
+    def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -305,19 +351,27 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             record = self._storage.get(id)
             return record.copy(deep=True) if record else None
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = str(self._versions[id])
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._versions.get(id, 0) + 1
+            return True
 
     def delete(self, id: str) -> bool:
         """Delete a record from memory."""
         with self._lock:
             if id in self._storage:
                 del self._storage[id]
+                self._versions.pop(id, None)
                 return True
             return False
 
@@ -326,9 +380,15 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             return id in self._storage
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -346,7 +406,14 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = str(self._versions[id]) if id in self._storage else None
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._versions.get(id, 0) + 1
             return id
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -387,6 +454,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
     def create_batch(self, records: list[Record]) -> list[str]:
@@ -397,6 +465,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
                 # Use record's ID if it has one, otherwise generate a new one
                 id = record.id if record.id else self._generate_id()
                 self._storage[id] = record.copy(deep=True)
+                self._versions[id] = self._versions.get(id, 0) + 1
                 ids.append(id)
             return ids
 
@@ -416,6 +485,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)

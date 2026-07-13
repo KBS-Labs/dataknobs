@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ElasticsearchConflictError` (rather than returned), so callers handle a
   create-conflict with the same `try`/`except` shape the native async client
   uses.
+- `SimplifiedElasticsearchIndex.update()` gains optional `if_seq_no` /
+  `if_primary_term` parameters for optimistic-concurrency (compare-and-set)
+  updates. When both are supplied the update proceeds only if the document
+  still carries that `_seq_no`/`_primary_term`; a mismatch (or a missing
+  document) is a 409 raised as `ElasticsearchConflictError` instead of the
+  usual `bool` return. Omitting them preserves the existing unconditional
+  `bool`-returning behavior exactly.
 
 ## v1.2.15 - 2026-07-07
 

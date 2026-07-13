@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase
+from ..database import AsyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
@@ -231,8 +231,39 @@ class AsyncS3Database(  # type: ignore[misc]
         except Exception:
             return None
 
-    async def update(self, id: str, record: Record) -> bool:
-        """Update an existing record in S3."""
+    async def get_version(self, id: str) -> str | None:
+        """Return the object's S3 ``ETag`` as the version token.
+
+        The ETag changes whenever the object's bytes change, and S3 enforces
+        it server-side via ``If-Match`` on the conditional PUT, so it is a
+        native version token — overrides the base content-hash default.
+        """
+        self._check_connection()
+        key = self._get_key(id)
+        from botocore.exceptions import ClientError
+
+        try:
+            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+                response = await s3.head_object(
+                    Bucket=self._pool_config.bucket,
+                    Key=key,
+                )
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return None
+            raise
+        return response.get("ETag")
+
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
+        """Update an existing record in S3.
+
+        When ``expected_version`` is provided the PUT carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError``. When ``None`` the update is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
 
         # Check if record exists
@@ -245,13 +276,29 @@ class AsyncS3Database(  # type: ignore[misc]
         # Preserve ID in metadata
         obj["metadata"]["id"] = id
 
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            await s3.put_object(
-                Bucket=self._pool_config.bucket,
-                Key=key,
-                Body=json.dumps(obj),
-                ContentType="application/json"
-            )
+        put_kwargs: dict[str, Any] = {
+            "Bucket": self._pool_config.bucket,
+            "Key": key,
+            "Body": json.dumps(obj),
+            "ContentType": "application/json",
+        }
+        if expected_version is not None:
+            put_kwargs["IfMatch"] = expected_version
+
+        from botocore.exceptions import ClientError
+
+        try:
+            async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+                await s3.put_object(**put_kwargs)
+        except ClientError as e:
+            if expected_version is not None and is_s3_conditional_conflict(e):
+                # The guarded PUT lost: either the object is gone (update never
+                # inserts -> False) or the ETag is stale (-> raise).
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
+            raise
 
         return True
 
@@ -287,12 +334,22 @@ class AsyncS3Database(  # type: ignore[misc]
         except Exception:
             return False
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ETag, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts.
         """
         self._check_connection()
 
@@ -308,6 +365,14 @@ class AsyncS3Database(  # type: ignore[misc]
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
+
+        if expected_version is not None:
+            # Conditional upsert never inserts: require an existing object and
+            # let update() enforce the ETag If-Match compare-and-set.
+            if not await self.exists(id):
+                raise version_conflict_error(id, expected_version, None)
+            await self.update(id, record, expected_version=expected_version)
+            return id
 
         key = self._get_key(id)
         obj = self._record_to_s3_object(record)

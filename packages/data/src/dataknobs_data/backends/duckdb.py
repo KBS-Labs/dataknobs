@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
 from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
@@ -276,15 +276,28 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for DuckDB). When provided,
+                the read-compare-write runs inside the connection lock so the
+                compare-and-set is atomic within the connection; a stale token
+                raises ``ConcurrencyError`` instead of overwriting. When
+                ``None`` the update is unconditional, byte-identical to prior
+                behavior.
 
         Returns:
             True if the record was updated, False if no record exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -293,14 +306,34 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             self.executor,
             self._update_sync,
             id,
-            record
+            record,
+            expected_version,
         )
 
-    def _update_sync(self, id: str, record: Record) -> bool:
+    def _update_sync(
+        self, id: str, record: Record, expected_version: str | None = None
+    ) -> bool:
         """Synchronous update implementation."""
         query, params = self.query_builder.build_update_query(id, record)
 
         with self._lock:
+            if expected_version is not None:
+                # Conditional write: read the current row and apply the update
+                # under the connection lock so the compare-and-set is atomic.
+                read_query, read_params = self.query_builder.build_read_query(id)
+                result = self.conn.execute(read_query, read_params).fetchone()
+                if result is None:
+                    logger.warning(
+                        f"Update affected 0 rows for id={id}. Record may not exist."
+                    )
+                    return False
+                columns = self.conn.description
+                row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
+                current = SQLQueryBuilder.row_to_record(row_dict)
+                enforce_content_version(id, expected_version, current)
+                self.conn.execute(query, params)
+                return True
+
             # Check if record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
             exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
@@ -865,18 +898,42 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for DuckDB). When provided,
+                a stale token raises ``ConcurrencyError`` instead of
+                overwriting. When ``None`` the update is unconditional,
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
         query, params = self.query_builder.build_update_query(id, record)
+
+        # Conditional write: compare the current content-hash token before
+        # issuing the UPDATE. Reusing read() guarantees the token compared
+        # here matches the one get_version() returned. On a single connection
+        # the read and write are serialized; cross-connection atomicity is out
+        # of scope (see the module docs on the in-process content-hash
+        # backends).
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+                return False
+            enforce_content_version(id, expected_version, current)
 
         # Check if record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)

@@ -770,19 +770,49 @@ class SimplifiedElasticsearchIndex:
             return response.json
         return None
 
-    def update(self, doc_id: str, body: Dict[str, Any], refresh: bool = False) -> bool:
+    def update(
+        self,
+        doc_id: str,
+        body: Dict[str, Any],
+        refresh: bool = False,
+        if_seq_no: int | None = None,
+        if_primary_term: int | None = None,
+    ) -> bool:
         """Update a document.
-        
+
         Args:
             doc_id: Document ID
             body: Update body (should contain "doc" field with partial update)
             refresh: Whether to refresh immediately
-            
+            if_seq_no: Optional optimistic-concurrency guard — the sequence
+                number the document must currently carry. Pair with
+                ``if_primary_term``. When both are set the update is a
+                compare-and-set: a mismatch (or a missing document) is a 409
+                raised as ``ElasticsearchConflictError`` instead of returning
+                ``False``.
+            if_primary_term: Optional optimistic-concurrency guard — the primary
+                term the document must currently carry. Pair with ``if_seq_no``.
+
         Returns:
             True if updated successfully
+
+        Raises:
+            ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
+                are supplied and do not match the document's current values
+                (HTTP 409).
         """
-        params = {"refresh": "true"} if refresh else None
-        response = self._request("post", f"_update/{doc_id}", body, params)
+        params: Dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if if_seq_no is not None:
+            params["if_seq_no"] = if_seq_no
+        if if_primary_term is not None:
+            params["if_primary_term"] = if_primary_term
+        response = self._request("post", f"_update/{doc_id}", body, params or None)
+        # A conditional update (guards supplied) surfaces a stale-token 409 as
+        # a distinct conflict; the unconditional path keeps its bool contract.
+        if if_seq_no is not None and response.status == 409:
+            raise ElasticsearchConflictError(doc_id)
         return response.succeeded
 
     def search(self, body: Dict[str, Any] | None = None) -> Any:

@@ -51,10 +51,11 @@ db.close()
 
 - `create(record: Record) -> str`: Atomically insert a new record and return its ID; raises `DuplicateRecordError` if the id already exists
 - `read(id: str) -> Record | None`: Read a record by ID
-- `update(id: str, record: Record) -> bool`: Update an existing record
+- `get_version(id: str) -> str | None`: Return an opaque optimistic-concurrency token for a record (or `None` if absent)
+- `update(id: str, record: Record, *, expected_version: str | None = None) -> bool`: Update an existing record; with `expected_version`, a compare-and-set that raises `ConcurrencyError` on a stale token
 - `delete(id: str) -> bool`: Delete a record
 - `exists(id: str) -> bool`: Check if a record exists
-- `upsert(id_or_record: str | Record, record: Record | None = None) -> str`: Update or insert a record (enhanced to accept just a Record)
+- `upsert(id_or_record: str | Record, record: Record | None = None, *, expected_version: str | None = None) -> str`: Update or insert a record (enhanced to accept just a Record); with `expected_version`, a compare-and-set that never inserts
 - `search(query: Query) -> List[Record]`: Search for records
 - `count(query: Query | None) -> int`: Count matching records
 - `clear() -> int`: Delete all records
@@ -99,6 +100,51 @@ Backend notes:
   assign a fresh id and ignore any `record.id` you set. Use single `create()`
   in a loop for collision-safe inserts; reach for `create_batch()` only for
   throughput when ids are known-unique.
+
+#### Optimistic concurrency (conditional writes)
+
+`update()` and `upsert()` accept an opt-in, keyword-only `expected_version`
+token so a read-modify-write can fail closed on a concurrent change instead of
+silently clobbering it. Read the current token with `get_version()`, pass it
+back, and the write becomes a compare-and-set:
+
+```python
+from dataknobs_data import ConcurrencyError, Record
+
+token = db.get_version("k")               # opaque, backend-local token
+try:
+    db.update("k", Record({"v": 2}, id="k"), expected_version=token)
+except ConcurrencyError as e:
+    # Someone else wrote "k" since we read the token; e.context has
+    # {"id", "expected_version", "actual_version"}. Re-read and retry.
+    ...
+```
+
+Semantics:
+
+- **Opt-in and backward-compatible.** Omitting `expected_version` (the default)
+  is an unconditional, last-writer-wins write — byte-identical to prior behavior.
+- **`get_version(id)`** returns an opaque token, or `None` when the id does not
+  exist. Treat it as backend-local; it is not comparable across backends.
+- **`update()` with a token never inserts.** A missing record returns `False`;
+  an existing record with a mismatched token raises `ConcurrencyError`.
+- **`upsert()` with a token never inserts.** A missing record is itself a
+  conflict and raises `ConcurrencyError`; a mismatched token also raises.
+
+Token source and atomicity by backend:
+
+- **memory** — a monotonic per-key counter under the instance lock (ABA-safe).
+- **PostgreSQL** — the row's `xmin`, enforced server-side with
+  `WHERE id = … AND xmin = …` (ABA-safe, atomic across connections).
+- **Elasticsearch** — the document's `_seq_no`/`_primary_term`, enforced
+  server-side with `if_seq_no`/`if_primary_term` (ABA-safe).
+- **S3** — the object's `ETag`, enforced with a conditional PUT (`If-Match`)
+  against any store that honors it (real AWS S3, recent LocalStack).
+- **file, SQLite, DuckDB** — a deterministic content hash of the stored record;
+  the check is serialized within a single connection/instance. A content hash is
+  subject to the classic **ABA** limitation (an A→B→A cycle yields the original
+  token) and is not hardened across separate processes/connections — use a
+  native-token backend when either matters.
 
 ### Records
 

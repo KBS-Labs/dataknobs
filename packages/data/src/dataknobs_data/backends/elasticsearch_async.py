@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase
+from ..database import AsyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.elasticsearch import (
@@ -30,6 +30,8 @@ from .elasticsearch_mixins import (
     ElasticsearchQueryBuilder,
     ElasticsearchRecordSerializer,
     ElasticsearchVectorSupport,
+    es_version_token,
+    parse_es_version_token,
 )
 
 if TYPE_CHECKING:
@@ -294,10 +296,61 @@ class AsyncElasticsearchDatabase(
             logger.debug(f"Error reading document {id}: {e}")
             return None
 
-    async def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+    async def get_version(self, id: str) -> str | None:
+        """Return the document's ``_seq_no``/``_primary_term`` version token.
+
+        Elasticsearch's native optimistic-concurrency pair
+        (``_seq_no``, ``_primary_term``) advances on every write, so it is a
+        native version — ABA-safe, unlike the base content-hash default this
+        overrides. The two values are combined into one opaque token.
+        """
+        self._check_connection()
+        from elasticsearch import NotFoundError
+
+        try:
+            response = await self._client.get(index=self.index_name, id=id)
+        except NotFoundError:
+            return None
+        seq_no = response.get("_seq_no")
+        primary_term = response.get("_primary_term")
+        if seq_no is None or primary_term is None:
+            return None
+        return es_version_token(seq_no, primary_term)
+
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
+        """Update an existing record.
+
+        When ``expected_version`` is provided the update carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError``. When
+        ``None`` the update is unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
         doc = self._record_to_doc(record)
+
+        if expected_version is not None:
+            from elasticsearch import ConflictError
+
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                await self._client.update(
+                    index=self.index_name,
+                    id=id,
+                    doc=doc,
+                    refresh=self.refresh,
+                    if_seq_no=seq_no,
+                    if_primary_term=primary_term,
+                )
+                return True
+            except ConflictError as e:
+                # Either the doc is gone (update never inserts -> False) or the
+                # token is stale (concurrent modification -> raise).
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
 
         try:
             await self._client.update(
@@ -333,15 +386,25 @@ class AsyncElasticsearchDatabase(
             id=id
         )
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching version token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
         self._check_connection()
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             id = id_or_record
@@ -354,7 +417,15 @@ class AsyncElasticsearchDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
+        if expected_version is not None:
+            # Conditional upsert never inserts: require an existing row and let
+            # update() enforce the seq_no/primary_term compare-and-set.
+            if not await self.exists(id):
+                raise version_conflict_error(id, expected_version, None)
+            await self.update(id, record, expected_version=expected_version)
+            return id
+
         doc = self._record_to_doc(record)
 
         await self._client.index(

@@ -13,7 +13,7 @@ from dataknobs_utils.elasticsearch_utils import (
     SimplifiedElasticsearchIndex,
 )
 
-from ..database import SyncDatabase
+from ..database import SyncDatabase, version_conflict_error
 from ..exceptions import DatabaseError, DuplicateRecordError
 from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
@@ -27,6 +27,8 @@ from .elasticsearch_mixins import (
     ElasticsearchQueryBuilder,
     ElasticsearchRecordSerializer,
     ElasticsearchVectorSupport,
+    es_version_token,
+    parse_es_version_token,
 )
 from .vector_config_mixin import VectorConfigMixin
 
@@ -230,9 +232,50 @@ class SyncElasticsearchDatabase(
         doc = response.get("_source", {})
         return self._doc_to_record(doc)
 
-    def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+    def get_version(self, id: str) -> str | None:
+        """Return the document's ``_seq_no``/``_primary_term`` version token.
+
+        Elasticsearch's native optimistic-concurrency pair
+        (``_seq_no``, ``_primary_term``) advances on every write, so it is a
+        native version — ABA-safe, unlike the base content-hash default this
+        overrides. The two values are combined into one opaque token.
+        """
+        response = self.es_index.get(doc_id=id)
+        if not response:
+            return None
+        seq_no = response.get("_seq_no")
+        primary_term = response.get("_primary_term")
+        if seq_no is None or primary_term is None:
+            return None
+        return es_version_token(seq_no, primary_term)
+
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
+        """Update an existing record.
+
+        When ``expected_version`` is provided the update carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError``. When
+        ``None`` the update is unconditional, byte-identical to prior behavior.
+        """
         doc = self._record_to_doc(record, id)
+
+        if expected_version is not None:
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                return self.es_index.update(
+                    doc_id=id,
+                    body={"doc": doc},
+                    refresh=self.refresh,
+                    if_seq_no=seq_no,
+                    if_primary_term=primary_term,
+                )
+            except ElasticsearchConflictError as e:
+                # Either the doc is gone (update never inserts -> False) or the
+                # token is stale (concurrent modification -> raise).
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
 
         # Update the document
         success = self.es_index.update(
@@ -257,12 +300,22 @@ class SyncElasticsearchDatabase(
         """Check if a record exists."""
         return self.es_index.exists(doc_id=id)
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching version token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -276,7 +329,15 @@ class SyncElasticsearchDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
+        if expected_version is not None:
+            # Conditional upsert never inserts: require an existing row and let
+            # update() enforce the seq_no/primary_term compare-and-set.
+            if not self.exists(id):
+                raise version_conflict_error(id, expected_version, None)
+            self.update(id, record, expected_version=expected_version)
+            return id
+
         doc = self._record_to_doc(record, id)
         response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)
 

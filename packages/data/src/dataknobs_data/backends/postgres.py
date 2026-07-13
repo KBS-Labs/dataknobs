@@ -14,7 +14,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
@@ -348,18 +348,68 @@ class SyncPostgresDatabase(
         row = df.iloc[0].to_dict()
         return self._row_to_record(row)
 
-    def update(self, id: str, record: Record) -> bool:
+    def get_version(self, id: str) -> str | None:
+        """Return the row's ``xmin`` transaction id as the version token.
+
+        ``xmin`` is PostgreSQL's system column holding the id of the
+        transaction that last inserted/updated the row; it advances on every
+        UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
+        the base content-hash default this overrides.
+        """
+        self._check_connection()
+        sql = f"""
+        SELECT xmin::text AS version
+        FROM {self._q_qualified}
+        WHERE id = %(id)s
+        """
+        df = self.db.query(sql, {"id": id})
+        if df.empty:
+            return None
+        return str(df.iloc[0]["version"])
+
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional ``xmin`` token from ``get_version(id)``.
+                When provided, the ``UPDATE`` carries an ``AND xmin = …``
+                predicate so the compare-and-set is enforced atomically by the
+                server; a stale token raises ``ConcurrencyError``. When ``None``
+                the update is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current ``xmin`` token.
         """
         self._check_connection()
         row = self._record_to_row(record, id)
+
+        if expected_version is not None:
+            sql = f"""
+            UPDATE {self._q_qualified}
+            SET data = %(data)s, metadata = %(metadata)s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s AND xmin::text = %(expected_version)s
+            """
+            params = dict(row)
+            params["expected_version"] = expected_version
+            result = self.db.execute(sql, params)
+            rows_affected = result if isinstance(result, int) else 0
+            if rows_affected == 0:
+                # The atomic UPDATE matched nothing: either the row is gone
+                # (update never inserts -> False) or the token is stale
+                # (concurrent modification -> raise). A follow-up read only
+                # picks the right disposition/message; the CAS itself already
+                # happened server-side.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
 
         sql = f"""
         UPDATE {self._q_qualified}
@@ -397,15 +447,25 @@ class SyncPostgresDatabase(
         df = self.db.query(sql, {"id": id})
         return not df.empty
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ``xmin`` token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts.
         """
         self._check_connection()
-        
+
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
             id = id_or_record
@@ -418,10 +478,14 @@ class SyncPostgresDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
-        
+
         if self.exists(id):
-            self.update(id, record)
+            self.update(id, record, expected_version=expected_version)
         else:
+            if expected_version is not None:
+                # A conditional upsert cannot insert: the caller expected a
+                # specific current version but the record is absent.
+                raise version_conflict_error(id, expected_version, None)
             # Insert with specific ID
             row = self._record_to_row(record, id)
             sql = f"""
@@ -1268,15 +1332,44 @@ class AsyncPostgresDatabase(
 
         return self._row_to_record(row)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def get_version(self, id: str) -> str | None:
+        """Return the row's ``xmin`` transaction id as the version token.
+
+        ``xmin`` is PostgreSQL's system column holding the id of the
+        transaction that last inserted/updated the row; it advances on every
+        UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
+        the base content-hash default this overrides.
+        """
+        self._check_connection()
+        sql = f"""
+        SELECT xmin::text AS version
+        FROM {self._q_qualified}
+        WHERE id = $1
+        """
+        async with self._pool.acquire() as conn:
+            version = await conn.fetchval(sql, id)
+        return None if version is None else str(version)
+
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional ``xmin`` token from ``get_version(id)``.
+                When provided, the ``UPDATE`` carries an ``AND xmin = …``
+                predicate so the compare-and-set is enforced atomically by the
+                server; a stale token raises ``ConcurrencyError``. When ``None``
+                the update is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current ``xmin`` token.
         """
         self._check_connection()
 
@@ -1293,10 +1386,15 @@ class AsyncPostgresDatabase(
             set_clauses.append(f"{q_col} = {placeholder}")
         values.extend(vec_values)
 
+        where = "WHERE id = $1"
+        if expected_version is not None:
+            where += f" AND xmin::text = ${len(values) + 1}"
+            values.append(expected_version)
+
         sql = f"""
         UPDATE {self._q_qualified}
         SET {', '.join(set_clauses)}
-        WHERE id = $1
+        {where}
         """
 
         async with self._pool.acquire() as conn:
@@ -1306,6 +1404,16 @@ class AsyncPostgresDatabase(
         rows_affected = int(result.split()[-1])
 
         if rows_affected == 0:
+            if expected_version is not None:
+                # The atomic UPDATE matched nothing: either the row is gone
+                # (update never inserts -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition/message; the CAS already happened
+                # server-side.
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
             logger.warning("Update affected 0 rows for id=%s. Record may not exist.", id)
 
         return rows_affected > 0
@@ -1338,12 +1446,23 @@ class AsyncPostgresDatabase(
 
         return row is not None
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
 
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching ``xmin`` token, otherwise it
+        raises ``ConcurrencyError``. A conditional upsert never inserts, so it
+        takes the explicit compare-and-set path rather than ``ON CONFLICT``.
         """
         self._check_connection()
 
@@ -1359,6 +1478,14 @@ class AsyncPostgresDatabase(
                 import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
+
+        if expected_version is not None:
+            # A conditional upsert cannot insert: require an existing row and
+            # let update() enforce the xmin compare-and-set.
+            if not await self.exists(id):
+                raise version_conflict_error(id, expected_version, None)
+            await self.update(id, record, expected_version=expected_version)
+            return id
 
         vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
