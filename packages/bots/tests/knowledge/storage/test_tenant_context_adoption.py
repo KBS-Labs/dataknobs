@@ -116,7 +116,7 @@ async def test_capability_advertisement(kind, tmp_path) -> None:
     assert b.supports(Capability.SNAPSHOT_ISOLATION)
     # Conditional metadata writes are enforced (S3 If-Match / file flock /
     # memory counter), so the consistency capability is advertised.
-    assert b.supports(Capability.TRANSACTIONAL_METADATA)
+    assert b.supports(Capability.CONDITIONAL_WRITE)
     # No architectural backend locking in this layer — the conditional-
     # write flock is an in-operation atomicity detail, not an ingest lock.
     assert not b.supports(Capability.TENANT_SCOPED_LOCKS)

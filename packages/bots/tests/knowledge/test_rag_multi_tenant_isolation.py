@@ -859,7 +859,7 @@ async def test_ingestion_manager_advertises_chunk_and_state_not_locks() -> None:
         )
         # Locking is the orchestrator's contract, not the manager's.
         assert mgr.supports(Capability.TENANT_SCOPED_LOCKS) is False
-        assert mgr.supports(Capability.TRANSACTIONAL_METADATA) is False
+        assert mgr.supports(Capability.CONDITIONAL_WRITE) is False
 
 
 @pytest.mark.asyncio
@@ -914,7 +914,7 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
     ``state_write_callbacks``) — together with the two tenant-state
     capabilities each backend unions on: ``TENANT_SCOPED_STATE`` (state
     methods honor ``ctx.state_key_prefix()``), ``SNAPSHOT_ISOLATION``
-    (per-tenant snapshot lineage), and ``TRANSACTIONAL_METADATA``
+    (per-tenant snapshot lineage), and ``CONDITIONAL_WRITE``
     (conditional metadata writes — S3 ``If-Match`` / file ``flock`` /
     memory counter — enforced by ``set_ingestion_status``'s
     ``expected_version`` guard). Capabilities whose behaviour has not
@@ -932,7 +932,7 @@ def test_backend_subclasses_advertise_state_observability_surface() -> None:
         Capability.CALLBACK_REGISTRY,
         Capability.TENANT_SCOPED_STATE,
         Capability.SNAPSHOT_ISOLATION,
-        Capability.TRANSACTIONAL_METADATA,
+        Capability.CONDITIONAL_WRITE,
     })
     backend_classes: list[type[Any]] = [
         InMemoryKnowledgeBackend,
@@ -975,5 +975,5 @@ def test_in_memory_backend_satisfies_capability_contract_protocol() -> None:
         Capability.CALLBACK_REGISTRY,
         Capability.TENANT_SCOPED_STATE,
         Capability.SNAPSHOT_ISOLATION,
-        Capability.TRANSACTIONAL_METADATA,
+        Capability.CONDITIONAL_WRITE,
     })

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `Capability.CONDITIONAL_WRITE` (consistency family): advertises that a
+  backend enforces compare-and-set on `update`/`upsert`. A version token —
+  read via `get_version` on a record store, or `get_state_version` on a
+  metadata store — is passed back as `expected_version`, and a stale token
+  raises `ConcurrencyError` instead of silent last-writer-wins. This is the
+  single, layer-neutral identifier for the conditional-write contract, shared
+  by the data-record backends and the knowledge-storage backends.
+
+### Removed
+
+- `Capability.TRANSACTIONAL_METADATA`. The conditional-write /
+  optimistic-concurrency contract it described is now advertised under the
+  layer-neutral `Capability.CONDITIONAL_WRITE`; the former name read as
+  metadata-document-specific and did not fit a general record store. This is
+  a breaking change for any code referencing the member by name.
+
 ## v1.5.2 - 2026-07-07
 
 ### Added

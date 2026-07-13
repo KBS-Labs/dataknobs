@@ -64,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last-writer-wins). `upsert()` applies the update through the backend's own
   atomic guard and acts on its result, so a concurrent delete cannot make it
   report success without writing.
+- The database backends advertise their optional consistency features through
+  the `CapabilityContract` surface: `AsyncDatabase` / `SyncDatabase` and every
+  concrete backend report `Capability.CONDITIONAL_WRITE`. A consumer can query
+  `db.supports(Capability.CONDITIONAL_WRITE)` (or use `require_capability`)
+  before relying on `expected_version` compare-and-set, instead of knowing the
+  backend matrix out-of-band. The advertisement is uniform because every
+  backend enforces the contract; the ABA nuance of the content-hash backends
+  is documented, not encoded as a separate capability.
 
 ### Notes
 

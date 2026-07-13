@@ -228,7 +228,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
     # and the snapshot lineage derived from it, stay domain-keyed; only
     # ingest status is per-tenant.
     #
-    # ``TENANT_SCOPED_LOCKS`` / ``TRANSACTIONAL_METADATA`` are
+    # ``TENANT_SCOPED_LOCKS`` / ``CONDITIONAL_WRITE`` are
     # deliberately NOT declared: the manager and backends are lock-free.
     # Concurrent same-tenant ingests serialize through the
     # :class:`~dataknobs_bots.knowledge.orchestration.IngestOrchestrator`'s

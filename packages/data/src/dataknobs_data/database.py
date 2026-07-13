@@ -11,9 +11,14 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common import CapabilityNotSupportedError
+from dataknobs_common import (
+    Capability,
+    CapabilityLike,
+    CapabilityMixin,
+    CapabilityNotSupportedError,
+)
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -124,7 +129,7 @@ def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
     return None
 
 
-class AsyncDatabase(ABC):
+class AsyncDatabase(CapabilityMixin, ABC):
     """Abstract base class for async database implementations.
 
     Provides a unified async interface for CRUD operations, querying, and streaming
@@ -167,6 +172,19 @@ class AsyncDatabase(ABC):
                 process_record(record)
         ```
     """
+
+    # Every backend enforces compare-and-set on ``update``/``upsert`` when
+    # an ``expected_version`` (read via ``get_version``) is supplied — a
+    # stale token raises ``ConcurrencyError`` instead of last-writer-wins.
+    # The guarantee is uniform, so it is declared once on the ABC and every
+    # backend inherits it with no per-backend ClassVar. NOTE:
+    # ``CapabilityMixin`` does NOT auto-union across the MRO — a backend that
+    # later needs a backend-specific capability MUST declare
+    # ``SUPPORTED_CAPABILITIES = AsyncDatabase.SUPPORTED_CAPABILITIES | {...}``
+    # or it will silently drop ``CONDITIONAL_WRITE``.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.CONDITIONAL_WRITE,
+    })
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -231,7 +249,7 @@ class AsyncDatabase(ABC):
         """
         return extract_schema_from_config(schema_config)
 
-    def _initialize(self) -> None:  # noqa: B027
+    def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
 
@@ -756,11 +774,11 @@ class AsyncDatabase(ABC):
         else:
             await tx.commit()
 
-    async def connect(self) -> None:  # noqa: B027
+    async def connect(self) -> None:
         """Connect to the database. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit connection
 
-    async def close(self) -> None:  # noqa: B027
+    async def close(self) -> None:
         """Close the database connection. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit closing
 
@@ -866,7 +884,7 @@ class AsyncDatabase(ABC):
         return instance
 
 
-class SyncDatabase(ABC):
+class SyncDatabase(CapabilityMixin, ABC):
     """Synchronous variant of the Database abstract base class.
 
     Provides a unified synchronous interface for CRUD operations, querying, and streaming
@@ -899,6 +917,13 @@ class SyncDatabase(ABC):
                 process_record(record)
         ```
     """
+
+    # See ``AsyncDatabase.SUPPORTED_CAPABILITIES`` — the same uniform
+    # conditional-write guarantee applies to every sync backend, and the
+    # same MRO no-auto-union caveat holds for backend-specific additions.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset({
+        Capability.CONDITIONAL_WRITE,
+    })
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -948,7 +973,7 @@ class SyncDatabase(ABC):
         self.schema = schema or DatabaseSchema()
         self._initialize()
 
-    def _initialize(self) -> None:  # noqa: B027
+    def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
         # Default implementation does nothing - backends can override if needed
 
@@ -1396,11 +1421,11 @@ class SyncDatabase(ABC):
         """Clear all records from the database."""
         raise NotImplementedError
 
-    def connect(self) -> None:  # noqa: B027
+    def connect(self) -> None:
         """Connect to the database. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit connection
 
-    def close(self) -> None:  # noqa: B027
+    def close(self) -> None:
         """Close the database connection. Override in subclasses if needed."""
         # Default implementation does nothing - many backends don't need explicit closing
 
