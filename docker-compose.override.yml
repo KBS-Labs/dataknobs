@@ -63,7 +63,7 @@ services:
       - devnet
 
   localstack:
-    image: localstack/localstack:3.0
+    image: localstack/localstack:4.14.0
     environment:
       - SERVICES=s3,sqs
       - DEBUG=0
