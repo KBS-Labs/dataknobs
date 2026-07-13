@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
 from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..records import Record
@@ -524,25 +524,44 @@ class AsyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in the file."""
         async with self._lock:
             data = await self._load_data()
-            if id in data:
-                data[id] = record.copy(deep=True)
-                await self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            # Conditional write: compare the content-hash token inside the
+            # lock so the check and the write are atomic (no TOCTOU race).
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            data[id] = record.copy(deep=True)
+            await self._save_data(data)
+            return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         async with self._lock:
             data = await self._load_data()
-            if id in data:
-                del data[id]
-                await self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            await self._save_data(data)
+            return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
@@ -550,12 +569,23 @@ class AsyncFileDatabase(  # type: ignore[misc]
             data = await self._load_data()
             return id in data
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching token, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts (an absent
+        record's token is ``None``, which never matches).
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -571,6 +601,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
         async with self._lock:
             data = await self._load_data()
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
             data[id] = record.copy(deep=True)
             await self._save_data(data)
             return id
@@ -864,25 +897,42 @@ class SyncFileDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in the file."""
         with self._lock:
             data = self._load_data()
-            if id in data:
-                data[id] = record.copy(deep=True)
-                self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            # Conditional write: compare the content-hash token inside the
+            # lock so the check and the write are atomic (no TOCTOU race).
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            data[id] = record.copy(deep=True)
+            self._save_data(data)
+            return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         with self._lock:
             data = self._load_data()
-            if id in data:
-                del data[id]
-                self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            self._save_data(data)
+            return True
 
     def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
@@ -890,12 +940,23 @@ class SyncFileDatabase(  # type: ignore[misc]
             data = self._load_data()
             return id in data
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record.
-        
+
         Can be called as:
         - upsert(id, record) - explicit ID and record
         - upsert(record) - extract ID from record using Record's built-in logic
+
+        When ``expected_version`` is provided the upsert is conditional: the
+        record must already exist with a matching token, otherwise it raises
+        ``ConcurrencyError``. A conditional upsert never inserts (an absent
+        record's token is ``None``, which never matches).
         """
         # Determine ID and record based on arguments
         if isinstance(id_or_record, str):
@@ -911,6 +972,9 @@ class SyncFileDatabase(  # type: ignore[misc]
 
         with self._lock:
             data = self._load_data()
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
             data[id] = record.copy(deep=True)
             self._save_data(data)
             return id

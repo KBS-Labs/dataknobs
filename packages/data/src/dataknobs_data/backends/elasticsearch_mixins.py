@@ -16,6 +16,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def es_version_token(seq_no: int, primary_term: int) -> str:
+    """Compose the opaque optimistic-concurrency token for an ES document.
+
+    Elasticsearch's native optimistic concurrency uses the pair
+    (``_seq_no``, ``_primary_term``); a single opaque ``"{seq_no}:{primary_term}"``
+    string carries both so ``get_version`` fits the one-token contract. Shared
+    by the sync and async Elasticsearch backends so the two cannot drift.
+    """
+    return f"{seq_no}:{primary_term}"
+
+
+def parse_es_version_token(token: str) -> tuple[int, int]:
+    """Split an ES version token back into ``(seq_no, primary_term)``.
+
+    Inverse of :func:`es_version_token`. Raises ``ValueError`` on a malformed
+    token (the caller passed something that did not come from ``get_version``).
+    """
+    seq_no_str, _, primary_term_str = token.partition(":")
+    if not primary_term_str:
+        raise ValueError(f"Malformed Elasticsearch version token: {token!r}")
+    return int(seq_no_str), int(primary_term_str)
+
+
 class ElasticsearchBaseConfig:
     """Mixin for parsing Elasticsearch configuration."""
 

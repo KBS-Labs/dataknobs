@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
@@ -50,6 +50,17 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Optimistic-concurrency token store: per-key value drawn from a
+        # per-instance monotonic sequence (``_version_seq``). Using a
+        # never-reused sequence value (rather than the base content hash, or a
+        # per-key counter that resets on delete) makes the token ABA-safe on
+        # every mutation path: an A->B->A in-place cycle advances the version,
+        # AND a delete->recreate cycle mints a fresh value that cannot collide
+        # with the deleted record's stale token. So a stale conditional write
+        # is always detected. The sequence is never reset (not even by
+        # ``clear()``) so tokens stay unique for the instance's lifetime.
+        self._versions: dict[str, int] = {}
+        self._version_seq = 0
         self._lock = asyncio.Lock()
 
         cfg = self.config
@@ -59,6 +70,26 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
+
+    def _next_version(self) -> int:
+        """Return the next monotonic version value (call while holding the lock).
+
+        Never resets, so a delete->recreate at the same id yields a new token
+        that cannot equal the deleted record's — the ABA guarantee.
+        """
+        self._version_seq += 1
+        return self._version_seq
+
+    def _current_version(self, id: str) -> str | None:
+        """Current token for ``id`` as a string, or ``None`` if absent.
+
+        Reads via ``.get`` (not a bare subscript) so a hypothetical
+        ``_storage``/``_versions`` desync degrades to a ``None`` token — which
+        never matches a real token, so the conditional write fails closed —
+        rather than raising ``KeyError``.
+        """
+        version = self._versions.get(id)
+        return None if version is None else str(version)
 
     async def create(self, record: Record) -> str:
         """Create a new record in memory."""
@@ -72,7 +103,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
             # Store the record
             self._storage[storage_id] = record_copy
+            self._versions[storage_id] = self._next_version()
             return storage_id
+
+    async def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        async with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     async def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -81,30 +119,57 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         async with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
+            return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from memory."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from memory.
+
+        When ``expected_version`` is provided the delete is a compare-and-set:
+        it proceeds only if the record's current token still matches, otherwise
+        it raises ``ConcurrencyError``. A missing record returns ``False``
+        (delete never conflicts on an absent id). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         async with self._lock:
-            if id in self._storage:
-                del self._storage[id]
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            del self._storage[id]
+            self._versions.pop(id, None)
+            return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in memory."""
         async with self._lock:
             return id in self._storage
 
-    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    async def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -122,7 +187,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         async with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
 
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -163,6 +235,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
     async def create_batch(self, records: list[Record]) -> list[str]:
@@ -175,6 +248,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
                 # Store the record
                 self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._next_version()
                 ids.append(storage_id)
             return ids
 
@@ -195,6 +269,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)
@@ -278,6 +353,12 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         construction note in ``StructuredConfigConsumer``).
         """
         self._storage: OrderedDict[str, Record] = OrderedDict()
+        # Per-key optimistic-concurrency token drawn from a per-instance
+        # monotonic sequence (never reset). ABA-safe across both in-place
+        # mutation and delete->recreate; see the async counterpart for the
+        # full rationale.
+        self._versions: dict[str, int] = {}
+        self._version_seq = 0
         self._lock = threading.RLock()
 
         cfg = self.config
@@ -288,6 +369,25 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
 
+    def _next_version(self) -> int:
+        """Return the next monotonic version value (call while holding the lock).
+
+        Never resets, so a delete->recreate at the same id yields a new token
+        that cannot equal the deleted record's — the ABA guarantee.
+        """
+        self._version_seq += 1
+        return self._version_seq
+
+    def _current_version(self, id: str) -> str | None:
+        """Current token for ``id`` as a string, or ``None`` if absent.
+
+        Reads via ``.get`` (not a bare subscript) so a hypothetical
+        ``_storage``/``_versions`` desync fails closed (a ``None`` token never
+        matches) rather than raising ``KeyError``.
+        """
+        version = self._versions.get(id)
+        return None if version is None else str(version)
+
     def create(self, record: Record) -> str:
         """Create a new record in memory."""
         with self._lock:
@@ -297,7 +397,14 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             if id in self._storage:
                 raise DuplicateRecordError(id)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
+
+    def get_version(self, id: str) -> str | None:
+        """Return the monotonic version token for a record, or None if absent."""
+        with self._lock:
+            version = self._versions.get(id)
+            return None if version is None else str(version)
 
     def read(self, id: str) -> Record | None:
         """Read a record from memory."""
@@ -305,30 +412,55 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             record = self._storage.get(id)
             return record.copy(deep=True) if record else None
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update a record in memory."""
         with self._lock:
-            if id in self._storage:
-                self._storage[id] = record.copy(deep=True)
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
+            return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from memory."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from memory.
+
+        When ``expected_version`` is provided the delete is a compare-and-set:
+        it proceeds only if the record's current token still matches, otherwise
+        it raises ``ConcurrencyError``. A missing record returns ``False``
+        (delete never conflicts on an absent id). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         with self._lock:
-            if id in self._storage:
-                del self._storage[id]
-                return True
-            return False
+            if id not in self._storage:
+                return False
+            if expected_version is not None:
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
+            del self._storage[id]
+            self._versions.pop(id, None)
+            return True
 
     def exists(self, id: str) -> bool:
         """Check if a record exists in memory."""
         with self._lock:
             return id in self._storage
 
-    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+    def upsert(
+        self,
+        id_or_record: str | Record,
+        record: Record | None = None,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
         """Update or insert a record with the specified ID.
-        
+
         Overrides base class to handle memory-specific storage.
         """
         # Use base class logic to determine ID and record
@@ -346,7 +478,14 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
         # Memory-specific implementation
         with self._lock:
+            if expected_version is not None:
+                # Conditional upsert never inserts: an absent record has a
+                # None current version, which never matches a token.
+                current = self._current_version(id)
+                if current != expected_version:
+                    raise version_conflict_error(id, expected_version, current)
             self._storage[id] = record.copy(deep=True)
+            self._versions[id] = self._next_version()
             return id
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -387,6 +526,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             count = len(self._storage)
             self._storage.clear()
+            self._versions.clear()
             return count
 
     def create_batch(self, records: list[Record]) -> list[str]:
@@ -397,6 +537,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
                 # Use record's ID if it has one, otherwise generate a new one
                 id = record.id if record.id else self._generate_id()
                 self._storage[id] = record.copy(deep=True)
+                self._versions[id] = self._next_version()
                 ids.append(id)
             return ids
 
@@ -416,6 +557,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             for id in ids:
                 if id in self._storage:
                     del self._storage[id]
+                    self._versions.pop(id, None)
                     results.append(True)
                 else:
                     results.append(False)

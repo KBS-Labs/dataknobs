@@ -39,14 +39,24 @@ logger = logging.getLogger(__name__)
 
 
 def is_s3_conditional_conflict(error: BaseException) -> bool:
-    """Whether a boto ``ClientError`` is an atomic-insert conflict.
+    """Whether a boto ``ClientError`` is an S3 conditional-write rejection.
 
-    A conditional PUT (``IfNoneMatch="*"``) that loses to an existing object
-    fails closed. AWS S3 surfaces this two ways: ``412 PreconditionFailed``
-    when the object already exists at request time, and ``409
-    ConditionalRequestConflict`` when concurrent conditional writes to the
-    same key race. Both mean the id is already taken, so both map to
-    ``DuplicateRecordError``.
+    Covers both conditional-write shapes the S3 backends use:
+
+    * ``IfNoneMatch="*"`` on PUT — the atomic-insert guard (create-if-absent);
+      a loss means the id is already taken (maps to ``DuplicateRecordError``).
+    * ``IfMatch=<ETag>`` on PUT and DeleteObject — the compare-and-set guard
+      (conditional update/delete); a loss means the token is stale.
+
+    AWS S3 surfaces a conditional-write loss two ways: ``412
+    PreconditionFailed`` (the guard failed at request time) and ``409
+    ConditionalRequestConflict`` (concurrent conditional writes to the same key
+    raced). Both mean the guard was not satisfied.
+
+    This helper does **not** cover a missing object (``404 NoSuchKey``): an
+    ``IfMatch`` write against a key that does not exist is a *miss*, not a
+    *conflict*, and callers must check ``404``/``NoSuchKey`` separately (a
+    conditional update/delete of an absent id returns ``False``, never raises).
 
     Duck-typed on the ``ClientError.response`` dict so it serves the sync
     (boto3) and async (aioboto3) S3 backends identically without importing

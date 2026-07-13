@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase
+from ..database import AsyncDatabase, enforce_content_version
 from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
@@ -80,6 +80,12 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         self.db: aiosqlite.Connection | None = None
         self._connected = False
+
+        # Serializes conditional (compare-and-set) writes so a concurrent pair
+        # on one instance yields exactly one winner. aiosqlite queues each
+        # statement independently, so without this the read and the write of a
+        # conditional update could interleave across coroutines.
+        self._cas_lock = asyncio.Lock()
 
         # Initialize vector support
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
@@ -211,17 +217,44 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(dict(row))
             return None
 
-    async def update(self, id: str, record: Record) -> bool:
+    async def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for SQLite). When provided,
+                a stale token raises ``ConcurrencyError`` instead of
+                overwriting. When ``None`` the update is unconditional,
+                byte-identical to prior behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
+
+        # Conditional write: hold the CAS lock across the read-compare-write so
+        # a concurrent conditional pair on this instance yields exactly one
+        # winner. Reusing read() guarantees the token compared here matches the
+        # one get_version() returned. Cross-connection atomicity is out of
+        # scope (see the module docs on the in-process content-hash backends).
+        if expected_version is not None:
+            async with self._cas_lock:
+                current = await self.read(id)
+                if current is None:
+                    return False
+                enforce_content_version(id, expected_version, current)
+                query, params = self.query_builder.build_update_query(id, record)
+                cursor = await self.db.execute(query, params)
+                await self.db.commit()
+                return cursor.rowcount > 0
 
         query, params = self.query_builder.build_update_query(id, record)
 
@@ -234,9 +267,31 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         return rows_affected > 0
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the read-compare-delete runs
+        under the CAS lock so a concurrent conditional pair on this instance
+        yields exactly one winner; a stale token raises ``ConcurrencyError``
+        and a missing record returns ``False``. Cross-connection atomicity is
+        out of scope (see the module docs on the in-process content-hash
+        backends). When ``None`` the delete is unconditional, byte-identical to
+        prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            async with self._cas_lock:
+                current = await self.read(id)
+                if current is None:
+                    return False
+                enforce_content_version(id, expected_version, current)
+                query, params = self.query_builder.build_delete_query(id)
+                cursor = await self.db.execute(query, params)
+                await self.db.commit()
+                return cursor.rowcount > 0
 
         query, params = self.query_builder.build_delete_query(id)
 

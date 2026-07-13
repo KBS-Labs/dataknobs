@@ -37,6 +37,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError`; carries the colliding id in `.id` and `context={"id": ...}`.
 - `ConcurrencyError.__init__` accepts an optional keyword-only `context` mapping
   (backward-compatible), so concurrency conflicts can carry structured detail.
+- `get_version(id) -> str | None` on `AsyncDatabase` / `SyncDatabase` and every
+  backend: returns an opaque, backend-local optimistic-concurrency token for a
+  stored record (or `None` if the id does not exist). The token is native where
+  the store provides one — an in-memory per-instance monotonic sequence,
+  PostgreSQL `xmin`, Elasticsearch `_seq_no`/`_primary_term`, S3 `ETag` — and a
+  deterministic content hash of the stored record on the file, SQLite, and
+  DuckDB backends. The in-memory token is ABA-safe on every path, including a
+  delete→recreate at the same id (the sequence value is never reused). Treat it
+  as opaque; it is not comparable across backends.
+- An opt-in, keyword-only `expected_version` parameter on `update()`,
+  `upsert()`, and `delete()` across both base contracts and all 14 backends.
+  Passing a token read from `get_version()` turns the write into a
+  compare-and-set: it proceeds only if the record's current token still matches,
+  otherwise it raises `ConcurrencyError` (carrying `id` / `expected_version` /
+  `actual_version` in `.context`) instead of last-writer-wins. The
+  compare-and-set is enforced atomically where the store supports it —
+  PostgreSQL `WHERE ... AND xmin = …`, Elasticsearch `if_seq_no`/`if_primary_term`,
+  S3 `If-Match` (on both the conditional PUT and the conditional DELETE) — and
+  the in-process content-hash backends serialize the check within a single
+  connection/instance. A conditional `update()` never inserts (a missing record
+  returns `False`); a conditional `delete()` never conflicts on an absent id (a
+  missing record returns `False`); a conditional `upsert()` never inserts (a
+  missing record is itself a conflict and raises). Omitting `expected_version`
+  leaves all three operations byte-identical to prior behavior (unconditional
+  last-writer-wins). `upsert()` applies the update through the backend's own
+  atomic guard and acts on its result, so a concurrent delete cannot make it
+  report success without writing.
+
+### Notes
+
+- The file/SQLite/DuckDB content-hash token is subject to the classic ABA
+  limitation: an A→B→A mutation cycle yields the original token, so a stale
+  conditional write in that exact scenario is not detected. The backends with a
+  native monotonic version (memory counter, PostgreSQL `xmin`, Elasticsearch
+  `_seq_no`, S3 `ETag`) are ABA-safe. The in-process content-hash backends
+  enforce the compare-and-set within a single connection/instance; conditional
+  writes are not hardened across separate processes/connections.
 
 ## v0.5.5 - 2026-07-07
 

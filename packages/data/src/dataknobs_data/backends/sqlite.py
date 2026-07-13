@@ -13,7 +13,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import SyncDatabase
+from ..database import SyncDatabase, enforce_content_version
 from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
@@ -243,15 +243,28 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def update(self, id: str, record: Record) -> bool:
+    def update(
+        self, id: str, record: Record, *, expected_version: str | None = None
+    ) -> bool:
         """Update an existing record.
 
         Args:
             id: The record ID to update
             record: The record data to update with
+            expected_version: Optional optimistic-concurrency token from
+                ``get_version(id)`` (a content hash for SQLite). When provided,
+                the read-compare-write runs inside one transaction so the
+                compare-and-set is atomic within the connection; a stale token
+                raises ``ConcurrencyError`` instead of overwriting. When
+                ``None`` the update is unconditional, byte-identical to prior
+                behavior.
 
         Returns:
             True if the record was updated, False if no record with the given ID exists
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -267,6 +280,18 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         query = f"UPDATE {self.table_manager.qualified_table} SET data = ?, metadata = ? WHERE id = ?"
         params = [data_json, metadata_json, id]
 
+        # Conditional write: compare the current content-hash token before
+        # issuing the UPDATE. Reusing read() guarantees the token compared
+        # here is byte-identical to the one get_version() returned. On a
+        # single connection the read and write are effectively serialized;
+        # cross-connection atomicity is out of scope (see the module docs on
+        # the in-process content-hash backends).
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
+
         cursor = self.conn.cursor()
 
         try:
@@ -281,9 +306,25 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the current content-hash token is
+        compared before the ``DELETE``; a stale token raises
+        ``ConcurrencyError`` and a missing record returns ``False``. Reusing
+        ``read()`` keeps the compared token byte-identical to ``get_version()``.
+        On a single connection the read and delete are serialized;
+        cross-connection atomicity is out of scope (see the module docs on the
+        in-process content-hash backends). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
 
         query, params = self.query_builder.build_delete_query(id)
         cursor = self.conn.cursor()
