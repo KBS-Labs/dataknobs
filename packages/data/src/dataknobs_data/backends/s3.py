@@ -14,6 +14,7 @@ from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
+from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
@@ -193,7 +194,14 @@ class SyncS3Database(  # type: ignore[misc]
         return Record.from_dict(obj_data)
 
     def create(self, record: Record) -> str:
-        """Create a new record in S3."""
+        """Create a new record in S3.
+
+        Atomic create-if-absent is enforced with a conditional PUT
+        (``If-None-Match: *``): a colliding id raises ``DuplicateRecordError``.
+        The guarantee holds against any S3 implementation that honors
+        conditional writes (real AWS S3, recent LocalStack). Older stores
+        that ignore the header degrade to last-writer-wins.
+        """
         self._check_connection()
 
         # Use centralized method to prepare record
@@ -211,13 +219,23 @@ class SyncS3Database(  # type: ignore[misc]
         obj_data = self._record_to_s3_object(record_copy)
         body = json.dumps(obj_data)
 
-        # Store in S3
-        self.s3_client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=body,
-            ContentType='application/json'
-        )
+        # Store in S3 as an atomic insert. IfNoneMatch="*" makes the PUT
+        # fail closed with 412 PreconditionFailed if the key already exists,
+        # so a colliding id cannot silently overwrite an existing record.
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                ContentType='application/json',
+                IfNoneMatch='*',
+            )
+        except self.ClientError as e:
+            err = e.response.get('Error', {})
+            status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+            if err.get('Code') in ('PreconditionFailed', '412') or status == 412:
+                raise DuplicateRecordError(storage_id) from e
+            raise
 
         # Invalidate cache
         self._cache_dirty = True

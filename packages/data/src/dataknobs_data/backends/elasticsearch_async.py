@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.elasticsearch import (
     ElasticsearchPoolConfig,
@@ -230,16 +231,25 @@ class AsyncElasticsearchDatabase(
         self._check_connection()
         doc = self._record_to_doc(record)
 
-        # Create document with explicit ID if record has one
+        # Create document with explicit ID if record has one. op_type="create"
+        # makes this an atomic insert: a colliding id yields a 409 conflict
+        # instead of silently overwriting the existing document.
         kwargs = {
             "index": self.index_name,
             "document": doc,
-            "refresh": self.refresh
+            "refresh": self.refresh,
+            "op_type": "create",
         }
         if record.id:
             kwargs["id"] = record.id
 
-        response = await self._client.index(**kwargs)
+        from elasticsearch import ConflictError
+
+        try:
+            response = await self._client.index(**kwargs)
+        except ConflictError as e:
+            # op_type="create" only conflicts when an explicit id was supplied.
+            raise DuplicateRecordError(record.id or "") from e
 
         return response["_id"]
 

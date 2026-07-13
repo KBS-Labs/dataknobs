@@ -137,8 +137,22 @@ class ConfigurationError(BaseConfigurationError):
 class ConcurrencyError(BaseConcurrencyError):
     """Raised when a concurrency conflict occurs."""
 
-    def __init__(self, message: str):
-        super().__init__(f"Concurrency error: {message}")
+    def __init__(self, message: str, *, context: dict | None = None):
+        super().__init__(f"Concurrency error: {message}", context=context)
+
+
+class DuplicateRecordError(ConcurrencyError, ValueError):
+    """Raised when create() targets an id that already exists.
+
+    create() is an atomic insert: a colliding id fails closed rather than
+    overwriting an existing record. This type also subclasses ValueError so
+    callers that caught the former bare ``ValueError`` on a duplicate id
+    continue to catch it.
+    """
+
+    def __init__(self, id: str):
+        self.id = id
+        super().__init__(f"Record with ID '{id}' already exists", context={"id": id})
 
 
 class TransactionError(OperationError):

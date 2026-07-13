@@ -18,6 +18,7 @@ import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
@@ -232,7 +233,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            raise DuplicateRecordError(params[0]) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -829,7 +830,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            raise DuplicateRecordError(params[0]) from e
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID.

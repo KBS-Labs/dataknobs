@@ -80,7 +80,7 @@ backends share one `FileDatabaseConfig`.
 
 #### Database Methods
 
-- `create(record: Record) -> str`: Create a new record and return its ID
+- `create(record: Record) -> str`: Atomically insert a new record and return its ID; raises `DuplicateRecordError` if the id already exists
 - `read(id: str) -> Record | None`: Read a record by ID
 - `update(id: str, record: Record) -> bool`: Update an existing record
 - `delete(id: str) -> bool`: Delete a record
@@ -91,6 +91,41 @@ backends share one `FileDatabaseConfig`.
 - `clear() -> int`: Delete all records
 - `stream_read(query, config) -> Iterator[Record]`: Stream records
 - `stream_write(records, config) -> StreamResult`: Stream write records
+
+#### Create semantics (atomic create-if-absent)
+
+`create()` is a defined atomic insert across all backends. If a record with the
+same id already exists, it fails closed with `DuplicateRecordError` rather than
+overwriting the existing record — so a collision-safe insert needs no racy
+`exists()`-then-`create()` guard:
+
+```python
+from dataknobs_data import DuplicateRecordError, Record
+
+db.create(Record({"v": 1}, id="k"))
+try:
+    db.create(Record({"v": 2}, id="k"))
+except DuplicateRecordError as e:
+    print(e.id)  # "k" — the original record is untouched
+```
+
+`DuplicateRecordError` subclasses both the data-layer `ConcurrencyError` and
+`ValueError`, so code that previously caught `ValueError` on a duplicate id
+keeps working. It carries the colliding id on `.id` and in `context={"id": ...}`.
+
+To overwrite when the id may already exist, use `upsert()` instead of `create()`.
+
+Backend notes:
+
+- **memory, file, SQLite, DuckDB, Postgres, Elasticsearch** enforce the insert
+  through their native uniqueness/constraint mechanism (in-lock check, primary
+  key, or `op_type=create`).
+- **S3** enforces it with a conditional PUT (`If-None-Match`). The atomic
+  guarantee holds against any S3 implementation that honors conditional writes
+  (real AWS S3, recent LocalStack); stores that ignore the header degrade to
+  last-writer-wins.
+- **`create_batch()`** semantics are unchanged (batch atomicity is not part of
+  this contract).
 
 ### Records
 

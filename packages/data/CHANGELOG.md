@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `create()` is now a defined atomic insert across every backend: a colliding
+  id raises `DuplicateRecordError` instead of silently overwriting the existing
+  record (memory, file, S3, Elasticsearch) or raising a bare `ValueError`
+  (SQLite, DuckDB). This removes the racy `exists()`-then-`create()` workaround
+  consumers needed for collision-safe inserts. `DuplicateRecordError` subclasses
+  `ValueError`, so existing callers that caught the former `ValueError` on a
+  duplicate id are unaffected. On S3 the guarantee is enforced with a
+  conditional PUT (`If-None-Match`) and therefore holds against any S3
+  implementation that honors conditional writes (real AWS S3, recent
+  LocalStack); older stores that ignore the header degrade to last-writer-wins.
+  `create_batch()` semantics are unchanged in this release.
+
+### Added
+
+- `DuplicateRecordError` (exported from `dataknobs_data`), raised by `create()`
+  on a duplicate id. Subclasses both the data-layer `ConcurrencyError` and
+  `ValueError`; carries the colliding id in `.id` and `context={"id": ...}`.
+- `ConcurrencyError.__init__` accepts an optional keyword-only `context` mapping
+  (backward-compatible), so concurrency conflicts can carry structured detail.
+
 ## v0.5.5 - 2026-07-07
 
 ### Changed

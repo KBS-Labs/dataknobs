@@ -14,6 +14,7 @@ import numpy as np
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import SyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
@@ -209,7 +210,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             return storage_id
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
-            raise ValueError(f"Record with ID {record.id} already exists") from e
+            raise DuplicateRecordError(storage_id) from e
         finally:
             cursor.close()
 

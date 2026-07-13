@@ -672,6 +672,7 @@ class SimplifiedElasticsearchIndex:
         refresh: bool = False,
         max_retries: int = 3,
         initial_delay: float = 0.5,
+        op_type: str | None = None,
     ) -> Dict[str, Any]:
         """Index a document with retry for transient server errors.
 
@@ -681,22 +682,36 @@ class SimplifiedElasticsearchIndex:
             refresh: Whether to refresh immediately for search visibility
             max_retries: Maximum retry attempts for 5xx errors
             initial_delay: Initial backoff delay in seconds (doubles each retry)
+            op_type: Optional index op type. Pass ``"create"`` for an atomic
+                insert that fails with a 409 conflict if the document id
+                already exists. When a conflict occurs the returned dict is
+                ``{"_id": None, "result": "conflict", "status": 409}``.
 
         Returns:
             Response with created document ID
         """
         path = f"_doc/{doc_id}" if doc_id else "_doc"
-        params = {"refresh": "true"} if refresh else None
+        params: Dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if op_type:
+            params["op_type"] = op_type
         method = "put" if doc_id else "post"
 
         delay = initial_delay
         for attempt in range(max_retries + 1):
-            response = self._request(method, path, body, params)
+            response = self._request(method, path, body, params or None)
 
             if response.succeeded and response.json:
                 return response.json
 
             status = response.status
+
+            # A create conflict (op_type="create" against an existing id) is a
+            # definitive 409 — surface it distinctly and do not retry.
+            if status == 409:
+                return {"_id": None, "result": "conflict", "status": 409}
+
             is_server_error = status is not None and status >= 500
             has_retries_left = attempt < max_retries
 

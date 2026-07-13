@@ -11,7 +11,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
 from ..database import SyncDatabase
-from ..exceptions import DatabaseError
+from ..exceptions import DatabaseError, DuplicateRecordError
 from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
@@ -198,12 +198,17 @@ class SyncElasticsearchDatabase(
         id = record.id if record.id else str(uuid.uuid4())
         doc = self._record_to_doc(record, id)
 
-        # Index the document
+        # Index the document as an atomic insert. op_type="create" makes a
+        # colliding id fail closed with a 409 conflict rather than overwrite.
         response = self.es_index.index(
             body=doc,
             doc_id=id,
             refresh=self.refresh,
+            op_type="create",
         )
+
+        if response.get("result") == "conflict" or response.get("status") == 409:
+            raise DuplicateRecordError(id)
 
         if not response.get("_id"):
             raise DatabaseError(f"Failed to create record: {response}")

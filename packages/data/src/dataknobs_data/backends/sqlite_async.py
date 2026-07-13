@@ -11,6 +11,7 @@ import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
@@ -191,7 +192,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             return record_id
         except aiosqlite.IntegrityError as e:
             await self.db.rollback()
-            raise ValueError(f"Record with ID {params[0]} already exists") from e
+            raise DuplicateRecordError(params[0]) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
