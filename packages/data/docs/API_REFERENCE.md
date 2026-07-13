@@ -124,8 +124,13 @@ Backend notes:
   guarantee holds against any S3 implementation that honors conditional writes
   (real AWS S3, recent LocalStack); stores that ignore the header degrade to
   last-writer-wins.
-- **`create_batch()`** semantics are unchanged (batch atomicity is not part of
-  this contract).
+- **`create_batch()` does not carry the create-if-absent contract.** It does
+  **not** fail closed on a colliding id, and the backends differ on what happens:
+  memory and file overwrite (last-writer-wins), while the SQL and Elasticsearch
+  backends assign a fresh server/UUID id and ignore any `record.id` you set. Use
+  single `create()` in a loop when you need collision-safe inserts; reach for
+  `create_batch()` only for throughput when ids are known-unique (e.g. freshly
+  generated).
 
 ### Records
 

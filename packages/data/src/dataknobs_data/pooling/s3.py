@@ -38,6 +38,32 @@ from .base import BasePoolConfig
 logger = logging.getLogger(__name__)
 
 
+def is_s3_conditional_conflict(error: BaseException) -> bool:
+    """Whether a boto ``ClientError`` is an atomic-insert conflict.
+
+    A conditional PUT (``IfNoneMatch="*"``) that loses to an existing object
+    fails closed. AWS S3 surfaces this two ways: ``412 PreconditionFailed``
+    when the object already exists at request time, and ``409
+    ConditionalRequestConflict`` when concurrent conditional writes to the
+    same key race. Both mean the id is already taken, so both map to
+    ``DuplicateRecordError``.
+
+    Duck-typed on the ``ClientError.response`` dict so it serves the sync
+    (boto3) and async (aioboto3) S3 backends identically without importing
+    botocore here. A non-``ClientError`` (no ``response`` dict) is not a
+    conflict.
+    """
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return False
+    code = response.get("Error", {}).get("Code")
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return (
+        code in ("PreconditionFailed", "ConditionalRequestConflict", "412", "409")
+        or status in (412, 409)
+    )
+
+
 def create_boto3_s3_client(
     config: AwsSessionConfig | dict[str, Any] | None = None,
 ) -> Any:

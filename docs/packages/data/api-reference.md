@@ -90,10 +90,15 @@ Backend notes:
   key, or `op_type=create`).
 - **S3** enforces it with a conditional PUT (`If-None-Match`); the atomic
   guarantee holds against any S3 implementation that honors conditional writes
-  (real AWS S3, recent LocalStack), and degrades to last-writer-wins on stores
-  that ignore the header.
-- **`create_batch()`** semantics are unchanged (batch atomicity is not part of
-  this contract).
+  (real AWS S3, recent LocalStack) — both a pre-existing key (412) and a
+  concurrent conditional-write race (409) fail closed — and degrades to
+  last-writer-wins on stores that ignore the header.
+- **`create_batch()` does not carry the create-if-absent contract.** It does
+  **not** fail closed on a colliding id, and the backends differ: memory and
+  file overwrite (last-writer-wins), while the SQL and Elasticsearch backends
+  assign a fresh id and ignore any `record.id` you set. Use single `create()`
+  in a loop for collision-safe inserts; reach for `create_batch()` only for
+  throughput when ids are known-unique.
 
 ### Records
 

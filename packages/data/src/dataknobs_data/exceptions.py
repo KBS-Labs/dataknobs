@@ -152,7 +152,12 @@ class DuplicateRecordError(ConcurrencyError, ValueError):
 
     def __init__(self, id: str):
         self.id = id
-        super().__init__(f"Record with ID '{id}' already exists", context={"id": id})
+        # The message is already a complete sentence, so bypass
+        # ConcurrencyError's "Concurrency error: " prefix (which would
+        # otherwise double up) and initialize the common base directly.
+        BaseConcurrencyError.__init__(
+            self, f"Record with ID '{id}' already exists", context={"id": id}
+        )
 
 
 class TransactionError(OperationError):

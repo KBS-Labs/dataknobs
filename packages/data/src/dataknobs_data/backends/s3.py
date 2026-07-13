@@ -15,7 +15,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase
 from dataknobs_data.exceptions import DuplicateRecordError
-from dataknobs_data.pooling.s3 import create_boto3_s3_client
+from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
@@ -219,8 +219,9 @@ class SyncS3Database(  # type: ignore[misc]
         obj_data = self._record_to_s3_object(record_copy)
         body = json.dumps(obj_data)
 
-        # Store in S3 as an atomic insert. IfNoneMatch="*" makes the PUT
-        # fail closed with 412 PreconditionFailed if the key already exists,
+        # Store in S3 as an atomic insert. IfNoneMatch="*" makes the PUT fail
+        # closed if the key already exists (412 PreconditionFailed) or if a
+        # concurrent conditional write races it (409 ConditionalRequestConflict),
         # so a colliding id cannot silently overwrite an existing record.
         try:
             self.s3_client.put_object(
@@ -231,9 +232,7 @@ class SyncS3Database(  # type: ignore[misc]
                 IfNoneMatch='*',
             )
         except self.ClientError as e:
-            err = e.response.get('Error', {})
-            status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
-            if err.get('Code') in ('PreconditionFailed', '412') or status == 412:
+            if is_s3_conditional_conflict(e):
                 raise DuplicateRecordError(storage_id) from e
             raise
 

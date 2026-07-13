@@ -17,7 +17,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from ..database import AsyncDatabase
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
-from ..pooling.s3 import S3PoolConfig, validate_s3_session
+from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
 from ..query import Operator, Query
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
@@ -184,8 +184,9 @@ class AsyncS3Database(  # type: ignore[misc]
 
         from botocore.exceptions import ClientError
 
-        # Atomic insert. IfNoneMatch="*" makes the PUT fail closed with 412
-        # PreconditionFailed if the key already exists, so a colliding id
+        # Atomic insert. IfNoneMatch="*" makes the PUT fail closed if the key
+        # already exists (412 PreconditionFailed) or if a concurrent conditional
+        # write races it (409 ConditionalRequestConflict), so a colliding id
         # cannot silently overwrite an existing record.
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             try:
@@ -197,9 +198,7 @@ class AsyncS3Database(  # type: ignore[misc]
                     IfNoneMatch="*",
                 )
             except ClientError as e:
-                err = e.response.get("Error", {})
-                status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-                if err.get("Code") in ("PreconditionFailed", "412") or status == 412:
+                if is_s3_conditional_conflict(e):
                     raise DuplicateRecordError(storage_id) from e
                 raise
 

@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate id are unaffected. On S3 the guarantee is enforced with a
   conditional PUT (`If-None-Match`) and therefore holds against any S3
   implementation that honors conditional writes (real AWS S3, recent
-  LocalStack); older stores that ignore the header degrade to last-writer-wins.
-  `create_batch()` semantics are unchanged in this release.
+  LocalStack); both a pre-existing key (412) and a concurrent conditional-write
+  race (409) fail closed as `DuplicateRecordError`, while older stores that
+  ignore the header degrade to last-writer-wins. `create_batch()` does **not**
+  participate in this contract: it does not fail closed on a colliding id
+  (memory/file overwrite; the SQL and Elasticsearch backends assign a fresh id
+  and ignore `record.id`) — use single `create()` for collision-safe inserts.
 - On the SQL backends (SQLite, DuckDB), `create()` now distinguishes a
   duplicate-id collision from other column-constraint violations: only a
   primary-key collision raises `DuplicateRecordError`, while a `NOT NULL` or

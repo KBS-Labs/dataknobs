@@ -15,6 +15,7 @@ from dataknobs_data.exceptions import (
     BackendNotFoundError,
     ConfigurationError,
     ConcurrencyError,
+    DuplicateRecordError,
     TransactionError,
     MigrationError,
 )
@@ -232,6 +233,35 @@ class TestConcurrencyError:
     def test_is_dataknobs_error(self):
         """Test that it's a DataknobsDataError."""
         assert issubclass(ConcurrencyError, DataknobsDataError)
+
+
+class TestDuplicateRecordError:
+    """Tests for DuplicateRecordError."""
+
+    def test_message_is_not_double_prefixed(self):
+        """The message is a complete sentence with no 'Concurrency error:' prefix.
+
+        DuplicateRecordError subclasses ConcurrencyError, whose __init__ prepends
+        'Concurrency error: '. The message already reads as a full sentence, so
+        the subclass must bypass that prefix rather than double it up
+        ('Concurrency error: Record with ID ... already exists').
+        """
+        error = DuplicateRecordError("dup")
+        assert str(error) == "Record with ID 'dup' already exists"
+        assert not str(error).startswith("Concurrency error:")
+
+    def test_carries_id_and_context(self):
+        """The colliding id is exposed both as an attribute and in context."""
+        error = DuplicateRecordError("dup")
+        assert error.id == "dup"
+        assert error.context == {"id": "dup"}
+
+    def test_catch_compat_mro(self):
+        """Subclasses both ConcurrencyError and ValueError for catch-compat."""
+        error = DuplicateRecordError("dup")
+        assert isinstance(error, ConcurrencyError)
+        assert isinstance(error, ValueError)
+        assert isinstance(error, DataknobsDataError)
 
 
 class TestTransactionError:
