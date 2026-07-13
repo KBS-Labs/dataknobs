@@ -14,7 +14,7 @@ import numpy as np
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import SyncDatabase
-from ..exceptions import DuplicateRecordError
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
@@ -22,7 +22,12 @@ from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncSQLiteDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLRecordSerializer,
+    SQLTableManager,
+    is_duplicate_key_error,
+)
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -210,7 +215,11 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             return storage_id
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
-            raise DuplicateRecordError(storage_id) from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(storage_id) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
         finally:
             cursor.close()
 

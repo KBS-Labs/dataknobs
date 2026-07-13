@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
+from dataknobs_utils.elasticsearch_utils import (
+    ElasticsearchConflictError,
+    SimplifiedElasticsearchIndex,
+)
 
 from ..database import SyncDatabase
 from ..exceptions import DatabaseError, DuplicateRecordError
@@ -200,15 +203,17 @@ class SyncElasticsearchDatabase(
 
         # Index the document as an atomic insert. op_type="create" makes a
         # colliding id fail closed with a 409 conflict rather than overwrite.
-        response = self.es_index.index(
-            body=doc,
-            doc_id=id,
-            refresh=self.refresh,
-            op_type="create",
-        )
-
-        if response.get("result") == "conflict" or response.get("status") == 409:
-            raise DuplicateRecordError(id)
+        # Mirrors the async backend's try/except ConflictError shape so the two
+        # conflict-detection paths cannot silently drift.
+        try:
+            response = self.es_index.index(
+                body=doc,
+                doc_id=id,
+                refresh=self.refresh,
+                op_type="create",
+            )
+        except ElasticsearchConflictError as e:
+            raise DuplicateRecordError(id) from e
 
         if not response.get("_id"):
             raise DatabaseError(f"Failed to create record: {response}")

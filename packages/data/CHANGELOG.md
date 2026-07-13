@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation that honors conditional writes (real AWS S3, recent
   LocalStack); older stores that ignore the header degrade to last-writer-wins.
   `create_batch()` semantics are unchanged in this release.
+- On the SQL backends (SQLite, DuckDB), `create()` now distinguishes a
+  duplicate-id collision from other column-constraint violations: only a
+  primary-key collision raises `DuplicateRecordError`, while a `NOT NULL` or
+  `CHECK` violation on the stored data surfaces as `RecordValidationError`
+  rather than being mislabeled as a duplicate id.
 
 ### Added
 

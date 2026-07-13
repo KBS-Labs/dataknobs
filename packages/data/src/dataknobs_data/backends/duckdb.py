@@ -18,11 +18,16 @@ import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
-from ..exceptions import DuplicateRecordError
+from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
-from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
+from .sql_base import (
+    SQLQueryBuilder,
+    SQLRecordSerializer,
+    SQLTableManager,
+    is_duplicate_key_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -233,7 +238,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise DuplicateRecordError(params[0]) from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(params[0]) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID.
@@ -830,7 +839,11 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
-            raise DuplicateRecordError(params[0]) from e
+            if is_duplicate_key_error(e):
+                raise DuplicateRecordError(params[0]) from e
+            # NOT NULL / CHECK / other column constraint — surface truthfully
+            # instead of mislabeling it as a duplicate id.
+            raise RecordValidationError(str(e)) from e
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID.

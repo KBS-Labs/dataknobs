@@ -248,8 +248,11 @@ class AsyncElasticsearchDatabase(
         try:
             response = await self._client.index(**kwargs)
         except ConflictError as e:
-            # op_type="create" only conflicts when an explicit id was supplied.
-            raise DuplicateRecordError(record.id or "") from e
+            # op_type="create" only conflicts when an explicit id was supplied
+            # (an auto-id POST never collides), so record.id is set here.
+            if record.id is None:  # pragma: no cover - defensive; unreachable
+                raise
+            raise DuplicateRecordError(record.id) from e
 
         return response["_id"]
 

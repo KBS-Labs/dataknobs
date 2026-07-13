@@ -30,6 +30,32 @@ def validate_field_name(field: str) -> None:
             f"Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
 
+
+def is_duplicate_key_error(exc: BaseException) -> bool:
+    """Return True if a SQL integrity/constraint error is a primary-key
+    (duplicate-id) collision rather than another column-constraint violation.
+
+    ``create()`` maps a colliding id to ``DuplicateRecordError``, but the raw
+    driver exceptions (``sqlite3.IntegrityError``, ``duckdb.ConstraintException``)
+    also fire for ``NOT NULL`` and ``CHECK`` violations on the ``data`` /
+    ``metadata`` columns. Those must not be mislabeled as a duplicate id — this
+    predicate distinguishes them by the driver's error text:
+
+    - SQLite enforces a non-integer ``PRIMARY KEY`` via a unique index, so a
+      colliding id surfaces as ``UNIQUE constraint failed``.
+    - DuckDB reports ``Duplicate key ... violates primary key constraint``.
+
+    ``NOT NULL`` / ``CHECK`` violations carry their own distinct markers and
+    return ``False`` here.
+    """
+    msg = str(exc).lower()
+    return (
+        "unique constraint failed" in msg  # sqlite (id PK -> unique index)
+        or "primary key" in msg  # duckdb
+        or "duplicate key" in msg  # duckdb / generic
+    )
+
+
 if TYPE_CHECKING:
     from ..query_logic import ComplexQuery
 
