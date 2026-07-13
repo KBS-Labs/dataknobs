@@ -478,7 +478,7 @@ async def test_capability_advertisement() -> None:
         assert mgr.supports(Capability.INGEST_EVENT_PUBLICATION)
         # Locking is the orchestrator's contract, NOT the manager's:
         assert not mgr.supports(Capability.TENANT_SCOPED_LOCKS)
-        assert not mgr.supports(Capability.TRANSACTIONAL_METADATA)
+        assert not mgr.supports(Capability.CONDITIONAL_WRITE)
 
     await kb.close()
     await backend.close()

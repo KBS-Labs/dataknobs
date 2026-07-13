@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The knowledge-storage backends (`FileKnowledgeBackend`,
+  `S3KnowledgeBackend`, `InMemoryKnowledgeBackend`) advertise their
+  conditional-metadata-write / optimistic-concurrency contract under
+  `Capability.CONDITIONAL_WRITE` — the layer-neutral identifier now shared
+  with the `dataknobs-data` record backends. A consumer querying
+  `backend.supports(Capability.CONDITIONAL_WRITE)` discovers the CAS
+  contract that `get_state_version` + `expected_version` on
+  `set_ingestion_status` enforce. (The former, metadata-flavored member was
+  removed from `dataknobs-common`; querying the old identifier no longer
+  resolves.)
+
 ## v0.8.3 - 2026-07-07
 
 ### Changed

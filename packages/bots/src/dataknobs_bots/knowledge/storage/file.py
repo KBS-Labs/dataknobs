@@ -92,7 +92,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             # Conditional metadata writes are guarded by an ephemeral
             # advisory file lock (POSIX fcntl.flock) held for the
             # read-check-write critical section; see _cas_write_metadata_sync.
-            Capability.TRANSACTIONAL_METADATA,
+            Capability.CONDITIONAL_WRITE,
         })
     )
 

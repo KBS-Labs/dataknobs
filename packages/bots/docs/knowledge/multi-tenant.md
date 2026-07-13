@@ -295,7 +295,7 @@ implement — `KEY_PATTERN_FILTERING`, `CHANGE_SUBSCRIPTION`,
 tenant-state and consistency capabilities they support:
 `TENANT_SCOPED_STATE` (state methods honor `ctx.state_key_prefix()`),
 `SNAPSHOT_ISOLATION` (a tenant's change detection resolves against the
-shared domain content lineage), and `TRANSACTIONAL_METADATA` (conditional
+shared domain content lineage), and `CONDITIONAL_WRITE` (conditional
 metadata writes — see "Conditional state writes" below). They do **not**
 advertise `TENANT_SCOPED_LOCKS` — backends take no architectural lock
 (the conditional-write flock is an in-operation atomicity detail, not an

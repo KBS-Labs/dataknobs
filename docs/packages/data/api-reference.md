@@ -151,6 +151,29 @@ Token source and atomicity by backend:
   token) and is not hardened across separate processes/connections — use a
   native-token backend when either matters.
 
+#### Capability advertisement
+
+The backends advertise their optional consistency features through the
+`CapabilityContract` surface, so a consumer can query support before relying on
+a behavior instead of knowing the backend matrix out-of-band. Every backend
+enforces the conditional-write contract, so `AsyncDatabase` / `SyncDatabase` and
+all 14 backends report `Capability.CONDITIONAL_WRITE`:
+
+```python
+from dataknobs_common import Capability, require_capability
+
+if db.supports(Capability.CONDITIONAL_WRITE):
+    token = db.get_version("k")
+    db.update("k", record, expected_version=token)
+
+# or fail-closed at a boundary:
+require_capability(db, Capability.CONDITIONAL_WRITE)
+```
+
+The advertisement is uniform because every backend enforces the contract; the
+ABA nuance of the content-hash backends (above) is documented rather than
+encoded as a separate capability.
+
 ### Records
 
 `Record` represents a data record with fields and metadata.

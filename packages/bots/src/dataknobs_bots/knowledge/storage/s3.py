@@ -107,7 +107,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             # Conditional metadata writes use S3's server-enforced
             # If-Match precondition on the metadata object's ETag — the
             # race-free CAS primitive for many replicas over one bucket.
-            Capability.TRANSACTIONAL_METADATA,
+            Capability.CONDITIONAL_WRITE,
         })
     )
 

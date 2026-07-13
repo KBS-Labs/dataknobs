@@ -75,7 +75,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             # Conditional state writes are trivially race-free in a
             # single-process backend: the version-counter check and
             # increment in set_ingestion_status run synchronously.
-            Capability.TRANSACTIONAL_METADATA,
+            Capability.CONDITIONAL_WRITE,
         })
     )
 
