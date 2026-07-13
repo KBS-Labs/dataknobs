@@ -11,7 +11,7 @@ from dataknobs_data.records import Record
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.query import Query
-from dataknobs_data.streaming import StreamConfig, StreamResult
+from dataknobs_data.streaming import ConflictPolicy, StreamConfig, StreamResult
 
 from dataknobs_data.migration import (
     Migrator,
@@ -652,6 +652,177 @@ class TestMigratorAdvanced:
         
         # Verify all records were migrated
         assert target.count(Query()) == 15
-        
+
         # Restore original count
         source.count = original_count
+
+
+def _seed(db, ids, value, *, partition=0):
+    """Seed a sync backend with records carrying a stable id + partition_id."""
+    for i in ids:
+        db.create(Record({"v": value, "partition_id": partition}, id=str(i)))
+
+
+async def _aseed(db, ids, value, *, partition=0):
+    """Seed an async backend with records carrying a stable id + partition_id."""
+    for i in ids:
+        await db.create(Record({"v": value, "partition_id": partition}, id=str(i)))
+
+
+def _run_sync(method, src, tgt, policy):
+    """Dispatch a conflict-policy migration through each sync ``migrate*`` path."""
+    m = Migrator()
+    if method == "migrate":
+        return m.migrate(src, tgt, on_conflict=policy)
+    if method == "migrate_stream":
+        return m.migrate_stream(src, tgt, config=StreamConfig(on_conflict=policy))
+    if method == "migrate_parallel":
+        return m.migrate_parallel(src, tgt, partitions=1, on_conflict=policy)
+    raise AssertionError(f"unknown method {method}")
+
+
+class TestMigratorConflictPolicy:
+    """Conflict policy (insert / upsert / skip) across all four migrate paths.
+
+    Built on real in-process memory backends (no mocks). ``create()`` is an
+    atomic insert post-tightening, so a re-run into a populated target has no
+    idempotent path without a policy — these tests pin the default (strict
+    insert) starting point and prove upsert/skip are threaded through every
+    public ``migrate*`` method and both shared write helpers.
+    """
+
+    def test_batched_insert_records_collision_as_failure(self):
+        """RED/pin: default (insert) fails closed on a colliding id (batched)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        # No policy => strict insert. Continue past the failure (on_error → True)
+        # so it is recorded rather than aborting the run.
+        progress = Migrator().migrate(src, tgt, on_error=lambda e, r: True)
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        # The pre-existing target row is untouched.
+        assert tgt.read("2").get_value("v") == "old"
+
+    def test_streaming_insert_overwrites_via_batch_fastpath(self):
+        """Pin the documented streaming fast-path asymmetry.
+
+        ``create_batch`` overwrites a colliding id instead of raising, so the
+        streaming INSERT fast-path does NOT fail closed the way batched
+        ``migrate()`` does. This is pre-existing behavior; the test guards that
+        the default policy did not accidentally change it.
+        """
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = Migrator().migrate_stream(src, tgt)  # default INSERT
+        assert progress.failed == 0
+        assert tgt.read("2").get_value("v") == "src"  # overwritten by create_batch
+
+    def test_batched_upsert_overwrites(self):
+        """UPSERT overwrites the target row and counts the id as a success."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.failed == 0
+        assert progress.skipped == 0
+        assert progress.succeeded == 3
+        assert tgt.read("2").get_value("v") == "src"
+
+    def test_batched_skip_is_idempotent(self):
+        """SKIP leaves the existing row and re-runs converge to all-skipped."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        m = Migrator()
+
+        first = m.migrate(src, tgt, on_conflict="skip")
+        assert first.skipped == 1
+        assert first.failed == 0
+        assert first.succeeded == 2
+        assert tgt.read("2").get_value("v") == "old"  # untouched
+
+        # Second run: every id already present => all skipped, nothing failed.
+        second = m.migrate(src, tgt, on_conflict="skip")
+        assert second.skipped == 3
+        assert second.failed == 0
+        assert second.succeeded == 0
+        # Rows are byte-identical to the first run.
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("2").get_value("v") == "old"
+
+    @pytest.mark.parametrize("method", ["migrate", "migrate_stream", "migrate_parallel"])
+    def test_all_sync_methods_upsert(self, method):
+        """Every sync path honors upsert (no failures; target matches source)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = _run_sync(method, src, tgt, "upsert")
+        assert progress.failed == 0
+        assert tgt.read("2").get_value("v") == "src"
+        assert tgt.read("1") is not None
+        assert tgt.read("3") is not None
+
+    @pytest.mark.parametrize("method", ["migrate", "migrate_stream", "migrate_parallel"])
+    def test_all_sync_methods_skip(self, method):
+        """Every sync path honors skip (colliding id skipped, old row kept)."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = _run_sync(method, src, tgt, "skip")
+        assert progress.failed == 0
+        assert progress.skipped >= 1
+        assert tgt.read("2").get_value("v") == "old"  # skip kept the old row
+        assert tgt.read("1").get_value("v") == "src"
+
+    @pytest.mark.asyncio
+    async def test_async_upsert(self):
+        """migrate_async honors upsert via config.on_conflict."""
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(
+            src, tgt, config=StreamConfig(on_conflict="upsert")
+        )
+        assert progress.failed == 0
+        assert (await tgt.read("2")).get_value("v") == "src"
+
+    @pytest.mark.asyncio
+    async def test_async_skip(self):
+        """migrate_async honors skip via config.on_conflict."""
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(
+            src, tgt, config=StreamConfig(on_conflict="skip")
+        )
+        assert progress.failed == 0
+        assert progress.skipped >= 1
+        assert (await tgt.read("2")).get_value("v") == "old"
+
+    def test_streaming_skip_accounting(self):
+        """StreamResult carries `skipped` and folds into progress.skipped."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        progress = Migrator().migrate_stream(
+            src, tgt, config=StreamConfig(on_conflict="skip")
+        )
+        assert progress.skipped == 1
+
+        # StreamResult itself carries the field and merges it.
+        result = StreamResult(skipped=2)
+        result.merge(StreamResult(skipped=3))
+        assert result.skipped == 5
+
+    def test_str_coercion_and_invalid_rejected(self):
+        """A bare string resolves; an unknown policy fails closed, not silent."""
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1], "src")
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.failed == 0
+        assert ConflictPolicy("skip") is ConflictPolicy.SKIP
+        with pytest.raises(ValueError):
+            StreamConfig(on_conflict="nonsense")

@@ -72,6 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend matrix out-of-band. The advertisement is uniform because every
   backend enforces the contract; the ABA nuance of the content-hash backends
   is documented, not encoded as a separate capability.
+- `Migrator` gains an `on_conflict` policy (`insert` / `upsert` / `skip`) for
+  idempotent re-runs into a populated target. `insert` (the default) fails
+  closed on a colliding id as before; `upsert` overwrites the target row;
+  `skip` leaves the existing row and counts the id as skipped. The policy is
+  threaded through all four migrate methods — `migrate()` and
+  `migrate_parallel()` take it directly, `migrate_stream()` / `migrate_async()`
+  read it from `StreamConfig`. Default behavior is unchanged.
+- `ConflictPolicy` enum and `StreamConfig.on_conflict` field (exported from
+  `dataknobs_data` and `dataknobs_data.migration`) carry the policy on the
+  streaming path; every backend's `stream_write` honors it. `StreamResult`
+  gains a `skipped` counter. Under `upsert`/`skip` records are written one at a
+  time (no conflict-aware bulk verb yet); the `insert` fast-path still uses the
+  backend's native batch write and is byte-identical to prior behavior. An
+  unknown `on_conflict` value is rejected when the `StreamConfig` is built.
 
 ### Notes
 

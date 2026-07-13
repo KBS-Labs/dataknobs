@@ -713,12 +713,38 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
         Returns:
             Stream result with statistics
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch`` bulk
+        fast-path; UPSERT/SKIP write per-record via ``upsert``/``create``.
         """
         import time
 
-        from ..streaming import StreamConfig, StreamResult
+        from ..streaming import (
+            ConflictPolicy,
+            StreamConfig,
+            StreamResult,
+            async_run_stream_write,
+            resolve_conflict_write,
+        )
 
         config = config or StreamConfig()
+
+        if config.on_conflict != ConflictPolicy.INSERT:
+            # UPSERT/SKIP have no conflict-aware bulk verb: write per record.
+            batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+                config.on_conflict,
+                insert_batch_func=None,
+                single_create_func=self.create,
+                upsert_func=self.upsert,
+            )
+            return await async_run_stream_write(
+                records,
+                batch_write_func=batch_write_func,
+                single_write_func=single_write_func,
+                skip_on_duplicate=skip_on_duplicate,
+                config=config,
+            )
+
         batch = []
         total_written = 0
         start_time = time.time()
@@ -1232,12 +1258,38 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
 
         Returns:
             Stream result with statistics
+
+        Honors ``config.on_conflict``: INSERT uses the ``create_batch`` bulk
+        fast-path; UPSERT/SKIP write per-record via ``upsert``/``create``.
         """
         import time
 
-        from ..streaming import StreamConfig, StreamResult
+        from ..streaming import (
+            ConflictPolicy,
+            StreamConfig,
+            StreamResult,
+            resolve_conflict_write,
+            run_stream_write,
+        )
 
         config = config or StreamConfig()
+
+        if config.on_conflict != ConflictPolicy.INSERT:
+            # UPSERT/SKIP have no conflict-aware bulk verb: write per record.
+            batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+                config.on_conflict,
+                insert_batch_func=None,
+                single_create_func=self.create,
+                upsert_func=self.upsert,
+            )
+            return run_stream_write(
+                records,
+                batch_write_func=batch_write_func,
+                single_write_func=single_write_func,
+                skip_on_duplicate=skip_on_duplicate,
+                config=config,
+            )
+
         batch = []
         total_written = 0
         start_time = time.time()

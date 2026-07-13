@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -18,7 +17,12 @@ from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
-from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
+from dataknobs_data.streaming import (
+    StreamConfig,
+    StreamResult,
+    resolve_conflict_write,
+    run_stream_write,
+)
 
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
@@ -576,45 +580,27 @@ class SyncS3Database(  # type: ignore[misc]
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into S3."""
+        """Stream records into S3.
+
+        Honors ``config.on_conflict``: INSERT uses the batch fast-path
+        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
+        write per-record via ``upsert``/``create``.
+        """
         self._check_connection()
         config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        quitting = False
-
-        batch = []
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write batch with graceful fallback
-                continue_processing = process_batch_with_fallback(
-                    batch,
-                    self._write_batch,
-                    self.create,
-                    result,
-                    config
-                )
-
-                if not continue_processing:
-                    quitting = True
-                    break
-
-                batch = []
-
-        # Write remaining batch
-        if batch and not quitting:
-            process_batch_with_fallback(
-                batch,
-                self._write_batch,
-                self.create,
-                result,
-                config
-            )
-
-        result.duration = time.time() - start_time
-        return result
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self._write_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def _write_batch(self, records: list[Record]) -> list[str]:
         """Write a batch of records to S3.
