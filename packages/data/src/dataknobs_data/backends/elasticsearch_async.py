@@ -331,7 +331,7 @@ class AsyncElasticsearchDatabase(
         doc = self._record_to_doc(record)
 
         if expected_version is not None:
-            from elasticsearch import ConflictError
+            from elasticsearch import ConflictError, NotFoundError
 
             seq_no, primary_term = parse_es_version_token(expected_version)
             try:
@@ -344,9 +344,17 @@ class AsyncElasticsearchDatabase(
                     if_primary_term=primary_term,
                 )
                 return True
+            except NotFoundError:
+                # The document was absent all along. A conditional update never
+                # inserts, so return False (uniform with the sync ES backend
+                # and every other backend) rather than surfacing ES's raw 404.
+                # A document deleted *after* a real seq_no conflict surfaces as
+                # ConflictError below, not here.
+                return False
             except ConflictError as e:
-                # Either the doc is gone (update never inserts -> False) or the
-                # token is stale (concurrent modification -> raise).
+                # The token is stale (concurrent modification). If the doc has
+                # since been deleted, treat it as gone (-> False); otherwise
+                # raise the standard conflict.
                 current = await self.get_version(id)
                 if current is None:
                     return False
@@ -363,9 +371,40 @@ class AsyncElasticsearchDatabase(
         except Exception:
             return False
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the delete carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError`` and a
+        missing document returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            from elasticsearch import ConflictError, NotFoundError
+
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                await self._client.delete(
+                    index=self.index_name,
+                    id=id,
+                    refresh=self.refresh,
+                    if_seq_no=seq_no,
+                    if_primary_term=primary_term,
+                )
+                return True
+            except NotFoundError:
+                # A conditional delete never conflicts on an absent id.
+                return False
+            except ConflictError as e:
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
 
         try:
             await self._client.delete(
@@ -419,12 +458,15 @@ class AsyncElasticsearchDatabase(
                 record.storage_id = id
 
         if expected_version is not None:
-            # Conditional upsert never inserts: require an existing row and let
-            # update() enforce the seq_no/primary_term compare-and-set.
-            if not await self.exists(id):
-                raise version_conflict_error(id, expected_version, None)
-            await self.update(id, record, expected_version=expected_version)
-            return id
+            # A conditional upsert never inserts. Delegate to update()'s
+            # server-side seq_no/primary_term compare-and-set: a True return is
+            # the update; a stale token raises straight out; a False return
+            # means the doc is absent, which for a conditional upsert is itself
+            # a conflict. Acting on the return (not a separate exists() probe)
+            # closes the exists()->update() TOCTOU.
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         doc = self._record_to_doc(record)
 

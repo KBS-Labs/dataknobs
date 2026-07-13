@@ -267,9 +267,31 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         return rows_affected > 0
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the read-compare-delete runs
+        under the CAS lock so a concurrent conditional pair on this instance
+        yields exactly one winner; a stale token raises ``ConcurrencyError``
+        and a missing record returns ``False``. Cross-connection atomicity is
+        out of scope (see the module docs on the in-process content-hash
+        backends). When ``None`` the delete is unconditional, byte-identical to
+        prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            async with self._cas_lock:
+                current = await self.read(id)
+                if current is None:
+                    return False
+                enforce_content_version(id, expected_version, current)
+                query, params = self.query_builder.build_delete_query(id)
+                cursor = await self.db.execute(query, params)
+                await self.db.commit()
+                return cursor.rowcount > 0
 
         query, params = self.query_builder.build_delete_query(id)
 

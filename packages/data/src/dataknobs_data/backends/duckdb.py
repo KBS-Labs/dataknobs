@@ -323,9 +323,9 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 read_query, read_params = self.query_builder.build_read_query(id)
                 result = self.conn.execute(read_query, read_params).fetchone()
                 if result is None:
-                    logger.warning(
-                        f"Update affected 0 rows for id={id}. Record may not exist."
-                    )
+                    # Conditional update of an absent record is a documented
+                    # False return, not a warning-worthy event (matches the
+                    # SQLite backend's quiet miss).
                     return False
                 columns = self.conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
@@ -345,14 +345,26 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
             return False
 
-    async def delete(self, id: str) -> bool:
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional content-hash token from
+                ``get_version(id)``. When provided, the read-compare-delete
+                runs under the connection lock so the compare-and-set is atomic
+                within the connection; a stale token raises ``ConcurrencyError``
+                and a missing record returns ``False``. When ``None`` the
+                delete is unconditional, byte-identical to prior behavior.
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
 
@@ -360,14 +372,29 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._delete_sync,
-            id
+            id,
+            expected_version,
         )
 
-    def _delete_sync(self, id: str) -> bool:
+    def _delete_sync(self, id: str, expected_version: str | None = None) -> bool:
         """Synchronous delete implementation."""
         query, params = self.query_builder.build_delete_query(id)
 
         with self._lock:
+            if expected_version is not None:
+                # Conditional delete: read the current row and apply the delete
+                # under the connection lock so the compare-and-set is atomic.
+                read_query, read_params = self.query_builder.build_read_query(id)
+                result = self.conn.execute(read_query, read_params).fetchone()
+                if result is None:
+                    return False
+                columns = self.conn.description
+                row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
+                current = SQLQueryBuilder.row_to_record(row_dict)
+                enforce_content_version(id, expected_version, current)
+                self.conn.execute(query, params)
+                return True
+
             # First check if the record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
             exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
@@ -931,7 +958,8 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         if expected_version is not None:
             current = self.read(id)
             if current is None:
-                logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+                # Conditional update of an absent record is a documented False
+                # return, not a warning-worthy event (matches SQLite).
                 return False
             enforce_content_version(id, expected_version, current)
 
@@ -946,17 +974,34 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
         return False
 
-    def delete(self, id: str) -> bool:
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional content-hash token from
+                ``get_version(id)``. When provided, a stale token raises
+                ``ConcurrencyError`` and a missing record returns ``False``.
+                When ``None`` the delete is unconditional, byte-identical to
+                prior behavior.
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` does not match the
+                record's current version token.
         """
         self._check_connection()
         query, params = self.query_builder.build_delete_query(id)
+
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
+            self.conn.execute(query, params)
+            return True
 
         # First check if the record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)

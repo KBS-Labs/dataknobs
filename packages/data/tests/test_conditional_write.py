@@ -1,9 +1,11 @@
 """Optimistic-concurrency (conditional write) contract across backends.
 
-``update()`` / ``upsert()`` accept an optional ``expected_version`` token read
-back from ``get_version(id)``. When supplied, the write is a compare-and-set: it
-proceeds only if the record's current token still matches, otherwise it raises
-``ConcurrencyError`` instead of last-writer-wins. Omitting ``expected_version``
+``update()`` / ``upsert()`` / ``delete()`` accept an optional
+``expected_version`` token read back from ``get_version(id)``. When supplied,
+the write is a compare-and-set: it proceeds only if the record's current token
+still matches, otherwise it raises ``ConcurrencyError`` instead of
+last-writer-wins (a conditional ``delete`` of a missing record returns
+``False`` — an absent id never conflicts). Omitting ``expected_version``
 preserves the unconditional write, byte-identical to prior behavior.
 
 Reproduce-first framing: ``test_*_unconditional_update_still_clobbers`` pins the
@@ -150,6 +152,62 @@ def test_sync_unconditional_upsert_still_inserts(sync_db: object) -> None:
     assert sync_db.read(rid).get_value("v") == 7
 
 
+def test_sync_conditional_delete_fresh_token_succeeds(sync_db: object) -> None:
+    """A conditional delete with the current token removes the record."""
+    id = _seed(sync_db)
+    token = sync_db.get_version(id)
+    assert sync_db.delete(id, expected_version=token) is True
+    assert sync_db.read(id) is None
+
+
+def test_sync_conditional_delete_stale_token_raises(sync_db: object) -> None:
+    """A conditional delete with a stale token raises and leaves the record."""
+    id = _seed(sync_db)
+    stale = sync_db.get_version(id)
+    # An interleaved writer advances the token.
+    sync_db.update(id, Record({"v": "A"}, id=id), expected_version=stale)
+    with pytest.raises(ConcurrencyError) as excinfo:
+        sync_db.delete(id, expected_version=stale)
+    assert excinfo.value.context["id"] == id
+    assert excinfo.value.context["expected_version"] == stale
+    # The stale-token delete did not remove the record.
+    assert sync_db.read(id) is not None
+
+
+def test_sync_conditional_delete_missing_returns_false(sync_db: object) -> None:
+    """A conditional delete of an absent id returns False (never conflicts)."""
+    assert sync_db.delete("ghost", expected_version="whatever") is False
+
+
+def test_sync_unconditional_delete_still_works(sync_db: object) -> None:
+    """Omitting expected_version keeps delete's unconditional behavior."""
+    id = _seed(sync_db)
+    assert sync_db.delete(id) is True
+    assert sync_db.read(id) is None
+
+
+def test_sync_memory_delete_recreate_is_aba_safe() -> None:
+    """Memory's monotonic token survives a delete->recreate ABA cycle.
+
+    Reproduce-first: the old per-key counter reset to 1 on ``create`` and was
+    popped on ``delete``, so a token read before a delete->recreate cycle
+    (value ``"1"``) matched the recreated record's token (also ``"1"``) — a
+    stale conditional write silently succeeded. The record is recreated with
+    *identical* content here so a content-hash token would also collide; only a
+    never-reused monotonic sequence detects the change, which is exactly memory's
+    stated guarantee.
+    """
+    db = SyncMemoryDatabase()
+    db.create(Record({"v": 0}, id="k"))
+    stale = db.get_version("k")
+    db.delete("k")
+    db.create(Record({"v": 0}, id="k"))  # identical content, same id
+    with pytest.raises(ConcurrencyError):
+        db.update("k", Record({"v": 9}, id="k"), expected_version=stale)
+    # The recreated record is untouched by the stale-token write.
+    assert db.read("k").get_value("v") == 0
+
+
 # ---------------------------------------------------------------------------
 # Async backends
 # ---------------------------------------------------------------------------
@@ -239,3 +297,63 @@ async def test_async_concurrent_conditional_update_one_wins(async_db: object) ->
     assert len(conflicts) == 2
     got = await async_db.read(id)
     assert got.get_value("who") in {"a", "b", "c"}
+
+
+@pytest.mark.asyncio
+async def test_async_conditional_delete_fresh_token_succeeds(async_db: object) -> None:
+    """A conditional delete with the current token removes the record."""
+    id = await _aseed(async_db)
+    token = await async_db.get_version(id)
+    assert await async_db.delete(id, expected_version=token) is True
+    assert await async_db.read(id) is None
+
+
+@pytest.mark.asyncio
+async def test_async_conditional_delete_stale_token_raises(async_db: object) -> None:
+    """A conditional delete with a stale token raises and leaves the record."""
+    id = await _aseed(async_db)
+    stale = await async_db.get_version(id)
+    await async_db.update(id, Record({"v": "A"}, id=id), expected_version=stale)
+    with pytest.raises(ConcurrencyError) as excinfo:
+        await async_db.delete(id, expected_version=stale)
+    assert excinfo.value.context["id"] == id
+    assert await async_db.read(id) is not None
+
+
+@pytest.mark.asyncio
+async def test_async_conditional_delete_missing_returns_false(async_db: object) -> None:
+    """A conditional delete of an absent id returns False (never conflicts)."""
+    assert await async_db.delete("ghost", expected_version="whatever") is False
+
+
+@pytest.mark.asyncio
+async def test_async_concurrent_conditional_delete_one_wins(async_db: object) -> None:
+    """Concurrent conditional deletes on one token: exactly one wins."""
+    id = await _aseed(async_db)
+    token = await async_db.get_version(id)
+    results = await asyncio.gather(
+        async_db.delete(id, expected_version=token),
+        async_db.delete(id, expected_version=token),
+        async_db.delete(id, expected_version=token),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if r is True]
+    # The losers either raise ConcurrencyError (record still present at the
+    # stale token) or return False (record already gone) — never a silent
+    # second successful delete.
+    assert len(successes) == 1
+    assert await async_db.read(id) is None
+
+
+@pytest.mark.asyncio
+async def test_async_memory_delete_recreate_is_aba_safe() -> None:
+    """Memory's monotonic token survives a delete->recreate ABA cycle (async)."""
+    db = AsyncMemoryDatabase()
+    await db.create(Record({"v": 0}, id="k"))
+    stale = await db.get_version("k")
+    await db.delete("k")
+    await db.create(Record({"v": 0}, id="k"))  # identical content, same id
+    with pytest.raises(ConcurrencyError):
+        await db.update("k", Record({"v": 9}, id="k"), expected_version=stale)
+    got = await db.read("k")
+    assert got.get_value("v") == 0

@@ -662,18 +662,47 @@ class SimplifiedElasticsearchIndex:
         )
         return response.succeeded
 
-    def delete(self, doc_id: str | None = None) -> bool:
+    def delete(
+        self,
+        doc_id: str | None = None,
+        if_seq_no: int | None = None,
+        if_primary_term: int | None = None,
+    ) -> bool:
         """Delete the index or a document.
-        
+
         Args:
             doc_id: If provided, delete document. Otherwise delete entire index.
-            
+            if_seq_no: Optional optimistic-concurrency guard — the sequence
+                number the document must currently carry. Pair with
+                ``if_primary_term``. When both are set the delete is a
+                compare-and-set: a stale token is a 409 raised as
+                ``ElasticsearchConflictError``; a missing document is a 404 that
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id).
+            if_primary_term: Optional optimistic-concurrency guard — the primary
+                term the document must currently carry. Pair with ``if_seq_no``.
+
         Returns:
             True if deleted successfully
+
+        Raises:
+            ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
+                are supplied and the document exists with different values
+                (HTTP 409).
         """
         if doc_id:
             # Delete document
-            response = self._request("delete", f"_doc/{doc_id}")
+            params: Dict[str, Any] = {}
+            if if_seq_no is not None:
+                params["if_seq_no"] = if_seq_no
+            if if_primary_term is not None:
+                params["if_primary_term"] = if_primary_term
+            response = self._request("delete", f"_doc/{doc_id}", params=params or None)
+            # A conditional delete (guards supplied) surfaces a stale-token 409
+            # as a distinct conflict; the unconditional path keeps its bool
+            # contract (and a missing doc is a 404 -> False).
+            if if_seq_no is not None and response.status == 409:
+                raise ElasticsearchConflictError(doc_id)
             return response.succeeded
         else:
             # Delete index

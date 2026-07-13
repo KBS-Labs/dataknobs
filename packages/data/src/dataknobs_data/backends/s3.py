@@ -338,11 +338,41 @@ class SyncS3Database(  # type: ignore[misc]
         logger.debug(f"Updated record {id} at {key}")
         return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from S3."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from S3.
+
+        When ``expected_version`` is provided the ``DeleteObject`` carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError`` and a missing object returns
+        ``False``. When ``None`` the delete is unconditional, byte-identical to
+        prior behavior. The compare-and-set holds against any S3 implementation
+        that honors conditional deletes (real AWS S3, recent LocalStack).
+        """
         self._check_connection()
 
         key = self._get_object_key(id)
+
+        if expected_version is not None:
+            try:
+                self.s3_client.delete_object(
+                    Bucket=self.bucket, Key=key, IfMatch=expected_version
+                )
+            except self.ClientError as e:
+                code = e.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey"):
+                    # A conditional delete never conflicts on an absent id.
+                    return False
+                if is_s3_conditional_conflict(e):
+                    # The guarded delete lost: the ETag is stale (-> raise) or
+                    # the object vanished mid-op (-> False).
+                    current = self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
+                raise
+            self._cache_dirty = True
+            logger.debug(f"Conditionally deleted record {id} at {key}")
+            return True
 
         # Check if exists
         try:

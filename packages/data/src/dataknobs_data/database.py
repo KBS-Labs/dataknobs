@@ -82,9 +82,15 @@ def enforce_content_version(
     (its lock or transaction), raise ``ConcurrencyError`` when
     ``expected_version`` does not match the record's current content-hash
     token. ``expected_version=None`` is an unconditional write (no-op).
+
     ``current_record`` is ``None`` for an absent record, whose token is
-    ``None`` and therefore never matches a real token -- so a conditional
-    write against a missing record always conflicts.
+    ``None`` and therefore never matches a real token. Which callers reach
+    that branch differs by operation: the content-hash ``update`` / ``delete``
+    callers pre-filter the missing case (``if current is None: return False``)
+    *before* calling this, so for them the ``None`` -> raise path is not
+    exercised. It is live for ``upsert``-style callers (e.g. file's
+    ``upsert``) that have no pre-existence check and rely on a missing record
+    conflicting -- a conditional upsert must never insert.
 
     Pass the read-prepared record (the same value ``read()`` would return),
     so the token compared here is byte-identical to the one
@@ -393,14 +399,25 @@ class AsyncDatabase(ABC):
         return None if record is None else hash_record_version(record)
 
     @abstractmethod
-    async def delete(self, id: str) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the delete proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). A missing record
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id). When ``None`` (the default) the delete is
+                unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
         """
         raise NotImplementedError
 
@@ -540,22 +557,30 @@ class AsyncDatabase(ABC):
                 # Set it on the record for future reference
                 record.storage_id = id
 
-        # Now perform the upsert
-        if await self.exists(id):
-            await self.update(id, record, expected_version=expected_version)
-        else:
-            if expected_version is not None:
-                # A conditional upsert cannot insert: the caller expected a
-                # specific current version but the record is absent (its
-                # current version is None, which never matches a token).
-                raise version_conflict_error(id, expected_version, None)
-            # Ensure the record has the storage_id set for create
-            if not record.storage_id:
-                record.storage_id = id
-            created_id = await self.create(record)
-            # Return the created ID (might be different from what we provided)
-            return created_id or id
-        return id
+        # Conditional upsert: delegate to update()'s atomic compare-and-set. A
+        # True return is the update; a stale token raises ``ConcurrencyError``
+        # straight out; a False return means the record is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent record without side effects, so
+        # this stays quiet on the miss.
+        if expected_version is not None:
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of returning ``id`` while writing nothing (the old code
+        # ignored update()'s return -- the silent-no-write bug). Gating update()
+        # behind exists() also skips a doomed UPDATE on the common insert path.
+        if await self.exists(id) and await self.update(id, record):
+            return id
+        # Ensure the record has the storage_id set for create.
+        if not record.storage_id:
+            record.storage_id = id
+        created_id = await self.create(record)
+        # Return the created ID (might be different from what we provided).
+        return created_id or id
 
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch.
@@ -1112,14 +1137,25 @@ class SyncDatabase(ABC):
         return None if record is None else hash_record_version(record)
 
     @abstractmethod
-    def delete(self, id: str) -> bool:
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         Args:
             id: The record ID
+            expected_version: Optional optimistic-concurrency token obtained
+                from ``get_version(id)``. When provided, the delete proceeds
+                only if the record's current token still matches, otherwise it
+                raises ``ConcurrencyError`` (compare-and-set). A missing record
+                returns ``False`` (a conditional delete never conflicts on an
+                absent id). When ``None`` (the default) the delete is
+                unconditional, byte-identical to prior behavior.
 
         Returns:
             True if the record was deleted, False if not found
+
+        Raises:
+            ConcurrencyError: If ``expected_version`` is provided and does not
+                match the record's current version token.
 
         Example:
             ```python
@@ -1276,22 +1312,30 @@ class SyncDatabase(ABC):
                 # Set it on the record for future reference
                 record.storage_id = id
 
-        # Now perform the upsert
-        if self.exists(id):
-            self.update(id, record, expected_version=expected_version)
-        else:
-            if expected_version is not None:
-                # A conditional upsert cannot insert: the caller expected a
-                # specific current version but the record is absent (its
-                # current version is None, which never matches a token).
-                raise version_conflict_error(id, expected_version, None)
-            # Ensure the record has the storage_id set for create
-            if not record.storage_id:
-                record.storage_id = id
-            created_id = self.create(record)
-            # Return the created ID (might be different from what we provided)
-            return created_id or id
-        return id
+        # Conditional upsert: delegate to update()'s atomic compare-and-set. A
+        # True return is the update; a stale token raises ``ConcurrencyError``
+        # straight out; a False return means the record is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent record without side effects, so
+        # this stays quiet on the miss.
+        if expected_version is not None:
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of returning ``id`` while writing nothing (the old code
+        # ignored update()'s return -- the silent-no-write bug). Gating update()
+        # behind exists() also skips a doomed UPDATE on the common insert path.
+        if self.exists(id) and self.update(id, record):
+            return id
+        # Ensure the record has the storage_id set for create.
+        if not record.storage_id:
+            record.storage_id = id
+        created_id = self.create(record)
+        # Return the created ID (might be different from what we provided).
+        return created_id or id
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""

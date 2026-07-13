@@ -132,3 +132,103 @@ async def test_async_conditional_update_stale_token_raises(
             await async_db.update("k", Record({"v": "B"}, id="k"), expected_version=stale)
     got = await async_db.read("k")
     assert got.get_value("v") == "A"
+
+
+async def test_async_conditional_update_missing_returns_false(
+    async_db: AsyncS3Database,
+) -> None:
+    """A conditional update of a missing id returns False, never leaks ClientError.
+
+    Regression: dropping the exists() pre-check on the conditional path left the
+    missing-key case to the IfMatch PUT, which S3 answers with 404 NoSuchKey
+    (not 412). Only ``is_s3_conditional_conflict`` (412/409) was caught, so the
+    raw botocore ClientError leaked instead of returning False. The direct
+    update() call is the only path that reaches this — upsert() masks it by
+    delegating to update() and then treating False as an insert.
+    """
+    with assert_no_blocking():
+        result = await async_db.update(
+            "ghost", Record({"v": 1}, id="ghost"), expected_version='"deadbeef"'
+        )
+    assert result is False
+
+
+async def test_async_conditional_upsert_absent_raises(
+    async_db: AsyncS3Database,
+) -> None:
+    """upsert() of a missing id with a token is itself a conflict (never inserts)."""
+    with assert_no_blocking():
+        with pytest.raises(ConcurrencyError) as excinfo:
+            await async_db.upsert(
+                "ghost", Record({"v": 1}, id="ghost"), expected_version='"x"'
+            )
+    assert excinfo.value.context["actual_version"] is None
+
+
+def _store_honors_delete_if_match(cfg: dict[str, Any]) -> bool:
+    """True when the S3 store rejects a DELETE carrying a non-matching ``If-Match``.
+
+    ``If-Match`` on ``DeleteObject`` is a newer S3 feature than on ``PutObject``;
+    probe it independently so a store that honors conditional PUT but not
+    conditional DELETE skips (rather than false-fails) the delete tests.
+    """
+    client = boto3.client(
+        "s3",
+        endpoint_url=cfg.get("endpoint_url"),
+        region_name=cfg.get("region", "us-east-1"),
+        aws_access_key_id=cfg.get("aws_access_key_id", "test"),
+        aws_secret_access_key=cfg.get("aws_secret_access_key", "test"),
+    )
+    key = f"_probe/{uuid.uuid4().hex}"
+    client.put_object(Bucket=cfg["bucket"], Key=key, Body=b"first")
+    try:
+        # A deliberately-wrong ETag must be rejected.
+        client.delete_object(Bucket=cfg["bucket"], Key=key, IfMatch='"0deadbeef0"')
+        return False  # accepted a bogus If-Match → header ignored
+    except ClientError as e:
+        status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        code = e.response.get("Error", {}).get("Code")
+        return status in (412, 409) or code in (
+            "PreconditionFailed",
+            "412",
+            "ConditionalRequestConflict",
+        )
+    finally:
+        client.delete_object(Bucket=cfg["bucket"], Key=key)
+
+
+def test_sync_conditional_delete(
+    sync_db: SyncS3Database, s3_config: dict[str, Any]
+) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    if not _store_honors_delete_if_match(s3_config):
+        pytest.skip("S3 store under test does not honor If-Match conditional deletes")
+    sync_db.create(Record({"v": 0}, id="k"))
+    stale = sync_db.get_version("k")
+    sync_db.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+    with pytest.raises(ConcurrencyError):
+        sync_db.delete("k", expected_version=stale)
+    assert sync_db.read("k") is not None
+    fresh = sync_db.get_version("k")
+    assert sync_db.delete("k", expected_version=fresh) is True
+    assert sync_db.read("k") is None
+    assert sync_db.delete("k", expected_version='"x"') is False
+
+
+async def test_async_conditional_delete(
+    async_db: AsyncS3Database, s3_config: dict[str, Any]
+) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    if not _store_honors_delete_if_match(s3_config):
+        pytest.skip("S3 store under test does not honor If-Match conditional deletes")
+    with assert_no_blocking():
+        await async_db.create(Record({"v": 0}, id="k"))
+        stale = await async_db.get_version("k")
+        await async_db.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+        with pytest.raises(ConcurrencyError):
+            await async_db.delete("k", expected_version=stale)
+        assert await async_db.read("k") is not None
+        fresh = await async_db.get_version("k")
+        assert await async_db.delete("k", expected_version=fresh) is True
+        assert await async_db.read("k") is None
+        assert await async_db.delete("k", expected_version='"x"') is False

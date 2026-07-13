@@ -77,3 +77,82 @@ async def test_async_conditional_write(elasticsearch_test_index) -> None:
         assert got.get_value("v") == 1
     finally:
         await db.close()
+
+
+def test_sync_conditional_update_missing_returns_false(elasticsearch_test_index) -> None:
+    """A conditional update of an absent id returns False (never inserts)."""
+    db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    db.connect()
+    try:
+        result = db.update(
+            "ghost", Record({"v": 1}, id="ghost"), expected_version="1:1"
+        )
+        assert result is False
+        assert db.read("ghost") is None
+    finally:
+        db.close()
+
+
+async def test_async_conditional_update_missing_returns_false(
+    elasticsearch_test_index,
+) -> None:
+    """Reproduce-first: a conditional update of an absent id must return False.
+
+    The async backend caught only ``ConflictError``, so ES's 404
+    ``document_missing_exception`` (raised by ``elasticsearch-py`` as
+    ``NotFoundError``) propagated uncaught instead of the documented ``False``
+    — diverging from the sync backend and every other backend. This exercises
+    the missing-record path through ``update()`` directly; the pre-existing
+    conditional tests only reach the missing path via ``upsert()``.
+    """
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        result = await db.update(
+            "ghost", Record({"v": 1}, id="ghost"), expected_version="1:1"
+        )
+        assert result is False
+        assert await db.read("ghost") is None
+    finally:
+        await db.close()
+
+
+def test_sync_conditional_delete(elasticsearch_test_index) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    db = SyncElasticsearchDatabase(elasticsearch_test_index)
+    db.connect()
+    try:
+        db.create(Record({"v": 0}, id="k"))
+        stale = db.get_version("k")
+        # An interleaved writer advances the token.
+        db.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+        with pytest.raises(ConcurrencyError):
+            db.delete("k", expected_version=stale)
+        assert db.read("k") is not None
+        # Fresh token deletes.
+        fresh = db.get_version("k")
+        assert db.delete("k", expected_version=fresh) is True
+        assert db.read("k") is None
+        # Conditional delete of an absent id returns False.
+        assert db.delete("k", expected_version="1:1") is False
+    finally:
+        db.close()
+
+
+async def test_async_conditional_delete(elasticsearch_test_index) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        await db.create(Record({"v": 0}, id="k"))
+        stale = await db.get_version("k")
+        await db.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+        with pytest.raises(ConcurrencyError):
+            await db.delete("k", expected_version=stale)
+        assert await db.read("k") is not None
+        fresh = await db.get_version("k")
+        assert await db.delete("k", expected_version=fresh) is True
+        assert await db.read("k") is None
+        assert await db.delete("k", expected_version="1:1") is False
+    finally:
+        await db.close()

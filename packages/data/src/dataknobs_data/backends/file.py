@@ -541,15 +541,27 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         async with self._lock:
             data = await self._load_data()
-            if id in data:
-                del data[id]
-                await self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            await self._save_data(data)
+            return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
@@ -902,15 +914,25 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data(data)
             return True
 
-    def delete(self, id: str) -> bool:
-        """Delete a record from the file."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record from the file.
+
+        When ``expected_version`` is provided the content-hash token is
+        compared inside the lock so the check and the delete are atomic (no
+        TOCTOU); a stale token raises ``ConcurrencyError`` and a missing record
+        returns ``False``. When ``None`` the delete is unconditional,
+        byte-identical to prior behavior.
+        """
         with self._lock:
             data = self._load_data()
-            if id in data:
-                del data[id]
-                self._save_data(data)
-                return True
-            return False
+            if id not in data:
+                return False
+            enforce_content_version(
+                id, expected_version, self._prepare_record_from_storage(data.get(id), id)
+            )
+            del data[id]
+            self._save_data(data)
+            return True
 
     def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""

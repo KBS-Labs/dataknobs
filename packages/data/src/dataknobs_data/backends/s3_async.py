@@ -266,8 +266,12 @@ class AsyncS3Database(  # type: ignore[misc]
         """
         self._check_connection()
 
-        # Check if record exists
-        if not await self.exists(id):
+        # An unconditional update must fail closed on a missing object (a plain
+        # PUT would insert), so it keeps the exists() pre-check. A conditional
+        # update needs no pre-check: the IfMatch PUT below resolves the missing
+        # case itself (S3 answers a missing key with 404 NoSuchKey, handled
+        # below -> False), so we skip the extra head_object round-trip.
+        if expected_version is None and not await self.exists(id):
             return False
 
         key = self._get_key(id)
@@ -291,22 +295,66 @@ class AsyncS3Database(  # type: ignore[misc]
             async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
                 await s3.put_object(**put_kwargs)
         except ClientError as e:
-            if expected_version is not None and is_s3_conditional_conflict(e):
-                # The guarded PUT lost: either the object is gone (update never
-                # inserts -> False) or the ETag is stale (-> raise).
-                current = await self.get_version(id)
-                if current is None:
+            if expected_version is not None:
+                code = e.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey"):
+                    # A conditional update never inserts: an absent id is a
+                    # miss, not a conflict, so an IfMatch PUT against a missing
+                    # key (S3 -> 404 NoSuchKey) returns False.
                     return False
-                raise version_conflict_error(id, expected_version, current) from e
+                if is_s3_conditional_conflict(e):
+                    # The guarded PUT lost: either the object vanished mid-op
+                    # (update never inserts -> False) or the ETag is stale
+                    # (-> raise).
+                    current = await self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
             raise
 
         return True
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record from S3."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record from S3.
+
+        When ``expected_version`` is provided the ``DeleteObject`` carries an
+        ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
+        stale token raises ``ConcurrencyError`` and a missing object returns
+        ``False``. When ``None`` the delete is unconditional, byte-identical to
+        prior behavior.
+        """
         self._check_connection()
 
         key = self._get_key(id)
+
+        if expected_version is not None:
+            from botocore.exceptions import ClientError
+
+            try:
+                async with self._session.client(
+                    "s3", endpoint_url=self._pool_config.endpoint_url
+                ) as s3:
+                    await s3.delete_object(
+                        Bucket=self._pool_config.bucket,
+                        Key=key,
+                        IfMatch=expected_version,
+                    )
+                return True
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey"):
+                    # A conditional delete never conflicts on an absent id.
+                    return False
+                if is_s3_conditional_conflict(e):
+                    # The guarded delete lost: the ETag is stale (-> raise) or
+                    # the object vanished mid-op (-> False).
+                    current = await self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
+                raise
 
         try:
             async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
@@ -367,12 +415,15 @@ class AsyncS3Database(  # type: ignore[misc]
                 record.storage_id = id
 
         if expected_version is not None:
-            # Conditional upsert never inserts: require an existing object and
-            # let update() enforce the ETag If-Match compare-and-set.
-            if not await self.exists(id):
-                raise version_conflict_error(id, expected_version, None)
-            await self.update(id, record, expected_version=expected_version)
-            return id
+            # A conditional upsert never inserts. Delegate to update()'s ETag
+            # If-Match compare-and-set: a True return is the update; a stale
+            # ETag raises straight out; a False return means the object is
+            # absent, which for a conditional upsert is itself a conflict.
+            # Acting on the return (not a separate exists() probe) closes the
+            # exists()->update() TOCTOU.
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         key = self._get_key(id)
         obj = self._record_to_s3_object(record)

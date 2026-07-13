@@ -120,3 +120,54 @@ async def test_async_concurrent_conditional_update_one_wins(
     conflicts = [r for r in results if isinstance(r, ConcurrencyError)]
     assert len(successes) == 1
     assert len(conflicts) == 2
+
+
+def test_sync_conditional_delete(sync_pg: SyncPostgresDatabase) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    sync_pg.create(Record({"v": 0}, id="k"))
+    stale = sync_pg.get_version("k")
+    # An interleaved writer advances xmin.
+    sync_pg.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+    with pytest.raises(ConcurrencyError) as excinfo:
+        sync_pg.delete("k", expected_version=stale)
+    assert excinfo.value.context["id"] == "k"
+    assert sync_pg.read("k") is not None
+    # Fresh token deletes.
+    fresh = sync_pg.get_version("k")
+    assert sync_pg.delete("k", expected_version=fresh) is True
+    assert sync_pg.read("k") is None
+    # Conditional delete of an absent id returns False (never conflicts).
+    assert sync_pg.delete("k", expected_version="1") is False
+
+
+async def test_async_conditional_delete(async_pg: AsyncPostgresDatabase) -> None:
+    """Conditional delete: stale raises, fresh removes, missing returns False."""
+    await async_pg.create(Record({"v": 0}, id="k"))
+    stale = await async_pg.get_version("k")
+    await async_pg.update("k", Record({"v": 1}, id="k"), expected_version=stale)
+    with pytest.raises(ConcurrencyError):
+        await async_pg.delete("k", expected_version=stale)
+    assert await async_pg.read("k") is not None
+    fresh = await async_pg.get_version("k")
+    assert await async_pg.delete("k", expected_version=fresh) is True
+    assert await async_pg.read("k") is None
+    assert await async_pg.delete("k", expected_version="1") is False
+
+
+async def test_async_concurrent_conditional_delete_one_wins(
+    async_pg: AsyncPostgresDatabase,
+) -> None:
+    """Concurrent conditional deletes on one token: exactly one wins."""
+    await async_pg.create(Record({"v": 0}, id="race"))
+    token = await async_pg.get_version("race")
+    results = await asyncio.gather(
+        async_pg.delete("race", expected_version=token),
+        async_pg.delete("race", expected_version=token),
+        async_pg.delete("race", expected_version=token),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if r is True]
+    # Losers raise (row still present at the stale token) or return False (row
+    # already gone) — never a silent second successful delete.
+    assert len(successes) == 1
+    assert await async_pg.read("race") is None

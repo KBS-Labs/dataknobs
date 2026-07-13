@@ -286,9 +286,30 @@ class SyncElasticsearchDatabase(
 
         return success
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
-        success = self.es_index.delete(doc_id=id)
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the delete carries ES's
+        ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
+        enforced server-side; a stale token raises ``ConcurrencyError`` and a
+        missing document returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
+        if expected_version is not None:
+            seq_no, primary_term = parse_es_version_token(expected_version)
+            try:
+                success = self.es_index.delete(
+                    doc_id=id, if_seq_no=seq_no, if_primary_term=primary_term
+                )
+            except ElasticsearchConflictError as e:
+                # Stale token (doc exists, version mismatch). If the doc is
+                # already gone, treat it as not-found -> False.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current) from e
+        else:
+            success = self.es_index.delete(doc_id=id)
 
         # Refresh if needed
         if success and self.refresh:
@@ -331,12 +352,15 @@ class SyncElasticsearchDatabase(
                 record.storage_id = id
 
         if expected_version is not None:
-            # Conditional upsert never inserts: require an existing row and let
-            # update() enforce the seq_no/primary_term compare-and-set.
-            if not self.exists(id):
-                raise version_conflict_error(id, expected_version, None)
-            self.update(id, record, expected_version=expected_version)
-            return id
+            # A conditional upsert never inserts. Delegate to update()'s
+            # server-side seq_no/primary_term compare-and-set: a True return is
+            # the update; a stale token raises straight out; a False return
+            # means the doc is absent, which for a conditional upsert is itself
+            # a conflict. Acting on the return (not a separate exists() probe)
+            # closes the exists()->update() TOCTOU.
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         doc = self._record_to_doc(record, id)
         response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)

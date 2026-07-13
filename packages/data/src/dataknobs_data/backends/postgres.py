@@ -426,9 +426,37 @@ class SyncPostgresDatabase(
 
         return rows_affected > 0
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the ``DELETE`` carries an
+        ``AND xmin = …`` predicate so the compare-and-set is enforced
+        atomically by the server; a stale token raises ``ConcurrencyError``
+        and a missing row returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            sql = f"""
+            DELETE FROM {self._q_qualified}
+            WHERE id = %(id)s AND xmin::text = %(expected_version)s
+            """
+            result = self.db.execute(
+                sql, {"id": id, "expected_version": expected_version}
+            )
+            rows_affected = result if isinstance(result, int) else 0
+            if rows_affected == 0:
+                # The atomic DELETE matched nothing: either the row is gone
+                # (delete of an absent id -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition; the CAS already happened server-side.
+                current = self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
+
         sql = f"""
         DELETE FROM {self._q_qualified}
         WHERE id = %(id)s
@@ -479,20 +507,31 @@ class SyncPostgresDatabase(
                 id = str(uuid.uuid4())
                 record.storage_id = id
 
-        if self.exists(id):
-            self.update(id, record, expected_version=expected_version)
-        else:
-            if expected_version is not None:
-                # A conditional upsert cannot insert: the caller expected a
-                # specific current version but the record is absent.
-                raise version_conflict_error(id, expected_version, None)
-            # Insert with specific ID
-            row = self._record_to_row(record, id)
-            sql = f"""
-            INSERT INTO {self._q_qualified} (id, data, metadata)
-            VALUES (%(id)s, %(data)s, %(metadata)s)
-            """
-            self.db.execute(sql, row)
+        # Conditional upsert: delegate to update()'s atomic xmin
+        # compare-and-set. A True return is the update; a stale token raises
+        # straight out; a False return means the row is absent, which for a
+        # conditional upsert is itself a conflict (it never inserts). update()'s
+        # conditional path reports an absent row without logging, so this stays
+        # quiet on the miss.
+        if expected_version is not None:
+            if self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
+
+        # Unconditional upsert: probe existence, but ACT on update()'s return so
+        # a concurrent delete between exists() and update() falls through to the
+        # insert instead of claiming a false success (the old code ignored
+        # update()'s return). Gating update() behind exists() also skips a
+        # doomed UPDATE (and its log) on the common insert path.
+        if self.exists(id) and self.update(id, record):
+            return id
+        # Insert with specific ID (unconditional upsert of an absent row).
+        row = self._record_to_row(record, id)
+        sql = f"""
+        INSERT INTO {self._q_qualified} (id, data, metadata)
+        VALUES (%(id)s, %(data)s, %(metadata)s)
+        """
+        self.db.execute(sql, row)
         return id
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
@@ -1418,9 +1457,38 @@ class AsyncPostgresDatabase(
 
         return rows_affected > 0
 
-    async def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    async def delete(
+        self, id: str, *, expected_version: str | None = None
+    ) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the ``DELETE`` carries an
+        ``AND xmin = …`` predicate so the compare-and-set is enforced
+        atomically by the server; a stale token raises ``ConcurrencyError``
+        and a missing row returns ``False``. When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            sql = f"""
+            DELETE FROM {self._q_qualified}
+            WHERE id = $1 AND xmin::text = $2
+            """
+            async with self._pool.acquire() as conn:
+                result = await conn.execute(sql, id, expected_version)
+            rows_affected = int(result.split()[-1])
+            if rows_affected == 0:
+                # The atomic DELETE matched nothing: either the row is gone
+                # (delete of an absent id -> False) or the token is stale
+                # (concurrent modification -> raise). The follow-up read only
+                # picks the disposition; the CAS already happened server-side.
+                current = await self.get_version(id)
+                if current is None:
+                    return False
+                raise version_conflict_error(id, expected_version, current)
+            return True
+
         sql = f"""
         DELETE FROM {self._q_qualified}
         WHERE id = $1
@@ -1480,12 +1548,15 @@ class AsyncPostgresDatabase(
                 record.storage_id = id
 
         if expected_version is not None:
-            # A conditional upsert cannot insert: require an existing row and
-            # let update() enforce the xmin compare-and-set.
-            if not await self.exists(id):
-                raise version_conflict_error(id, expected_version, None)
-            await self.update(id, record, expected_version=expected_version)
-            return id
+            # A conditional upsert never inserts. Delegate to update()'s atomic
+            # xmin compare-and-set: a True return is the update; a stale token
+            # raises straight out; a False return means the row is absent
+            # (decided server-side), which for a conditional upsert is itself a
+            # conflict. Acting on the return (not a separate exists() probe)
+            # closes the exists()->update() TOCTOU.
+            if await self.update(id, record, expected_version=expected_version):
+                return id
+            raise version_conflict_error(id, expected_version, None)
 
         vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)

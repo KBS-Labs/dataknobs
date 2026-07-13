@@ -306,9 +306,25 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
-    def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+    def delete(self, id: str, *, expected_version: str | None = None) -> bool:
+        """Delete a record by ID.
+
+        When ``expected_version`` is provided the current content-hash token is
+        compared before the ``DELETE``; a stale token raises
+        ``ConcurrencyError`` and a missing record returns ``False``. Reusing
+        ``read()`` keeps the compared token byte-identical to ``get_version()``.
+        On a single connection the read and delete are serialized;
+        cross-connection atomicity is out of scope (see the module docs on the
+        in-process content-hash backends). When ``None`` the delete is
+        unconditional, byte-identical to prior behavior.
+        """
         self._check_connection()
+
+        if expected_version is not None:
+            current = self.read(id)
+            if current is None:
+                return False
+            enforce_content_version(id, expected_version, current)
 
         query, params = self.query_builder.build_delete_query(id)
         cursor = self.conn.cursor()
