@@ -242,11 +242,19 @@ class AsyncDatabase(ABC):
     async def create(self, record: Record) -> str:
         """Create a new record in the database.
 
+        This is an atomic insert: if a record with the same id already
+        exists, the create fails closed rather than overwriting it.
+
         Args:
             record: The record to create
 
         Returns:
             The ID of the created record
+
+        Raises:
+            DuplicateRecordError: If a record with the same id already exists.
+                Subclasses ValueError, so callers catching ValueError on a
+                duplicate id remain compatible.
         """
         raise NotImplementedError
 
@@ -873,11 +881,19 @@ class SyncDatabase(ABC):
     def create(self, record: Record) -> str:
         """Create a new record in the database.
 
+        This is an atomic insert: if a record with the same id already
+        exists, the create fails closed rather than overwriting it.
+
         Args:
             record: The record to create
 
         Returns:
             The ID of the created record
+
+        Raises:
+            DuplicateRecordError: If a record with the same id already exists.
+                Subclasses ValueError, so callers catching ValueError on a
+                duplicate id remain compatible.
 
         Example:
             ```python

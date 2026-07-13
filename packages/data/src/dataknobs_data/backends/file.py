@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
@@ -508,6 +509,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
             data = await self._load_data()
             # Use centralized method to prepare record
             record_copy, storage_id = self._prepare_record_for_storage(record)
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in data:
+                raise DuplicateRecordError(storage_id)
             data[storage_id] = record_copy
             await self._save_data(data)
             return storage_id
@@ -844,9 +848,13 @@ class SyncFileDatabase(  # type: ignore[misc]
         with self._lock:
             data = self._load_data()
             # Use record's ID if it has one, otherwise generate a new one
-            record_id = self._do_set_data(data, record)
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in data:
+                raise DuplicateRecordError(storage_id)
+            data[storage_id] = record_copy
             self._save_data(data)
-            return record_id
+            return storage_id
 
     def read(self, id: str) -> Record | None:
         """Read a record from the file."""

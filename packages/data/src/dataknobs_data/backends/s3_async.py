@@ -15,8 +15,9 @@ from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
-from ..pooling.s3 import S3PoolConfig, validate_s3_session
+from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
 from ..query import Operator, Query
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
@@ -163,7 +164,14 @@ class AsyncS3Database(  # type: ignore[misc]
         return Record.from_dict(obj)
 
     async def create(self, record: Record) -> str:
-        """Create a new record in S3."""
+        """Create a new record in S3.
+
+        Atomic create-if-absent is enforced with a conditional PUT
+        (``If-None-Match: *``): a colliding id raises ``DuplicateRecordError``.
+        The guarantee holds against any S3 implementation that honors
+        conditional writes (real AWS S3, recent LocalStack). Older stores
+        that ignore the header degrade to last-writer-wins.
+        """
         self._check_connection()
 
         # Use centralized method to prepare record
@@ -174,13 +182,25 @@ class AsyncS3Database(  # type: ignore[misc]
         # Add ID to metadata
         obj["metadata"]["id"] = storage_id
 
+        from botocore.exceptions import ClientError
+
+        # Atomic insert. IfNoneMatch="*" makes the PUT fail closed if the key
+        # already exists (412 PreconditionFailed) or if a concurrent conditional
+        # write races it (409 ConditionalRequestConflict), so a colliding id
+        # cannot silently overwrite an existing record.
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            await s3.put_object(
-                Bucket=self._pool_config.bucket,
-                Key=key,
-                Body=json.dumps(obj),
-                ContentType="application/json"
-            )
+            try:
+                await s3.put_object(
+                    Bucket=self._pool_config.bucket,
+                    Key=key,
+                    Body=json.dumps(obj),
+                    ContentType="application/json",
+                    IfNoneMatch="*",
+                )
+            except ClientError as e:
+                if is_s3_conditional_conflict(e):
+                    raise DuplicateRecordError(storage_id) from e
+                raise
 
         return storage_id
 

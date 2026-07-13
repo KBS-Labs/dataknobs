@@ -19,6 +19,21 @@ from dataknobs_utils import requests_utils
 logger = logging.getLogger(__name__)
 
 
+class ElasticsearchConflictError(Exception):
+    """Raised when an ``op_type="create"`` index request hits an existing id.
+
+    Elasticsearch returns HTTP 409 when a document with the target id already
+    exists and the request forbids overwriting it. Surfacing this as an
+    exception (rather than a sentinel return value) lets callers handle a
+    create-conflict with the same ``try``/``except`` shape the native async
+    client uses, so the sync and async paths stay in lockstep.
+    """
+
+    def __init__(self, doc_id: str | None = None):
+        self.doc_id = doc_id
+        super().__init__(f"Document id already exists: {doc_id!r}")
+
+
 def build_field_query_dict(
     fields: Union[str, List[str]], text: str, operator: str | None = None
 ) -> Dict[str, Any]:
@@ -672,6 +687,7 @@ class SimplifiedElasticsearchIndex:
         refresh: bool = False,
         max_retries: int = 3,
         initial_delay: float = 0.5,
+        op_type: str | None = None,
     ) -> Dict[str, Any]:
         """Index a document with retry for transient server errors.
 
@@ -681,22 +697,47 @@ class SimplifiedElasticsearchIndex:
             refresh: Whether to refresh immediately for search visibility
             max_retries: Maximum retry attempts for 5xx errors
             initial_delay: Initial backoff delay in seconds (doubles each retry)
+            op_type: Optional index op type. Pass ``"create"`` for an atomic
+                insert that fails with a 409 conflict if the document id
+                already exists; the conflict is raised as
+                ``ElasticsearchConflictError`` rather than returned.
 
         Returns:
             Response with created document ID
+
+        Raises:
+            ElasticsearchConflictError: When ``op_type="create"`` targets an id
+                that already exists (HTTP 409).
         """
         path = f"_doc/{doc_id}" if doc_id else "_doc"
-        params = {"refresh": "true"} if refresh else None
+        params: Dict[str, Any] = {}
+        if refresh:
+            params["refresh"] = "true"
+        if op_type:
+            params["op_type"] = op_type
         method = "put" if doc_id else "post"
 
         delay = initial_delay
         for attempt in range(max_retries + 1):
-            response = self._request(method, path, body, params)
+            response = self._request(method, path, body, params or None)
 
             if response.succeeded and response.json:
                 return response.json
 
             status = response.status
+
+            # A create conflict (op_type="create" against an existing id) is a
+            # definitive 409 — raise distinctly and do not retry.
+            #
+            # Note on at-least-once semantics: if a prior attempt's PUT actually
+            # succeeded server-side but its response was lost (transient 5xx /
+            # dropped connection), the retry below sees a genuine 409 for the
+            # record it just created and reports it as a conflict. This is
+            # inherent to at-least-once retry and is acceptable — the record is
+            # persisted; the caller simply learns of it as a duplicate.
+            if status == 409:
+                raise ElasticsearchConflictError(doc_id)
+
             is_server_error = status is not None and status >= 500
             has_retries_left = attempt < max_retries
 

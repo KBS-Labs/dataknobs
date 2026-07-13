@@ -8,12 +8,14 @@ import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
+import psycopg2
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
 
 from ..database import AsyncDatabase, SyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
 from ..query import Operator, Query
@@ -324,7 +326,10 @@ class SyncPostgresDatabase(
         INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES (%(id)s, %(data)s, %(metadata)s)
         """
-        self.db.execute(sql, row)
+        try:
+            self.db.execute(sql, row)
+        except psycopg2.errors.UniqueViolation as e:
+            raise DuplicateRecordError(id) from e
         return id
 
     def read(self, id: str) -> Record | None:
@@ -1238,8 +1243,11 @@ class AsyncPostgresDatabase(
         VALUES ({', '.join(placeholders)})
         """
 
-        async with self._pool.acquire() as conn:
-            await conn.execute(sql, *values)
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(sql, *values)
+        except asyncpg.exceptions.UniqueViolationError as e:
+            raise DuplicateRecordError(id) from e
 
         return id
 

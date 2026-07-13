@@ -505,14 +505,27 @@ class TestMigratorAdvanced:
         assert progress.succeeded == 1
         assert progress.failed == 1
         
-        # Test with error handler that continues
+        # Test with error handler that continues. Use a fresh target so the
+        # "good" records are genuine inserts: create() is an atomic insert and
+        # re-creating an id already written above would (correctly) raise a
+        # DuplicateRecordError rather than silently overwrite.
+        target2 = MemoryDatabase()
+        original_create2 = target2.create
+
+        def failing_create2(record):
+            if record.get_value("value") == "bad":
+                raise ValueError("Cannot create bad record")
+            return original_create2(record)
+
+        target2.create = failing_create2
+
         progress2 = MigrationProgress().start()
-        
+
         def error_handler(error, record):
             return True  # Continue processing
-        
-        migrator._write_batch(target, batch, progress2, on_error=error_handler)
-        
+
+        migrator._write_batch(target2, batch, progress2, on_error=error_handler)
+
         # Should process all, with one failure
         assert progress2.succeeded == 2
         assert progress2.failed == 1

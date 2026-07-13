@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, ClassVar
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, SyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 from ..vector import VectorOperationsMixin
@@ -64,6 +65,10 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             # Use centralized method to prepare record
             record_copy, storage_id = self._prepare_record_for_storage(record)
+
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if storage_id in self._storage:
+                raise DuplicateRecordError(storage_id)
 
             # Store the record
             self._storage[storage_id] = record_copy
@@ -288,6 +293,9 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             # Use record's ID if it has one, otherwise generate a new one
             id = record.id if record.id else self._generate_id()
+            # Atomic insert: fail closed on a colliding id rather than overwrite
+            if id in self._storage:
+                raise DuplicateRecordError(id)
             self._storage[id] = record.copy(deep=True)
             return id
 

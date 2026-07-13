@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `SimplifiedElasticsearchIndex.index()` gains an optional `op_type` parameter.
+  Pass `op_type="create"` for an atomic insert that fails closed on a colliding
+  document id: the resulting HTTP 409 is raised as the new
+  `ElasticsearchConflictError` (rather than returned), so callers handle a
+  create-conflict with the same `try`/`except` shape the native async client
+  uses.
+
 ## v1.2.15 - 2026-07-07
 
 ### Security

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase
+from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.elasticsearch import (
     ElasticsearchPoolConfig,
@@ -230,16 +232,25 @@ class AsyncElasticsearchDatabase(
         self._check_connection()
         doc = self._record_to_doc(record)
 
-        # Create document with explicit ID if record has one
-        kwargs = {
-            "index": self.index_name,
-            "document": doc,
-            "refresh": self.refresh
-        }
-        if record.id:
-            kwargs["id"] = record.id
+        # Mint the id client-side when the record has none, so create() always
+        # supplies an explicit id and returns a known value — uniform with the
+        # sync backend and every other backend. op_type="create" makes this an
+        # atomic insert: a colliding id yields a 409 conflict instead of
+        # silently overwriting the existing document.
+        record_id = record.id if record.id else str(uuid.uuid4())
 
-        response = await self._client.index(**kwargs)
+        from elasticsearch import ConflictError
+
+        try:
+            response = await self._client.index(
+                index=self.index_name,
+                id=record_id,
+                document=doc,
+                refresh=self.refresh,
+                op_type="create",
+            )
+        except ConflictError as e:
+            raise DuplicateRecordError(record_id) from e
 
         return response["_id"]
 

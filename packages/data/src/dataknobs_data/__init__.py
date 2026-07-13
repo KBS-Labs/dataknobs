@@ -95,6 +95,7 @@ from .exceptions import (
     DatabaseConnectionError,
     DatabaseOperationError,
     DataknobsDataError,
+    DuplicateRecordError,
     FieldTypeError,
     MigrationError,
     QueryError,
@@ -170,6 +171,7 @@ __all__ = [
     # Exceptions
     "DataknobsDataError",
     "RecordNotFoundError",
+    "DuplicateRecordError",
     "RecordValidationError",
     "FieldTypeError",
     "DatabaseConnectionError",
