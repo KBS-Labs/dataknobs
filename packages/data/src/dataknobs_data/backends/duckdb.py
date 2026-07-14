@@ -525,7 +525,13 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         )
 
     def _create_batch_sync(self, records: list[Record]) -> list[str]:
-        """Synchronous batch create implementation."""
+        """Synchronous batch create implementation.
+
+        Fails closed like ``create()``: a colliding id (or a within-batch
+        duplicate, raised up front by the shared query builder) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written; a caller-supplied ``record.id`` is honored.
+        """
         # Use the shared batch create query builder
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
@@ -536,6 +542,23 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 self.conn.execute(query, params)
                 self.conn.commit()
                 return ids
+            except duckdb.ConstraintException as e:
+                self.conn.rollback()
+                if is_duplicate_key_error(e):
+                    # Name the colliding id precisely on the error path. We are
+                    # on the executor thread holding the lock, so probe the raw
+                    # connection directly rather than the async exists() coroutine.
+                    colliding = ids[0]
+                    for record in records:
+                        rid = record.id
+                        if not rid:
+                            continue
+                        read_query, read_params = self.query_builder.build_read_query(rid)
+                        if self.conn.execute(read_query, read_params).fetchone() is not None:
+                            colliding = rid
+                            break
+                    raise DuplicateRecordError(colliding) from e
+                raise RecordValidationError(str(e)) from e
             except Exception:
                 self.conn.rollback()
                 raise
@@ -747,64 +770,33 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         Returns:
             Stream result with statistics
 
-        Honors ``config.on_conflict``: INSERT uses the ``create_batch`` bulk
-        fast-path; UPSERT/SKIP write per-record via ``upsert``/``create``.
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
         """
-        import time
-
         from ..streaming import (
-            ConflictPolicy,
             StreamConfig,
-            StreamResult,
             async_run_stream_write,
             resolve_conflict_write,
         )
 
         config = config or StreamConfig()
 
-        if config.on_conflict != ConflictPolicy.INSERT:
-            # UPSERT/SKIP have no conflict-aware bulk verb: write per record.
-            batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
-                config.on_conflict,
-                insert_batch_func=None,
-                single_create_func=self.create,
-                upsert_func=self.upsert,
-                upsert_batch_func=self.upsert_batch,
-            )
-            return await async_run_stream_write(
-                records,
-                batch_write_func=batch_write_func,
-                single_write_func=single_write_func,
-                skip_on_duplicate=skip_on_duplicate,
-                config=config,
-            )
-
-        batch = []
-        total_written = 0
-        start_time = time.time()
-
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write the batch
-                await self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            await self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )
 
 
@@ -1137,6 +1129,12 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently.
 
+        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
+        colliding id (or a duplicate id within the batch) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written. A caller-supplied ``record.id`` is honored (the shared query
+        builder mints a uuid only when a record has none).
+
         Args:
             records: List of records to create
 
@@ -1154,6 +1152,14 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             self.conn.execute(query, params)
             self.conn.commit()
             return ids
+        except duckdb.ConstraintException as e:
+            self.conn.rollback()
+            if is_duplicate_key_error(e):
+                colliding = next(
+                    (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+                )
+                raise DuplicateRecordError(colliding) from e
+            raise RecordValidationError(str(e)) from e
         except Exception:
             self.conn.rollback()
             raise
@@ -1315,61 +1321,31 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         Returns:
             Stream result with statistics
 
-        Honors ``config.on_conflict``: INSERT uses the ``create_batch`` bulk
-        fast-path; UPSERT/SKIP write per-record via ``upsert``/``create``.
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
         """
-        import time
-
         from ..streaming import (
-            ConflictPolicy,
             StreamConfig,
-            StreamResult,
             resolve_conflict_write,
             run_stream_write,
         )
 
         config = config or StreamConfig()
 
-        if config.on_conflict != ConflictPolicy.INSERT:
-            # UPSERT/SKIP have no conflict-aware bulk verb: write per record.
-            batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
-                config.on_conflict,
-                insert_batch_func=None,
-                single_create_func=self.create,
-                upsert_func=self.upsert,
-                upsert_batch_func=self.upsert_batch,
-            )
-            return run_stream_write(
-                records,
-                batch_write_func=batch_write_func,
-                single_write_func=single_write_func,
-                skip_on_duplicate=skip_on_duplicate,
-                config=config,
-            )
-
-        batch = []
-        total_written = 0
-        start_time = time.time()
-
-        for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )

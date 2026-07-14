@@ -65,21 +65,25 @@ result = db.stream_write(records, config)
 print(f"Skipped {result.skipped} already-present records")
 ```
 
-The `"insert"` fast-path uses the backend's native `create_batch`; `"upsert"`
+The `"insert"` fast-path uses the backend's native `create_batch` (or an atomic
+`_write_batch` on PostgreSQL) with a per-record `create()` fallback so a
+collision is attributed to the specific id; the non-transactional backends (S3,
+Elasticsearch-sync, async-Elasticsearch) write INSERT per-record via `create()`
+directly. `"upsert"`
 uses the native `upsert_batch` bulk verb (see below) with a per-record `upsert`
 fallback; `"skip"` writes one record at a time (a whole-batch verb cannot skip
 individual duplicates while inserting the rest). An unknown policy value is
 rejected when the `StreamConfig` is constructed, rather than silently falling
 back to insert.
 
-Whether streaming `"insert"` fails closed on a colliding id depends on the
-backend's streaming batch write. It holds on the **memory and file** backends.
-It does **not** hold on the **SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch**
-backends: their streaming batch write mints a fresh id per record, so a
-streaming `"insert"` into one of those targets neither preserves the source id
-nor fails closed on a collision. Use `"upsert"` / `"skip"` for idempotent
-re-runs into those targets, or single `create()` for id-preserving,
-collision-safe inserts.
+Streaming `"insert"` fails closed on a colliding id — recording it as a failure
+and preserving the source id — across **every** backend. SQLite / DuckDB reach
+this through the fail-closed bulk `create_batch` plus a per-record `create()`
+fallback; PostgreSQL through its atomic `_write_batch` fast-path; S3,
+Elasticsearch-sync, and async-Elasticsearch through per-record `create()` (their
+non-transactional bulk write would otherwise re-write already-written rows under
+the fallback). Use `"upsert"` / `"skip"` for idempotent re-runs into a populated
+target.
 
 #### Batch write verbs: `create_batch` vs `upsert_batch`
 
@@ -87,7 +91,7 @@ Every backend exposes two batch write verbs:
 
 | Verb | Semantics on a colliding id | Honors `record.id` |
 |------|-----------------------------|--------------------|
-| `create_batch(records)` | Insert-only (see the fail-closed note above for the per-backend collision behavior) | yes |
+| `create_batch(records)` | Insert-only — a colliding id (existing row or a within-batch duplicate) **fails closed** with `DuplicateRecordError`, uniform across every backend, matching single `create()` | yes |
 | `upsert_batch(records)` | **Overwrite** — never raised, never skipped | yes (minted only when absent) |
 
 `upsert_batch` is the batch sibling of a per-record `upsert` loop: it inserts

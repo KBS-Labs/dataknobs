@@ -274,10 +274,11 @@ class AsyncElasticsearchDatabase(
         module there) so the response shapes differ, but the per-item
         drop-the-failures contract is identical.
 
-        Shared by ``create_batch`` (``ids=None`` — the server assigns ids, so
-        each successful item's ``_id`` is read out) and ``upsert_batch``
-        (explicit-``_id`` writes — ``ids`` is the input-order id list and only
-        the failed positions are dropped).
+        Both ``create_batch`` and ``upsert_batch`` pass the client-minted,
+        input-order ``ids`` list (explicit-``_id`` writes), so only the failed
+        positions are dropped. The ``ids=None`` branch — reading each successful
+        item's ``_id`` out of the response — is retained for a caller relying on
+        server-assigned ids.
         """
         result: list[str] = []
         for pos, item in enumerate(response.get("items", [])):
@@ -297,29 +298,59 @@ class AsyncElasticsearchDatabase(
                     result.append(_id)
         return result
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records in batch.
+    @staticmethod
+    def _raise_on_bulk_conflict(response: Any) -> None:
+        """Raise ``DuplicateRecordError`` on the first 409 in a bulk response.
 
-        Uses server-assigned ids (bulk ``index`` with no ``_id``). Per-item
+        The bulk ``create`` op fails closed on a colliding id (409), matching a
+        single-record ``create()``. The Elasticsearch bulk API is per-item
+        (non-atomic), so non-colliding records may already be indexed when the
+        conflict is raised — exactly like a ``create()`` loop.
+        """
+        for item in response.get("items", []):
+            op = item.get("create") or item.get("index") or {}
+            if op.get("status") == 409:
+                raise DuplicateRecordError(op.get("_id"))
+
+    async def create_batch(self, records: list[Record]) -> list[str]:
+        """Create multiple records in batch, failing closed on a colliding id.
+
+        Uses the bulk ``create`` op keyed on ``record.id`` (honoring a
+        caller-supplied id, minting a uuid only when absent). Like ``create()``,
+        a colliding id raises ``DuplicateRecordError`` (bulk 409); other per-item
         errors are reconciled via :meth:`_extract_bulk_index_ids`, so a record
         that fails to index is not reported as created.
+
+        Raises:
+            DuplicateRecordError: a record collides with an existing id, or two
+                records in the batch share an id.
         """
         self._check_connection()
 
-        operations = []
-        for record in records:
-            doc = self._record_to_doc(record)
-            operations.append({"index": {"_index": self.index_name}})
-            operations.append(doc)
-
-        if not operations:
+        if not records:
             return []
+
+        ids: list[str] = []
+        operations: list[dict] = []
+        seen: set[str] = set()
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            if record_id in seen:
+                raise DuplicateRecordError(record_id)
+            seen.add(record_id)
+            ids.append(record_id)
+            doc = self._record_to_doc(record)
+            operations.append(
+                {"create": {"_index": self.index_name, "_id": record_id}}
+            )
+            operations.append(doc)
 
         response = await self._client.bulk(
             operations=operations,
             refresh=self.refresh
         )
-        return self._extract_bulk_index_ids(response)
+        self._raise_on_bulk_conflict(response)
+        return self._extract_bulk_index_ids(response, ids)
 
     async def upsert_batch(self, records: list[Record]) -> list[str]:
         """Insert-or-overwrite multiple records in batch using the bulk API.
@@ -327,9 +358,10 @@ class AsyncElasticsearchDatabase(
         Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
         honoring a caller-supplied ``record.id`` (minting a uuid only when
         absent); a colliding id is overwritten (never raised). Returns the ids
-        that were written, in input order. Unlike ``create_batch`` — which uses
-        server auto-ids — this supplies ``_id`` explicitly so the write is
-        addressable and idempotent. Per-item errors are reconciled via
+        that were written, in input order. Like ``create_batch``, this supplies
+        ``_id`` explicitly so the write is addressable and idempotent; the two
+        differ only in op type (``index`` overwrites, ``create`` fails closed).
+        Per-item errors are reconciled via
         :meth:`_extract_bulk_index_ids`, so an id whose write failed is dropped
         rather than reported as written.
         """
@@ -858,20 +890,22 @@ class AsyncElasticsearchDatabase(
     ) -> StreamResult:
         """Stream records into Elasticsearch using bulk API.
 
-        Honors ``config.on_conflict``: INSERT uses the bulk-index fast-path
-        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
-        write per-record via ``upsert``/``create``.
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than a bulk fast-path: the Elasticsearch bulk API is non-atomic,
+        so a partial-success batch followed by the per-record fallback would
+        re-write the already-indexed rows and count them as spurious duplicate
+        failures. Per-doc ``create`` is the natural granularity and fails closed
+        cleanly. UPSERT keeps the bulk ``upsert_batch`` fast-path (overwrite is
+        idempotent, so partial success is benign).
         """
         self._check_connection()
         config = config or StreamConfig()
 
-        async def insert_batch(b):
-            await self._write_batch(b)
-            return [r.id for r in b]
-
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy.
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             config.on_conflict,
-            insert_batch_func=insert_batch,
+            insert_batch_func=None,
             single_create_func=self.create,
             upsert_func=self.upsert,
             upsert_batch_func=self.upsert_batch,
@@ -882,24 +916,6 @@ class AsyncElasticsearchDatabase(
             single_write_func=single_write_func,
             skip_on_duplicate=skip_on_duplicate,
             config=config,
-        )
-
-    async def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records using bulk API."""
-        if not records:
-            return
-
-        # Build bulk operations
-        operations = []
-        for record in records:
-            doc = self._record_to_doc(record)
-            operations.append({"index": {"_index": self.index_name}})
-            operations.append(doc)
-
-        # Execute bulk
-        await self._client.bulk(
-            operations=operations,
-            refresh=self.refresh
         )
 
     async def vector_search(

@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation that honors conditional writes (real AWS S3, recent
   LocalStack); both a pre-existing key (412) and a concurrent conditional-write
   race (409) fail closed as `DuplicateRecordError`, while older stores that
-  ignore the header degrade to last-writer-wins. `create_batch()` honors this
-  contract on some but not all backends — see the `create_batch()` and streaming
-  entries below for the per-backend detail.
+  ignore the header degrade to last-writer-wins. `create_batch()` honors the same
+  contract uniformly across every backend — see the `create_batch()` and
+  streaming entries below.
 - On the SQL backends (SQLite, DuckDB), `create()` now distinguishes a
   duplicate-id collision from other column-constraint violations: only a
   primary-key collision raises `DuplicateRecordError`, while a `NOT NULL` or
@@ -99,26 +99,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the FSM `DatabaseResource.commit_batch` identity path both adopt it for batch
   throughput. `BufferedTransaction` gains a matching `upsert_batch` staging
   method (it still flushes staged upserts row-by-row).
-- `create_batch()` on the **memory and file** backends now fails closed on a
-  colliding id, matching single `create()`: a colliding id — against an existing
-  record or a duplicate within the same batch — raises `DuplicateRecordError`
-  before any record is written (the batch is all-or-nothing), and the record's
-  own id is honored. Memory and sync-file previously overwrote on collision;
-  async-file previously minted a fresh id and discarded `record.id`.
-- As a result, the **streaming INSERT** path (`migrate_stream` /
-  `migrate_async` under the default `ConflictPolicy.INSERT`) now fails closed on
-  a colliding id — recording it as a failure and preserving the source id — on
-  the **memory and file** backends (via the `create_batch` fix above). A re-run
-  into a populated memory/file target records the colliding ids as failures
-  rather than silently overwriting them, matching the batched `migrate()` path.
-- **Known gap:** streaming INSERT into a **SQLite, DuckDB, PostgreSQL, S3, or
-  Elasticsearch** target is still *not* fail-closed — their streaming batch
-  write mints a fresh id per record, so a colliding source id is written as a
-  new row under a new id (the source id is not preserved). Use `upsert` / `skip`
-  for idempotent re-runs into those targets, or the batched `migrate()` path
-  (single `create()`) for id-preserving, collision-safe inserts. Closing this
-  gap is tracked as a follow-up (bringing each backend's bulk batch write into
-  line with the `create()` contract).
+- `create_batch()` now fails closed on a colliding id across **every backend**,
+  matching single `create()`: a colliding id — against an existing record or a
+  duplicate within the same batch — raises `DuplicateRecordError`, and a
+  caller-supplied `record.id` is honored (minted only when absent). The SQL
+  backends (SQLite, DuckDB, PostgreSQL) previously minted a fresh id per record
+  and ignored `record.id`; Elasticsearch overwrote (sync) or used server-assigned
+  ids (async); memory/sync-file overwrote and async-file minted. On the
+  transactional SQL backends the batch is atomic (a collision rolls back the
+  whole INSERT — nothing written); on Elasticsearch the bulk API is per-item, so
+  — exactly like a `create()` loop — non-colliding rows in the same batch may be
+  written before the conflict is raised.
+- The **streaming INSERT** path (`migrate_stream` / `migrate_async` and every
+  backend's `stream_write` under the default `ConflictPolicy.INSERT`) now fails
+  closed on a colliding id across **every backend** — recording it as a failure
+  and preserving the source id, rather than writing a fresh-id row. A re-run into
+  a populated target records the colliding ids as failures, matching the batched
+  `migrate()` path. SQLite/DuckDB reach this through the tightened bulk
+  `create_batch` plus a per-record `create()` fallback; PostgreSQL through its
+  atomic `_write_batch` fast-path; S3, Elasticsearch-sync, and async-Elasticsearch
+  through per-record `create()` (their non-transactional bulk write would
+  otherwise double-write the already-written rows under the fallback). `upsert` /
+  `skip`
+  remain available for idempotent re-runs.
 
 ### Fixed
 

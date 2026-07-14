@@ -11,6 +11,7 @@ from dataknobs_data.records import Record
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+from dataknobs_data.backends.duckdb import SyncDuckDBDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.streaming import ConflictPolicy, StreamConfig, StreamResult
 
@@ -864,10 +865,9 @@ class TestMigratorConflictPolicy:
         on the type-level routing guarantee. For UPSERT/SKIP, sqlite's
         ``stream_write`` routes per-record (``insert_batch_func=None``) via
         ``upsert`` / ``create``, so the policy behaves identically to the memory
-        backend. The INSERT policy is a separate case — sqlite's ``stream_write``
-        INSERT branch uses the id-minting bulk ``create_batch`` path and is not
-        yet fail-closed; see
-        ``test_sqlite_streaming_insert_not_yet_fail_closed``.
+        backend. The INSERT policy fails closed via the tightened ``create_batch``
+        fast-path plus a per-record ``create`` fallback; see
+        ``test_sqlite_streaming_insert_fails_closed``.
         """
 
         def _pair() -> tuple[SyncSQLiteDatabase, SyncSQLiteDatabase]:
@@ -905,21 +905,16 @@ class TestMigratorConflictPolicy:
             src.close()
             tgt.close()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "sqlite/duckdb streaming INSERT is not yet fail-closed: their "
-            "stream_write INSERT branch uses the id-minting create_batch bulk "
-            "path, not per-record create(). Goes GREEN when create_batch is "
-            "tightened to honor create()'s fail-closed contract on those "
-            "backends. See the data CHANGELOG 'known gap'."
-        ),
-    )
-    def test_sqlite_streaming_insert_not_yet_fail_closed(self):
-        """Part B acceptance test (currently RED): streaming INSERT into a
-        populated sqlite target should fail closed on the colliding id and
-        preserve the source id. Today sqlite streaming INSERT mints fresh ids via
-        the bulk ``create_batch`` path, so the collision is not detected."""
+    def test_sqlite_streaming_insert_fails_closed(self):
+        """Streaming INSERT into a populated sqlite target fails closed on the
+        colliding id and preserves the source id.
+
+        Their ``stream_write`` routes INSERT through the tightened bulk
+        ``create_batch`` (atomic multi-row INSERT — rolls back on a collision)
+        with a per-record ``create`` fallback that attributes the specific
+        colliding id as a failure. The two non-colliding source rows are written
+        with their source ids; the pre-existing row is untouched.
+        """
         src = SyncSQLiteDatabase({"path": ":memory:"})
         tgt = SyncSQLiteDatabase({"path": ":memory:"})
         src.connect()
@@ -933,6 +928,30 @@ class TestMigratorConflictPolicy:
             assert progress.failed == 1
             assert progress.succeeded == 2
             assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+            assert tgt.read("3").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+    def test_duckdb_streaming_insert_fails_closed(self):
+        """DuckDB streaming INSERT fails closed on a colliding id (sibling of the
+        sqlite case — same tightened ``create_batch`` + per-record fallback)."""
+        src = SyncDuckDBDatabase({"path": ":memory:"})
+        tgt = SyncDuckDBDatabase({"path": ":memory:"})
+        src.connect()
+        tgt.connect()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+            )
+            assert progress.failed == 1
+            assert progress.succeeded == 2
+            assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+            assert tgt.read("3").get_value("v") == "src"
         finally:
             src.close()
             tgt.close()

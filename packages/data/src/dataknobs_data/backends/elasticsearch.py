@@ -372,14 +372,24 @@ class SyncElasticsearchDatabase(
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using the bulk API.
-        
-        Uses Elasticsearch's bulk API for efficient batch creation.
-        
+
+        Uses the bulk ``create`` op (fail-closed-by-id), honoring a
+        caller-supplied ``record.id`` (minting a uuid only when absent). Like
+        ``create()``, a colliding id fails closed: the bulk response is scanned
+        for a 409 conflict and raises ``DuplicateRecordError``. The Elasticsearch
+        bulk API is per-item (non-atomic), so — exactly like a ``create()`` loop —
+        non-colliding records in the same batch may already be indexed when the
+        conflict is raised.
+
         Args:
             records: List of records to create
-            
+
         Returns:
             List of created record IDs
+
+        Raises:
+            DuplicateRecordError: a record collides with an existing id, or two
+                records in the batch share an id.
         """
         if not records:
             return []
@@ -387,23 +397,27 @@ class SyncElasticsearchDatabase(
         # Build bulk operations
         bulk_operations = []
         ids = []
+        seen: set[str] = set()
 
         for record in records:
-            # Generate ID
-            record_id = str(uuid.uuid4())
+            record_id = record.id or str(uuid.uuid4())
+            if record_id in seen:
+                raise DuplicateRecordError(record_id)
+            seen.add(record_id)
             ids.append(record_id)
 
-            # Create action dict for bulk operation
+            # op_type "create" fails closed on a colliding id (409) instead of
+            # overwriting, mirroring the single-record create().
             doc = self._record_to_doc(record, record_id)
             action = {
-                "_op_type": "index",
+                "_op_type": "create",
                 "_index": self.es_index.index_name,
                 "_id": record_id,
                 "_source": doc
             }
             bulk_operations.append(action)
 
-        return self._execute_bulk_index(bulk_operations, ids)
+        return self._execute_bulk_index(bulk_operations, ids, raise_on_conflict=True)
 
     def upsert_batch(self, records: list[Record]) -> list[str]:
         """Insert-or-overwrite multiple records efficiently using the bulk API.
@@ -433,13 +447,22 @@ class SyncElasticsearchDatabase(
         return self._execute_bulk_index(bulk_operations, ids)
 
     def _execute_bulk_index(
-        self, bulk_operations: list[dict], ids: list[str]
+        self,
+        bulk_operations: list[dict],
+        ids: list[str],
+        *,
+        raise_on_conflict: bool = False,
     ) -> list[str]:
         """Run a bulk index/create request, returning the ids that succeeded.
 
         Shared by ``create_batch`` and ``upsert_batch``: the request execution
         and per-item error reconciliation are identical; only how each caller
         derives the id and op type differs.
+
+        ``raise_on_conflict`` (set by ``create_batch``, whose ``create`` op fails
+        closed) turns a per-item 409 conflict into ``DuplicateRecordError``,
+        matching a ``create()`` loop; ``upsert_batch`` leaves it ``False`` (its
+        ``index`` op cannot conflict).
         """
         from elasticsearch import helpers
 
@@ -460,7 +483,10 @@ class SyncElasticsearchDatabase(
                     # Error dict can have 'index', 'create', 'update', or 'delete' keys
                     for op_type in ['index', 'create']:
                         if op_type in err:
-                            error_dict[err[op_type].get('_id')] = err
+                            op = err[op_type]
+                            if raise_on_conflict and op.get('status') == 409:
+                                raise DuplicateRecordError(op.get('_id'))
+                            error_dict[op.get('_id')] = err
                             break
 
                 result_ids = []
@@ -473,11 +499,26 @@ class SyncElasticsearchDatabase(
                 # All succeeded
                 return ids
 
+        except DuplicateRecordError:
+            # A create() collision — propagate the fail-closed signal.
+            raise
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
-                # Extract which operations succeeded
-                failed_ids = {err.get('index', {}).get('_id') for err in e.errors}
+                # Extract which operations failed. An error entry carries an
+                # 'index' or 'create' key depending on the op type, so probe
+                # both — mirroring the returned-errors reconciliation above, and
+                # honoring raise_on_conflict so a 409 surfaced via this path also
+                # fails closed rather than silently passing as success.
+                failed_ids = set()
+                for err in e.errors:
+                    for op_type in ['index', 'create']:
+                        if op_type in err:
+                            op = err[op_type]
+                            if raise_on_conflict and op.get('status') == 409:
+                                raise DuplicateRecordError(op.get('_id')) from e
+                            failed_ids.add(op.get('_id'))
+                            break
                 result_ids = []
                 for record_id in ids:
                     if record_id not in failed_ids:
@@ -1090,9 +1131,40 @@ upper}}}}}
         records: Iterator[Record],
         config: StreamConfig | None = None
     ) -> StreamResult:
-        """Stream records into Elasticsearch."""
-        # Use the default implementation from mixin
-        return self._default_stream_write(records, config)
+        """Stream records into Elasticsearch.
+
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than the bulk ``create_batch`` fast-path: the Elasticsearch bulk
+        API is non-atomic, so a partial-success batch followed by the per-record
+        fallback would re-write the already-indexed rows and count them as
+        spurious duplicate failures. Per-doc ``create`` is the natural granularity
+        and fails closed cleanly. UPSERT keeps the bulk ``upsert_batch`` fast-path
+        (overwrite is idempotent, so partial success is benign).
+        """
+        from ..streaming import (
+            StreamConfig,
+            resolve_conflict_write,
+            run_stream_write,
+        )
+
+        config = config or StreamConfig()
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy (UPSERT uses
+        # upsert_batch, SKIP is per-record), so None is safe for every policy.
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=None,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
+        )
 
     def vector_search(
         self,

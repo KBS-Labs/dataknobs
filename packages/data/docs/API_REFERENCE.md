@@ -125,17 +125,15 @@ Backend notes:
   guarantee holds against any S3 implementation that honors conditional writes
   (real AWS S3, recent LocalStack); stores that ignore the header degrade to
   last-writer-wins.
-- **`create_batch()` collision semantics are not uniform across backends.**
-  On **memory, file, and S3** a colliding id — against an existing record or a
-  duplicate within the same batch — fails closed with `DuplicateRecordError` and
-  `record.id` is honored (S3 and the abstract-base default loop single
-  `create()`). On **SQLite, DuckDB, PostgreSQL, and Elasticsearch** the bulk
-  `create_batch()` mints a fresh id per record and ignores any `record.id` you
-  set, so a colliding id does not fail. For collision-safe, id-preserving
-  inserts on those backends, use single `create()` in a loop. (The *streaming*
-  INSERT path is a separate axis — see the batch-processing / migration guides:
-  it fails closed on **memory and file**, but not on SQLite, DuckDB, PostgreSQL,
-  S3, or Elasticsearch.)
+- **`create_batch()` fails closed uniformly across every backend**, matching
+  single `create()`: a colliding id — against an existing record or a duplicate
+  within the same batch — raises `DuplicateRecordError`, and `record.id` is
+  honored (minted only when absent). On the transactional SQL backends (SQLite,
+  DuckDB, PostgreSQL) the batch is atomic — a collision rolls back the whole
+  INSERT (nothing written); on Elasticsearch the bulk API is per-item, so — like
+  a `create()` loop — non-colliding rows may be written before the conflict is
+  raised. The *streaming* INSERT path fails closed on every backend too — see the
+  batch-processing / migration guides.
 - **`upsert_batch(records)`** is the batch sibling of `create_batch`, with
   upsert (insert-or-overwrite) semantics: it honors a caller-supplied
   `record.id` (minting one only when absent), **overwrites** a colliding id
