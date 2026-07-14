@@ -594,8 +594,31 @@ class TestElasticsearchAsyncIntegration:
         # Delete batch
         results = await db.delete_batch(ids)
         assert all(results)
-        
+
         await db.close()
+
+    async def test_async_upsert_batch_inserts_and_overwrites(
+        self, elasticsearch_test_index
+    ):
+        """Async upsert_batch (bulk index-by-id) inserts new + overwrites."""
+        db = await AsyncDatabase.from_backend(
+            "elasticsearch", elasticsearch_test_index
+        )
+        try:
+            await db.create(Record({"name": "old"}, id="u1"))
+            await asyncio.sleep(1)
+            ids = await db.upsert_batch(
+                [
+                    Record({"name": "new"}, id="u1"),  # overwrite
+                    Record({"name": "u2"}, id="u2"),  # insert
+                ]
+            )
+            assert ids == ["u1", "u2"]
+            await asyncio.sleep(1)
+            assert (await db.read("u1")).get_value("name") == "new"
+            assert (await db.read("u2")).get_value("name") == "u2"
+        finally:
+            await db.close()
 
     async def test_async_concurrent_operations(self, elasticsearch_test_index):
         """Test concurrent async operations."""

@@ -10,6 +10,7 @@ from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.exceptions import OperationError
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import (
@@ -17,6 +18,8 @@ from dataknobs_data.streaming import (
     StreamConfig,
     StreamProcessor,
     StreamResult,
+    async_process_batch_with_fallback,
+    process_batch_with_fallback,
 )
 
 
@@ -700,3 +703,155 @@ class TestStreamingIntegration:
         assert result.total_processed == 100
         assert result.successful == 100
         assert await target.count() == 100
+
+
+class TestBatchShortfallAccounting:
+    """A batch write verb that confirms fewer ids than the batch (a bulk
+    partial failure, e.g. Elasticsearch per-item errors) must count the
+    unconfirmed records as failed — not silently drop them from the tally.
+    """
+
+    def test_partial_batch_counts_shortfall_as_failed_and_quits(self):
+        """Sync: confirming 2 of 3 records counts the 3rd as failed, and with
+        no ``on_error`` handler the stream quits — the same fail-stop default a
+        per-record failure gets.
+        """
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+
+        cont = process_batch_with_fallback(
+            batch,
+            batch_create_func=lambda recs: ["a", "b"],  # short by one
+            single_create_func=lambda r: "unused",  # not reached on success
+            result=result,
+            config=StreamConfig(batch_size=10),
+        )
+
+        assert cont is False  # no handler -> fail-stop, matching per-record path
+        assert result.successful == 2
+        assert result.failed == 1
+        assert result.total_processed == 3
+        # The invariant the accounting exists to protect.
+        assert (
+            result.successful + result.failed + result.skipped
+            == result.total_processed
+        )
+        assert len(result.errors) == 1
+
+    def test_partial_batch_routes_aggregate_through_on_error(self):
+        """Sync: the shortfall is offered to ``on_error`` as one aggregate error
+        with a ``None`` record; a handler that returns True keeps streaming.
+        """
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+        seen: list[tuple] = []
+
+        def on_error(error, record):
+            seen.append((error, record))
+            return True  # keep streaming
+
+        cont = process_batch_with_fallback(
+            batch,
+            batch_create_func=lambda recs: ["a", "b"],
+            single_create_func=lambda r: "unused",
+            result=result,
+            config=StreamConfig(batch_size=10, on_error=on_error),
+        )
+
+        assert cont is True  # handler opted to continue
+        assert result.failed == 1
+        assert len(seen) == 1
+        error, record = seen[0]
+        assert isinstance(error, OperationError)
+        assert record is None  # no per-item identity at this layer
+
+    def test_partial_batch_handler_veto_quits(self):
+        """Sync: an ``on_error`` handler returning False aborts the stream."""
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+
+        cont = process_batch_with_fallback(
+            batch,
+            batch_create_func=lambda recs: ["a", "b"],
+            single_create_func=lambda r: "unused",
+            result=result,
+            config=StreamConfig(batch_size=10, on_error=lambda e, r: False),
+        )
+
+        assert cont is False  # handler vetoed continuation
+        assert result.failed == 1
+
+    def test_full_batch_records_no_shortfall(self):
+        """Sync: confirming all ids records no failure and keeps streaming
+        (regression guard — a full batch never touches the error path).
+        """
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+
+        cont = process_batch_with_fallback(
+            batch,
+            batch_create_func=lambda recs: ["a", "b", "c"],
+            single_create_func=lambda r: "unused",
+            result=result,
+            config=StreamConfig(batch_size=10),
+        )
+
+        assert cont is True
+        assert result.successful == 3
+        assert result.failed == 0
+        assert result.errors == []
+
+    @pytest.mark.asyncio
+    async def test_async_partial_batch_counts_shortfall_as_failed_and_quits(self):
+        """Async: confirming 2 of 3 records counts the 3rd as failed and, with
+        no handler, quits (fail-stop default).
+        """
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+
+        async def short_batch(recs):
+            return ["a", "b"]
+
+        async def single(r):
+            return "unused"
+
+        cont = await async_process_batch_with_fallback(
+            batch,
+            batch_create_func=short_batch,
+            single_create_func=single,
+            result=result,
+            config=StreamConfig(batch_size=10),
+        )
+
+        assert cont is False
+        assert result.successful == 2
+        assert result.failed == 1
+        assert result.total_processed == 3
+        assert (
+            result.successful + result.failed + result.skipped
+            == result.total_processed
+        )
+        assert len(result.errors) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_partial_batch_handler_continues(self):
+        """Async: an ``on_error`` handler returning True keeps the stream going."""
+        batch = [Record({"v": i}) for i in range(3)]
+        result = StreamResult()
+
+        async def short_batch(recs):
+            return ["a", "b"]
+
+        async def single(r):
+            return "unused"
+
+        cont = await async_process_batch_with_fallback(
+            batch,
+            batch_create_func=short_batch,
+            single_create_func=single,
+            result=result,
+            config=StreamConfig(batch_size=10, on_error=lambda e, r: True),
+        )
+
+        assert cont is True
+        assert result.failed == 1

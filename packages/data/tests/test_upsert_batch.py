@@ -91,6 +91,48 @@ def test_sync_upsert_batch_empty_is_noop(sync_db: object) -> None:
     assert sync_db.upsert_batch([]) == []
 
 
+def test_sync_upsert_batch_within_batch_duplicate_is_last_wins(
+    sync_db: object,
+) -> None:
+    """Two records with the same id in one batch coalesce last-wins.
+
+    A single write cannot affect the same row twice, so within-batch duplicate
+    ids collapse to the **last** occurrence (matching a per-record ``upsert``
+    loop) — while the returned id list still carries one entry per input record
+    in input order. For the SQL backends this exercises the ``rows``-dict
+    coalescing in ``build_batch_upsert_query`` (the one branch where the number
+    of physical VALUES rows differs from ``len(ids)``); for memory/file it
+    exercises the overwrite loop.
+    """
+    ids = sync_db.upsert_batch(
+        [Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")]
+    )
+    assert ids == ["dup", "dup"]  # one id per input record, in order
+    assert sync_db.read("dup").get_value("v") == 2  # last occurrence won
+
+
+def test_sync_upsert_batch_mints_id_when_absent(sync_db: object) -> None:
+    """An id-less record gets a freshly minted uuid, returned and readable."""
+    ids = sync_db.upsert_batch([Record({"v": 1})])
+    assert len(ids) == 1
+    minted = ids[0]
+    assert len(minted) == 36 and minted.count("-") == 4  # uuid4 shape
+    assert sync_db.read(minted).get_value("v") == 1
+
+
+def test_sync_upsert_batch_honors_id_in_data_field(sync_db: object) -> None:
+    """An id carried in a *data field* is honored, not replaced by a mint.
+
+    ``Record({"id": "x"})`` resolves ``record.id == "x"`` through the
+    ``Record.id`` priority chain (data field, then metadata). Every backend
+    must store under ``"x"`` — the id-honoring contract must not depend on the
+    id arriving via the ``id=`` constructor kwarg vs. a data field.
+    """
+    ids = sync_db.upsert_batch([Record({"id": "x", "v": 1})])
+    assert ids == ["x"]
+    assert sync_db.read("x").get_value("v") == 1
+
+
 # ---------------------------------------------------------------------------
 # Async backends
 # ---------------------------------------------------------------------------
@@ -150,6 +192,45 @@ async def test_async_upsert_batch_overwrites_existing(async_db: object) -> None:
 async def test_async_upsert_batch_empty_is_noop(async_db: object) -> None:
     """An empty batch returns an empty id list and writes nothing."""
     assert await async_db.upsert_batch([]) == []
+
+
+@pytest.mark.asyncio
+async def test_async_upsert_batch_within_batch_duplicate_is_last_wins(
+    async_db: object,
+) -> None:
+    """Two records with the same id in one batch coalesce last-wins (async)."""
+    ids = await async_db.upsert_batch(
+        [Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")]
+    )
+    assert ids == ["dup", "dup"]
+    assert (await async_db.read("dup")).get_value("v") == 2
+
+
+@pytest.mark.asyncio
+async def test_async_upsert_batch_mints_id_when_absent(async_db: object) -> None:
+    """An id-less record gets a freshly minted uuid, returned and readable."""
+    ids = await async_db.upsert_batch([Record({"v": 1})])
+    assert len(ids) == 1
+    minted = ids[0]
+    assert len(minted) == 36 and minted.count("-") == 4
+    assert (await async_db.read(minted)).get_value("v") == 1
+
+
+@pytest.mark.asyncio
+async def test_async_upsert_batch_honors_id_in_data_field(
+    async_db: object,
+) -> None:
+    """An id carried in a *data field* is honored, not replaced by a mint.
+
+    Regression guard for the async in-process write path: ``copy(deep=True)``
+    inside ``_prepare_record_for_storage`` promotes ``record.id`` (the full
+    priority chain, including a data-field ``id``) into the copy's storage id,
+    so ``has_storage_id()`` on the copy aligns with ``record.id`` and the id is
+    honored rather than minted over.
+    """
+    ids = await async_db.upsert_batch([Record({"id": "x", "v": 1})])
+    assert ids == ["x"]
+    assert (await async_db.read("x")).get_value("v") == 1
 
 
 # ---------------------------------------------------------------------------

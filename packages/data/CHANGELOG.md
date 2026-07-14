@@ -120,6 +120,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap is tracked as a follow-up (bringing each backend's bulk batch write into
   line with the `create()` contract).
 
+### Fixed
+
+- The async Elasticsearch backend's `create_batch()` and `upsert_batch()` now
+  reconcile the bulk response per item, so a record whose bulk operation failed
+  (e.g. a mapping error or version conflict) is no longer reported as written. A
+  partial bulk failure previously returned every input id as successful — the id
+  list is now filtered to the operations that actually succeeded, matching the
+  sync backend's `_execute_bulk_index` reconciliation (extracted here into a
+  shared `_extract_bulk_index_ids` helper used by both async bulk paths).
+- Streaming now accounts a partial-batch failure honestly. When a batch write
+  verb confirms fewer ids than the batch it was given — which a bulk backend
+  can do (Elasticsearch reports per-item errors, so its `create_batch` /
+  `upsert_batch` return only the ids that succeeded) — the unconfirmed records
+  are counted as `failed` instead of silently vanishing from the tally, so
+  `StreamResult.total_processed == successful + failed + skipped` holds. The
+  shortfall is routed through `StreamConfig.on_error` once as an aggregate
+  error (with a `None` record, since per-item identity is not available at this
+  layer), placing the batch path on the same stop/continue contract as the
+  per-record fallback: a configured handler decides whether to continue, and
+  with no handler the stream quits on the first failing batch — the same
+  fail-stop default a per-record failure already gets.
+
 ### Notes
 
 - The file/SQLite/DuckDB content-hash token is subject to the classic ABA
