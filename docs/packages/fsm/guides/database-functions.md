@@ -234,8 +234,12 @@ guarantee atomic commit (`supports_transactions()` is `False`):
 
 The buffered transaction defers all writes until commit; it does **not** provide
 in-transaction isolation or read-your-writes (staged writes are invisible to
-reads until commit). For connection-scoped isolation, branch on
-`supports_transactions()` and use a backend-native transaction directly.
+reads until commit), and it does **not** commit mixed operation kinds
+all-or-nothing (see the multi-kind caveat above). The public API exposes no
+connection-scoped transaction beyond this buffered form: for a multi-record
+read-modify-write invariant use optimistic concurrency (`update` / `upsert` with
+`expected_version`); for all-or-nothing across mixed kinds, stage a single kind
+per transaction (each single-kind commit is atomic on a transactional backend).
 
 > **There is no `transaction:` config block for database atomicity.** The
 > former strategy-based transaction coordinator has been removed — it
@@ -244,6 +248,16 @@ reads until commit). For connection-scoped isolation, branch on
 > existing config is ignored (a warning is logged at load time). For database
 > atomicity use `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or
 > the `AsyncDatabase.transaction()` primitive directly.
+
+> **`TransactionMode` is logical bookkeeping — it does not drive database
+> commits.** The FSM execution context carries a `transaction_mode`
+> (`TransactionMode.NONE` / `PER_RECORD` / `PER_BATCH` / `PER_SESSION` /
+> `DISTRIBUTED`), but it is internal execution-engine bookkeeping only: no
+> engine reads it to open, commit, or roll back a database transaction. Setting
+> it (e.g. to `PER_BATCH`) does **not** make execution commit per batch.
+> Database atomicity comes only from the functions on this page —
+> `DatabaseTransaction`, `BatchCommit(atomicity="require")` — or the
+> `AsyncDatabase.transaction()` primitive directly.
 
 ## Read functions
 
