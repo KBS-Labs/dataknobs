@@ -607,7 +607,8 @@ class SyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params_list, ids = query_builder.build_batch_create_query(records)
 
         # Build params dict for psycopg2
@@ -615,8 +616,16 @@ class SyncPostgresDatabase(
         for i, param in enumerate(params_list):
             params_dict[f"p{i}"] = param
 
-        # Execute the batch insert and get returned IDs
-        result_df = self.db.query(query, params_dict)
+        # Execute the batch insert and get returned IDs. Like create(), a
+        # colliding id fails closed: the single INSERT is transactional, so the
+        # unique-violation aborts the whole batch (nothing written).
+        try:
+            result_df = self.db.query(query, params_dict)
+        except psycopg2.errors.UniqueViolation as e:
+            colliding = next(
+                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+            )
+            raise DuplicateRecordError(colliding) from e
 
         # PostgreSQL RETURNING clause gives us the actual inserted IDs
         if not result_df.empty:
@@ -815,8 +824,14 @@ class SyncPostgresDatabase(
         )
 
     def _write_batch(self, records: list[Record]) -> list[str]:
-        """Write a batch of records to the database.
-        
+        """Write a batch of records with a single multi-row INSERT.
+
+        The INSERT fast-path for the streaming INSERT policy. Like ``create()``,
+        it honors a caller-supplied ``record.id`` (minting only when absent) and
+        fails closed on a colliding id — the single INSERT is atomic, so the
+        unique-violation aborts the whole batch and the streaming loop falls back
+        to per-record ``create()`` to attribute the specific collision.
+
         Returns:
             List of created record IDs
         """
@@ -826,7 +841,7 @@ class SyncPostgresDatabase(
         ids = []
 
         for i, record in enumerate(records):
-            id = str(uuid.uuid4())
+            id = record.id if record.id else str(uuid.uuid4())
             ids.append(id)
             row = self._record_to_row(record, id)
             values.append(f"(%(id_{i})s, %(data_{i})s, %(metadata_{i})s)")
@@ -838,7 +853,13 @@ class SyncPostgresDatabase(
         INSERT INTO {self._q_qualified} (id, data, metadata)
         VALUES {', '.join(values)}
         """
-        self.db.execute(sql, params)
+        try:
+            self.db.execute(sql, params)
+        except psycopg2.errors.UniqueViolation as e:
+            colliding = next(
+                (r.id for r in records if r.id and self.exists(r.id)), ids[0]
+            )
+            raise DuplicateRecordError(colliding) from e
         return ids
 
     def vector_search(
@@ -1682,12 +1703,23 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = query_builder.build_batch_create_query(records)
 
-        # Execute the batch insert with RETURNING
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, *params)
+        # Execute the batch insert with RETURNING. Like create(), a colliding id
+        # fails closed: the single INSERT is atomic, so the unique-violation
+        # aborts the whole batch (nothing written).
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(query, *params)
+        except asyncpg.exceptions.UniqueViolationError as e:
+            colliding = ids[0]
+            for record in records:
+                if record.id and await self.exists(record.id):
+                    colliding = record.id
+                    break
+            raise DuplicateRecordError(colliding) from e
 
         # Return the actual inserted IDs from RETURNING clause
         if rows:
@@ -2227,18 +2259,24 @@ class AsyncPostgresDatabase(
 
     async def _write_batch(self, records: list[Record]) -> list[str]:
         """Write a batch of records using COPY for performance.
-        
+
+        The INSERT fast-path for the streaming INSERT policy. Like ``create()``,
+        it honors a caller-supplied ``record.id`` (minting only when absent) and
+        fails closed on a colliding id — ``COPY`` runs in one transaction, so the
+        unique-violation aborts the whole batch and the streaming loop falls back
+        to per-record ``create()`` to attribute the specific collision.
+
         Returns:
             List of created record IDs
         """
         if not records:
             return []
 
-        # Prepare data for COPY
+        # Prepare data for COPY; honor record.id (mint only when absent).
         rows = []
         ids = []
         for record in records:
-            row_data = self._record_to_row(record)
+            row_data = self._record_to_row(record, record.id)
             ids.append(row_data["id"])
             rows.append((
                 row_data["id"],
@@ -2247,13 +2285,21 @@ class AsyncPostgresDatabase(
             ))
 
         # Use COPY for efficient bulk insert
-        async with self._pool.acquire() as conn:
-            await conn.copy_records_to_table(
-                self.table_name,
-                schema_name=self.schema_name or None,
-                records=rows,
-                columns=["id", "data", "metadata"]
-            )
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.copy_records_to_table(
+                    self.table_name,
+                    schema_name=self.schema_name or None,
+                    records=rows,
+                    columns=["id", "data", "metadata"]
+                )
+        except asyncpg.exceptions.UniqueViolationError as e:
+            colliding = ids[0]
+            for record in records:
+                if record.id and await self.exists(record.id):
+                    colliding = record.id
+                    break
+            raise DuplicateRecordError(colliding) from e
 
         return ids
 

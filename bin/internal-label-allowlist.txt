@@ -31,3 +31,4 @@ packages/xization/tests/test_md_constructs.py	- Item 	markdown list-item test fi
 packages/xization/tests/test_md_constructs.py	* Item 	markdown list-item test fixture
 packages/xization/tests/test_md_constructs.py	+ Item 	markdown list-item test fixture
 packages/xization/tests/test_md_constructs.py	assert "Item 	fixture assertion on markdown list content
+packages/data/src/dataknobs_data/backends/elasticsearch.py	per-item 409	HTTP 409 conflict status code in docstring, not a tracker label

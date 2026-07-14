@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -658,20 +656,22 @@ class AsyncS3Database(  # type: ignore[misc]
     ) -> StreamResult:
         """Stream records into S3.
 
-        Honors ``config.on_conflict``: INSERT uses the batch fast-path
-        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
-        write per-record via ``upsert``/``create``.
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than a bulk fast-path: the per-key S3 writes are non-transactional,
+        so a partial-success batch followed by the per-record fallback would
+        re-write the already-written keys and count them as spurious duplicate
+        failures. A per-key conditional ``create`` PUT is the natural granularity
+        and fails closed cleanly. UPSERT keeps the bulk ``upsert_batch`` fast-path
+        (overwrite is idempotent, so partial success is benign).
         """
         self._check_connection()
         config = config or StreamConfig()
 
-        async def insert_batch(b):
-            await self._write_batch(b)
-            return [r.id for r in b]
-
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy.
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             config.on_conflict,
-            insert_batch_func=insert_batch,
+            insert_batch_func=None,
             single_create_func=self.create,
             upsert_func=self.upsert,
             upsert_batch_func=self.upsert_batch,
@@ -683,32 +683,6 @@ class AsyncS3Database(  # type: ignore[misc]
             skip_on_duplicate=skip_on_duplicate,
             config=config,
         )
-
-    async def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records to S3."""
-        if not records:
-            return
-
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            # Write each record (S3 doesn't have native batch write)
-            # We could potentially use multipart upload for very large batches
-            tasks = []
-            for record in records:
-                id = str(uuid.uuid4())
-                key = self._get_key(id)
-                obj = self._record_to_s3_object(record)
-                obj["metadata"]["id"] = id
-
-                task = s3.put_object(
-                    Bucket=self._pool_config.bucket,
-                    Key=key,
-                    Body=json.dumps(obj),
-                    ContentType="application/json"
-                )
-                tasks.append(task)
-
-            # Execute all uploads concurrently
-            await asyncio.gather(*tasks)
 
     async def list_all(self) -> list[str]:
         """List all record IDs in the database."""

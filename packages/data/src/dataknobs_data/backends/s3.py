@@ -7,7 +7,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -582,15 +581,22 @@ class SyncS3Database(  # type: ignore[misc]
     ) -> StreamResult:
         """Stream records into S3.
 
-        Honors ``config.on_conflict``: INSERT uses the batch fast-path
-        (``_write_batch``) with a ``create`` per-record fallback; UPSERT/SKIP
-        write per-record via ``upsert``/``create``.
+        INSERT routes through per-record ``create()`` (``insert_batch_func=None``)
+        rather than the batch fast-path: the per-key S3 writes are
+        non-transactional, so a partial-success batch followed by the per-record
+        fallback would re-write the already-written keys and count them as
+        spurious duplicate failures. A per-key conditional ``create`` PUT is the
+        natural granularity and fails closed cleanly. UPSERT keeps the bulk
+        ``upsert_batch`` fast-path (overwrite is idempotent, so partial success
+        is benign).
         """
         self._check_connection()
         config = config or StreamConfig()
+        # insert_batch_func=None routes INSERT through per-record create(); the
+        # resolver only consults it for the INSERT policy.
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             config.on_conflict,
-            insert_batch_func=self._write_batch,
+            insert_batch_func=None,
             single_create_func=self.create,
             upsert_func=self.upsert,
             upsert_batch_func=self.upsert_batch,
@@ -601,47 +607,6 @@ class SyncS3Database(  # type: ignore[misc]
             single_write_func=single_write_func,
             skip_on_duplicate=skip_on_duplicate,
             config=config,
-        )
-
-    def _write_batch(self, records: list[Record]) -> list[str]:
-        """Write a batch of records to S3.
-        
-        Returns:
-            List of created record IDs
-        """
-        ids = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = []
-            for record in records:
-                record_id = str(uuid4())
-                ids.append(record_id)
-                future = executor.submit(self._write_single, record_id, record)
-                futures.append(future)
-
-            # Wait for all writes to complete
-            for future in as_completed(futures):
-                future.result()  # This will raise if there was an error
-
-        return ids
-
-    def _write_single(self, record_id: str, record: Record) -> None:
-        """Write a single record to S3."""
-        # Set metadata
-        record.metadata = record.metadata or {}
-        record.metadata["id"] = record_id
-        now = datetime.now(UTC)
-        record.metadata["created_at"] = now.isoformat()
-        record.metadata["updated_at"] = now.isoformat()
-
-        key = self._get_object_key(record_id)
-        obj_data = self._record_to_s3_object(record)
-        body = json.dumps(obj_data)
-
-        self.s3_client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=body,
-            ContentType='application/json'
         )
 
     def vector_search(

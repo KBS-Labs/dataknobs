@@ -351,14 +351,19 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
 
-        Uses multi-value INSERT for better performance.
+        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
+        colliding id (or a duplicate id within the batch) raises
+        ``DuplicateRecordError`` and the transaction is rolled back so nothing is
+        written. A caller-supplied ``record.id`` is honored (the shared query
+        builder mints a uuid only when a record has none).
         """
         if not records:
             return []
 
         self._check_connection()
 
-        # Use the shared batch create query builder
+        # Use the shared batch create query builder (honors record.id; raises
+        # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
         # Execute the batch insert in a transaction
@@ -370,6 +375,17 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
             # Return the generated IDs
             return ids
+        except aiosqlite.IntegrityError as e:
+            await self.db.rollback()
+            if is_duplicate_key_error(e):
+                # Name the colliding id precisely on the error path only.
+                colliding = ids[0]
+                for record in records:
+                    if record.id and await self.exists(record.id):
+                        colliding = record.id
+                        break
+                raise DuplicateRecordError(colliding) from e
+            raise RecordValidationError(str(e)) from e
         except Exception:
             await self.db.rollback()
             raise
@@ -525,64 +541,33 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
     ) -> StreamResult:
         """Stream records into database.
 
-        Honors ``config.on_conflict``: INSERT uses the ``create_batch`` bulk
-        fast-path; UPSERT/SKIP write per-record via ``upsert``/``create``.
+        Honors ``config.on_conflict`` via the shared conflict resolver: INSERT
+        uses the ``create_batch`` bulk fast-path with a per-record ``create``
+        fallback (so a colliding id fails closed and is attributed as a failure,
+        not silently overwritten); UPSERT uses ``upsert_batch``; SKIP writes
+        per-record via ``create`` and counts duplicates as skips.
         """
-        import time
-
         from ..streaming import (
-            ConflictPolicy,
             StreamConfig,
-            StreamResult,
             async_run_stream_write,
             resolve_conflict_write,
         )
 
         config = config or StreamConfig()
 
-        if config.on_conflict != ConflictPolicy.INSERT:
-            # UPSERT/SKIP have no conflict-aware bulk verb: write per record.
-            batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
-                config.on_conflict,
-                insert_batch_func=None,
-                single_create_func=self.create,
-                upsert_func=self.upsert,
-                upsert_batch_func=self.upsert_batch,
-            )
-            return await async_run_stream_write(
-                records,
-                batch_write_func=batch_write_func,
-                single_write_func=single_write_func,
-                skip_on_duplicate=skip_on_duplicate,
-                config=config,
-            )
-
-        batch = []
-        total_written = 0
-        start_time = time.time()
-
-        async for record in records:
-            batch.append(record)
-
-            if len(batch) >= config.batch_size:
-                # Write the batch
-                await self.create_batch(batch)
-                total_written += len(batch)
-                batch = []
-
-        # Write any remaining records
-        if batch:
-            await self.create_batch(batch)
-            total_written += len(batch)
-
-        elapsed = time.time() - start_time
-
-        return StreamResult(
-            total_processed=total_written,
-            successful=total_written,
-            failed=0,
-            duration=elapsed,
-            total_batches=(total_written + config.batch_size - 1) // config.batch_size
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            config.on_conflict,
+            insert_batch_func=self.create_batch,
+            single_create_func=self.create,
+            upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
+        )
+        return await async_run_stream_write(
+            records,
+            batch_write_func=batch_write_func,
+            single_write_func=single_write_func,
+            skip_on_duplicate=skip_on_duplicate,
+            config=config,
         )
 
     async def vector_search(

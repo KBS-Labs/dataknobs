@@ -7,15 +7,16 @@ before *any* record in the batch is written, and the record's own id is
 preserved. Previously memory and sync-file silently overwrote, and async-file
 minted a fresh id and discarded ``record.id``.
 
-Scope note: this covers only the two backends whose ``create_batch`` was brought
-into line here. The SQLite / DuckDB / PostgreSQL / Elasticsearch bulk
-``create_batch`` (and the S3 / PostgreSQL / Elasticsearch streaming
-``_write_batch``) still mint a fresh id per record and do NOT fail closed; that
-broader batch-verb tightening is tracked as a separate follow-up. What this PR
-*does* guarantee end-to-end is that the **streaming INSERT** path fails closed
-on all four in-process backend families (memory + file via this ``create_batch``
-fix; SQLite + DuckDB because their ``stream_write`` routes INSERT through
-per-record ``create()``) — see ``test_migrator_extended.py``.
+Scope note: this file covers the in-process memory and file backends. The
+SQL (SQLite / DuckDB / PostgreSQL) and Elasticsearch bulk ``create_batch`` now
+honor the same fail-closed + id-preserving contract — see
+``test_create_batch_fail_closed_sql_es.py`` (in-process sqlite/duckdb) and the
+``integration/test_create_batch_fail_closed_{postgres,elasticsearch}.py`` service
+tests. Streaming INSERT fails closed on every backend: SQLite/DuckDB/ES-sync via
+the tightened bulk ``create_batch`` + per-record ``create()`` fallback, PostgreSQL
+via its atomic ``_write_batch`` fast-path, and S3/Elasticsearch-async via
+per-record ``create()`` (their non-transactional bulk would double-write) — see
+``test_migrator_extended.py`` and the ``integration/`` streaming tests.
 
 This is the batch sibling of ``test_create_if_absent.py`` (single ``create()``).
 """

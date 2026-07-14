@@ -10,6 +10,7 @@ from typing import Any, TYPE_CHECKING
 
 from dataknobs_utils.sql_utils import quote_ident
 
+from ..exceptions import DuplicateRecordError
 from ..query import Filter, Operator, Query, SortOrder
 from ..records import Record
 
@@ -592,27 +593,43 @@ class SQLQueryBuilder:
 
     def build_batch_create_query(self, records: list[Record]) -> tuple[str, list[Any], list[str]]:
         """Build a batch INSERT query for multiple records.
-        
-        Generates efficient multi-value INSERT statements.
-        
+
+        Generates an efficient multi-value INSERT statement. Like ``create()``,
+        a caller-supplied ``record.id`` is honored (a uuid is minted only when a
+        record has none); the id primary-key constraint makes a colliding id
+        fail closed at the store (the executor translates the driver violation
+        to ``DuplicateRecordError``). A duplicate id *within* the same batch —
+        which the single INSERT statement cannot express and which would surface
+        as an opaque constraint error — is detected here and raises
+        ``DuplicateRecordError`` before any SQL runs.
+
         Args:
             records: List of records to insert
-            
+
         Returns:
-            Tuple of (SQL query, parameters, generated IDs)
+            Tuple of (SQL query, parameters, ids in input order)
+
+        Raises:
+            DuplicateRecordError: two records in the batch share an id.
         """
         if not records:
             return "", [], []
 
         import uuid
 
-        # Generate IDs and prepare values
+        # Honor record.id; mint only when absent. Detect within-batch duplicate
+        # ids up front (a single INSERT cannot insert the same PK twice), failing
+        # closed the same way create() does for a colliding id.
         ids = []
         values_clauses = []
         params = []
+        seen: set[str] = set()
 
         for i, record in enumerate(records):
-            record_id = str(uuid.uuid4())
+            record_id = record.id or str(uuid.uuid4())
+            if record_id in seen:
+                raise DuplicateRecordError(record_id)
+            seen.add(record_id)
             ids.append(record_id)
             data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
