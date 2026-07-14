@@ -11,8 +11,9 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import duckdb
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -503,11 +504,54 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         """DuckDB batch ops run inside an explicit ``begin``/``commit``."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Open one native transaction on the shared DuckDB connection.
+
+        Runs the outer ``begin`` / ``commit`` / ``rollback`` on the executor
+        under ``self._lock`` (matching how every op reaches the connection) and
+        yields ``self.conn`` as the handle. The batch sync cores run their DML
+        under the same lock and skip their own ``begin``/``commit`` when a handle
+        is threaded, so a multi-kind buffered-transaction flush commits (or rolls
+        back) as one unit. As the module docs note, two buffered-transaction
+        commits must not run against this instance concurrently.
+        """
+        self._check_connection()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(self.executor, self._begin_sync)
+        try:
+            yield self.conn
+        except BaseException:
+            await loop.run_in_executor(self.executor, self._rollback_sync)
+            raise
+        else:
+            await loop.run_in_executor(self.executor, self._commit_sync)
+
+    def _begin_sync(self) -> None:
+        """Begin a transaction on the connection (executor thread, under lock)."""
+        with self._lock:
+            self.conn.begin()
+
+    def _commit_sync(self) -> None:
+        """Commit the connection's transaction (executor thread, under lock)."""
+        with self._lock:
+            self.conn.commit()
+
+    def _rollback_sync(self) -> None:
+        """Roll back the connection's transaction (executor thread, under lock)."""
+        with self._lock:
+            self.conn.rollback()
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently.
 
         Args:
             records: List of records to create
+            _tx: Internal. When supplied (a multi-kind buffered-transaction
+                flush), the DML joins the outer :meth:`_transaction` and the sync
+                core skips its own ``begin``/``commit``.
 
         Returns:
             List of record IDs
@@ -521,16 +565,21 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._create_batch_sync,
-            records
+            records,
+            _tx is None,
         )
 
-    def _create_batch_sync(self, records: list[Record]) -> list[str]:
+    def _create_batch_sync(
+        self, records: list[Record], own_tx: bool = True
+    ) -> list[str]:
         """Synchronous batch create implementation.
 
         Fails closed like ``create()``: a colliding id (or a within-batch
         duplicate, raised up front by the shared query builder) raises
         ``DuplicateRecordError`` and the transaction is rolled back so nothing is
-        written; a caller-supplied ``record.id`` is honored.
+        written; a caller-supplied ``record.id`` is honored. When ``own_tx`` is
+        ``False`` the DML runs inside an outer :meth:`_transaction` and this core
+        skips its own ``begin``/``commit``/``rollback``.
         """
         # Use the shared batch create query builder
         query, params, ids = self.query_builder.build_batch_create_query(records)
@@ -538,12 +587,15 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         # Execute the batch insert in a transaction
         with self._lock:
             try:
-                self.conn.begin()
+                if own_tx:
+                    self.conn.begin()
                 self.conn.execute(query, params)
-                self.conn.commit()
+                if own_tx:
+                    self.conn.commit()
                 return ids
             except duckdb.ConstraintException as e:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 if is_duplicate_key_error(e):
                     # Name the colliding id precisely on the error path. We are
                     # on the executor thread holding the lock, so probe the raw
@@ -560,15 +612,20 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                     raise DuplicateRecordError(colliding) from e
                 raise RecordValidationError(str(e)) from e
             except Exception:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 raise
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records efficiently in one statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
         ``record.id`` (minting a uuid only when absent); a colliding id is
-        overwritten (never raised). Returns ids in input order.
+        overwritten (never raised). Returns ids in input order. When ``_tx`` is
+        supplied the DML joins the outer :meth:`_transaction` (see
+        :meth:`create_batch`).
         """
         if not records:
             return []
@@ -580,20 +637,26 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             self.executor,
             self._upsert_batch_sync,
             records,
+            _tx is None,
         )
 
-    def _upsert_batch_sync(self, records: list[Record]) -> list[str]:
+    def _upsert_batch_sync(
+        self, records: list[Record], own_tx: bool = True
+    ) -> list[str]:
         """Synchronous batch upsert implementation."""
         query, params, ids = self.query_builder.build_batch_upsert_query(records)
 
         with self._lock:
             try:
-                self.conn.begin()
+                if own_tx:
+                    self.conn.begin()
                 self.conn.execute(query, params)
-                self.conn.commit()
+                if own_tx:
+                    self.conn.commit()
                 return ids
             except Exception:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -647,11 +710,15 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 self.conn.rollback()
                 raise
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently.
 
         Args:
             ids: List of record IDs to delete
+            _tx: Internal. When supplied the DML joins the outer
+                :meth:`_transaction` (see :meth:`create_batch`).
 
         Returns:
             List of success indicators
@@ -665,10 +732,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         return await loop.run_in_executor(
             self.executor,
             self._delete_batch_sync,
-            ids
+            ids,
+            _tx is None,
         )
 
-    def _delete_batch_sync(self, ids: list[str]) -> list[bool]:
+    def _delete_batch_sync(self, ids: list[str], own_tx: bool = True) -> list[bool]:
         """Synchronous batch delete implementation."""
         with self._lock:
             # Check which IDs exist before deletion
@@ -683,9 +751,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
             # Execute the batch delete in a transaction
             try:
-                self.conn.begin()
+                if own_tx:
+                    self.conn.begin()
                 self.conn.execute(query, params)
-                self.conn.commit()
+                if own_tx:
+                    self.conn.commit()
 
                 # Return results based on which IDs existed
                 results = []
@@ -694,7 +764,8 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
                 return results
             except Exception:
-                self.conn.rollback()
+                if own_tx:
+                    self.conn.rollback()
                 raise
 
     def _initialize(self) -> None:

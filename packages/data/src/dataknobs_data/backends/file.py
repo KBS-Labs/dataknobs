@@ -658,7 +658,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data({})
             return count
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 
         Matches ``create``'s atomic-insert contract: a colliding id — against an
@@ -667,6 +669,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
         own id is honored (this path previously minted a fresh id and ignored
         ``record.id``). The pre-scan runs before ``_save_data``, so the batch is
         all-or-nothing and the streaming INSERT fast-path fails closed.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored — the file backend has no native transaction to join.
         """
         async with self._lock:
             data = await self._load_data()
@@ -680,7 +685,9 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return ids
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records in one load/save cycle.
 
         The batch sibling of ``create_batch``, with upsert semantics: a
@@ -688,7 +695,8 @@ class AsyncFileDatabase(  # type: ignore[misc]
         ``record.id`` is honored, and ids are returned in input order. The whole
         batch is applied under one ``_load_data`` / ``_save_data`` (a single file
         rewrite) rather than the per-record load+save the ABC default loop would
-        incur.
+        incur. ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
         """
         if not records:
             return []
@@ -712,8 +720,14 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records efficiently."""
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
+        """Delete multiple records efficiently.
+
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
         async with self._lock:
             data = await self._load_data()
             results = []

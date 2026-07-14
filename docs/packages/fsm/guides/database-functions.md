@@ -205,14 +205,17 @@ flushes them (returning `committed_count`) while `rollback` discards them.
 Because writes are buffered, a failure *before* `commit` persists nothing on any
 backend.
 
-Commit atomicity follows the buffered transaction's `is_atomic` flag: a single
-same-kind batch (all creates, all upserts, or all deletes) is all-or-nothing on
-a transactional backend, but a buffer spanning **more than one kind** (e.g.
-mixed create/delete, or create + upsert) commits as a sequence of independent
-batches and can partially persist if one fails mid-flush (see the data
-package's [Transactions](../../data/transactions.md) guide). A `commit` reaching a state
-with no active handle — a missing or failed prior `begin` — is logged at WARNING
-and commits nothing, rather than reporting a phantom success; a handle-less
+Commit atomicity follows the buffered transaction's `is_atomic` flag: on a
+transactional backend the commit flush runs every coalesced batch inside one
+native transaction, so a commit is all-or-nothing regardless of composition —
+a single same-kind batch **and** a buffer spanning several kinds (e.g. mixed
+create/delete, or create + upsert) alike; a mid-flush failure rolls the whole
+commit back (see the data package's
+[Transactions](../../data/transactions.md) guide). On a non-transactional
+backend a multi-kind buffer commits as a sequence of independent batches and can
+partially persist if one fails mid-flush. A `commit` reaching a state with no
+active handle — a missing or failed prior `begin` — is logged at WARNING and
+commits nothing, rather than reporting a phantom success; a handle-less
 `rollback` is a quiet no-op.
 
 ```python
@@ -234,12 +237,12 @@ guarantee atomic commit (`supports_transactions()` is `False`):
 
 The buffered transaction defers all writes until commit; it does **not** provide
 in-transaction isolation or read-your-writes (staged writes are invisible to
-reads until commit), and it does **not** commit mixed operation kinds
-all-or-nothing (see the multi-kind caveat above). The public API exposes no
+reads until commit). On a transactional backend it commits mixed operation kinds
+all-or-nothing (the multi-kind behaviour above); on a non-transactional backend
+a mixed-kind commit is best-effort per batch. The public API exposes no
 connection-scoped transaction beyond this buffered form: for a multi-record
 read-modify-write invariant use optimistic concurrency (`update` / `upsert` with
-`expected_version`); for all-or-nothing across mixed kinds, stage a single kind
-per transaction (each single-kind commit is atomic on a transactional backend).
+`expected_version`).
 
 > **There is no `transaction:` config block for database atomicity.** The
 > former strategy-based transaction coordinator has been removed — it

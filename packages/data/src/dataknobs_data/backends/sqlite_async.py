@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -348,7 +349,31 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         """SQLite batch ops run inside an explicit ``BEGIN``/``COMMIT``."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Open one native transaction on the shared aiosqlite connection.
+
+        Issues a single ``BEGIN TRANSACTION`` and yields ``self.db`` as the
+        handle; the batch methods run their DML on it and skip their own
+        ``BEGIN``/``commit`` when a handle is threaded (``_tx is not None``), so
+        a multi-kind buffered-transaction flush commits (or rolls back) as one
+        unit. Concurrency: the connection is single, so — as the module docs
+        note — two buffered-transaction commits must not run against this
+        instance concurrently; the ``BEGIN``/``COMMIT`` boundaries would
+        interleave.
+        """
+        self._check_connection()
+        await self.db.execute("BEGIN TRANSACTION")
+        try:
+            yield self.db
+            await self.db.commit()
+        except BaseException:
+            await self.db.rollback()
+            raise
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently using a single query.
 
         Uses a multi-value INSERT. Like ``create()``, this fails closed: a
@@ -356,6 +381,11 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         ``DuplicateRecordError`` and the transaction is rolled back so nothing is
         written. A caller-supplied ``record.id`` is honored (the shared query
         builder mints a uuid only when a record has none).
+
+        When ``_tx`` is supplied (a multi-kind buffered-transaction flush), the
+        DML joins that outer transaction and this method skips its own
+        ``BEGIN``/``commit``/``rollback`` — the outer :meth:`_transaction` owns
+        the boundary.
         """
         if not records:
             return []
@@ -366,17 +396,20 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         # DuplicateRecordError up front on a within-batch duplicate id).
         query, params, ids = self.query_builder.build_batch_create_query(records)
 
-        # Execute the batch insert in a transaction
-        await self.db.execute("BEGIN TRANSACTION")
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
 
         try:
             await self.db.execute(query, params)
-            await self.db.commit()
+            if own_tx:
+                await self.db.commit()
 
             # Return the generated IDs
             return ids
         except aiosqlite.IntegrityError as e:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
             if is_duplicate_key_error(e):
                 # Name the colliding id precisely on the error path only.
                 colliding = ids[0]
@@ -387,15 +420,21 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 raise DuplicateRecordError(colliding) from e
             raise RecordValidationError(str(e)) from e
         except Exception:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
             raise
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records efficiently in one statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
         ``record.id`` (minting a uuid only when absent); a colliding id is
         overwritten (never raised). Returns ids in input order.
+
+        When ``_tx`` is supplied the DML joins that outer transaction and this
+        method skips its own boundary (see :meth:`create_batch`).
         """
         if not records:
             return []
@@ -404,13 +443,17 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         query, params, ids = self.query_builder.build_batch_upsert_query(records)
 
-        await self.db.execute("BEGIN TRANSACTION")
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
         try:
             await self.db.execute(query, params)
-            await self.db.commit()
+            if own_tx:
+                await self.db.commit()
             return ids
         except Exception:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
             raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -453,10 +496,15 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             await self.db.rollback()
             raise
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause for better performance.
+
+        When ``_tx`` is supplied the DML joins that outer transaction and this
+        method skips its own boundary (see :meth:`create_batch`).
         """
         if not ids:
             return []
@@ -474,12 +522,14 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         # Use the shared batch delete query builder
         query, params = self.query_builder.build_batch_delete_query(ids)
 
-        # Execute the batch delete in a transaction
-        await self.db.execute("BEGIN TRANSACTION")
+        own_tx = _tx is None
+        if own_tx:
+            await self.db.execute("BEGIN TRANSACTION")
 
         try:
             await self.db.execute(query, params)
-            await self.db.commit()
+            if own_tx:
+                await self.db.commit()
 
             # Return results based on which IDs existed
             results = []
@@ -488,7 +538,8 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
             return results
         except Exception:
-            await self.db.rollback()
+            if own_tx:
+                await self.db.rollback()
             raise
 
     def _initialize(self) -> None:

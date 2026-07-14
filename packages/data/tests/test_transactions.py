@@ -11,14 +11,16 @@ and atomic commit on transactional backends (sqlite here), plus the
 strict/emulate policy gate and the buffer's own lifecycle invariants.
 """
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
 
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, OperationError
-from dataknobs_common.testing import assert_no_blocking
+from dataknobs_common.testing import assert_no_blocking, requires_package
 from dataknobs_data import Record, async_database_factory
+from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
 from dataknobs_data.backends.file import AsyncFileDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
@@ -31,6 +33,12 @@ async def _memory_db():
 
 async def _sqlite_db():
     db = AsyncSQLiteDatabase({"path": ":memory:"})
+    await db.connect()
+    return db
+
+
+async def _duckdb_db():
+    db = AsyncDuckDBDatabase({"path": ":memory:"})
     await db.connect()
     return db
 
@@ -159,14 +167,13 @@ async def test_sqlite_exception_rolls_back():
         await db.close()
 
 
-# ---- is_atomic reflects the staged-op composition ------------------------
+# ---- is_atomic reflects the backend capability ---------------------------
 #
-# Reproduce-first for the over-claim: ``is_atomic`` previously returned the
-# backend capability unconditionally, so a *mixed*-operation buffer on sqlite
-# reported ``True`` while its commit was, in fact, a sequence of independent
-# batches that can partially persist. These pin the honest boundary — including
-# the WS2 correction that a single-kind all-upsert buffer IS atomic (it
-# coalesces into one ``upsert_batch``).
+# On a transactional backend the commit flush spans every coalesced batch in
+# ONE native transaction, so a buffer of ANY composition — single-kind or
+# multi-kind — is all-or-nothing. ``is_atomic`` therefore reports the backend
+# capability directly; op composition no longer downgrades it. (A
+# non-transactional backend stays non-atomic; see the sibling test.)
 
 
 async def test_is_atomic_reflects_op_composition_on_transactional_backend():
@@ -178,24 +185,23 @@ async def test_is_atomic_reflects_op_composition_on_transactional_backend():
         await tx.create(Record({"name": "b"}))
         assert tx.is_atomic is True  # all creates → one coalesced create_batch
         await tx.delete("x")
-        assert tx.is_atomic is False  # create + delete → two independent batches
+        assert tx.is_atomic is True  # create + delete → one spanning native txn
         await tx.rollback()
 
         # All-upsert single-kind buffer → one coalesced ``upsert_batch``, atomic
-        # on a transactional backend. (Before WS2 this reported False, because
-        # upserts were flushed row-by-row.)
+        # on a transactional backend.
         tx2 = await db.begin_transaction()
         await tx2.upsert("id1", Record({"name": "u"}))
         await tx2.upsert("id2", Record({"name": "v"}))
         assert tx2.is_atomic is True
         await tx2.rollback()
 
-        # A buffer spanning >1 kind (create + upsert) still flushes as
-        # independent batches and stays non-atomic.
+        # A buffer spanning >1 kind (create + upsert) now flushes inside one
+        # native transaction and is atomic too.
         tx3 = await db.begin_transaction()
         await tx3.create(Record({"name": "c"}))
         await tx3.upsert("id3", Record({"name": "w"}))
-        assert tx3.is_atomic is False
+        assert tx3.is_atomic is True
         await tx3.rollback()
     finally:
         await db.close()
@@ -216,16 +222,18 @@ class _MidFlushDeleteFailure(AsyncSQLiteDatabase):
     """Real sqlite backend subclass that injects a mid-flush ``delete_batch`` failure.
 
     A real ``AsyncSQLiteDatabase`` (not a mock) with only ``delete_batch``
-    overridden to raise, so a commit can fail *between* batches — after an earlier
-    ``create_batch`` has already committed — proving a mixed buffer is not
-    all-or-nothing.
+    overridden to raise, so a commit fails *between* batches — after an earlier
+    ``create_batch`` has run inside the spanning native transaction — proving
+    the whole multi-kind flush rolls back rather than partially persisting.
+    The ``_tx`` keyword mirrors the public ``delete_batch`` signature so the
+    injection still fires on the threaded-handle path the flush now takes.
     """
 
-    async def delete_batch(self, ids):  # type: ignore[override]
+    async def delete_batch(self, ids, *, _tx=None):  # type: ignore[override]
         raise RuntimeError("delete batch failed mid-flush")
 
 
-async def test_mixed_buffer_partially_persists_on_midflush_failure():
+async def test_mixed_buffer_rolls_back_whole_flush_on_midflush_failure():
     db = _MidFlushDeleteFailure({"path": ":memory:"})
     await db.connect()
     try:
@@ -233,13 +241,13 @@ async def test_mixed_buffer_partially_persists_on_midflush_failure():
         await tx.create(Record({"name": "early"}))  # batch 1: create_batch
         await tx.delete("whatever")  # batch 2: delete_batch → raises
         await tx.create(Record({"name": "late"}))  # batch 3: never reached
-        # A mixed create+delete buffer correctly reports non-atomic...
-        assert tx.is_atomic is False
-        # ...and the partial persistence it warns about is real: the first
-        # create_batch commits before the delete_batch fails.
+        # A multi-kind create+delete buffer is atomic on a transactional backend.
+        assert tx.is_atomic is True
+        # The mid-flush failure rolls the whole commit back: the earlier
+        # create_batch, run inside the same native transaction, is undone.
         with pytest.raises(RuntimeError, match="mid-flush"):
             await tx.commit()
-        assert await db.count() == 1  # "early" persisted; "late" never flushed
+        assert await db.count() == 0  # nothing persisted — all-or-nothing
     finally:
         await db.close()
 
@@ -270,9 +278,9 @@ class _CountingUpsertSQLite(AsyncSQLiteDatabase):
         self.upsert_calls += 1
         return await super().upsert(*args, **kwargs)
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:  # type: ignore[override]
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:  # type: ignore[override]
         self.upsert_batch_calls += 1
-        return await super().upsert_batch(records)
+        return await super().upsert_batch(records, _tx=_tx)
 
 
 class _UpsertBatchFailure(AsyncSQLiteDatabase):
@@ -282,7 +290,7 @@ class _UpsertBatchFailure(AsyncSQLiteDatabase):
     persists nothing — no partial row-by-row persistence (the pre-WS2 hazard).
     """
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:  # type: ignore[override]
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:  # type: ignore[override]
         raise RuntimeError("upsert batch failed")
 
 
@@ -383,7 +391,7 @@ async def test_mixed_create_upsert_buffer_commits_all_rows():
         await tx.upsert_batch(
             [Record({"id": "u1", "v": "up1"}), Record({"id": "u2", "v": "up2"})]
         )
-        assert tx.is_atomic is False  # spans 2 kinds → not single-batch
+        assert tx.is_atomic is True  # spans 2 kinds, one native txn → atomic
         res = await tx.commit()
         # The coalescer must not drop or reorder ops: all 3 rows land.
         assert res["affected_rows"] == 3
@@ -485,5 +493,152 @@ async def test_double_commit_is_noop():
         assert first == {"affected_rows": 1}
         assert second == {"affected_rows": 0}
         assert await db.count() == 1
+    finally:
+        await db.close()
+
+
+# ---- cross-kind atomic commit (multi-kind buffer, one native transaction) ----
+#
+# A multi-kind buffer (create + delete, create + upsert, ...) commits every
+# coalesced batch inside ONE native transaction on a transactional backend, so
+# a mid-flush failure rolls the whole commit back. Single-kind buffers stay on
+# the direct path (they are already one native batch). The headline
+# reproduce-first pins for this — the inverted partial-persist test and the
+# widened ``is_atomic`` composition test above — assert the same contract.
+
+
+class _TxCountingSQLite(AsyncSQLiteDatabase):
+    """Real sqlite backend that tallies ``_transaction()`` entries.
+
+    A behaviour-preserving subclass (not a mock) so a test can prove the commit
+    flush enters the native-transaction hook ONLY for a multi-kind buffer, and
+    leaves the single-kind fast path (one ``*_batch`` = one native tx) untouched.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.transaction_entries = 0
+
+    @asynccontextmanager
+    async def _transaction(self):  # type: ignore[override]
+        self.transaction_entries += 1
+        async with super()._transaction() as tx:
+            yield tx
+
+
+async def test_single_kind_buffer_does_not_enter_transaction_hook():
+    db = _TxCountingSQLite({"path": ":memory:"})
+    await db.connect()
+    try:
+        # All creates → single coalesced batch → direct path, hook NOT entered.
+        async with db.transaction() as tx:
+            await tx.create(Record({"name": "a"}))
+            await tx.create(Record({"name": "b"}))
+        assert await db.count() == 2
+        assert db.transaction_entries == 0
+
+        # A multi-kind buffer DOES span the flush in one native transaction.
+        async with db.transaction() as tx:
+            await tx.create(Record({"id": "c", "v": "1"}))
+            await tx.delete("missing")
+        assert db.transaction_entries == 1
+    finally:
+        await db.close()
+
+
+async def test_multi_kind_buffer_commits_all_rows_atomically():
+    db = await _sqlite_db()
+    try:
+        seed_id = await db.create(Record({"v": "s"}))  # backend id; to be deleted
+        async with db.transaction() as tx:  # strict; sqlite transactional
+            await tx.create(Record({"id": "c1", "v": "a"}))
+            await tx.delete(seed_id)
+            await tx.create(Record({"id": "c2", "v": "b"}))
+            await tx.upsert("u1", Record({"v": "c"}))
+            assert tx.is_atomic is True  # multi-kind, one spanning native txn
+        # c1, c2, u1 persisted; seed removed → 3 rows.
+        assert await db.count() == 3
+        assert await db.read(seed_id) is None
+        c1 = await db.read("c1")
+        u1 = await db.read("u1")
+        assert c1 is not None and c1.get_value("v") == "a"
+        assert u1 is not None and u1.get_value("v") == "c"
+    finally:
+        await db.close()
+
+
+async def test_multi_kind_flush_no_blocking_on_sqlite():
+    db = await _sqlite_db()
+    try:
+        # The spanning-transaction flush must reach the backend via aiosqlite
+        # (async transport), never a blocking syscall on the loop.
+        with assert_no_blocking():
+            async with db.transaction() as tx:
+                await tx.create(Record({"id": "c1", "v": "a"}))
+                await tx.delete("x")
+                await tx.upsert("u1", Record({"v": "b"}))
+        assert await db.count() == 2  # c1 + u1 (delete of missing x is a no-op)
+    finally:
+        await db.close()
+
+
+# ---- DuckDB twin (executor + lock connection model) ---------------------
+
+
+class _DuckDBMidFlushFailure(AsyncDuckDBDatabase):
+    """Real DuckDB backend whose ``delete_batch`` raises mid-flush.
+
+    Proves the whole multi-kind flush rolls back through the spanning native
+    transaction on DuckDB's executor+lock connection model — not just sqlite's.
+    """
+
+    async def delete_batch(self, ids, *, _tx=None):  # type: ignore[override]
+        raise RuntimeError("delete batch failed mid-flush")
+
+
+@requires_package("duckdb")
+async def test_duckdb_multi_kind_commits_all_rows_atomically():
+    db = await _duckdb_db()
+    try:
+        seed_id = await db.create(Record({"v": "s"}))
+        async with db.transaction() as tx:  # strict; duckdb transactional
+            await tx.create(Record({"id": "c1", "v": "a"}))
+            await tx.delete(seed_id)
+            await tx.upsert("u1", Record({"v": "c"}))
+            assert tx.is_atomic is True
+        assert await db.count() == 2  # c1 + u1; seed removed
+        assert await db.read(seed_id) is None
+    finally:
+        await db.close()
+
+
+@requires_package("duckdb")
+async def test_duckdb_multi_kind_rolls_back_whole_flush_on_midflush_failure():
+    db = _DuckDBMidFlushFailure({"path": ":memory:"})
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()  # strict; duckdb transactional
+        await tx.create(Record({"id": "early", "v": "a"}))
+        await tx.delete("whatever")
+        assert tx.is_atomic is True
+        with pytest.raises(RuntimeError, match="mid-flush"):
+            await tx.commit()
+        assert await db.count() == 0  # early rolled back with the failed delete
+    finally:
+        await db.close()
+
+
+@requires_package("duckdb")
+async def test_duckdb_multi_kind_flush_no_blocking():
+    db = await _duckdb_db()
+    try:
+        # DuckDB's sync core is offloaded via the executor, so the spanning-tx
+        # flush must not block the loop either.
+        with assert_no_blocking():
+            async with db.transaction() as tx:
+                await tx.create(Record({"id": "c1", "v": "a"}))
+                await tx.delete("x")
+                await tx.upsert("u1", Record({"v": "b"}))
+        assert await db.count() == 2
     finally:
         await db.close()

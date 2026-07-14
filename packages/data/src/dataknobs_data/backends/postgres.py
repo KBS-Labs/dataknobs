@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
@@ -1683,14 +1684,54 @@ class AsyncPostgresDatabase(
         """Postgres batch ops are atomic (single multi-row DML statement)."""
         return True
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Pin one pooled connection in a transaction spanning a commit flush.
+
+        Acquires a single connection from the pool and opens a
+        ``conn.transaction()`` on it, yielding the connection as the handle. The
+        batch methods run their DML on this exact connection (via
+        :meth:`_acquire`) and skip opening a nested transaction, so a multi-kind
+        buffered-transaction flush commits (or rolls back) as one unit. Pinning
+        the connection is why the batch methods **must** route through the
+        threaded handle: a fall-through to a second ``self._pool.acquire()`` while
+        this one is held would deadlock a size-1 pool.
+        """
+        self._check_connection()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
+
+    @asynccontextmanager
+    async def _acquire(self, _tx: Any) -> AsyncIterator[Any]:
+        """Yield the threaded flush connection, or acquire a fresh pooled one.
+
+        When ``_tx`` is supplied (inside a :meth:`_transaction` flush) it is the
+        pinned connection — yield it directly and never acquire a second one
+        (the size-1-pool deadlock trap). When ``None`` (the direct path) acquire
+        a fresh pooled connection for the batch's own implicit transaction, the
+        pre-existing behavior.
+        """
+        if _tx is not None:
+            yield _tx
+        else:
+            async with self._pool.acquire() as conn:
+                yield conn
+
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records efficiently using a single query.
 
         Uses multi-value INSERT with RETURNING for better performance.
-        
+
         Args:
             records: List of records to create
-            
+            _tx: Internal. When supplied (a multi-kind buffered-transaction
+                flush), the DML runs on that pinned connection inside the outer
+                :meth:`_transaction`; when ``None`` a fresh pooled connection
+                runs it as an implicit transaction (the pre-existing path).
+
         Returns:
             List of created record IDs
         """
@@ -1711,14 +1752,20 @@ class AsyncPostgresDatabase(
         # fails closed: the single INSERT is atomic, so the unique-violation
         # aborts the whole batch (nothing written).
         try:
-            async with self._pool.acquire() as conn:
+            async with self._acquire(_tx) as conn:
                 rows = await conn.fetch(query, *params)
         except asyncpg.exceptions.UniqueViolationError as e:
             colliding = ids[0]
-            for record in records:
-                if record.id and await self.exists(record.id):
-                    colliding = record.id
-                    break
+            # Precise colliding-id naming needs a probe on a *fresh* connection.
+            # That is safe only off the pinned-tx path: inside a flush the pool
+            # connection is held (a probe could exhaust a size-1 pool) and the
+            # aborted transaction cannot be queried anyway. On the ``_tx`` path
+            # report the first batch id and let the outer transaction roll back.
+            if _tx is None:
+                for record in records:
+                    if record.id and await self.exists(record.id):
+                        colliding = record.id
+                        break
             raise DuplicateRecordError(colliding) from e
 
         # Return the actual inserted IDs from RETURNING clause
@@ -1726,12 +1773,16 @@ class AsyncPostgresDatabase(
             return [row["id"] for row in rows]
         return ids  # Fallback to generated IDs
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records in a single statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
         ``record.id`` (minting a uuid only when absent); a colliding id is
-        overwritten (never raised). Returns ids in input order.
+        overwritten (never raised). Returns ids in input order. When ``_tx`` is
+        supplied the DML runs on the pinned flush connection (see
+        :meth:`create_batch`).
         """
         if not records:
             return []
@@ -1744,21 +1795,25 @@ class AsyncPostgresDatabase(
         )
         query, params, ids = query_builder.build_batch_upsert_query(records)
 
-        async with self._pool.acquire() as conn:
+        async with self._acquire(_tx) as conn:
             await conn.execute(query, *params)
 
         # RETURNING order is not guaranteed under ON CONFLICT, so return the
         # builder's input-order ids.
         return ids
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records efficiently using a single query.
-        
+
         Uses single DELETE with IN clause and RETURNING for verification.
-        
+
         Args:
             ids: List of record IDs to delete
-            
+            _tx: Internal. When supplied the DML runs on the pinned flush
+                connection (see :meth:`create_batch`).
+
         Returns:
             List of success flags for each deletion
         """
@@ -1775,7 +1830,7 @@ class AsyncPostgresDatabase(
         query, params = query_builder.build_batch_delete_query(ids)
 
         # Execute the batch delete with RETURNING
-        async with self._pool.acquire() as conn:
+        async with self._acquire(_tx) as conn:
             rows = await conn.fetch(query, *params)
 
         # Convert returned rows to set of deleted IDs

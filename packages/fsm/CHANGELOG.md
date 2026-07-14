@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias) on this idempotent-upsert path too — committing atomically instead of
   rejecting it, matching the create-mode path — and reject `require` only on
   non-transactional backends.
+- The `DatabaseTransaction` function now commits a **multi-kind** staged buffer
+  (e.g. creates and deletes staged across FSM states) all-or-nothing on a
+  transactional backend (SQLite/DuckDB/PostgreSQL): the underlying
+  `AsyncDatabase` buffered transaction runs every coalesced batch inside one
+  native transaction, so a mid-flush failure rolls the whole commit back instead
+  of partially persisting. The Database Functions guide's multi-kind note is
+  updated to match.
 
 ### Removed
 
