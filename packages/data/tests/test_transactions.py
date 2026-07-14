@@ -325,6 +325,38 @@ async def test_all_upsert_buffer_is_idempotent_and_persists():
         await db.close()
 
 
+async def test_duplicate_id_within_one_upsert_run_last_wins():
+    """Two upserts of the SAME id inside one coalesced run resolve last-wins.
+
+    The row-by-row→``upsert_batch`` change routes a within-buffer duplicate id
+    through SQL within-batch coalescing: exactly one row persists (last value
+    wins), while ``affected_rows`` reflects the input count (``upsert_batch``
+    returns one id per input). Covers the mixed staging forms — the explicit-id
+    ``upsert(id, record)`` form and the ``upsert_batch`` form — sharing an id in
+    a single coalesced run.
+    """
+    db = _CountingUpsertSQLite({"path": ":memory:"})
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()  # strict; sqlite is transactional
+        await tx.upsert("1", Record({"v": "a"}))
+        await tx.upsert_batch([Record({"id": "1", "v": "b"})])  # same id
+        assert tx.is_atomic is True  # single-kind all-upsert
+        result = await tx.commit()
+        # One coalesced upsert_batch for the whole run, no row-by-row fallback.
+        assert db.upsert_batch_calls == 1
+        assert db.upsert_calls == 0
+        # affected_rows reflects the input count (upsert_batch returns one id
+        # per input), even though the within-batch dup coalesces server-side.
+        assert result["affected_rows"] == 2
+        # Within-batch dup coalesces to a single persisted row, last value wins.
+        assert await db.count() == 1
+        rec = await db.read("1")
+        assert rec is not None and rec.get_value("v") == "b"
+    finally:
+        await db.close()
+
+
 async def test_all_upsert_commit_failure_persists_nothing():
     db = _UpsertBatchFailure({"path": ":memory:"})
     await db.connect()

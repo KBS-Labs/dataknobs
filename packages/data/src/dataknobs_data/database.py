@@ -622,9 +622,16 @@ class AsyncDatabase(CapabilityMixin, ABC):
         # behind exists() also skips a doomed UPDATE on the common insert path.
         if await self.exists(id) and await self.update(id, record):
             return id
-        # Ensure the record has the storage_id set for create.
-        if not record.storage_id:
-            record.storage_id = id
+        # Stamp the resolved id onto the record before create so the explicit
+        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
+        # so it must override any differing ``storage_id`` the caller pre-set on
+        # the record (a conditional ``if not record.storage_id`` guard would let
+        # create write under the record's own id and silently ignore ``id``). In
+        # the ``upsert(record)`` form ``id`` already equals the record's id, so
+        # this reproduces prior behavior there (a true no-op only when
+        # ``storage_id`` was already set; when the id came from an ``id`` field
+        # or a minted uuid it stamps ``storage_id``, exactly as before).
+        record.storage_id = id
         created_id = await self.create(record)
         # Return the created ID (might be different from what we provided).
         return created_id or id
@@ -1408,9 +1415,16 @@ class SyncDatabase(CapabilityMixin, ABC):
         # behind exists() also skips a doomed UPDATE on the common insert path.
         if self.exists(id) and self.update(id, record):
             return id
-        # Ensure the record has the storage_id set for create.
-        if not record.storage_id:
-            record.storage_id = id
+        # Stamp the resolved id onto the record before create so the explicit
+        # id wins. In the ``upsert(id, record)`` form ``id`` is authoritative,
+        # so it must override any differing ``storage_id`` the caller pre-set on
+        # the record (a conditional ``if not record.storage_id`` guard would let
+        # create write under the record's own id and silently ignore ``id``). In
+        # the ``upsert(record)`` form ``id`` already equals the record's id, so
+        # this reproduces prior behavior there (a true no-op only when
+        # ``storage_id`` was already set; when the id came from an ``id`` field
+        # or a minted uuid it stamps ``storage_id``, exactly as before).
+        record.storage_id = id
         created_id = self.create(record)
         # Return the created ID (might be different from what we provided).
         return created_id or id

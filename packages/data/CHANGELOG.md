@@ -135,6 +135,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `upsert(id, record)` now honors the explicit `id` when the record carries a
+  *different* pre-set `storage_id` and the id does not yet exist. The base
+  create-fallback previously wrote the new row under the record's own
+  `storage_id` (and returned that id), silently discarding the explicit `id`
+  argument; it now stamps the resolved id onto the record before the create so
+  the explicit id is authoritative. Affects the backends that use the base
+  `upsert` (SQLite, DuckDB, sync S3); backends overriding `upsert` (memory,
+  PostgreSQL, Elasticsearch, file, async S3) already behaved correctly. The
+  common paths —
+  `upsert(record)`, and `upsert(id, record)` with a matching or absent
+  `storage_id` — are unchanged.
 - The async Elasticsearch backend's `create_batch()` and `upsert_batch()` now
   reconcile the bulk response per item, so a record whose bulk operation failed
   (e.g. a mapping error or version conflict) is no longer reported as written. A
