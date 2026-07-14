@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T18:01:25Z",
+  "timestamp": "2026-07-14T18:15:32Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fsm-transaction-manager-wire-or-retire",
-  "git_commit": "e7959d750cc5e81204448a3be55ac9733df3863c",
+  "git_commit": "4f801242c30690c8c4ab75fd9022bb4140df6d7e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
