@@ -1,0 +1,75 @@
+{
+  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every top-level *.md in both trees MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. See docs/packages/<pkg> and the 179 doc-mirror-drift brief for the model.",
+  "_schema": {
+    "symlink": "Site page is a symlink to the package source; drift is structurally impossible. The guard verifies the site path is a symlink resolving to the package source. Used when the source has no intra-doc links that need site-form rewriting. Each entry: {package, site}.",
+    "transclude": "Site page is a pymdownx `--8<--` include of the package source; drift is structurally impossible. The guard only verifies the include still points at the source. Each entry: {package, site}.",
+    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}.",
+    "diverge": "Intentional content divergence (structural landing page, faithful condensation, independent elaboration). Recorded, not content-checked; both files must exist. Each entry: {package, site, reason}.",
+    "package_only": "Package doc with no site mirror. Listed by package filename.",
+    "site_only": "Site-native page with no package source. Listed by site filename."
+  },
+  "packages": {
+    "data": {
+      "package_dir": "packages/data/docs",
+      "site_dir": "docs/packages/data",
+      "symlink": [
+        {"package": "DEDUP.md", "site": "dedup.md"},
+        {"package": "KEYED_RECORD_STORE.md", "site": "keyed-record-store.md"}
+      ],
+      "mirror": [
+        {
+          "package": "API_REFERENCE.md",
+          "site": "api-reference.md",
+          "line_exceptions": [
+            {
+              "package": "call. See the [Batch Processing Guide](BATCH_PROCESSING_GUIDE.md) for the",
+              "site": "call. See the [Migration guide](migration.md) for the",
+              "note": "The source links to BATCH_PROCESSING_GUIDE.md, which has no site mirror yet; the site repoints to the existing migration.md page (same streaming-write / StreamConfig material). Remove this exception once the batch guide is mirrored to the site."
+            }
+          ]
+        },
+        {"package": "TRANSACTIONS.md", "site": "transactions.md"}
+      ],
+      "transclude": [
+        {"package": "GROUNDED_SOURCES.md", "site": "grounded-sources.md"},
+        {"package": "VECTOR_FILTER_SEMANTICS.md", "site": "vector-filter-semantics.md"},
+        {"package": "vector-timestamps.md", "site": "vector-timestamps.md"}
+      ],
+      "diverge": [
+        {"package": "index.md", "site": "index.md", "reason": "Tree-specific landing pages: the package index is a GitHub development-history overview; the site index is a consumer-facing navigation page. Both API-correct."},
+        {"package": "HYBRID_SEARCH.md", "site": "hybrid-search.md", "reason": "The site page is a faithful condensation of the package source; both API-correct."},
+        {"package": "PGVECTOR_BACKEND.md", "site": "pgvector-backend.md", "reason": "Independent elaboration; both sides API-correct."}
+      ],
+      "package_only": [
+        "ARCHITECTURE.md",
+        "BATCH_PROCESSING_GUIDE.md",
+        "BOOLEAN_LOGIC_OPERATORS.md",
+        "DESIGN_PLAN.md",
+        "RECORD_ID_ARCHITECTURE.md",
+        "RECORD_SERIALIZATION.md"
+      ],
+      "site_only": [
+        "async-pooling-quickstart.md",
+        "async-pooling.md",
+        "backends.md",
+        "configuration.md",
+        "duckdb-backend.md",
+        "elasticsearch-backend.md",
+        "examples.md",
+        "factory-pattern.md",
+        "field-types.md",
+        "file-backend.md",
+        "memory-backend.md",
+        "migration.md",
+        "pandas-integration.md",
+        "performance-tuning.md",
+        "postgres-backend.md",
+        "query.md",
+        "record-model.md",
+        "s3-backend.md",
+        "sqlite-backend.md",
+        "validation.md"
+      ]
+    }
+  }
+}

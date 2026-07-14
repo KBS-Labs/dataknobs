@@ -476,6 +476,7 @@ VALIDATION_STATUS=0
 VALIDATION_SKIPPED="false"
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
+DOCS_MIRROR_STATUS=0
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
@@ -563,37 +564,31 @@ else
     print_status "Skipping code validation"
 fi
 
-# Build documentation (PR mode only, skip if no docs changes in pr mode)
+# Documentation checks (PR mode only, skip if no docs changes in pr mode)
 if [ "$PR_MODE" = "yes" ]; then
     if [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; then
-        print_status "Building documentation (checking for errors)..."
-        if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
-            print_success "Documentation builds without errors or warnings"
-        else
-            DOCS_STATUS=$?
-            print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
-            echo ""
-            echo -e "${YELLOW}Documentation errors:${NC}"
-            cat "$ARTIFACTS_DIR/docs-build.log"
-            echo ""
-        fi
+        print_status "Running documentation checks (build, versions, mirrors)..."
+        # bin/docs-checks.sh is the single source of truth for the doc-check set.
+        # It writes per-check logs (docs-build.log / docs-versions.log /
+        # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
+        "$SCRIPT_DIR/docs-checks.sh" --artifacts "$ARTIFACTS_DIR" || true
+        DOCS_CHECK_CODES=$(python3 -c "
+import json
+try:
+    d = json.load(open('$ARTIFACTS_DIR/docs-checks-status.json'))
+    print(d.get('docs-build', 1), d.get('docs-versions', 1), d.get('docs-mirror', 1))
+except Exception:
+    print(1, 1, 1)
+" 2>/dev/null || echo "1 1 1")
+        read -r DOCS_STATUS DOCS_VERSIONS_STATUS DOCS_MIRROR_STATUS <<< "$DOCS_CHECK_CODES"
 
-        # Check documentation versions are in sync with packages.json
-        print_status "Checking documentation versions..."
-        if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
-            print_success "Documentation versions are in sync"
+        if [ "$DOCS_STATUS" -eq 0 ] && [ "$DOCS_VERSIONS_STATUS" -eq 0 ] && [ "$DOCS_MIRROR_STATUS" -eq 0 ]; then
+            print_success "Documentation checks passed (build, versions, mirrors)"
         else
-            DOCS_VERSIONS_STATUS=$?
-            print_error "Documentation versions are out of sync"
-            echo ""
-            echo -e "${YELLOW}Version sync errors:${NC}"
-            cat "$ARTIFACTS_DIR/docs-versions.log"
-            echo ""
-            echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
-            echo ""
+            print_error "Documentation checks failed - see .quality-artifacts/docs-*.log (details below)"
         fi
     else
-        print_status "Skipping docs build (no documentation changes detected)"
+        print_status "Skipping docs checks (no documentation changes detected)"
     fi
 fi
 
@@ -938,7 +933,7 @@ if [ "$PR_MODE" = "yes" ]; then
 
     print_status "Generating quality summary..."
     OVERALL_STATUS="PASS"
-    if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
+    if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $DOCS_MIRROR_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         OVERALL_STATUS="PASS_WITH_SKIPS"
@@ -964,6 +959,11 @@ if [ "$PR_MODE" = "yes" ]; then
       "status": $([ $DOCS_VERSIONS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_VERSIONS_STATUS,
       "tool": "docs-update-versions.sh"
+    },
+    "documentation_mirrors": {
+      "status": $([ $DOCS_MIRROR_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $DOCS_MIRROR_STATUS,
+      "tool": "docs-mirror-check.py"
     },
     "validation": {
       "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
@@ -1100,6 +1100,13 @@ if [ "$PR_MODE" = "yes" ]; then
     else
         echo -e "  Doc Versions:       ${RED}✗ FAILED${NC}"
     fi
+
+    # Show documentation mirror status
+    if [ $DOCS_MIRROR_STATUS -eq 0 ]; then
+        echo -e "  Doc Mirrors:        ${GREEN}✓ PASSED${NC}"
+    else
+        echo -e "  Doc Mirrors:        ${RED}✗ FAILED${NC}"
+    fi
 fi
 
 if [ "$SKIP_STYLE" = "yes" ]; then
@@ -1181,6 +1188,15 @@ else
             echo "      cat $ARTIFACTS_DIR/docs-versions.log"
             echo "    To fix:"
             echo "      bin/docs-update-versions.sh"
+            echo ""
+        fi
+
+        if [ $DOCS_MIRROR_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-mirror.log" ]; then
+            echo -e "  ${CYAN}Documentation Mirror Drift:${NC}"
+            echo "    View mirror differences:"
+            echo "      cat $ARTIFACTS_DIR/docs-mirror.log"
+            echo "    To fix:"
+            echo "      bin/docs-mirror-check.py --fix   # or reclassify in .dataknobs/docs-mirror-manifest.json"
             echo ""
         fi
 
