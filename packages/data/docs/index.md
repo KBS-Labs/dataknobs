@@ -90,10 +90,11 @@ pip install "dataknobs-data[all]"
 ## Quick Start
 
 ```python
-from dataknobs_data import Database, Record, Query, Operator
+from dataknobs_data import AsyncDatabaseFactory, Record, Query, Operator
 
 # Create a database connection
-async with Database.create("memory") as db:
+factory = AsyncDatabaseFactory()
+async with factory.create(backend="memory") as db:
     # Create a record
     record = Record({
         "name": "Alice",
@@ -117,6 +118,8 @@ async with Database.create("memory") as db:
 |---------|---------|----------|-------------|
 | Memory | ✅ Stable | Testing, caching | Very High |
 | File | ✅ Stable | Local persistence | Medium |
+| SQLite | ✅ Stable | Embedded SQL, transactions | High |
+| DuckDB | ✅ Stable | Analytics, OLAP | High |
 | PostgreSQL | ✅ Stable | Relational data | High |
 | Elasticsearch | ✅ Stable | Search, analytics | High |
 | S3 | ✅ Stable | Cloud storage | Medium |

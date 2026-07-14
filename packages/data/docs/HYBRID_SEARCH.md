@@ -235,9 +235,9 @@ async def hybrid_search(
 Uses native RRF retriever (Elasticsearch 8.8+):
 
 ```python
-from dataknobs_data.backends import ElasticsearchAsyncBackend
+from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
-backend = ElasticsearchAsyncBackend(...)
+backend = AsyncElasticsearchDatabase(...)
 await backend.connect()
 
 # Native hybrid search using RRF retriever
@@ -260,9 +260,9 @@ results = await backend.hybrid_search(
 Uses tsvector + pgvector combination:
 
 ```python
-from dataknobs_data.backends import PostgresAsyncBackend
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
-backend = PostgresAsyncBackend(...)
+backend = AsyncPostgresDatabase(...)
 await backend.connect()
 
 # Hybrid search using tsvector and pgvector
