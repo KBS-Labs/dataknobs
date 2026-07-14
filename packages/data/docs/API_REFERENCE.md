@@ -374,7 +374,8 @@ The validation module (`dataknobs_data.validation`) provides schema-based valida
 Define validation schemas for your data.
 
 ```python
-from dataknobs_data.validation import Schema, FieldType
+from dataknobs_data import FieldType
+from dataknobs_data.validation import Schema
 from dataknobs_data.validation.constraints import Required, Range, Length, Pattern
 
 # Create schema
@@ -449,7 +450,8 @@ constraint = Length(min=10) | Pattern(r"^\d{5}$")  # OR
 Type coercion for automatic type conversion:
 
 ```python
-from dataknobs_data.validation import Coercer, FieldType
+from dataknobs_data import FieldType
+from dataknobs_data.validation import Coercer
 
 coercer = Coercer()
 
