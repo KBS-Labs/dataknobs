@@ -49,6 +49,7 @@ from dataknobs_common.testing._core import (
     get_test_rag_config,
     is_bedrock_available,
     is_chromadb_available,
+    is_elasticsearch_available,
     is_faiss_available,
     is_localstack_available,
     is_ollama_available,
@@ -58,6 +59,7 @@ from dataknobs_common.testing._core import (
     is_redis_available,
     requires_bedrock,
     requires_chromadb,
+    requires_elasticsearch,
     requires_faiss,
     requires_localstack,
     requires_ollama,
@@ -79,6 +81,7 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
     elasticsearch_connection_params,
     ensure_elasticsearch_ready,
     make_elasticsearch_test_index,
+    sweep_stale_test_indices,
     wait_for_elasticsearch,
 )
 from dataknobs_common.testing.factory_parity import (
@@ -123,6 +126,7 @@ __all__ = [
     "is_bedrock_available",
     "is_blockbuster_available",
     "is_chromadb_available",
+    "is_elasticsearch_available",
     "is_faiss_available",
     "is_localstack_available",
     "is_ollama_available",
@@ -139,6 +143,7 @@ __all__ = [
     "requires_bedrock",
     "requires_blockbuster",
     "requires_chromadb",
+    "requires_elasticsearch",
     "requires_faiss",
     "requires_localstack",
     "requires_ollama",
@@ -148,6 +153,7 @@ __all__ = [
     "requires_real_postgres",
     "requires_redis",
     "safe_sql_ident",
+    "sweep_stale_test_indices",
     "wait_for_elasticsearch",
     "wait_for_postgres",
 ]
