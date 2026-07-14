@@ -161,10 +161,15 @@ def sweep_stale_test_indices(
     same host as the test process, so host↔container clock skew is sub-second —
     negligible against the minutes-scale default threshold.
 
-    Best-effort and non-fatal: any request / connection / parse error is
-    logged at WARNING and the function returns the indices deleted so far (or
-    an empty list). It never raises — a cleanup hiccup must not fail an
-    otherwise-green run.
+    Best-effort and non-fatal: every failure mode is logged at WARNING and the
+    function returns the indices deleted so far (or an empty list) — it never
+    raises, because it runs inside the session-scoped ``ensure_elasticsearch_ready``
+    fixture where an uncaught error would abort the whole ES test session. This
+    covers connection / timeout / HTTP errors, a non-JSON or non-2xx response
+    body, an unparseable per-index ``creation.date``, and a malformed
+    ``DK_ES_TEST_INDEX_MAX_AGE_SECONDS`` (which falls back to the default).
+    ``min_age_seconds`` and ``now_ms`` passed by the caller are trusted and not
+    re-validated.
 
     Args:
         host: Elasticsearch host.
@@ -185,12 +190,20 @@ def sweep_stale_test_indices(
     from dataknobs_utils.requests_utils import RequestHelper
 
     if min_age_seconds is None:
-        min_age_seconds = int(
-            os.environ.get(
-                "DK_ES_TEST_INDEX_MAX_AGE_SECONDS",
-                str(_DEFAULT_MIN_AGE_SECONDS),
-            )
-        )
+        raw_max_age = os.environ.get("DK_ES_TEST_INDEX_MAX_AGE_SECONDS")
+        if raw_max_age is None:
+            min_age_seconds = _DEFAULT_MIN_AGE_SECONDS
+        else:
+            try:
+                min_age_seconds = int(raw_max_age)
+            except ValueError:
+                logger.warning(
+                    "Ignoring malformed DK_ES_TEST_INDEX_MAX_AGE_SECONDS=%r; "
+                    "falling back to the %ds default.",
+                    raw_max_age,
+                    _DEFAULT_MIN_AGE_SECONDS,
+                )
+                min_age_seconds = _DEFAULT_MIN_AGE_SECONDS
     if now_ms is None:
         now_ms = int(time.time() * 1000)
     cutoff_ms = now_ms - min_age_seconds * 1000
@@ -205,7 +218,11 @@ def sweep_stale_test_indices(
             f"_cat/indices/{pattern}",
             params={"h": "index,creation.date", "format": "json"},
         )
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+    # requests.exceptions.RequestException covers connection/timeout/HTTP
+    # errors; ValueError covers a non-JSON response body (the response handler
+    # calls json.loads, which raises json.JSONDecodeError — a ValueError). Both
+    # are swallowed so a hiccup never aborts the session-scoped fixture.
+    except (requests.exceptions.RequestException, ValueError) as exc:
         logger.warning(
             "Could not list stale Elasticsearch test indices at %s:%s: %s",
             host,
@@ -214,9 +231,17 @@ def sweep_stale_test_indices(
         )
         return deleted
 
-    if not response.succeeded or not isinstance(response.json, list):
-        # No matching indices (404 on an empty pattern) or an unexpected shape;
-        # nothing to reclaim.
+    if not response.succeeded:
+        logger.warning(
+            "Listing stale Elasticsearch test indices at %s:%s returned "
+            "status %s; skipping sweep.",
+            host,
+            port,
+            response.status,
+        )
+        return deleted
+    if not isinstance(response.json, list):
+        # Unexpected shape (not a JSON array); nothing to reclaim.
         return deleted
 
     for entry in response.json:
@@ -239,10 +264,7 @@ def sweep_stale_test_indices(
             continue
         try:
             del_response = helper.delete(name)
-        except (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-        ) as exc:
+        except (requests.exceptions.RequestException, ValueError) as exc:
             logger.warning(
                 "Failed to delete stale Elasticsearch index %s: %s", name, exc
             )

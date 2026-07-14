@@ -18,9 +18,13 @@ unconditionally.
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import logging
+import threading
 import time
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -230,19 +234,120 @@ def test_sweep_scopes_to_given_prefixes(es_host_port, ensure_elasticsearch_ready
         )
 
 
+_ES_FIX_LOGGER = "dataknobs_common.testing.elasticsearch_fixtures"
+
+
 def test_sweep_unreachable_host_is_non_fatal(caplog):
     """Best-effort: an unreachable cluster yields ``[]`` and logs, never raises.
 
     Needs no live ES — targets a closed port — so it runs unconditionally.
     """
-    with caplog.at_level(
-        logging.WARNING, logger="dataknobs_common.testing.elasticsearch_fixtures"
-    ):
+    with caplog.at_level(logging.WARNING, logger=_ES_FIX_LOGGER):
         result = sweep_stale_test_indices(
             "127.0.0.1", 1, prefixes=("test_sweep_nope_",), min_age_seconds=0
         )
     assert result == []
     assert any(
         "Could not list stale Elasticsearch test indices" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+@contextlib.contextmanager
+def _canned_http_server(status: int, body: bytes) -> Iterator[tuple[str, int]]:
+    """A real local HTTP server returning a fixed status + body to any request.
+
+    Not a mock of any dataknobs interface — an actual ``http.server`` on an
+    ephemeral port — so the sweep exercises its genuine request/response and
+    JSON-parsing code path against a controllable, ES-independent endpoint.
+    Yields ``(host, port)``.
+    """
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def _respond(self) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        # Names mandated by BaseHTTPRequestHandler's do_<METHOD> dispatch.
+        do_GET = _respond  # noqa: N815
+        do_DELETE = _respond  # noqa: N815
+
+        def log_message(self, *_args: object) -> None:  # silence stderr noise
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[0], server.server_address[1]
+        yield host, port
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_sweep_non_json_response_is_non_fatal(caplog):
+    """A non-JSON response body (e.g. a proxy error page) is swallowed, not raised.
+
+    The response handler calls ``json.loads`` on the body, raising
+    ``json.JSONDecodeError`` (a ``ValueError``). The sweep must catch it like
+    any other failure — otherwise it aborts the session-scoped fixture. Uses a
+    real local server, no ES.
+    """
+    with (
+        _canned_http_server(200, b"<html>502 Bad Gateway</html>") as (host, port),
+        caplog.at_level(logging.WARNING, logger=_ES_FIX_LOGGER),
+    ):
+        result = sweep_stale_test_indices(
+            host, port, prefixes=("test_sweep_nonjson_",), min_age_seconds=0
+        )
+    assert result == []
+    assert any(
+        "Could not list stale Elasticsearch test indices" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_sweep_non_2xx_list_logs_status_and_returns_empty(caplog):
+    """A non-2xx list response is distinguished from 'nothing to sweep' via a log.
+
+    A valid-JSON body with a 503 status must not be mistaken for an empty
+    match: the sweep returns ``[]`` and logs the status so a real server-side
+    rejection is diagnosable. Uses a real local server, no ES.
+    """
+    with (
+        _canned_http_server(503, b"{}") as (host, port),
+        caplog.at_level(logging.WARNING, logger=_ES_FIX_LOGGER),
+    ):
+        result = sweep_stale_test_indices(
+            host, port, prefixes=("test_sweep_503_",), min_age_seconds=0
+        )
+    assert result == []
+    assert any(
+        "returned status 503" in rec.getMessage() for rec in caplog.records
+    )
+
+
+def test_sweep_malformed_max_age_env_is_non_fatal(caplog, monkeypatch):
+    """A malformed ``DK_ES_TEST_INDEX_MAX_AGE_SECONDS`` falls back, never raises.
+
+    The env-var parse runs before any request, so a bad value would abort the
+    session fixture before it even connects. Points at a closed port so the
+    fallback path completes without ES; asserts the malformed value is logged
+    and the sweep returns ``[]``.
+    """
+    monkeypatch.setenv("DK_ES_TEST_INDEX_MAX_AGE_SECONDS", "not-a-number")
+    with caplog.at_level(logging.WARNING, logger=_ES_FIX_LOGGER):
+        # min_age_seconds omitted => the env var is consulted (and is malformed).
+        result = sweep_stale_test_indices(
+            "127.0.0.1", 1, prefixes=("test_sweep_badenv_",)
+        )
+    assert result == []
+    assert any(
+        "malformed DK_ES_TEST_INDEX_MAX_AGE_SECONDS" in rec.getMessage()
         for rec in caplog.records
     )
