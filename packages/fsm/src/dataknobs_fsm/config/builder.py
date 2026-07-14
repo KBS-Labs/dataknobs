@@ -14,7 +14,6 @@ raw configuration with optional custom functions.
 import asyncio
 import importlib
 import inspect
-import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
 
@@ -47,8 +46,6 @@ from dataknobs_fsm.functions.manager import (
     FunctionManager,
     FunctionSource
 )
-
-logger = logging.getLogger(__name__)
 
 
 # Interface -> the method the engine ultimately invokes on a function instance.

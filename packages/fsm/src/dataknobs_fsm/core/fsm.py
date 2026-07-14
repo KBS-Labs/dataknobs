@@ -2,7 +2,7 @@
 
 This module provides the core FSM class that serves as the foundation for all
 dataknobs-fsm functionality. The FSM class manages state networks, function
-registries, data modes, transactions, and resources.
+registries, data modes, transaction modes, and resources.
 
 Architecture:
     The FSM class is the central orchestrator in the dataknobs-fsm architecture:
@@ -11,7 +11,8 @@ Architecture:
     - Network Management: Manages one or more state networks with transitions
     - Function Registry: Maintains registered functions for state operations
     - Data Mode Control: Configures how data flows through states (COPY/REFERENCE/DIRECT)
-    - Transaction Management: Coordinates transactional state changes
+    - Transaction Mode: Tracks logical (in-memory) transaction bookkeeping;
+      database atomicity is provided by the dataknobs-data transaction primitives
     - Resource Management: Tracks and manages resource requirements
     - Execution Engine: Creates and manages the single async execution engine
 
