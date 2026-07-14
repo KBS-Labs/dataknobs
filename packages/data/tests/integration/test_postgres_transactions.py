@@ -15,6 +15,7 @@ from dataknobs_common.testing import requires_postgres
 
 from dataknobs_data import Record
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+from dataknobs_data.exceptions import DuplicateRecordError
 
 pytestmark = requires_postgres
 
@@ -141,5 +142,39 @@ async def test_postgres_multi_kind_rolls_back_whole_flush_on_size1_pool(postgres
             await tx.commit()
         # The earlier create, run inside the pinned transaction, is rolled back.
         assert await db.count() == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_postgres_multi_kind_create_collision_raises_duplicate(postgres_test_db):
+    """A colliding create inside a multi-kind flush fails with the documented
+    ``DuplicateRecordError`` (not a raw ``asyncpg`` error), and the whole flush
+    rolls back — the pinned-connection twin of the duckdb collision test.
+
+    On the ``_tx`` path the batch INSERT's unique violation aborts the pinned
+    transaction, so the precise-id probe is skipped and the first batch id is
+    reported; the outer ``_transaction`` rolls the whole flush back.
+    """
+    db = AsyncPostgresDatabase(
+        {**postgres_test_db, "min_pool_size": 1, "max_pool_size": 1}
+    )
+    try:
+        await db.connect()
+        # Seed the colliding id via create_batch, which honors record.id (the
+        # single create() path keys off storage_id and would mint a uuid).
+        await db.create_batch([Record({"id": "dup", "v": "seed"})])
+        seed_id = await db.create(Record({"v": "s"}))  # backend id; to be deleted
+        tx = await db.begin_transaction()  # strict; postgres transactional
+        await tx.create(Record({"id": "dup", "v": "x"}))  # collides on commit
+        await tx.delete(seed_id)  # forces the multi-kind pinned-txn path
+        assert tx.is_atomic is True
+        with pytest.raises(DuplicateRecordError):
+            await tx.commit()
+        # Whole flush rolled back: seed still present, dup unchanged → 2 rows.
+        assert await db.count() == 2
+        dup = await db.read("dup")
+        assert dup is not None and dup.get_value("v") == "seed"
+        assert await db.read(seed_id) is not None
     finally:
         await db.close()

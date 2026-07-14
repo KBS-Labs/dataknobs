@@ -22,7 +22,9 @@ from dataknobs_common.testing import assert_no_blocking, requires_package
 from dataknobs_data import Record, async_database_factory
 from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
 from dataknobs_data.backends.file import AsyncFileDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+from dataknobs_data.exceptions import DuplicateRecordError
 
 
 async def _memory_db():
@@ -640,5 +642,126 @@ async def test_duckdb_multi_kind_flush_no_blocking():
                 await tx.delete("x")
                 await tx.upsert("u1", Record({"v": "b"}))
         assert await db.count() == 2
+    finally:
+        await db.close()
+
+
+@requires_package("duckdb")
+async def test_duckdb_multi_kind_create_collision_raises_duplicate():
+    """A colliding create inside a multi-kind flush fails with the documented
+    ``DuplicateRecordError`` — not a raw ``duckdb.TransactionException`` from
+    probing the aborted transaction for the precise colliding id.
+
+    Reproduce-first: on the ``_tx`` flush path DuckDB aborts the whole
+    transaction on the constraint violation, so the pre-fix colliding-id probe
+    ran a ``SELECT`` on an aborted transaction and raised
+    ``TransactionException``, masking the ``DuplicateRecordError`` the create
+    contract promises across every backend.
+    """
+    db = await _duckdb_db()
+    try:
+        # Seed the colliding id via create_batch, which honors record.id (the
+        # single create() path keys off storage_id and would mint a uuid).
+        await db.create_batch([Record({"id": "dup", "v": "seed"})])
+        seed_id = await db.create(Record({"v": "s"}))  # backend id; to be deleted
+        tx = await db.begin_transaction()  # strict; duckdb transactional
+        await tx.create(Record({"id": "dup", "v": "x"}))  # collides on commit
+        await tx.delete(seed_id)  # forces the multi-kind spanning-txn path
+        assert tx.is_atomic is True
+        with pytest.raises(DuplicateRecordError):
+            await tx.commit()
+        # Whole flush rolled back: seed still present, dup unchanged → 2 rows.
+        assert await db.count() == 2
+        dup = await db.read("dup")
+        assert dup is not None and dup.get_value("v") == "seed"
+        assert await db.read(seed_id) is not None
+    finally:
+        await db.close()
+
+
+class _DuckDBCommitFailure(AsyncDuckDBDatabase):
+    """Real DuckDB backend whose transaction commit raises once.
+
+    Proves a commit-time failure still rolls the shared connection back, so the
+    next operation is not poisoned by a left-open transaction.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._fail_commit = True
+
+    def _commit_sync(self) -> None:  # type: ignore[override]
+        if self._fail_commit:
+            self._fail_commit = False
+            raise RuntimeError("commit failed")
+        super()._commit_sync()
+
+
+@requires_package("duckdb")
+async def test_duckdb_commit_failure_rolls_back_connection():
+    """A failure of the spanning-transaction commit itself rolls the shared
+    connection back, so a subsequent write is not poisoned.
+
+    Reproduce-first: with the commit on the ``_transaction`` ``else`` branch, a
+    commit failure did not route through the ``except`` (Python does not send an
+    ``else``-clause exception to the preceding ``except``), so the connection
+    was left with the whole flush still open. The subsequent plain ``db.create``
+    below then silently joined that dangling transaction — so ``c1`` was never
+    rolled back and ``count()`` saw 2 rows. Moving the commit inside the ``try``
+    routes a commit failure through the rollback, and the ``count() == 1`` /
+    ``read("c1") is None`` assertions below are the discriminator.
+    """
+    db = _DuckDBCommitFailure({"path": ":memory:"})
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()  # strict; duckdb transactional
+        await tx.create(Record({"id": "c1", "v": "a"}))
+        await tx.delete("missing")  # multi-kind → enters the spanning txn
+        with pytest.raises(RuntimeError, match="commit failed"):
+            await tx.commit()
+        # The failed commit rolled the connection back (no left-open txn), so a
+        # subsequent write succeeds instead of raising "cannot start a
+        # transaction within a transaction", and c1 is gone.
+        after_id = await db.create(Record({"v": "b"}))
+        assert await db.count() == 1  # only "after"; the rolled-back c1 is gone
+        assert await db.read(after_id) is not None
+        assert await db.read("c1") is None
+    finally:
+        await db.close()
+
+
+class _FakeAtomicMemory(AsyncMemoryDatabase):
+    """Memory backend that lies about transaction support.
+
+    Reports ``supports_transactions()`` as ``True`` but does NOT override
+    ``_transaction()`` (it inherits the ABC default that yields ``None``) — the
+    misimplemented-backend case the commit guard must catch.
+    """
+
+    def supports_transactions(self) -> bool:  # type: ignore[override]
+        return True
+
+
+async def test_multi_kind_commit_fails_closed_when_transaction_hook_not_overridden():
+    """A backend that reports transaction support but forgets to override
+    ``_transaction()`` fails closed on a multi-kind commit rather than silently
+    losing atomicity.
+
+    Reproduce-first: before the guard, the multi-kind branch threaded
+    ``_tx=None`` into every batch, so the create persisted while claiming
+    ``is_atomic`` — a silent partial-persistence footgun. The guard converts
+    that into a loud ``OperationError`` before anything flushes.
+    """
+    db = _FakeAtomicMemory()
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()  # strict ok — it claims support
+        await tx.create(Record({"id": "c1", "v": "a"}))
+        await tx.delete("missing")  # multi-kind → enters the atomic branch
+        assert tx.is_atomic is True  # it claims all-or-nothing...
+        with pytest.raises(OperationError, match="must override _transaction"):
+            await tx.commit()
+        # ...but fails closed before any partial persistence: c1 never flushed.
+        assert await db.count() == 0
     finally:
         await db.close()

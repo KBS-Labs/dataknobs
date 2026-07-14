@@ -805,6 +805,13 @@ class AsyncDatabase(CapabilityMixin, ABC):
         (``sqlite_async`` / ``postgres`` / ``duckdb``) override it per their
         connection model. Internal: the handle is threaded only through the
         write batch methods and only for the synchronous commit flush.
+
+        Contract: a backend that reports :meth:`supports_transactions` as
+        ``True`` **must** override this to yield a real (non-``None``) handle.
+        The commit flush enforces it — a multi-kind flush that reaches this
+        default (``None`` handle) on a self-declared transactional backend fails
+        closed with :class:`~dataknobs_common.exceptions.OperationError` rather
+        than silently degrading to a non-atomic per-batch commit.
         """
         yield None
 

@@ -521,11 +521,15 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         await loop.run_in_executor(self.executor, self._begin_sync)
         try:
             yield self.conn
+            # Commit inside the ``try`` (not an ``else``) so a failure of the
+            # commit itself rolls the connection back — otherwise the shared
+            # connection is left with an open/aborted transaction and the next
+            # ``begin()`` raises "cannot start a transaction within a
+            # transaction". Mirrors the sqlite ``_transaction`` sibling.
+            await loop.run_in_executor(self.executor, self._commit_sync)
         except BaseException:
             await loop.run_in_executor(self.executor, self._rollback_sync)
             raise
-        else:
-            await loop.run_in_executor(self.executor, self._commit_sync)
 
     def _begin_sync(self) -> None:
         """Begin a transaction on the connection (executor thread, under lock)."""
@@ -597,18 +601,28 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 if own_tx:
                     self.conn.rollback()
                 if is_duplicate_key_error(e):
-                    # Name the colliding id precisely on the error path. We are
-                    # on the executor thread holding the lock, so probe the raw
-                    # connection directly rather than the async exists() coroutine.
                     colliding = ids[0]
-                    for record in records:
-                        rid = record.id
-                        if not rid:
-                            continue
-                        read_query, read_params = self.query_builder.build_read_query(rid)
-                        if self.conn.execute(read_query, read_params).fetchone() is not None:
-                            colliding = rid
-                            break
+                    # Precise colliding-id naming needs a read probe, but DuckDB
+                    # (like Postgres) aborts the whole transaction on a
+                    # constraint violation. Probe only on the owned path, where
+                    # we just rolled back and the connection is queryable again;
+                    # on the multi-kind flush path (own_tx=False) the transaction
+                    # is still aborted — a probe would raise
+                    # ``duckdb.TransactionException`` and mask the
+                    # ``DuplicateRecordError`` — so report the first batch id and
+                    # let the outer ``_transaction`` roll the whole flush back.
+                    # We are on the executor thread holding the lock, so probe
+                    # the raw connection directly rather than the async exists()
+                    # coroutine.
+                    if own_tx:
+                        for record in records:
+                            rid = record.id
+                            if not rid:
+                                continue
+                            read_query, read_params = self.query_builder.build_read_query(rid)
+                            if self.conn.execute(read_query, read_params).fetchone() is not None:
+                                colliding = rid
+                                break
                     raise DuplicateRecordError(colliding) from e
                 raise RecordValidationError(str(e)) from e
             except Exception:

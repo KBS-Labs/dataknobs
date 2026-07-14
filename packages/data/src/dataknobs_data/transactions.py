@@ -37,11 +37,17 @@ What it deliberately does **not** provide:
 - **In-transaction isolation or read-your-writes.** Buffered writes are
   invisible to reads (``db.read``) until commit, and concurrent readers never
   see a partially-applied transaction because nothing is written until the
-  flush. Do **not** commit two buffered transactions concurrently against a
-  single-connection backend (e.g. aiosqlite): the per-batch ``BEGIN`` /
-  ``COMMIT`` boundaries the backend issues can interleave. Connection-scoped
-  isolation / read-your-writes is not provided — the public API exposes no
-  connection-scoped transaction beyond this buffered form. A consumer needing a
+  flush. On a single-connection backend (e.g. aiosqlite or duckdb) a multi-kind
+  commit holds one open native transaction across several ``await`` boundaries
+  (begin, then each coalesced batch, then commit); **no concurrent write of any
+  kind** may run against that same instance during the flush — not just another
+  buffered commit, but also a plain ``db.create`` / ``db.upsert`` / ``db.delete``
+  — because that write would issue its own ``BEGIN`` while the multi-kind
+  transaction is already open and the boundaries would interleave. Serialize
+  writes to a single-connection instance yourself if they can overlap.
+  Connection-scoped isolation / read-your-writes is not provided — the public
+  API exposes no connection-scoped transaction beyond this buffered form. A
+  consumer needing a
   read-modify-write invariant should use optimistic concurrency
   (:meth:`AsyncDatabase.update` / :meth:`AsyncDatabase.upsert` with
   ``expected_version``) or serialize the conflicting work itself (e.g. an
@@ -239,6 +245,21 @@ class BufferedTransaction:
         # path, byte-identical to the per-batch flush.
         if self._backend_atomic and len(runs) > 1:
             async with self._db._transaction() as tx:
+                # A backend reporting ``supports_transactions()`` MUST override
+                # ``_transaction()`` to yield a real handle (the ABC default
+                # yields ``None``). Fail closed on the misimplemented case rather
+                # than silently threading ``_tx=None`` into every batch — which
+                # would run each on its own boundary, losing the cross-kind
+                # atomicity ``is_atomic`` just promised. Nothing has flushed yet,
+                # so this raises before any partial persistence.
+                if tx is None:
+                    raise OperationError(
+                        f"{type(self._db).__name__} reports "
+                        "supports_transactions() is True but its _transaction() "
+                        "yielded no handle; a transactional backend must override "
+                        "_transaction() to span a multi-kind commit flush "
+                        "atomically."
+                    )
                 affected = await replay(tx)
         else:
             affected = await replay(None)
