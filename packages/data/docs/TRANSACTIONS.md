@@ -50,8 +50,9 @@ assert not tx.is_atomic        # now create + delete → two independent batches
 currently staged ops reduce to a single coalesced same-kind batch. It is
 computed from the live buffer, so staging more writes can flip it — read it
 immediately before `commit()` when you need to rely on all-or-nothing across
-the whole commit. For genuine cross-operation atomicity today, branch on
-`is_atomic` / `supports_transactions()` and use a backend-native transaction.
+the whole commit. There is no public primitive that commits mixed kinds
+all-or-nothing today; for that guarantee, stage a single kind per transaction
+(each single-kind commit is atomic on a transactional backend).
 
 It deliberately does **not** provide in-transaction isolation or
 read-your-writes: buffered writes are invisible to reads (`db.read`) until
@@ -59,8 +60,10 @@ commit, and concurrent readers never observe a partially-applied transaction
 because nothing is written until the flush. Do **not** commit two buffered
 transactions concurrently against a single-connection backend (e.g. aiosqlite):
 the per-batch `BEGIN`/`COMMIT` boundaries the backend issues can interleave.
-Consumers needing connection-scoped isolation should branch on
-`supports_transactions()` and use a backend-native transaction directly.
+Connection-scoped isolation / read-your-writes is not provided — the public API
+exposes no connection-scoped transaction beyond this buffered form. For a
+read-modify-write invariant use optimistic concurrency (`update` / `upsert` with
+`expected_version`) or serialize the conflicting work yourself.
 
 ## `supports_transactions()`
 

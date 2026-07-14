@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modes (`NONE`/`PER_RECORD`/`PER_BATCH`/`PER_SESSION`/`DISTRIBUTED`); the
   `transaction_mode` setting selects in-memory logical bookkeeping only and does
   not by itself drive database commit/rollback.
+- Corrected the Database Functions guide's transaction guidance to stop
+  directing consumers to a non-existent "backend-native transaction" primitive,
+  and documented at the guide level that `TransactionMode` /
+  `ExecutionContext.transaction_mode` is logical bookkeeping only — no execution
+  engine reads it to drive database commit/rollback; database atomicity comes
+  from `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
+  `AsyncDatabase.transaction()` primitive.
 
 ## v0.2.5 - 2026-07-07
 

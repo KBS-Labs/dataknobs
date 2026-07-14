@@ -25,17 +25,23 @@ What it deliberately does **not** provide:
   and **stay persisted** — a partial commit, with no compensating rollback
   (there cannot be one; the earlier writes are already durable). For such a
   buffer :attr:`~BufferedTransaction.is_atomic` is ``False`` even on a
-  transactional backend, so a consumer needing all-or-nothing across mixed
-  operations can branch on it and roll its own backend-native transaction.
+  transactional backend. There is no public primitive that commits mixed kinds
+  all-or-nothing; a consumer needing that guarantee should stage a **single
+  kind per transaction** (each single-kind commit is all-or-nothing on a
+  transactional backend) and order the per-kind commits so a mid-sequence
+  failure leaves a recoverable state.
 - **In-transaction isolation or read-your-writes.** Buffered writes are
   invisible to reads (``db.read``) until commit, and concurrent readers never
   see a partially-applied transaction because nothing is written until the
   flush. Do **not** commit two buffered transactions concurrently against a
   single-connection backend (e.g. aiosqlite): the per-batch ``BEGIN`` /
-  ``COMMIT`` boundaries the backend issues can interleave. Consumers needing
-  connection-scoped isolation should branch on
-  :meth:`AsyncDatabase.supports_transactions` and use a backend-native
-  transaction directly.
+  ``COMMIT`` boundaries the backend issues can interleave. Connection-scoped
+  isolation / read-your-writes is not provided — the public API exposes no
+  connection-scoped transaction beyond this buffered form. A consumer needing a
+  read-modify-write invariant should use optimistic concurrency
+  (:meth:`AsyncDatabase.update` / :meth:`AsyncDatabase.upsert` with
+  ``expected_version``) or serialize the conflicting work itself (e.g. an
+  application-level lock).
 """
 
 from __future__ import annotations

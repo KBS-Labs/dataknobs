@@ -165,6 +165,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-record fallback: a configured handler decides whether to continue, and
   with no handler the stream quits on the first failing batch — the same
   fail-stop default a per-record failure already gets.
+- Corrected the buffered-transaction documentation (the
+  `dataknobs_data.transactions` module docstring and the Transactions guide) to
+  stop directing consumers to a non-existent "backend-native transaction"
+  primitive for cross-operation atomicity and connection-scoped isolation — the
+  public API exposes no connection-scoped transaction beyond the buffered
+  `db.transaction()` form. The docs now state the actual options: stage a single
+  operation kind per transaction for all-or-nothing on a transactional backend,
+  and use optimistic concurrency (`update` / `upsert` with `expected_version`)
+  for a read-modify-write invariant.
 
 ### Notes
 
