@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T03:41:53Z",
+  "timestamp": "2026-07-14T16:29:16Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/batch-write-verb-conflict-semantics-part-B",
-  "git_commit": "80c465a1fd7a99d870d09eabdaf876a145e8d6b2",
+  "git_branch": "sbk/atomic-idempotent-batch-commit",
+  "git_commit": "aa4eeb845aaf88f4efecf3fb7d2c0021838b11c5",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

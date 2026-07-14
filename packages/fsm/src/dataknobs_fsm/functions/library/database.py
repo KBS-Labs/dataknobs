@@ -451,9 +451,10 @@ class DatabaseTransaction(ITransformFunction):
 
     Commit atomicity follows
     :attr:`~dataknobs_data.BufferedTransaction.is_atomic`: a single same-kind
-    batch is all-or-nothing on a transactional backend, but a mixed-operation
-    or upsert-containing buffer commits as a sequence of independent batches and
-    can partially persist on a mid-flush failure (see the ``BufferedTransaction``
+    batch (all-create, all-upsert, or all-delete) is all-or-nothing on a
+    transactional backend, but a multi-kind buffer (e.g. create + upsert, or
+    create + delete) commits as a sequence of independent batches and can
+    partially persist on a mid-flush failure (see the ``BufferedTransaction``
     docs). A ``commit`` reaching a state with no active handle (a missing or
     failed prior ``begin``) is logged at WARNING and commits nothing rather than
     reporting a phantom success; a handle-less ``rollback`` is a benign no-op.

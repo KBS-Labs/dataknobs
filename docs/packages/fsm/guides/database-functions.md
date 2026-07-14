@@ -148,9 +148,9 @@ backend-assigned ids and `on_duplicate` is not evaluated).
 ## `BatchCommit`
 
 Persists `data["batch"]` and clears it. Without an identity it writes the batch
-via `create_batch` (all-or-nothing on transactional backends); with an identity
-it upserts each row under its derived id, so re-committing the same batch is
-idempotent.
+via `create_batch`; with an identity it upserts each row under its derived id
+via `upsert_batch`, so re-committing the same batch is idempotent. Both paths
+are all-or-nothing on transactional backends.
 
 ```python
 BatchCommit(
@@ -185,11 +185,11 @@ The legacy `use_transaction=` flag is a back-compat alias:
 `use_transaction=True` maps to `atomicity="require"`, `False` to
 `"best_effort"`.
 
-> **Atomic idempotent commit** (`atomicity="require"` *together with* an
-> identity) is not yet supported — the per-row upsert path is not batch-atomic
-> without a connection-scoped transaction primitive, so it raises
-> `CapabilityNotSupportedError`. Use create-mode (`require`, no identity) for
-> all-or-nothing batch writes today.
+`atomicity="require"` is honored on **both** paths on transactional backends:
+create-mode (via `create_batch`) and the idempotent-upsert path (via
+`upsert_batch`) are each written as a single all-or-nothing batch statement. On
+a non-transactional backend `require` raises `CapabilityNotSupportedError` on
+either path.
 
 The `require` capability check is sourced from the data layer's
 `AsyncDatabase.supports_transactions()` flag — `True` on `sqlite`, `postgres`,
@@ -206,11 +206,11 @@ Because writes are buffered, a failure *before* `commit` persists nothing on any
 backend.
 
 Commit atomicity follows the buffered transaction's `is_atomic` flag: a single
-same-kind batch (all creates, or all deletes) is all-or-nothing on a
-transactional backend, but a **mixed** create/delete or **upsert**-containing
-buffer commits as a sequence of independent batches and can partially persist if
-one fails mid-flush (see the data package's
-[Transactions](../../data/transactions.md) guide). A `commit` reaching a state
+same-kind batch (all creates, all upserts, or all deletes) is all-or-nothing on
+a transactional backend, but a buffer spanning **more than one kind** (e.g.
+mixed create/delete, or create + upsert) commits as a sequence of independent
+batches and can partially persist if one fails mid-flush (see the data
+package's [Transactions](../../data/transactions.md) guide). A `commit` reaching a state
 with no active handle — a missing or failed prior `begin` — is logged at WARNING
 and commits nothing, rather than reporting a phantom success; a handle-less
 `rollback` is a quiet no-op.

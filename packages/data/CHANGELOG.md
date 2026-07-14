@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `AsyncDatabase.transaction()` now commits a batch of upserts atomically on
+  transactional backends: `BufferedTransaction.commit()` coalesces consecutive
+  staged upserts into a single `upsert_batch` call (mirroring the existing
+  `create_batch` / `delete_batch` coalescing) instead of flushing them
+  row-by-row, and `BufferedTransaction.is_atomic` reports `True` for an
+  all-upsert single-kind buffer accordingly. A buffer spanning more than one
+  operation kind (e.g. create + upsert) still commits as a sequence of
+  independent atomic batches and reports `is_atomic` `False`.
+
 - `create()` is now a defined atomic insert across every backend: a colliding
   id raises `DuplicateRecordError` instead of silently overwriting the existing
   record (memory, file, S3, Elasticsearch) or raising a bare `ValueError`
@@ -98,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PUT) on S3, which has no cheaper bulk verb. The streaming `upsert` policy and
   the FSM `DatabaseResource.commit_batch` identity path both adopt it for batch
   throughput. `BufferedTransaction` gains a matching `upsert_batch` staging
-  method (it still flushes staged upserts row-by-row).
+  method; on commit a consecutive upsert run is coalesced into a single
+  `upsert_batch` (atomic on transactional backends — see the Changed entry).
 - `create_batch()` now fails closed on a colliding id across **every backend**,
   matching single `create()`: a colliding id — against an existing record or a
   duplicate within the same batch — raises `DuplicateRecordError`, and a
@@ -125,6 +135,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `upsert(id, record)` now honors the explicit `id` when the record carries a
+  *different* pre-set `storage_id` and the id does not yet exist. The base
+  create-fallback previously wrote the new row under the record's own
+  `storage_id` (and returned that id), silently discarding the explicit `id`
+  argument; it now stamps the resolved id onto the record before the create so
+  the explicit id is authoritative. Affects the backends that use the base
+  `upsert` (SQLite, DuckDB, sync S3); backends overriding `upsert` (memory,
+  PostgreSQL, Elasticsearch, file, async S3) already behaved correctly. The
+  common paths —
+  `upsert(record)`, and `upsert(id, record)` with a matching or absent
+  `storage_id` — are unchanged.
 - The async Elasticsearch backend's `create_batch()` and `upsert_batch()` now
   reconcile the bulk response per item, so a record whose bulk operation failed
   (e.g. a mapping error or version conflict) is no longer reported as written. A
