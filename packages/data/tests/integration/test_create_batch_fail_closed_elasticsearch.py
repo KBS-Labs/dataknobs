@@ -103,3 +103,29 @@ async def test_async_create_batch_preserves_ids(elasticsearch_test_index) -> Non
         assert (await db.read("x")).get_value("v") == 1
     finally:
         await db.close()
+
+
+async def test_async_streaming_insert_fails_closed(elasticsearch_test_index) -> None:
+    # Async ES routes streaming INSERT per-record via create() (its non-atomic
+    # bulk would double-write under the fallback), so a colliding source id in a
+    # re-run into a populated target is recorded as a failure with the id
+    # preserved — never overwritten.
+    db = AsyncElasticsearchDatabase(elasticsearch_test_index)
+    await db.connect()
+    try:
+        await db.create(Record({"v": "old"}, id="2"))
+        records = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+
+        async def _aiter():
+            for r in records:
+                yield r
+
+        result = await db.stream_write(
+            _aiter(), StreamConfig(on_error=lambda e, r: True)
+        )
+        assert result.failed == 1
+        assert result.successful == 2
+        assert (await db.read("2")).get_value("v") == "old"
+        assert (await db.read("1")).get_value("v") == "src"
+    finally:
+        await db.close()

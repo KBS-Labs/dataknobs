@@ -456,8 +456,12 @@ def test_extract_bulk_index_ids_upsert_drops_failed_items():
     assert got == ["a", "c"]  # "b" failed → dropped
 
 
-def test_extract_bulk_index_ids_create_reads_server_ids_and_drops_failed():
-    """Server-id path (``ids=None``): ids read from successful items only."""
+def test_extract_bulk_index_ids_server_id_path_drops_failed():
+    """Server-id path (``ids=None``): ids read from successful items only.
+
+    Both in-tree bulk callers now pass explicit client-minted ids, but the
+    ``ids=None`` branch is retained for a caller relying on server-assigned ids.
+    """
     response = {
         "items": [
             {"index": {"_id": "s1", "status": 201}},

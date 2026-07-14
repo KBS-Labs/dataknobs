@@ -86,3 +86,28 @@ def test_sql_create_batch_preserves_ids(sql_db: object) -> None:
     assert ids == ["x", "y"]
     assert sql_db.read("x").get_value("v") == 1
     assert sql_db.read("y").get_value("v") == 2
+
+
+def test_sql_create_batch_mints_only_absent_ids_in_order(sql_db: object) -> None:
+    """Mixed id-bearing / id-less batch: supplied ids honored, absent ones minted.
+
+    The returned id list is in input order, the supplied ids appear verbatim,
+    and the minted positions are non-empty ids distinct from the supplied ones.
+    Each returned id round-trips to its record's value.
+    """
+    records = [
+        Record({"v": 1}, id="given1"),
+        Record({"v": 2}),  # id absent → minted
+        Record({"v": 3}, id="given2"),
+    ]
+    ids = sql_db.create_batch(records)
+
+    assert len(ids) == 3
+    assert ids[0] == "given1"
+    assert ids[2] == "given2"
+    minted = ids[1]
+    assert minted and minted not in {"given1", "given2"}
+    # Every returned id addresses the record at its input position.
+    assert sql_db.read("given1").get_value("v") == 1
+    assert sql_db.read(minted).get_value("v") == 2
+    assert sql_db.read("given2").get_value("v") == 3

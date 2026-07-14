@@ -115,11 +115,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed on a colliding id across **every backend** — recording it as a failure
   and preserving the source id, rather than writing a fresh-id row. A re-run into
   a populated target records the colliding ids as failures, matching the batched
-  `migrate()` path. SQLite/DuckDB/Elasticsearch-sync reach this through the
-  tightened bulk `create_batch` plus a per-record `create()` fallback; PostgreSQL
-  through its atomic `_write_batch` fast-path; S3 and async-Elasticsearch through
-  per-record `create()` (their non-transactional bulk write would otherwise
-  double-write the already-written rows under the fallback). `upsert` / `skip`
+  `migrate()` path. SQLite/DuckDB reach this through the tightened bulk
+  `create_batch` plus a per-record `create()` fallback; PostgreSQL through its
+  atomic `_write_batch` fast-path; S3, Elasticsearch-sync, and async-Elasticsearch
+  through per-record `create()` (their non-transactional bulk write would
+  otherwise double-write the already-written rows under the fallback). `upsert` /
+  `skip`
   remain available for idempotent re-runs.
 
 ### Fixed

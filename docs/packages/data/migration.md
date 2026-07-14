@@ -114,8 +114,9 @@ progress = migrator.migrate_stream(
 
 The `"insert"` fast-path uses the backend's native `create_batch` (or an atomic
 `_write_batch` on PostgreSQL) with a per-record `create()` fallback; the
-non-transactional backends (S3, async-Elasticsearch) write INSERT per-record via
-`create()`. `"upsert"` uses the native `upsert_batch` bulk verb (with a
+non-transactional backends (S3, Elasticsearch-sync, async-Elasticsearch) write
+INSERT per-record via `create()`. `"upsert"` uses the native `upsert_batch` bulk
+verb (with a
 per-record `upsert` fallback); `"skip"` writes one record at a time (a
 whole-batch verb cannot skip individual duplicates while inserting the rest). An
 unknown policy value is rejected when the `StreamConfig` is constructed, rather

@@ -2239,8 +2239,10 @@ class AsyncPostgresDatabase(
         config = config or StreamConfig()
 
         async def insert_batch(b):
-            await self._write_batch(b)
-            return [r.id for r in b]
+            # _write_batch returns the authoritative ids (minting a uuid where
+            # record.id is absent), so return them directly rather than reading
+            # back r.id, which is None for id-less records.
+            return await self._write_batch(b)
 
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             config.on_conflict,

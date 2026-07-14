@@ -107,3 +107,26 @@ async def test_async_create_batch_preserves_ids(async_pg: AsyncPostgresDatabase)
     )
     assert ids == ["x", "y"]
     assert (await async_pg.read("x")).get_value("v") == 1
+
+
+async def test_async_streaming_insert_fails_closed(
+    async_pg: AsyncPostgresDatabase,
+) -> None:
+    # The async INSERT fast-path is COPY (a single atomic command), so a
+    # colliding id rolls the batch back and the per-record create() fallback
+    # replays it cleanly — no double-write, the collision counted as one failure.
+    await async_pg.create(Record({"v": "old"}, id="2"))
+    records = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+
+    async def _aiter() -> AsyncGenerator[Record, None]:
+        for r in records:
+            yield r
+
+    result = await async_pg.stream_write(
+        _aiter(), StreamConfig(on_error=lambda e, r: True)
+    )
+    assert result.failed == 1
+    assert result.successful == 2
+    assert (await async_pg.read("2")).get_value("v") == "old"
+    assert (await async_pg.read("1")).get_value("v") == "src"
+    assert (await async_pg.read("3")).get_value("v") == "src"

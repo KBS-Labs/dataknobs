@@ -274,10 +274,11 @@ class AsyncElasticsearchDatabase(
         module there) so the response shapes differ, but the per-item
         drop-the-failures contract is identical.
 
-        Shared by ``create_batch`` (``ids=None`` — the server assigns ids, so
-        each successful item's ``_id`` is read out) and ``upsert_batch``
-        (explicit-``_id`` writes — ``ids`` is the input-order id list and only
-        the failed positions are dropped).
+        Both ``create_batch`` and ``upsert_batch`` pass the client-minted,
+        input-order ``ids`` list (explicit-``_id`` writes), so only the failed
+        positions are dropped. The ``ids=None`` branch — reading each successful
+        item's ``_id`` out of the response — is retained for a caller relying on
+        server-assigned ids.
         """
         result: list[str] = []
         for pos, item in enumerate(response.get("items", [])):
@@ -357,9 +358,10 @@ class AsyncElasticsearchDatabase(
         Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
         honoring a caller-supplied ``record.id`` (minting a uuid only when
         absent); a colliding id is overwritten (never raised). Returns the ids
-        that were written, in input order. Unlike ``create_batch`` — which uses
-        server auto-ids — this supplies ``_id`` explicitly so the write is
-        addressable and idempotent. Per-item errors are reconciled via
+        that were written, in input order. Like ``create_batch``, this supplies
+        ``_id`` explicitly so the write is addressable and idempotent; the two
+        differ only in op type (``index`` overwrites, ``create`` fails closed).
+        Per-item errors are reconciled via
         :meth:`_extract_bulk_index_ids`, so an id whose write failed is dropped
         rather than reported as written.
         """

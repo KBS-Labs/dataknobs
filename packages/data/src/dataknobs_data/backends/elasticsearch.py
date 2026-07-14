@@ -505,8 +505,20 @@ class SyncElasticsearchDatabase(
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
-                # Extract which operations succeeded
-                failed_ids = {err.get('index', {}).get('_id') for err in e.errors}
+                # Extract which operations failed. An error entry carries an
+                # 'index' or 'create' key depending on the op type, so probe
+                # both — mirroring the returned-errors reconciliation above, and
+                # honoring raise_on_conflict so a 409 surfaced via this path also
+                # fails closed rather than silently passing as success.
+                failed_ids = set()
+                for err in e.errors:
+                    for op_type in ['index', 'create']:
+                        if op_type in err:
+                            op = err[op_type]
+                            if raise_on_conflict and op.get('status') == 409:
+                                raise DuplicateRecordError(op.get('_id')) from e
+                            failed_ids.add(op.get('_id'))
+                            break
                 result_ids = []
                 for record_id in ids:
                     if record_id not in failed_ids:

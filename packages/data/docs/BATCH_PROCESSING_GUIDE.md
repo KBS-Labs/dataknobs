@@ -68,7 +68,8 @@ print(f"Skipped {result.skipped} already-present records")
 The `"insert"` fast-path uses the backend's native `create_batch` (or an atomic
 `_write_batch` on PostgreSQL) with a per-record `create()` fallback so a
 collision is attributed to the specific id; the non-transactional backends (S3,
-async-Elasticsearch) write INSERT per-record via `create()` directly. `"upsert"`
+Elasticsearch-sync, async-Elasticsearch) write INSERT per-record via `create()`
+directly. `"upsert"`
 uses the native `upsert_batch` bulk verb (see below) with a per-record `upsert`
 fallback; `"skip"` writes one record at a time (a whole-batch verb cannot skip
 individual duplicates while inserting the rest). An unknown policy value is
@@ -76,10 +77,10 @@ rejected when the `StreamConfig` is constructed, rather than silently falling
 back to insert.
 
 Streaming `"insert"` fails closed on a colliding id — recording it as a failure
-and preserving the source id — across **every** backend. SQLite / DuckDB /
-Elasticsearch-sync reach this through the fail-closed bulk `create_batch` plus a
-per-record `create()` fallback; PostgreSQL through its atomic `_write_batch`
-fast-path; S3 and async-Elasticsearch through per-record `create()` (their
+and preserving the source id — across **every** backend. SQLite / DuckDB reach
+this through the fail-closed bulk `create_batch` plus a per-record `create()`
+fallback; PostgreSQL through its atomic `_write_batch` fast-path; S3,
+Elasticsearch-sync, and async-Elasticsearch through per-record `create()` (their
 non-transactional bulk write would otherwise re-write already-written rows under
 the fallback). Use `"upsert"` / `"skip"` for idempotent re-runs into a populated
 target.
