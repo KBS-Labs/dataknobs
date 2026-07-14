@@ -18,22 +18,22 @@ A buffered transaction makes two promises:
    commit persists nothing — on *any* backend, transactional or not.
 2. **Atomic commit of a single same-kind batch on transactional backends.** The
    commit flush replays the buffer through the backend's atomic batch
-   primitives (`create_batch` / `delete_batch`), coalescing consecutive
-   same-kind operations into a single batch call. When the staged buffer
-   reduces to *one* such call — all creates, or all deletes, with no upserts —
-   that call is all-or-nothing on a backend whose batch operations run inside a
-   backend transaction (**SQLite, Postgres, DuckDB**).
+   primitives (`create_batch` / `upsert_batch` / `delete_batch`), coalescing
+   consecutive same-kind operations into a single batch call. When the staged
+   buffer reduces to *one* such call — all creates, all upserts, or all deletes
+   — that call is all-or-nothing on a backend whose batch operations run inside
+   a backend transaction (**SQLite, Postgres, DuckDB**).
 
-### What is *not* all-or-nothing: mixed and upsert buffers
+### What is *not* all-or-nothing: mixed-kind buffers
 
-A buffer that mixes creates **and** deletes, or that contains any **upsert**,
-commits as a **sequence of independent backend batches** — create/delete runs
-flush as separate calls, and upserts apply one row at a time (a DB-level
-`upsert_batch` primitive exists, but this transaction handle flushes staged
-upserts row-by-row so it need not claim all-or-nothing across them). If a later
-batch fails mid-flush, earlier
-batches have **already committed and stay persisted** — a partial commit, with
-no compensating rollback (the earlier writes are already durable).
+A buffer spanning **more than one kind** (e.g. creates **and** deletes, or
+creates **and** upserts) commits as a **sequence of independent backend
+batches** — one coalesced call per same-kind run. If a later batch fails
+mid-flush, earlier batches have **already committed and stay persisted** — a
+partial commit, with no compensating rollback (the earlier writes are already
+durable). A single-kind buffer — all creates, all upserts, or all deletes —
+coalesces into one atomic batch and is all-or-nothing on a transactional
+backend.
 
 Branch on **`is_atomic`** to know which case you have:
 
@@ -76,7 +76,7 @@ Returns `True` for the transactional backends (`sqlite`, `postgres`, `duckdb`)
 and `False` for the rest (`memory`, `file`, `s3`, `elasticsearch`). It reports
 whether a **coalesced batch** in the commit flush is crash-safe atomic — not
 whether a transaction can be opened (the buffer-and-flush works on every
-backend), and not whether a *whole* mixed/upsert commit is atomic (see
+backend), and not whether a *whole* mixed-kind commit is atomic (see
 `is_atomic` above for that).
 
 ## Policy on non-transactional backends

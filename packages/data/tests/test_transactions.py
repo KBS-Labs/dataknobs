@@ -11,12 +11,15 @@ and atomic commit on transactional backends (sqlite here), plus the
 strict/emulate policy gate and the buffer's own lifecycle invariants.
 """
 
+from typing import Any
+
 import pytest
 
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_common.testing import assert_no_blocking
 from dataknobs_data import Record, async_database_factory
+from dataknobs_data.backends.file import AsyncFileDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 
@@ -159,9 +162,11 @@ async def test_sqlite_exception_rolls_back():
 # ---- is_atomic reflects the staged-op composition ------------------------
 #
 # Reproduce-first for the over-claim: ``is_atomic`` previously returned the
-# backend capability unconditionally, so a mixed-operation or upsert buffer on
-# sqlite reported ``True`` while its commit was, in fact, a sequence of
-# independent batches that can partially persist. These pin the honest boundary.
+# backend capability unconditionally, so a *mixed*-operation buffer on sqlite
+# reported ``True`` while its commit was, in fact, a sequence of independent
+# batches that can partially persist. These pin the honest boundary — including
+# the WS2 correction that a single-kind all-upsert buffer IS atomic (it
+# coalesces into one ``upsert_batch``).
 
 
 async def test_is_atomic_reflects_op_composition_on_transactional_backend():
@@ -176,10 +181,22 @@ async def test_is_atomic_reflects_op_composition_on_transactional_backend():
         assert tx.is_atomic is False  # create + delete → two independent batches
         await tx.rollback()
 
+        # All-upsert single-kind buffer → one coalesced ``upsert_batch``, atomic
+        # on a transactional backend. (Before WS2 this reported False, because
+        # upserts were flushed row-by-row.)
         tx2 = await db.begin_transaction()
-        await tx2.upsert("id", Record({"name": "u"}))
-        assert tx2.is_atomic is False  # any upsert → applied row-by-row
+        await tx2.upsert("id1", Record({"name": "u"}))
+        await tx2.upsert("id2", Record({"name": "v"}))
+        assert tx2.is_atomic is True
         await tx2.rollback()
+
+        # A buffer spanning >1 kind (create + upsert) still flushes as
+        # independent batches and stays non-atomic.
+        tx3 = await db.begin_transaction()
+        await tx3.create(Record({"name": "c"}))
+        await tx3.upsert("id3", Record({"name": "w"}))
+        assert tx3.is_atomic is False
+        await tx3.rollback()
     finally:
         await db.close()
 
@@ -223,6 +240,156 @@ async def test_mixed_buffer_partially_persists_on_midflush_failure():
         with pytest.raises(RuntimeError, match="mid-flush"):
             await tx.commit()
         assert await db.count() == 1  # "early" persisted; "late" never flushed
+    finally:
+        await db.close()
+
+
+# ---- WS2: atomic multi-upsert commit (coalesced upsert_batch) -----------
+#
+# Reproduce-first for the pre-Part-A residue: ``BufferedTransaction`` flushed
+# staged upserts row-by-row and reported a single-kind all-upsert buffer as
+# non-atomic, even though ``AsyncDatabase.upsert_batch`` is a single atomic
+# statement on a transactional backend. WS2 coalesces consecutive upserts into
+# one ``upsert_batch`` call and recognizes the all-upsert buffer as atomic.
+
+
+class _CountingUpsertSQLite(AsyncSQLiteDatabase):
+    """Real sqlite backend that tallies ``upsert`` vs ``upsert_batch`` calls.
+
+    A behaviour-preserving subclass (not a mock) so a test can prove the commit
+    coalesces an all-upsert run into ONE ``upsert_batch`` call rather than N
+    row-by-row ``upsert`` calls.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.upsert_calls = 0
+        self.upsert_batch_calls = 0
+
+    async def upsert(self, *args: Any, **kwargs: Any) -> str:  # type: ignore[override]
+        self.upsert_calls += 1
+        return await super().upsert(*args, **kwargs)
+
+    async def upsert_batch(self, records: list[Record]) -> list[str]:  # type: ignore[override]
+        self.upsert_batch_calls += 1
+        return await super().upsert_batch(records)
+
+
+class _UpsertBatchFailure(AsyncSQLiteDatabase):
+    """Real sqlite backend whose ``upsert_batch`` raises.
+
+    Proves the coalesced all-upsert commit is the atomic unit: a failure
+    persists nothing — no partial row-by-row persistence (the pre-WS2 hazard).
+    """
+
+    async def upsert_batch(self, records: list[Record]) -> list[str]:  # type: ignore[override]
+        raise RuntimeError("upsert batch failed")
+
+
+async def test_all_upsert_buffer_commits_as_single_batch():
+    db = _CountingUpsertSQLite({"path": ":memory:"})
+    await db.connect()
+    try:
+        async with db.transaction() as tx:  # strict; sqlite is transactional
+            await tx.upsert_batch(
+                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+            )
+            await tx.upsert("3", Record({"v": "c"}))  # explicit-id form, coalesced
+            assert tx.is_atomic is True  # single-kind all-upsert
+        assert await db.count() == 3
+        # Coalesced: ONE upsert_batch call for the whole run — both staging
+        # forms normalized into the batch, no row-by-row upsert fallback.
+        assert db.upsert_batch_calls == 1
+        assert db.upsert_calls == 0
+    finally:
+        await db.close()
+
+
+async def test_all_upsert_buffer_is_idempotent_and_persists():
+    db = await _sqlite_db()
+    try:
+        async with db.transaction() as tx:
+            await tx.upsert_batch(
+                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+            )
+        assert await db.count() == 2
+        # Re-commit the same ids: overwrite, not duplicate (idempotent).
+        async with db.transaction() as tx:
+            await tx.upsert_batch(
+                [Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})]
+            )
+        assert await db.count() == 2
+        rec = await db.read("1")
+        assert rec is not None and rec.get_value("v") == "A"
+    finally:
+        await db.close()
+
+
+async def test_all_upsert_commit_failure_persists_nothing():
+    db = _UpsertBatchFailure({"path": ":memory:"})
+    await db.connect()
+    try:
+        tx = await db.begin_transaction()
+        await tx.upsert_batch(
+            [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+        )
+        assert tx.is_atomic is True
+        with pytest.raises(RuntimeError, match="upsert batch failed"):
+            await tx.commit()
+        # One coalesced call whose failure leaves nothing persisted — the
+        # all-or-nothing guarantee for a single-kind all-upsert buffer.
+        assert await db.count() == 0
+    finally:
+        await db.close()
+
+
+async def test_mixed_create_upsert_buffer_commits_all_rows():
+    db = await _sqlite_db()
+    try:
+        tx = await db.begin_transaction()
+        await tx.create(Record({"id": "c1", "v": "created"}))
+        await tx.upsert_batch(
+            [Record({"id": "u1", "v": "up1"}), Record({"id": "u2", "v": "up2"})]
+        )
+        assert tx.is_atomic is False  # spans 2 kinds → not single-batch
+        res = await tx.commit()
+        # The coalescer must not drop or reorder ops: all 3 rows land.
+        assert res["affected_rows"] == 3
+        assert await db.count() == 3
+    finally:
+        await db.close()
+
+
+async def test_all_upsert_buffer_on_memory_is_best_effort():
+    db = await _memory_db()
+    try:
+        tx = await db.begin_transaction(policy="emulate")
+        await tx.upsert_batch(
+            [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+        )
+        # Non-transactional: coalescing still happens, but the backend does not
+        # wrap the batch in a transaction, so the buffer is not atomic.
+        assert tx.is_atomic is False
+        res = await tx.commit()
+        assert res["affected_rows"] == 2
+        assert await db.count() == 2
+    finally:
+        await db.close()
+
+
+async def test_coalesced_upsert_flush_no_blocking_on_file(tmp_path):
+    # The async file backend must reach disk via ``asyncio.to_thread`` offload,
+    # never a blocking syscall on the loop — including through the coalesced
+    # ``upsert_batch`` flush.
+    db = AsyncFileDatabase({"path": str(tmp_path / "recs.json")})
+    await db.connect()
+    try:
+        with assert_no_blocking():
+            async with db.transaction(policy="emulate") as tx:
+                await tx.upsert_batch(
+                    [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+                )
+        assert await db.count() == 2
     finally:
         await db.close()
 

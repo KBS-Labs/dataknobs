@@ -13,12 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the data layer's `upsert_batch` batch verb instead of a per-row `upsert` loop,
   so it uses the backend's native bulk upsert where one exists (a single
   `ON CONFLICT DO UPDATE` on SQLite/DuckDB/PostgreSQL, a bulk index on
-  Elasticsearch) and a per-record loop elsewhere. Behavior is unchanged — each
-  row is still upserted under its derived id (stamped onto `storage_id`, which
-  takes priority over any `id` field in the row), a `None` derivation still
-  mints/resolves its own id, and `atomicity="require"` is still rejected on this
-  path (the whole-batch upsert is not all-or-nothing without connection-scoped
-  isolation).
+  Elasticsearch) and a per-record loop elsewhere. Each row is still upserted
+  under its derived id (stamped onto `storage_id`, which takes priority over any
+  `id` field in the row), and a `None` derivation still mints/resolves its own
+  id. On transactional backends (SQLite/DuckDB/PostgreSQL) that whole-batch
+  upsert is a single all-or-nothing statement, so `BatchCommit` /
+  `commit_batch` now honor `atomicity="require"` (and the `use_transaction=True`
+  alias) on this idempotent-upsert path too — committing atomically instead of
+  rejecting it, matching the create-mode path — and reject `require` only on
+  non-transactional backends.
 
 ## v0.2.5 - 2026-07-07
 

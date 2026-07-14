@@ -43,6 +43,32 @@ async def test_postgres_transaction_commit_persists(postgres_test_db):
 
 
 @pytest.mark.asyncio
+async def test_postgres_all_upsert_buffer_commits_atomically(postgres_test_db):
+    """A single-kind all-upsert buffer coalesces into one atomic
+    ``upsert_batch`` on postgres — ``is_atomic`` is True and a re-commit of the
+    same ids overwrites idempotently rather than duplicating.
+    """
+    db = AsyncPostgresDatabase(postgres_test_db)
+    try:
+        await db.connect()
+        async with db.transaction() as tx:  # strict; postgres is transactional
+            await tx.upsert_batch(
+                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
+            )
+            assert tx.is_atomic is True
+        assert await db.count() == 2
+        async with db.transaction() as tx:
+            await tx.upsert_batch(
+                [Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})]
+            )
+        assert await db.count() == 2
+        rec = await db.read("1")
+        assert rec is not None and rec.get_value("v") == "A"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_postgres_transaction_rollback_persists_nothing(postgres_test_db):
     db = AsyncPostgresDatabase(postgres_test_db)
     try:
