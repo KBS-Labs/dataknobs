@@ -5,7 +5,7 @@ Extended tests for migrator module to improve coverage.
 import pytest
 import asyncio
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
-from typing import Iterator
+from typing import Any
 
 from dataknobs_data.records import Record
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
@@ -23,6 +23,24 @@ from dataknobs_data.migration import (
     RenameField,
     MigrationProgress,
 )
+
+
+def _disable_batch_verbs(db):
+    """Force the migrator's per-record fallback for a white-box failure test.
+
+    The batched write path tries the target's native bulk verbs
+    (``create_batch`` / ``upsert_batch``) first. A test that simulates a write
+    failure by patching the per-record ``create`` / ``upsert`` must make the
+    bulk verb fail too, so the per-record fallback — the path it pins — is
+    actually reached. Memory ``create_batch`` writes straight to storage without
+    routing through ``create``, so patching ``create`` alone would be bypassed.
+    """
+
+    def _raise(records):
+        raise RuntimeError("batch verb disabled; exercise per-record fallback")
+
+    db.create_batch = _raise
+    db.upsert_batch = _raise
 
 
 class TestMigratorAdvanced:
@@ -87,9 +105,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         migrator = Migrator()
-        
+
         # Test should now raise since no error handler is provided
         with pytest.raises(ValueError, match="Database error"):
             progress = migrator.migrate(
@@ -119,7 +138,8 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         # Error handler that continues
         def error_handler(error, record):
             return True  # Continue processing
@@ -495,9 +515,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         progress = MigrationProgress().start()
-        
+
         # Test without error handler - should raise
         migrator = Migrator()
         with pytest.raises(ValueError, match="Cannot create bad record"):
@@ -520,6 +541,7 @@ class TestMigratorAdvanced:
             return original_create2(record)
 
         target2.create = failing_create2
+        _disable_batch_verbs(target2)  # exercise the per-record fallback
 
         progress2 = MigrationProgress().start()
 
@@ -1005,3 +1027,135 @@ class TestMigrateStreamProcessedAccounting:
         assert progress.succeeded == 3
         assert progress.skipped == 3
         assert progress.failed == 0
+
+
+class _CountingMemoryDatabase(MemoryDatabase):
+    """Real memory backend that tallies which write verbs the migrator invokes.
+
+    No mocks — a genuine ``SyncMemoryDatabase`` subclass whose only addition is a
+    per-verb call counter, so a test can prove the batched migrator rides the
+    native bulk verbs (``create_batch`` / ``upsert_batch``) instead of looping
+    per record.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.calls = {"create": 0, "upsert": 0, "create_batch": 0, "upsert_batch": 0}
+
+    def create(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["create"] += 1
+        return super().create(*args, **kwargs)
+
+    def upsert(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["upsert"] += 1
+        return super().upsert(*args, **kwargs)
+
+    def create_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["create_batch"] += 1
+        return super().create_batch(*args, **kwargs)
+
+    def upsert_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["upsert_batch"] += 1
+        return super().upsert_batch(*args, **kwargs)
+
+
+class TestMigratorBatchedWriteVerbs:
+    """The batched write path (``migrate`` → ``_write_batch``) rides the target's
+    native bulk verbs, matching the streaming path's throughput, with a graceful
+    per-record fallback that preserves per-id accounting and ``on_error``.
+
+    ``migrate_stream`` / ``migrate_parallel`` / ``migrate_async`` already ride the
+    bulk verbs through the streaming write path; only ``migrate`` used a
+    per-record loop before this. Pre-change these throughput assertions failed —
+    ``migrate(on_conflict=upsert)`` called ``upsert`` N times and ``upsert_batch``
+    zero.
+    """
+
+    def test_batched_insert_rides_create_batch(self):
+        """INSERT into an empty target issues one ``create_batch``, no per-record."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        progress = Migrator().migrate(src, tgt)  # default INSERT
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["create_batch"] == 1  # one bulk call for the batch
+        assert tgt.calls["create"] == 0        # no per-record fallback
+        assert tgt.read("3").get_value("v") == "src"
+
+    def test_batched_upsert_rides_upsert_batch(self):
+        """UPSERT issues one ``upsert_batch``, never per-record ``upsert``."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        _seed(tgt, [2], "old")  # a colliding id; upsert overwrites it
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["upsert_batch"] == 1
+        assert tgt.calls["upsert"] == 0
+        assert tgt.read("2").get_value("v") == "src"  # overwritten
+
+    def test_batched_skip_stays_per_record(self):
+        """SKIP has no batch verb: writes per-record ``create``, never batches."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        progress = Migrator().migrate(src, tgt, on_conflict="skip")
+        assert progress.succeeded == 3
+        assert tgt.calls["create"] == 3
+        assert tgt.calls["create_batch"] == 0  # SKIP never batches
+
+    def test_batch_failure_falls_back_to_per_record_attribution(self):
+        """When the bulk verb fails, the per-record fallback attributes each id
+        and fires ``on_error`` per failing record — identical to per-record writes.
+        """
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _disable_batch_verbs(tgt)  # force the per-record fallback
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        seen: list[str] = []
+        progress = Migrator().migrate(
+            src, tgt, on_error=lambda _e, r: seen.append(r.id) or True
+        )
+        assert progress.succeeded == 2  # ids 1, 3
+        assert progress.failed == 1     # id 2
+        assert seen == ["2"]            # on_error fired for the failing id
+        assert any(e["record_id"] == "2" for e in progress.errors)
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+        assert tgt.read("2") is None
+
+    def test_batch_failure_no_handler_raises_immediately(self):
+        """Fail-fast preserved: a per-record failure with no handler re-raises.
+
+        The batch's remaining records are not written.
+        """
+        tgt = MemoryDatabase()
+        _disable_batch_verbs(tgt)
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        # Explicit order so the record after the failing one is unambiguous.
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(ValueError, match="cannot create 2"):
+            Migrator()._write_batch(tgt, batch, progress)
+
+        assert progress.succeeded == 1   # id 1 written before the failure
+        assert progress.failed == 1      # id 2
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3") is None     # record after the failure not written

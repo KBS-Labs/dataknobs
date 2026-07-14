@@ -6,9 +6,14 @@ from __future__ import annotations
 import concurrent.futures
 from typing import TYPE_CHECKING
 
-from dataknobs_data.exceptions import DuplicateRecordError
+from dataknobs_data.exceptions import OperationError
 from dataknobs_data.query import Query
-from dataknobs_data.streaming import ConflictPolicy, StreamConfig
+from dataknobs_data.streaming import (
+    ConflictPolicy,
+    StreamConfig,
+    drive_batch_with_fallback,
+    resolve_conflict_write,
+)
 
 from .migration import Migration
 from .progress import MigrationProgress
@@ -18,7 +23,67 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from dataknobs_data.database import AsyncDatabase, SyncDatabase
     from dataknobs_data.records import Record
-    
+
+
+class MigrationProgressAccountant:
+    """:class:`BatchWriteAccountant` tallying into a :class:`MigrationProgress`.
+
+    Drives the migrator's batched write path through the same
+    batch-first-with-per-record-fallback loop the streaming writer uses
+    (:func:`dataknobs_data.streaming.drive_batch_with_fallback`). Stop is hard: a
+    per-record failure with no ``on_error`` handler — or a handler that vetoes —
+    re-raises immediately, so the batch's remaining records are not written,
+    preserving the migrator's fail-fast contract. A handler returning ``True``
+    records the failure and continues.
+    """
+
+    def __init__(
+        self,
+        progress: MigrationProgress,
+        on_error: Callable[[Exception, Record], bool] | None = None,
+    ) -> None:
+        self._progress = progress
+        self._on_error = on_error
+
+    def on_batch_start(self) -> None:
+        # MigrationProgress tracks no per-batch counter.
+        return None
+
+    def on_batch_success(self, batch: list[Record], written_ids: list[str]) -> bool:
+        for record_id in written_ids:
+            self._progress.record_success(record_id)
+        shortfall = len(batch) - len(written_ids)
+        if shortfall <= 0:
+            return True
+        # A bulk backend confirmed fewer ids than the batch; the individual
+        # failing records are not available here, so record the shortfall and
+        # offer one aggregate error to ``on_error`` on the same stop contract as
+        # a per-record failure.
+        error = OperationError(
+            f"batch write confirmed {len(written_ids)} of {len(batch)} records; "
+            f"{shortfall} failed to write"
+        )
+        for _ in range(shortfall):
+            self._progress.record_failure(str(error), None, error)
+        if self._on_error and self._on_error(error, None):
+            return True
+        raise error
+
+    def on_record_success(self, record: Record) -> None:
+        self._progress.record_success(record.id)
+
+    def on_record_skip(self, record: Record) -> None:
+        self._progress.record_skip("Already present in target", record.id)
+
+    def on_record_failure(
+        self, record: Record | None, error: Exception, local_index: int
+    ) -> bool:
+        record_id = record.id if record is not None else None
+        self._progress.record_failure(str(error), record_id, error)
+        if self._on_error and self._on_error(error, record):
+            return True
+        raise error
+
 
 class Migrator:
     """Data migration orchestrator with streaming support.
@@ -356,6 +421,17 @@ class Migrator:
     ) -> None:
         """Write a batch of records to target database.
 
+        The write rides the target's native bulk verbs — ``create_batch`` for
+        INSERT (fail-closed on a colliding id) and ``upsert_batch`` for UPSERT —
+        with a graceful per-record fallback that preserves per-id progress
+        accounting and ``on_error`` semantics when the batch verb fails. SKIP
+        stays per-record: a whole-batch verb cannot skip one duplicate while
+        inserting the rest, so it writes each record with ``create`` and counts a
+        colliding id as skipped. This is the same conflict-policy resolution and
+        batch-first-fallback loop the streaming write path uses
+        (:func:`dataknobs_data.streaming.resolve_conflict_write` /
+        :func:`dataknobs_data.streaming.drive_batch_with_fallback`).
+
         Args:
             target: Target database
             batch: Batch of records to write
@@ -366,34 +442,25 @@ class Migrator:
                 count as skipped).
         """
         for record in batch:
-            try:
-                # Ensure record has an ID
-                if not record.id:
-                    record.generate_id()
+            # Mint ids for id-less records up front so the bulk verbs honor
+            # ``record.id`` (mirrors the per-record path's pre-write assignment).
+            if not record.id:
+                record.generate_id()
 
-                if on_conflict == ConflictPolicy.UPSERT:
-                    target.upsert(record)
-                    progress.record_success(record.id)
-                elif on_conflict == ConflictPolicy.SKIP:
-                    try:
-                        target.create(record)
-                        progress.record_success(record.id)
-                    except DuplicateRecordError:
-                        # Idempotent top-up: leave the existing row untouched.
-                        progress.record_skip("Already present in target", record.id)
-                else:  # ConflictPolicy.INSERT — fail closed on a collision
-                    target.create(record)
-                    progress.record_success(record.id)
-            except Exception as e:
-                progress.record_failure(str(e), record.id, e)
-                if on_error:
-                    if not on_error(e, record):
-                        # Handler says stop - re-raise to stop processing immediately
-                        raise
-                    # Handler says continue - keep going
-                else:
-                    # No handler - stop processing immediately
-                    raise
+        batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
+            on_conflict,
+            insert_batch_func=target.create_batch,
+            single_create_func=target.create,
+            upsert_func=target.upsert,
+            upsert_batch_func=target.upsert_batch,
+        )
+        drive_batch_with_fallback(
+            batch,
+            batch_write_func,
+            single_write_func,
+            MigrationProgressAccountant(progress, on_error),
+            skip_on_duplicate=skip_on_duplicate,
+        )
 
     def validate_migration(
         self,

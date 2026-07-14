@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `Migrator`'s batched write path (`migrate()`) now writes each batch
+  through the target's native bulk verbs — `create_batch` for `insert`
+  (fail-closed on a colliding id) and `upsert_batch` for `upsert` — with a
+  graceful per-record fallback that preserves per-id progress accounting and
+  `on_error` semantics when a batch write fails. This matches the throughput of
+  the streaming write path (`migrate_stream()` / `migrate_parallel()` /
+  `migrate_async()`), which already rode the bulk verbs, so a from-empty
+  `insert` or a `make-target-match-source` `upsert` migration issues one bulk
+  call per batch instead of a round trip per record. The `skip` policy still
+  writes per record (a whole-batch verb cannot skip one duplicate while
+  inserting the rest). Conflict-policy behavior and `MigrationProgress`
+  accounting are unchanged.
+
 - `AsyncDatabase.transaction()` / `begin_transaction()` now commit a buffered
   transaction of **any** composition all-or-nothing on a transactional backend
   (SQLite, PostgreSQL, DuckDB). `BufferedTransaction.commit()` coalesces
