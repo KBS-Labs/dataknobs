@@ -237,13 +237,13 @@ in-transaction isolation or read-your-writes (staged writes are invisible to
 reads until commit). For connection-scoped isolation, branch on
 `supports_transactions()` and use a backend-native transaction directly.
 
-> **The `transaction:` config block is not a database-atomicity knob.** A
-> `transaction: {strategy: batch|manual, ...}` block configures an in-memory
-> `TransactionManager` (commit-trigger / batching coordination) that the
-> execution engines do **not** consult to drive database commit/rollback —
-> configuring it logs a warning at build time. For database atomicity use
-> `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or the
-> `AsyncDatabase.transaction()` primitive directly.
+> **There is no `transaction:` config block for database atomicity.** The
+> former strategy-based transaction coordinator has been removed — it
+> configured an in-memory object the execution engines never consulted, so it
+> delivered no database atomicity. A leftover `transaction:` block in an
+> existing config is ignored (a warning is logged at load time). For database
+> atomicity use `DatabaseTransaction`, `BatchCommit(atomicity="require")`, or
+> the `AsyncDatabase.transaction()` primitive directly.
 
 ## Read functions
 

@@ -23,6 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejecting it, matching the create-mode path — and reject `require` only on
   non-transactional backends.
 
+### Removed
+
+- **Breaking:** removed the strategy-based FSM transaction coordinator — the
+  `dataknobs_fsm.core.transactions` module (`TransactionManager`,
+  `TransactionStrategy`, and the Single/Batch/Manual managers), the
+  `transaction` configuration block (`TransactionConfig`),
+  `AdvancedFSM.configure_transactions`, and the unused `on_transaction_*`
+  callbacks on `ExecutionHook`. It configured an in-memory coordinator that the
+  execution engines never consulted to drive database commit/rollback, so it
+  delivered no database atomicity. A leftover `transaction:` block in an
+  existing configuration is now ignored (a warning is logged at load time).
+  Database atomicity is provided by the `AsyncDatabase.transaction()` primitive,
+  the `DatabaseTransaction` function, and `BatchCommit(atomicity="require")`.
+
+### Fixed
+
+- Corrected the FSM transaction-mode documentation to the actual supported
+  modes (`NONE`/`PER_RECORD`/`PER_BATCH`/`PER_SESSION`/`DISTRIBUTED`); the
+  `transaction_mode` setting selects in-memory logical bookkeeping only and does
+  not by itself drive database commit/rollback.
+
 ## v0.2.5 - 2026-07-07
 
 ### Security

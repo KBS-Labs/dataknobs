@@ -6,12 +6,11 @@ from unittest.mock import Mock, patch, MagicMock
 
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
-    FSMConfig, 
-    StateConfig, 
-    ArcConfig, 
+    FSMConfig,
+    StateConfig,
+    ArcConfig,
     NetworkConfig,
     DataModeConfig,
-    TransactionConfig,
     FunctionReference
 )
 from dataknobs_fsm.core.data_modes import DataHandlingMode

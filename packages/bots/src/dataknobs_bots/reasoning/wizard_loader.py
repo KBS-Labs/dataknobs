@@ -514,7 +514,6 @@ class WizardConfigLoader:
             DataModeConfig,
             FSMConfig,
             NetworkConfig,
-            TransactionConfig,
         )
 
         # Create network config with states
@@ -538,7 +537,6 @@ class WizardConfigLoader:
             main_network="main",
             resources=[],
             data_mode=DataModeConfig(),
-            transaction=TransactionConfig(),
         )
 
         return fsm_config
