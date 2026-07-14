@@ -11,10 +11,12 @@ from dataknobs_common.testing import (
     get_test_bot_config,
     get_test_rag_config,
     is_chromadb_available,
+    is_elasticsearch_available,
     is_faiss_available,
     is_ollama_available,
     is_ollama_model_available,
     is_package_available,
+    is_postgres_available,
     is_redis_available,
     requires_chromadb,
     requires_faiss,
@@ -65,6 +67,101 @@ class TestServiceAvailability:
         # Test with unlikely port - should return False
         result = is_redis_available(host="localhost", port=65432)
         assert result is False
+
+
+class TestServiceProbeHostResolution:
+    """Host/port resolution of the socket-probe availability checks.
+
+    The probe must resolve the same host its paired ``*_connection_params``
+    fixture does: arg -> ``$<SVC>_HOST`` -> Docker-aware default. Previously
+    the probes hard-coded ``localhost``, so inside a container (service at its
+    compose hostname, not localhost) the probe reported "unavailable" and the
+    ``requires_*`` marker false-skipped tests that would actually run.
+    """
+
+    @staticmethod
+    def _install_addr_capture(monkeypatch) -> list[tuple[str, int]]:
+        """Patch ``socket.socket`` to record connect_ex addresses; report closed.
+
+        Returns the list that accumulates every probed ``(host, port)``.
+        """
+        import socket
+
+        captured: list[tuple[str, int]] = []
+
+        class _AddrCapturingSocket:
+            def __init__(self, *_args, **_kwargs) -> None:
+                pass
+
+            def settimeout(self, _seconds: float) -> None:
+                pass
+
+            def connect_ex(self, addr: tuple[str, int]) -> int:
+                captured.append(addr)
+                return 1  # nonzero => closed; probe returns False
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(
+            socket, "socket", lambda *_a, **_k: _AddrCapturingSocket()
+        )
+        return captured
+
+    def test_probe_resolves_docker_host_inside_container(self, monkeypatch):
+        """With DOCKER_CONTAINER set and no host env, the probe targets the
+        compose service hostname, not localhost."""
+        captured = self._install_addr_capture(monkeypatch)
+        monkeypatch.setenv("DOCKER_CONTAINER", "1")
+        for var in ("POSTGRES_HOST", "ELASTICSEARCH_HOST", "REDIS_HOST"):
+            monkeypatch.delenv(var, raising=False)
+
+        assert is_postgres_available() is False  # closed socket
+        assert is_elasticsearch_available() is False
+        assert is_redis_available() is False
+
+        hosts = [addr[0] for addr in captured]
+        assert "postgres" in hosts
+        assert "elasticsearch" in hosts
+        assert "redis" in hosts
+        assert "localhost" not in hosts
+
+    def test_probe_resolves_localhost_on_host(self, monkeypatch):
+        """Outside Docker (no /.dockerenv, no DOCKER_CONTAINER), host is
+        localhost."""
+        captured = self._install_addr_capture(monkeypatch)
+        monkeypatch.delenv("DOCKER_CONTAINER", raising=False)
+        for var in ("POSTGRES_HOST", "ELASTICSEARCH_HOST"):
+            monkeypatch.delenv(var, raising=False)
+        real_exists = __import__("os").path.exists
+        monkeypatch.setattr(
+            "dataknobs_common.testing._core.os.path.exists",
+            lambda p: False if p == "/.dockerenv" else real_exists(p),
+        )
+
+        is_postgres_available()
+        is_elasticsearch_available()
+
+        assert {addr[0] for addr in captured} == {"localhost"}
+
+    def test_explicit_host_and_env_win_over_docker_default(self, monkeypatch):
+        """An explicit host arg and ``$<SVC>_HOST`` both beat the Docker
+        default."""
+        captured = self._install_addr_capture(monkeypatch)
+        monkeypatch.setenv("DOCKER_CONTAINER", "1")
+
+        # Explicit arg wins.
+        monkeypatch.delenv("POSTGRES_HOST", raising=False)
+        is_postgres_available(host="db.internal", port=5432)
+        # Env var wins over the Docker default.
+        monkeypatch.setenv("ELASTICSEARCH_HOST", "es.internal")
+        is_elasticsearch_available()
+
+        hosts = [addr[0] for addr in captured]
+        assert "db.internal" in hosts
+        assert "es.internal" in hosts
+        assert "postgres" not in hosts
+        assert "elasticsearch" not in hosts
 
     def test_is_package_available_returns_true_for_installed(self):
         """Test that is_package_available returns True for installed packages."""

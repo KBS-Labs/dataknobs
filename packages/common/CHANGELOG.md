@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   teardown no longer accumulate on the persistent dev/CI cluster volume and
   exhaust the single-node shard budget. The sweep is age-gated and best-effort,
   so it never deletes an in-flight index nor fails an otherwise-green run.
+- The `is_redis_available` / `is_postgres_available` / `is_elasticsearch_available`
+  service probes now resolve their host Docker-aware (arg → `$<SVC>_HOST` →
+  the compose service name inside a container, else `localhost`), matching the
+  paired `*_connection_params` fixtures. Previously they hard-coded
+  `localhost`, so inside a container without an explicit host env the probe —
+  and its `requires_*` skip marker — would report the service unavailable and
+  false-skip tests that would actually run. Behavior on the host is unchanged.
 
 ### Removed
 

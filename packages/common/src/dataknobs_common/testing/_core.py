@@ -128,35 +128,96 @@ def is_chromadb_available() -> bool:
     return importlib.util.find_spec("chromadb") is not None
 
 
+def _docker_aware_default_host(docker_host: str) -> str:
+    """Return the compose service hostname inside Docker, else ``localhost``.
+
+    Mirrors the Docker detection the ``*_connection_params`` fixtures use
+    (``/.dockerenv`` presence or a truthy ``DOCKER_CONTAINER``) so an
+    availability probe and its paired fixture resolve the same host. Without
+    this, a probe run inside a container — where a service lives at its
+    compose hostname, not ``localhost`` — would report the service
+    unavailable and its ``requires_*`` marker would false-skip tests that
+    would actually run.
+
+    Args:
+        docker_host: The compose service hostname to use inside Docker.
+
+    Returns:
+        ``docker_host`` inside Docker, otherwise ``"localhost"``.
+    """
+    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
+        return docker_host
+    return "localhost"
+
+
+def _is_tcp_service_available(
+    host: str | None,
+    port: int | None,
+    *,
+    host_env: str,
+    port_env: str,
+    docker_host: str,
+    default_port: int,
+) -> bool:
+    """TCP-probe a service, resolving host/port arg → env var → Docker default.
+
+    Shared body for the socket-probe availability checks. Host resolution:
+    an explicit ``host`` wins; else ``$<host_env>``; else the Docker-aware
+    default (``docker_host`` inside a container, ``localhost`` on the host).
+    Port resolution: explicit ``port`` wins; else ``$<port_env>``; else
+    ``default_port``.
+
+    Args:
+        host: Explicit host, or ``None`` to resolve from env / Docker default.
+        port: Explicit port, or ``None`` to resolve from env / default.
+        host_env: Environment variable naming the host.
+        port_env: Environment variable naming the port.
+        docker_host: Compose service hostname used inside Docker.
+        default_port: Port used when neither ``port`` nor ``$<port_env>`` is set.
+
+    Returns:
+        True if a TCP connection to the resolved host:port succeeds.
+    """
+    import socket
+
+    if host is None:
+        host = os.environ.get(host_env) or _docker_aware_default_host(docker_host)
+    if port is None:
+        port = int(os.environ.get(port_env, str(default_port)))
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        try:
+            result = sock.connect_ex((host, port))
+        finally:
+            sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
 def is_redis_available(host: str | None = None, port: int | None = None) -> bool:
     """Check if Redis service is available.
 
-    Reads ``REDIS_HOST`` and ``REDIS_PORT`` environment variables when
-    explicit arguments are not provided, falling back to ``localhost:6379``.
-    This ensures the check works both on the host and inside Docker
-    where Redis runs on a network hostname.
+    Resolves the host as ``host`` arg → ``$REDIS_HOST`` → Docker-aware default
+    (``redis`` inside a container, ``localhost`` otherwise); the port as
+    ``port`` arg → ``$REDIS_PORT`` → ``6379``.
 
     Args:
-        host: Redis host (default: ``$REDIS_HOST`` or ``localhost``)
+        host: Redis host (default: ``$REDIS_HOST`` or the Docker-aware default)
         port: Redis port (default: ``$REDIS_PORT`` or ``6379``)
 
     Returns:
         True if Redis is available, False otherwise
     """
-    import os
-
-    host = host if host is not None else os.environ.get("REDIS_HOST", "localhost")
-    port = port if port is not None else int(os.environ.get("REDIS_PORT", "6379"))
-    try:
-        import socket
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
-    except OSError:
-        return False
+    return _is_tcp_service_available(
+        host,
+        port,
+        host_env="REDIS_HOST",
+        port_env="REDIS_PORT",
+        docker_host="redis",
+        default_port=6379,
+    )
 
 
 def is_postgres_available(
@@ -164,30 +225,26 @@ def is_postgres_available(
 ) -> bool:
     """Check if PostgreSQL service is available.
 
-    Reads ``POSTGRES_HOST`` and ``POSTGRES_PORT`` environment variables when
-    explicit arguments are not provided, falling back to ``localhost:5432``.
+    Resolves the host as ``host`` arg → ``$POSTGRES_HOST`` → Docker-aware
+    default (``postgres`` inside a container, ``localhost`` otherwise); the
+    port as ``port`` arg → ``$POSTGRES_PORT`` → ``5432``.
 
     Args:
-        host: PostgreSQL host (default: ``$POSTGRES_HOST`` or ``localhost``)
+        host: PostgreSQL host (default: ``$POSTGRES_HOST`` or the Docker-aware
+            default)
         port: PostgreSQL port (default: ``$POSTGRES_PORT`` or ``5432``)
 
     Returns:
         True if PostgreSQL is available, False otherwise
     """
-    import os
-
-    host = host if host is not None else os.environ.get("POSTGRES_HOST", "localhost")
-    port = port if port is not None else int(os.environ.get("POSTGRES_PORT", "5432"))
-    try:
-        import socket
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
-    except OSError:
-        return False
+    return _is_tcp_service_available(
+        host,
+        port,
+        host_env="POSTGRES_HOST",
+        port_env="POSTGRES_PORT",
+        docker_host="postgres",
+        default_port=5432,
+    )
 
 
 def is_elasticsearch_available(
@@ -195,36 +252,26 @@ def is_elasticsearch_available(
 ) -> bool:
     """Check if the Elasticsearch service is available.
 
-    Reads ``ELASTICSEARCH_HOST`` and ``ELASTICSEARCH_PORT`` environment
-    variables when explicit arguments are not provided, falling back to
-    ``localhost:9200``.
+    Resolves the host as ``host`` arg → ``$ELASTICSEARCH_HOST`` → Docker-aware
+    default (``elasticsearch`` inside a container, ``localhost`` otherwise);
+    the port as ``port`` arg → ``$ELASTICSEARCH_PORT`` → ``9200``.
 
     Args:
-        host: Elasticsearch host (default: ``$ELASTICSEARCH_HOST`` or
-            ``localhost``)
+        host: Elasticsearch host (default: ``$ELASTICSEARCH_HOST`` or the
+            Docker-aware default)
         port: Elasticsearch port (default: ``$ELASTICSEARCH_PORT`` or ``9200``)
 
     Returns:
         True if Elasticsearch is available, False otherwise
     """
-    import os
-
-    host = (
-        host if host is not None else os.environ.get("ELASTICSEARCH_HOST", "localhost")
+    return _is_tcp_service_available(
+        host,
+        port,
+        host_env="ELASTICSEARCH_HOST",
+        port_env="ELASTICSEARCH_PORT",
+        docker_host="elasticsearch",
+        default_port=9200,
     )
-    port = (
-        port if port is not None else int(os.environ.get("ELASTICSEARCH_PORT", "9200"))
-    )
-    try:
-        import socket
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return result == 0
-    except OSError:
-        return False
 
 
 def get_localstack_endpoint(
