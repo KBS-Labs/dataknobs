@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T16:29:16Z",
+  "timestamp": "2026-07-14T17:00:51Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/atomic-idempotent-batch-commit",
-  "git_commit": "aa4eeb845aaf88f4efecf3fb7d2c0021838b11c5",
+  "git_branch": "sbk/elasticsearch-test-index-leak-shard-exhaustion",
+  "git_commit": "fb5597423e156add5497a611d6dcb899effabfc3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
