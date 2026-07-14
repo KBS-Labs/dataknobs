@@ -40,6 +40,19 @@ earlier batches have already been applied and stay applied. Open the transaction
 with the default `policy="strict"` there to fail closed rather than assume an
 atomicity the backend cannot deliver.
 
+**Choosing a backend for multi-record atomicity.** The mutation shapes that make
+this boundary matter are the multi-record ones a versioned or archival store
+performs: **replace** (delete the old records, create the new), **reconcile**
+(upsert what changed, delete what was removed), and **prune-and-write /
+retention** (delete the oldest N, create the newest). These are all-or-nothing
+**only** on a transactional backend (`sqlite`, `postgres`, `duckdb`). On a
+non-transactional backend (`memory`, `file`, `s3`, `elasticsearch`) they are
+best-effort — pick one of three options: open the transaction with
+`policy="strict"` to fail closed rather than half-apply; rely on per-record
+`expected_version` CAS for single-record safety, which holds on *every* backend;
+or move the store to a transactional backend when the whole multi-record
+mutation must commit atomically.
+
 Branch on **`is_atomic`** to know whether a commit is all-or-nothing:
 
 ```python
@@ -67,8 +80,9 @@ boundaries would interleave. Serialize writes to a single-connection instance
 yourself if they can overlap. Connection-scoped isolation / read-your-writes is
 not provided — the public API exposes no connection-scoped transaction beyond
 this buffered form. For a read-modify-write invariant use optimistic
-concurrency (`update` / `upsert` with `expected_version`) or serialize the
-conflicting work yourself.
+concurrency (`update` / `upsert` with `expected_version`; see the CAS-retry
+example in the [API reference](api-reference.md#optimistic-concurrency-conditional-writes))
+or serialize the conflicting work yourself.
 
 ## `supports_transactions()`
 

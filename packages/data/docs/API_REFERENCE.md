@@ -161,9 +161,37 @@ try:
     db.update("k", Record({"v": 2}, id="k"), expected_version=token)
 except ConcurrencyError as e:
     # Someone else wrote "k" since we read the token; e.context has
-    # {"id", "expected_version", "actual_version"}. Re-read and retry.
+    # {"id", "expected_version", "actual_version"}. Re-read and retry —
+    # the RetryExecutor form below automates exactly this loop.
     ...
 ```
+
+Rather than hand-roll the re-read → recompute → conditional-write loop, wrap the
+whole read-modify-write in a callable and drive it with the shipped
+`RetryExecutor` (`dataknobs_common.retry`), retrying on `ConcurrencyError`. Each
+attempt re-reads the token inside the callable, so every try sees fresh state:
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig
+from dataknobs_data import ConcurrencyError, Record
+
+async def bump_counter() -> None:
+    token = await db.get_version("k")                 # re-read every attempt
+    current = await db.read("k")
+    await db.update(
+        "k", Record({"v": current.get_value("v") + 1}, id="k"),
+        expected_version=token,
+    )
+
+await RetryExecutor(
+    RetryConfig(retry_on_exceptions=[ConcurrencyError], max_attempts=5)
+).execute(bump_counter)
+```
+
+The retry *policy* — how many attempts, the backoff, when to give up — is yours,
+expressed through `RetryConfig` (`max_attempts`, `initial_delay`,
+`backoff_strategy`, …). `RetryExecutor.execute` runs sync or async callables, so
+the same shape works from either context.
 
 Semantics:
 
