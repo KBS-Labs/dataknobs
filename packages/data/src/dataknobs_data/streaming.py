@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfig
 
-from .exceptions import DuplicateRecordError
+from .exceptions import DuplicateRecordError, OperationError
 
 
 if TYPE_CHECKING:
@@ -118,6 +118,55 @@ class StreamResult:
         )
 
 
+def _account_batch_shortfall(
+    result: StreamResult,
+    batch: list[Record],
+    written: int,
+    config: StreamConfig,
+    on_quit_signal: Callable[[], None] | None,
+) -> bool:
+    """Record a partial-batch failure when the batch verb wrote fewer than all.
+
+    A batch write func returns the ids it actually wrote. Most backends are
+    all-or-nothing (they raise on any failure, caught by the caller's per-record
+    fallback), but a bulk backend can partially succeed — Elasticsearch's bulk
+    API reports per-item errors, so its ``create_batch`` / ``upsert_batch``
+    return only the ids that succeeded. Without this accounting the unconfirmed
+    records would silently vanish (``successful < total_processed``, ``failed``
+    unchanged). Counting the shortfall as failed keeps the invariant
+    ``total_processed == successful + failed + skipped`` honest.
+
+    The individual failing records are not available at this layer (the bulk
+    verb reports only the count of confirmed ids), so the shortfall is routed
+    through ``config.on_error`` once as an aggregate ``OperationError`` with a
+    ``None`` record. This keeps the batch path on the same stop/continue
+    contract as the per-record fallback below: a configured handler decides
+    (return ``False`` to abort), and with no handler the stream quits on the
+    first failing batch, exactly as a single per-record failure would. Without
+    this, a caller's ``on_error`` veto would be silently unreachable for a bulk
+    partial failure.
+
+    Returns:
+        True to continue processing, False to quit streaming.
+    """
+    shortfall = len(batch) - written
+    if shortfall <= 0:
+        return True
+    result.failed += shortfall
+    error = OperationError(
+        f"batch write confirmed {written} of {len(batch)} records; "
+        f"{shortfall} failed to write"
+    )
+    result.add_error(None, error)
+    if config.on_error and config.on_error(error, None):
+        # Handler explicitly opted to keep streaming.
+        return True
+    # No handler (fail-stop default) or handler vetoed — quit the stream.
+    if on_quit_signal:
+        on_quit_signal()
+    return False
+
+
 def process_batch_with_fallback(
     batch: list[Record],
     batch_create_func: Callable[[list[Record]], list[str]] | None,
@@ -138,9 +187,11 @@ def process_batch_with_fallback(
     Args:
         batch: List of records to process
         batch_create_func: Function to write a batch of records, or ``None`` to
-            skip the batch attempt and write every record individually. A
-            conflict-aware policy (upsert/skip) has no conflict-aware batch verb,
-            so it passes ``None`` and relies on the per-record path.
+            skip the batch attempt and write every record individually. The
+            ``SKIP`` policy always passes ``None`` (a whole-batch verb cannot
+            skip individual duplicates while inserting the rest); ``INSERT`` and
+            ``UPSERT`` pass their native bulk verb when the backend has one
+            (``insert_batch_func`` / ``upsert_batch_func``), else ``None``.
         single_create_func: Function to write a single record
         result: StreamResult to update with statistics
         config: Stream configuration
@@ -158,10 +209,13 @@ def process_batch_with_fallback(
         try:
             # Try batch creation first
             ids = batch_create_func(batch)
-            result.successful += len(ids)
+            written = len(ids)
+            result.successful += written
             result.total_processed += len(batch)
             result.total_batches += 1
-            return True
+            return _account_batch_shortfall(
+                result, batch, written, config, on_quit_signal
+            )
         except Exception:
             # Batch failed, fall back to per-record writes below.
             pass
@@ -222,8 +276,9 @@ async def async_process_batch_with_fallback(
         batch: List of records to process
         batch_create_func: Async function to write a batch of records, or
             ``None`` to skip the batch attempt and write every record
-            individually (a conflict-aware upsert/skip policy has no
-            conflict-aware batch verb).
+            individually. The ``SKIP`` policy always passes ``None``;
+            ``INSERT`` and ``UPSERT`` pass their native bulk verb when the
+            backend has one, else ``None``.
         single_create_func: Async function to write a single record
         result: StreamResult to update with statistics
         config: Stream configuration
@@ -240,10 +295,13 @@ async def async_process_batch_with_fallback(
         try:
             # Try batch creation first
             ids = await batch_create_func(batch)
-            result.successful += len(ids)
+            written = len(ids)
+            result.successful += written
             result.total_processed += len(batch)
             result.total_batches += 1
-            return True
+            return _account_batch_shortfall(
+                result, batch, written, config, on_quit_signal
+            )
         except Exception:
             # Batch failed, fall back to per-record writes below.
             pass
@@ -289,6 +347,7 @@ def resolve_conflict_write(
     insert_batch_func: Callable | None,
     single_create_func: Callable,
     upsert_func: Callable,
+    upsert_batch_func: Callable | None = None,
 ) -> tuple[Callable | None, Callable, bool]:
     """Map a write-conflict policy to concrete ``(batch, single, skip)`` funcs.
 
@@ -296,18 +355,22 @@ def resolve_conflict_write(
     ``(batch_write_func, single_write_func, skip_on_duplicate)`` — for the given
     policy. This is the single shared definition every ``stream_write`` path uses
     so the policy behaves identically across backends; only the backend-specific
-    ``insert_batch_func`` (the native bulk fast-path) differs per caller.
+    ``insert_batch_func`` / ``upsert_batch_func`` (the native bulk fast-paths)
+    differ per caller.
 
     - ``INSERT`` — the backend's native batch fast-path plus a ``create``
       fallback; a colliding id fails closed. Byte-identical to prior behavior.
-    - ``UPSERT`` — no batch attempt (there is no conflict-aware batch verb);
-      every record goes through ``upsert``, which overwrites and cannot collide.
-    - ``SKIP`` — no batch attempt (the native batch path would overwrite instead
-      of raising); ``create`` per record, and a ``DuplicateRecordError`` is
-      counted as a skip rather than a failure.
+    - ``UPSERT`` — the backend's native ``upsert_batch`` fast-path (when the
+      caller supplies one) plus a per-record ``upsert`` fallback. Overwrite is
+      idempotent, so a colliding id cannot fail and partial-batch fallback is
+      benign. When ``upsert_batch_func`` is ``None`` (the back-compat default)
+      every record goes through ``upsert`` one at a time, as before.
+    - ``SKIP`` — no batch attempt (a whole-batch verb cannot skip individual
+      dupes while inserting the rest); ``create`` per record, and a
+      ``DuplicateRecordError`` is counted as a skip rather than a failure.
     """
     if on_conflict == ConflictPolicy.UPSERT:
-        return None, upsert_func, False
+        return upsert_batch_func, upsert_func, False
     if on_conflict == ConflictPolicy.SKIP:
         return None, single_create_func, True
     return insert_batch_func, single_create_func, False
@@ -569,8 +632,9 @@ class StreamingMixin:
         """Default implementation of stream_write.
 
         Honors ``config.on_conflict``: INSERT uses the ``create_batch``
-        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
-        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
@@ -578,6 +642,7 @@ class StreamingMixin:
             insert_batch_func=self.create_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return run_stream_write(
             records,
@@ -625,8 +690,9 @@ class AsyncStreamingMixin:
         """Default implementation of async stream_write.
 
         Honors ``config.on_conflict``: INSERT uses the ``create_batch``
-        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
-        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
@@ -634,6 +700,7 @@ class AsyncStreamingMixin:
             insert_batch_func=self.create_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `DatabaseResource.commit_batch`'s idempotent identity path now writes through
+  the data layer's `upsert_batch` batch verb instead of a per-row `upsert` loop,
+  so it uses the backend's native bulk upsert where one exists (a single
+  `ON CONFLICT DO UPDATE` on SQLite/DuckDB/PostgreSQL, a bulk index on
+  Elasticsearch) and a per-record loop elsewhere. Behavior is unchanged — each
+  row is still upserted under its derived id (stamped onto `storage_id`, which
+  takes priority over any `id` field in the row), a `None` derivation still
+  mints/resolves its own id, and `atomicity="require"` is still rejected on this
+  path (the whole-batch upsert is not all-or-nothing without connection-scoped
+  isolation).
+
 ## v0.2.5 - 2026-07-07
 
 ### Security

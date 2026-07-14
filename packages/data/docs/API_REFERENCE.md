@@ -136,6 +136,16 @@ Backend notes:
   INSERT path is a separate axis — see the batch-processing / migration guides:
   it fails closed on **memory and file**, but not on SQLite, DuckDB, PostgreSQL,
   S3, or Elasticsearch.)
+- **`upsert_batch(records)`** is the batch sibling of `create_batch`, with
+  upsert (insert-or-overwrite) semantics: it honors a caller-supplied
+  `record.id` (minting one only when absent), **overwrites** a colliding id
+  (never raised, never skipped), returns the ids in input order, and carries no
+  version check (a whole batch cannot carry one optimistic-concurrency token).
+  It uses the backend's native bulk verb where one exists — a single
+  `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite / DuckDB / PostgreSQL, a bulk
+  index-by-id on Elasticsearch, a single file-rewrite (file) / single-lock pass
+  (memory) — and the per-record abstract-base loop (per-key PUT) on S3. This is
+  the batch verb the streaming `"upsert"` conflict policy routes through.
 
 #### Optimistic concurrency (conditional writes)
 

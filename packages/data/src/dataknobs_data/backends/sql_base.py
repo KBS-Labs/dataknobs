@@ -637,6 +637,75 @@ class SQLQueryBuilder:
 
         return query, params, ids
 
+    def build_batch_upsert_query(
+        self, records: list[Record]
+    ) -> tuple[str, list[Any], list[str]]:
+        """Build a batch INSERT ... ON CONFLICT DO UPDATE query.
+
+        The batch analogue of ``build_batch_create_query`` with upsert
+        semantics: a caller-supplied ``record.id`` is honored (a uuid is minted
+        only when absent) and an id already present is overwritten (never
+        raised). All three SQL dialects (PostgreSQL, SQLite, DuckDB) support
+        ``ON CONFLICT (id) DO UPDATE``.
+
+        A single ``ON CONFLICT`` statement cannot affect the same row twice, so
+        within-batch duplicate ids are coalesced keeping the **last** occurrence
+        (last-wins, matching a per-record ``upsert`` loop); the returned id list
+        still carries one entry per input record, in input order.
+
+        Args:
+            records: List of records to upsert
+
+        Returns:
+            Tuple of (SQL query, parameters, ids in input order)
+        """
+        if not records:
+            return "", [], []
+
+        import uuid
+
+        ids: list[str] = []
+        # Ordered id -> (data_json, metadata_json), last occurrence wins.
+        rows: dict[str, tuple[str, str | None]] = {}
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            data_json = self._record_to_json(record)
+            metadata_json = (
+                json.dumps(record.metadata) if record.metadata else None
+            )
+            rows[record_id] = (data_json, metadata_json)
+
+        values_clauses = []
+        params: list[Any] = []
+        for i, (record_id, (data_json, metadata_json)) in enumerate(rows.items()):
+            param_idx = i * 3 + 1
+            p1 = self._get_param_placeholder(param_idx)
+            p2 = self._get_param_placeholder(param_idx + 1)
+            p3 = self._get_param_placeholder(param_idx + 2)
+            values_clauses.append(
+                f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+            params.extend([record_id, data_json, metadata_json])
+
+        # EXCLUDED.updated_at is the CURRENT_TIMESTAMP from this row's VALUES
+        # clause (i.e. "now"); referencing it instead of a bare CURRENT_TIMESTAMP
+        # in the SET clause keeps the statement portable — DuckDB's binder
+        # rejects a bare CURRENT_TIMESTAMP there, PostgreSQL/SQLite accept both.
+        query = f"""
+        INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
+        VALUES {', '.join(values_clauses)}
+        ON CONFLICT (id) DO UPDATE SET
+            data = EXCLUDED.data,
+            metadata = EXCLUDED.metadata,
+            updated_at = EXCLUDED.updated_at
+        """
+
+        if self.dialect == "postgres":
+            query += " RETURNING id"
+
+        return query, params, ids
+
     def build_batch_delete_query(self, ids: list[str]) -> tuple[str, list[Any]]:
         """Build a batch DELETE query for multiple records.
         

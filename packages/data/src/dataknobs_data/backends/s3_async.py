@@ -674,6 +674,7 @@ class AsyncS3Database(  # type: ignore[misc]
             insert_batch_func=insert_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

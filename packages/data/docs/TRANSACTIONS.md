@@ -28,8 +28,10 @@ A buffered transaction makes two promises:
 
 A buffer that mixes creates **and** deletes, or that contains any **upsert**,
 commits as a **sequence of independent backend batches** — create/delete runs
-flush as separate calls, and upserts apply one row at a time (the abstraction
-has no batch-upsert primitive). If a later batch fails mid-flush, earlier
+flush as separate calls, and upserts apply one row at a time (a DB-level
+`upsert_batch` primitive exists, but this transaction handle flushes staged
+upserts row-by-row so it need not claim all-or-nothing across them). If a later
+batch fails mid-flush, earlier
 batches have **already committed and stay persisted** — a partial commit, with
 no compensating rollback (the earlier writes are already durable).
 

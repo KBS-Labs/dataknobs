@@ -260,30 +260,99 @@ class AsyncElasticsearchDatabase(
 
         return response["_id"]
 
+    @staticmethod
+    def _extract_bulk_index_ids(
+        response: Any, ids: list[str] | None = None
+    ) -> list[str]:
+        """Return the ids of successfully-indexed items from a bulk response.
+
+        Reconciles ``response['items']`` per operation so a partial bulk
+        failure is not reported as success: an item carrying an ``error`` (or
+        a ``status`` >= 400) is dropped. The async sibling of the sync
+        backend's ``_execute_bulk_index`` reconciliation — the two use
+        different ES client APIs (raw ``client.bulk`` here vs the ``helpers``
+        module there) so the response shapes differ, but the per-item
+        drop-the-failures contract is identical.
+
+        Shared by ``create_batch`` (``ids=None`` — the server assigns ids, so
+        each successful item's ``_id`` is read out) and ``upsert_batch``
+        (explicit-``_id`` writes — ``ids`` is the input-order id list and only
+        the failed positions are dropped).
+        """
+        result: list[str] = []
+        for pos, item in enumerate(response.get("items", [])):
+            op = item.get("index") or item.get("create") or {}
+            # An ``error`` key is ES's canonical per-item failure signal; the
+            # status check is a secondary guard (a successful item always
+            # carries status 200/201, so a missing status defaults to success).
+            if "error" in op or op.get("status", 200) >= 400:
+                # Failed operation — do not report its id as written.
+                continue
+            if ids is not None:
+                if pos < len(ids):
+                    result.append(ids[pos])
+            else:
+                _id = op.get("_id")
+                if _id is not None:
+                    result.append(_id)
+        return result
+
     async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records in batch."""
+        """Create multiple records in batch.
+
+        Uses server-assigned ids (bulk ``index`` with no ``_id``). Per-item
+        errors are reconciled via :meth:`_extract_bulk_index_ids`, so a record
+        that fails to index is not reported as created.
+        """
         self._check_connection()
 
-        ids = []
         operations = []
-
         for record in records:
             doc = self._record_to_doc(record)
             operations.append({"index": {"_index": self.index_name}})
             operations.append(doc)
 
-        if operations:
-            response = await self._client.bulk(
-                operations=operations,
-                refresh=self.refresh
+        if not operations:
+            return []
+
+        response = await self._client.bulk(
+            operations=operations,
+            refresh=self.refresh
+        )
+        return self._extract_bulk_index_ids(response)
+
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in batch using the bulk API.
+
+        Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
+        honoring a caller-supplied ``record.id`` (minting a uuid only when
+        absent); a colliding id is overwritten (never raised). Returns the ids
+        that were written, in input order. Unlike ``create_batch`` — which uses
+        server auto-ids — this supplies ``_id`` explicitly so the write is
+        addressable and idempotent. Per-item errors are reconciled via
+        :meth:`_extract_bulk_index_ids`, so an id whose write failed is dropped
+        rather than reported as written.
+        """
+        self._check_connection()
+
+        if not records:
+            return []
+
+        ids: list[str] = []
+        operations: list[dict] = []
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            doc = self._record_to_doc(record)
+            operations.append(
+                {"index": {"_index": self.index_name, "_id": record_id}}
             )
+            operations.append(doc)
 
-            # Extract IDs from response
-            for item in response.get("items", []):
-                if "index" in item and "_id" in item["index"]:
-                    ids.append(item["index"]["_id"])
-
-        return ids
+        response = await self._client.bulk(
+            operations=operations, refresh=self.refresh
+        )
+        return self._extract_bulk_index_ids(response, ids)
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
@@ -805,6 +874,7 @@ class AsyncElasticsearchDatabase(
             insert_batch_func=insert_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

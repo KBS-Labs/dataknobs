@@ -81,10 +81,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ConflictPolicy` enum and `StreamConfig.on_conflict` field (exported from
   `dataknobs_data` and `dataknobs_data.migration`) carry the policy on the
   streaming path; every backend's `stream_write` honors it. `StreamResult`
-  gains a `skipped` counter. Under `upsert`/`skip` records are written one at a
-  time (no conflict-aware bulk verb yet); the `insert` fast-path still uses the
-  backend's native batch write and is byte-identical to prior behavior. An
+  gains a `skipped` counter. The `insert` fast-path uses the backend's native
+  batch write; `upsert` uses the native `upsert_batch` bulk verb (see below)
+  with a per-record `upsert` fallback; `skip` writes one record at a time (a
+  whole-batch verb cannot skip individual dupes while inserting the rest). An
   unknown `on_conflict` value is rejected when the `StreamConfig` is built.
+- `upsert_batch(records)` on `AsyncDatabase` / `SyncDatabase` and every backend
+  — the batch sibling of `create_batch`, with upsert (insert-or-overwrite)
+  semantics: it honors a caller-supplied `record.id` (minting one only when
+  absent), overwrites a colliding id (never raised, never skipped), returns ids
+  in input order, and carries no version check (a whole batch cannot carry one
+  optimistic-concurrency token). Native bulk fast-paths where the store has one
+  — a single `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite, DuckDB, and
+  PostgreSQL; a bulk index-by-id on Elasticsearch; a single file-rewrite (file)
+  / single-lock pass (memory) — and the per-record ABC-default loop (per-key
+  PUT) on S3, which has no cheaper bulk verb. The streaming `upsert` policy and
+  the FSM `DatabaseResource.commit_batch` identity path both adopt it for batch
+  throughput. `BufferedTransaction` gains a matching `upsert_batch` staging
+  method (it still flushes staged upserts row-by-row).
 - `create_batch()` on the **memory and file** backends now fails closed on a
   colliding id, matching single `create()`: a colliding id — against an existing
   record or a duplicate within the same batch — raises `DuplicateRecordError`
@@ -105,6 +119,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (single `create()`) for id-preserving, collision-safe inserts. Closing this
   gap is tracked as a follow-up (bringing each backend's bulk batch write into
   line with the `create()` contract).
+
+### Fixed
+
+- The async Elasticsearch backend's `create_batch()` and `upsert_batch()` now
+  reconcile the bulk response per item, so a record whose bulk operation failed
+  (e.g. a mapping error or version conflict) is no longer reported as written. A
+  partial bulk failure previously returned every input id as successful — the id
+  list is now filtered to the operations that actually succeeded, matching the
+  sync backend's `_execute_bulk_index` reconciliation (extracted here into a
+  shared `_extract_bulk_index_ids` helper used by both async bulk paths).
+- Streaming now accounts a partial-batch failure honestly. When a batch write
+  verb confirms fewer ids than the batch it was given — which a bulk backend
+  can do (Elasticsearch reports per-item errors, so its `create_batch` /
+  `upsert_batch` return only the ids that succeeded) — the unconfirmed records
+  are counted as `failed` instead of silently vanishing from the tally, so
+  `StreamResult.total_processed == successful + failed + skipped` holds. The
+  shortfall is routed through `StreamConfig.on_error` once as an aggregate
+  error (with a `None` record, since per-item identity is not available at this
+  layer), placing the batch path on the same stop/continue contract as the
+  per-record fallback: a configured handler decides whether to continue, and
+  with no handler the stream quits on the first failing batch — the same
+  fail-stop default a per-record failure already gets.
 
 ### Notes
 
