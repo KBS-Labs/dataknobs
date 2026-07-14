@@ -285,6 +285,34 @@ class AsyncElasticsearchDatabase(
 
         return ids
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in batch using the bulk API.
+
+        Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
+        honoring a caller-supplied ``record.id`` (minting a uuid only when
+        absent); a colliding id is overwritten (never raised). Returns ids in
+        input order. Unlike ``create_batch`` — which uses server auto-ids — this
+        supplies ``_id`` explicitly so the write is addressable and idempotent.
+        """
+        self._check_connection()
+
+        if not records:
+            return []
+
+        ids: list[str] = []
+        operations: list[dict] = []
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            doc = self._record_to_doc(record)
+            operations.append(
+                {"index": {"_index": self.index_name, "_id": record_id}}
+            )
+            operations.append(doc)
+
+        await self._client.bulk(operations=operations, refresh=self.refresh)
+        return ids
+
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
         self._check_connection()
@@ -805,6 +833,7 @@ class AsyncElasticsearchDatabase(
             insert_batch_func=insert_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

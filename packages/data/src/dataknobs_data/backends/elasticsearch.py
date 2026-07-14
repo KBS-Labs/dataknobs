@@ -403,11 +403,47 @@ class SyncElasticsearchDatabase(
             }
             bulk_operations.append(action)
 
-        # Execute bulk create
+        return self._execute_bulk_index(bulk_operations, ids)
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently using the bulk API.
+
+        Uses the bulk ``index`` op (upsert-by-id), honoring a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        bulk_operations = []
+        ids = []
+        for record in records:
+            record_id = record.id or str(uuid.uuid4())
+            ids.append(record_id)
+            doc = self._record_to_doc(record, record_id)
+            bulk_operations.append(
+                {
+                    "_op_type": "index",  # index = upsert-by-id
+                    "_index": self.es_index.index_name,
+                    "_id": record_id,
+                    "_source": doc,
+                }
+            )
+
+        return self._execute_bulk_index(bulk_operations, ids)
+
+    def _execute_bulk_index(
+        self, bulk_operations: list[dict], ids: list[str]
+    ) -> list[str]:
+        """Run a bulk index/create request, returning the ids that succeeded.
+
+        Shared by ``create_batch`` and ``upsert_batch``: the request execution
+        and per-item error reconciliation are identical; only how each caller
+        derives the id and op type differs.
+        """
         from elasticsearch import helpers
 
         try:
-            # Use the bulk helper for creation
             # Note: helpers.BulkIndexError may be raised if raise_on_error=True
             _success_count, errors = helpers.bulk(
                 self.es_client,

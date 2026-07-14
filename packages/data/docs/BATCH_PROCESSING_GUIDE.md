@@ -65,10 +65,12 @@ result = db.stream_write(records, config)
 print(f"Skipped {result.skipped} already-present records")
 ```
 
-Under `"upsert"` and `"skip"` there is no conflict-aware bulk verb, so records
-are written one at a time (the `"insert"` fast-path uses the backend's native
-batch write). An unknown policy value is rejected when the `StreamConfig` is
-constructed, rather than silently falling back to insert.
+The `"insert"` fast-path uses the backend's native `create_batch`; `"upsert"`
+uses the native `upsert_batch` bulk verb (see below) with a per-record `upsert`
+fallback; `"skip"` writes one record at a time (a whole-batch verb cannot skip
+individual duplicates while inserting the rest). An unknown policy value is
+rejected when the `StreamConfig` is constructed, rather than silently falling
+back to insert.
 
 Whether streaming `"insert"` fails closed on a colliding id depends on the
 backend's streaming batch write. It holds on the **memory and file** backends.
@@ -78,6 +80,36 @@ streaming `"insert"` into one of those targets neither preserves the source id
 nor fails closed on a collision. Use `"upsert"` / `"skip"` for idempotent
 re-runs into those targets, or single `create()` for id-preserving,
 collision-safe inserts.
+
+#### Batch write verbs: `create_batch` vs `upsert_batch`
+
+Every backend exposes two batch write verbs:
+
+| Verb | Semantics on a colliding id | Honors `record.id` |
+|------|-----------------------------|--------------------|
+| `create_batch(records)` | Insert-only (see the fail-closed note above for the per-backend collision behavior) | yes |
+| `upsert_batch(records)` | **Overwrite** — never raised, never skipped | yes (minted only when absent) |
+
+`upsert_batch` is the batch sibling of a per-record `upsert` loop: it inserts
+new records and overwrites existing ones in one call, returns the ids in input
+order, and carries no version check (batch compare-and-set is not supported — a
+whole batch cannot carry a single version token). It uses the backend's native
+bulk verb where one exists — a single `INSERT ... ON CONFLICT (id) DO UPDATE` on
+SQLite / DuckDB / PostgreSQL, a bulk index-by-id on Elasticsearch, a single
+file-rewrite (file) or single-lock pass (memory) — and a per-record loop on S3
+(per-key PUT). It is the batch verb the streaming `"upsert"` policy routes
+through.
+
+```python
+from dataknobs_data import Record
+
+# Insert two new rows and overwrite one existing row, in a single call.
+ids = db.upsert_batch([
+    Record({"name": "ACME"}, id="k1"),   # overwrites k1 if present
+    Record({"name": "beta"}, id="k2"),   # inserts k2
+])
+assert ids == ["k1", "k2"]
+```
 
 ### Use BatchConfig When:
 

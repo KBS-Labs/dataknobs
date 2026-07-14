@@ -63,8 +63,8 @@ class BufferedTransaction:
     Obtain one via :meth:`AsyncDatabase.transaction` (context-manager form) or
     :meth:`AsyncDatabase.begin_transaction` (explicit ``commit``/``rollback``).
     The write methods (:meth:`create`, :meth:`create_batch`, :meth:`upsert`,
-    :meth:`delete`) stage operations; nothing reaches the backend until
-    :meth:`commit`.
+    :meth:`upsert_batch`, :meth:`delete`) stage operations; nothing reaches the
+    backend until :meth:`commit`.
     """
 
     def __init__(self, db: AsyncDatabase, *, policy: str = "strict") -> None:
@@ -93,8 +93,11 @@ class BufferedTransaction:
         fail) and a single op both qualify.
         """
         kinds = {op[0] for op in self._ops}
-        # Upserts are applied row-by-row (no batch-upsert primitive); two
-        # distinct batch kinds (create + delete) flush as separate calls.
+        # Upserts are flushed row-by-row here (this handle does not claim
+        # all-or-nothing across a coalesced ``upsert_batch`` — that atomicity is
+        # tracked separately), so any staged upsert makes the buffer non-single-
+        # batch; two distinct batch kinds (create + delete) also flush as
+        # separate calls.
         return "upsert" not in kinds and len(kinds) <= 1
 
     @property
@@ -153,6 +156,11 @@ class BufferedTransaction:
         """Stage an upsert (same calling convention as ``AsyncDatabase.upsert``)."""
         self._stage(("upsert", (id_or_record, record)))
 
+    async def upsert_batch(self, records: list[Record]) -> None:
+        """Stage multiple upserts (the batch sibling of :meth:`create_batch`)."""
+        for record in records:
+            self._stage(("upsert", (record, None)))
+
     async def delete(self, id: str) -> None:
         """Stage a delete (flushed via ``delete_batch`` on commit)."""
         self._stage(("delete", id))
@@ -162,9 +170,11 @@ class BufferedTransaction:
 
         Consecutive same-kind operations are coalesced into a single atomic
         batch call (``create_batch`` / ``delete_batch``); upserts are applied
-        individually (the abstraction has no batch-upsert primitive). On a
-        backend reporting :meth:`AsyncDatabase.supports_transactions`, each
-        coalesced batch is all-or-nothing.
+        individually here (a DB-level ``upsert_batch`` primitive exists, but this
+        handle flushes staged upserts row-by-row so it need not claim
+        all-or-nothing across them). On a backend reporting
+        :meth:`AsyncDatabase.supports_transactions`, each coalesced batch is
+        all-or-nothing.
 
         Atomicity is **per batch**, not across the whole buffer: when the staged
         ops span more than one batch (mixed create/delete, or any upsert) those

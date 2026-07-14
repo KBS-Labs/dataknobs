@@ -289,6 +289,7 @@ def resolve_conflict_write(
     insert_batch_func: Callable | None,
     single_create_func: Callable,
     upsert_func: Callable,
+    upsert_batch_func: Callable | None = None,
 ) -> tuple[Callable | None, Callable, bool]:
     """Map a write-conflict policy to concrete ``(batch, single, skip)`` funcs.
 
@@ -296,18 +297,22 @@ def resolve_conflict_write(
     ``(batch_write_func, single_write_func, skip_on_duplicate)`` — for the given
     policy. This is the single shared definition every ``stream_write`` path uses
     so the policy behaves identically across backends; only the backend-specific
-    ``insert_batch_func`` (the native bulk fast-path) differs per caller.
+    ``insert_batch_func`` / ``upsert_batch_func`` (the native bulk fast-paths)
+    differ per caller.
 
     - ``INSERT`` — the backend's native batch fast-path plus a ``create``
       fallback; a colliding id fails closed. Byte-identical to prior behavior.
-    - ``UPSERT`` — no batch attempt (there is no conflict-aware batch verb);
-      every record goes through ``upsert``, which overwrites and cannot collide.
-    - ``SKIP`` — no batch attempt (the native batch path would overwrite instead
-      of raising); ``create`` per record, and a ``DuplicateRecordError`` is
-      counted as a skip rather than a failure.
+    - ``UPSERT`` — the backend's native ``upsert_batch`` fast-path (when the
+      caller supplies one) plus a per-record ``upsert`` fallback. Overwrite is
+      idempotent, so a colliding id cannot fail and partial-batch fallback is
+      benign. When ``upsert_batch_func`` is ``None`` (the back-compat default)
+      every record goes through ``upsert`` one at a time, as before.
+    - ``SKIP`` — no batch attempt (a whole-batch verb cannot skip individual
+      dupes while inserting the rest); ``create`` per record, and a
+      ``DuplicateRecordError`` is counted as a skip rather than a failure.
     """
     if on_conflict == ConflictPolicy.UPSERT:
-        return None, upsert_func, False
+        return upsert_batch_func, upsert_func, False
     if on_conflict == ConflictPolicy.SKIP:
         return None, single_create_func, True
     return insert_batch_func, single_create_func, False
@@ -569,8 +574,9 @@ class StreamingMixin:
         """Default implementation of stream_write.
 
         Honors ``config.on_conflict``: INSERT uses the ``create_batch``
-        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
-        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
@@ -578,6 +584,7 @@ class StreamingMixin:
             insert_batch_func=self.create_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return run_stream_write(
             records,
@@ -625,8 +632,9 @@ class AsyncStreamingMixin:
         """Default implementation of async stream_write.
 
         Honors ``config.on_conflict``: INSERT uses the ``create_batch``
-        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
-        per-record via ``upsert``/``create`` (see :func:`resolve_conflict_write`).
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create`` (see :func:`resolve_conflict_write`).
         """
         config = config or StreamConfig()
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
@@ -634,6 +642,7 @@ class AsyncStreamingMixin:
             insert_batch_func=self.create_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

@@ -540,6 +540,39 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 self.conn.rollback()
                 raise
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self._upsert_batch_sync,
+            records,
+        )
+
+    def _upsert_batch_sync(self, records: list[Record]) -> list[str]:
+        """Synchronous batch upsert implementation."""
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        with self._lock:
+            try:
+                self.conn.begin()
+                self.conn.execute(query, params)
+                self.conn.commit()
+                return ids
+            except Exception:
+                self.conn.rollback()
+                raise
+
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently.
 
@@ -736,6 +769,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 insert_batch_func=None,
                 single_create_func=self.create,
                 upsert_func=self.upsert,
+                upsert_batch_func=self.upsert_batch,
             )
             return await async_run_stream_write(
                 records,
@@ -1124,6 +1158,28 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             self.conn.rollback()
             raise
 
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        try:
+            self.conn.begin()
+            self.conn.execute(query, params)
+            self.conn.commit()
+            return ids
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently.
 
@@ -1281,6 +1337,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
                 insert_batch_func=None,
                 single_create_func=self.create,
                 upsert_func=self.upsert,
+                upsert_batch_func=self.upsert_batch,
             )
             return run_stream_write(
                 records,

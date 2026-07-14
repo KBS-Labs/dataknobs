@@ -444,6 +444,32 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute(query, params)
+            self.conn.commit()
+            return ids
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
         
@@ -596,6 +622,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
                 insert_batch_func=None,
                 single_create_func=self.create,
                 upsert_func=self.upsert,
+                upsert_batch_func=self.upsert_batch,
             )
             return run_stream_write(
                 records,

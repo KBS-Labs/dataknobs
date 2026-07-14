@@ -623,6 +623,33 @@ class SyncPostgresDatabase(
             return result_df['id'].tolist()
         return ids
 
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in a single statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
+        )
+        query, params_list, ids = query_builder.build_batch_upsert_query(records)
+
+        params_dict = {}
+        for i, param in enumerate(params_list):
+            params_dict[f"p{i}"] = param
+
+        # RETURNING order is not guaranteed under ON CONFLICT, so return the
+        # builder's input-order ids rather than the result-set order.
+        self.db.query(query, params_dict)
+        return ids
+
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using a single query.
         
@@ -777,6 +804,7 @@ class SyncPostgresDatabase(
             insert_batch_func=self._write_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return run_stream_write(
             records,
@@ -1666,6 +1694,31 @@ class AsyncPostgresDatabase(
             return [row["id"] for row in rows]
         return ids  # Fallback to generated IDs
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in a single statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(
+            self.table_name, self.schema_name, dialect="postgres"
+        )
+        query, params, ids = query_builder.build_batch_upsert_query(records)
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(query, *params)
+
+        # RETURNING order is not guaranteed under ON CONFLICT, so return the
+        # builder's input-order ids.
+        return ids
+
     async def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using a single query.
         
@@ -2162,6 +2215,7 @@ class AsyncPostgresDatabase(
             insert_batch_func=insert_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return await async_run_stream_write(
             records,

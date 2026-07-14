@@ -374,6 +374,29 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             await self.db.rollback()
             raise
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records efficiently in one statement.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        ``record.id`` (minting a uuid only when absent); a colliding id is
+        overwritten (never raised). Returns ids in input order.
+        """
+        if not records:
+            return []
+
+        self._check_connection()
+
+        query, params, ids = self.query_builder.build_batch_upsert_query(records)
+
+        await self.db.execute("BEGIN TRANSACTION")
+        try:
+            await self.db.execute(query, params)
+            await self.db.commit()
+            return ids
+        except Exception:
+            await self.db.rollback()
+            raise
+
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
         
@@ -524,6 +547,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 insert_batch_func=None,
                 single_create_func=self.create,
                 upsert_func=self.upsert,
+                upsert_batch_func=self.upsert_batch,
             )
             return await async_run_stream_write(
                 records,

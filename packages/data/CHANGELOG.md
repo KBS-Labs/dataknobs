@@ -81,10 +81,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ConflictPolicy` enum and `StreamConfig.on_conflict` field (exported from
   `dataknobs_data` and `dataknobs_data.migration`) carry the policy on the
   streaming path; every backend's `stream_write` honors it. `StreamResult`
-  gains a `skipped` counter. Under `upsert`/`skip` records are written one at a
-  time (no conflict-aware bulk verb yet); the `insert` fast-path still uses the
-  backend's native batch write and is byte-identical to prior behavior. An
+  gains a `skipped` counter. The `insert` fast-path uses the backend's native
+  batch write; `upsert` uses the native `upsert_batch` bulk verb (see below)
+  with a per-record `upsert` fallback; `skip` writes one record at a time (a
+  whole-batch verb cannot skip individual dupes while inserting the rest). An
   unknown `on_conflict` value is rejected when the `StreamConfig` is built.
+- `upsert_batch(records)` on `AsyncDatabase` / `SyncDatabase` and every backend
+  — the batch sibling of `create_batch`, with upsert (insert-or-overwrite)
+  semantics: it honors a caller-supplied `record.id` (minting one only when
+  absent), overwrites a colliding id (never raised, never skipped), returns ids
+  in input order, and carries no version check (a whole batch cannot carry one
+  optimistic-concurrency token). Native bulk fast-paths where the store has one
+  — a single `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite, DuckDB, and
+  PostgreSQL; a bulk index-by-id on Elasticsearch; a single file-rewrite (file)
+  / single-lock pass (memory) — and the per-record ABC-default loop (per-key
+  PUT) on S3, which has no cheaper bulk verb. The streaming `upsert` policy and
+  the FSM `DatabaseResource.commit_batch` identity path both adopt it for batch
+  throughput. `BufferedTransaction` gains a matching `upsert_batch` staging
+  method (it still flushes staged upserts row-by-row).
 - `create_batch()` on the **memory and file** backends now fails closed on a
   colliding id, matching single `create()`: a colliding id — against an existing
   record or a duplicate within the same batch — raises `DuplicateRecordError`

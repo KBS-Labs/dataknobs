@@ -112,10 +112,11 @@ progress = migrator.migrate_stream(
 )
 ```
 
-Under `"upsert"` and `"skip"` records are written one at a time (there is no
-conflict-aware bulk verb yet); the `"insert"` fast-path still uses the backend's
-native batch write. An unknown policy value is rejected when the `StreamConfig`
-is constructed, rather than silently falling back to insert.
+The `"insert"` fast-path uses the backend's native `create_batch`; `"upsert"`
+uses the native `upsert_batch` bulk verb (with a per-record `upsert` fallback);
+`"skip"` writes one record at a time (a whole-batch verb cannot skip individual
+duplicates while inserting the rest). An unknown policy value is rejected when
+the `StreamConfig` is constructed, rather than silently falling back to insert.
 
 !!! warning "Streaming `insert` is not fail-closed on SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch"
     Whether streaming `"insert"` fails closed on a colliding id depends on the

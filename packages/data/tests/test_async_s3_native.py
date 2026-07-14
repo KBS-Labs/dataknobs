@@ -220,6 +220,29 @@ async def test_upsert_both_call_shapes(db) -> None:
     assert got2 is not None and got2.get_field("name").value == "b"
 
 
+async def test_upsert_batch_inserts_and_overwrites(db) -> None:
+    """upsert_batch (ABC per-key default on S3) inserts new + overwrites."""
+    await db.create(Record(data={"name": "old"}, id="k1"))
+    ids = await db.upsert_batch(
+        [
+            Record(data={"name": "new"}, id="k1"),  # overwrite
+            Record(data={"name": "k2"}, id="k2"),  # insert
+        ]
+    )
+    assert ids == ["k1", "k2"]
+    assert (await db.read("k1")).get_field("name").value == "new"
+    assert (await db.read("k2")).get_field("name").value == "k2"
+
+
+@requires_blockbuster
+async def test_upsert_batch_does_not_block(db) -> None:
+    """upsert_batch must not stall the loop (per-key PUT via aioboto3)."""
+    with assert_no_blocking():
+        await db.upsert_batch(
+            [Record(data={"name": "a"}, id="a"), Record(data={"name": "b"}, id="b")]
+        )
+
+
 async def test_search_filters(db) -> None:
     await db.create(Record(data={"name": "low", "value": 10}))
     await db.create(Record(data={"name": "high", "value": 20}))

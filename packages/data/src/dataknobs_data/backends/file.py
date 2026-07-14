@@ -680,6 +680,28 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return ids
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in one load/save cycle.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, and ids are returned in input order. The whole
+        batch is applied under one ``_load_data`` / ``_save_data`` (a single file
+        rewrite) rather than the per-record load+save the ABC default loop would
+        incur.
+        """
+        if not records:
+            return []
+        async with self._lock:
+            data = await self._load_data()
+            ids = []
+            for record in records:
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                data[storage_id] = record_copy  # overwrite (upsert)
+                ids.append(storage_id)
+            await self._save_data(data)
+            return ids
+
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         async with self._lock:
@@ -1052,6 +1074,28 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data(data)
             return ids
 
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in one load/save cycle.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, and ids are returned in input order. The whole
+        batch is applied under one ``_load_data`` / ``_save_data`` (a single file
+        rewrite) rather than the per-record load+save the ABC default loop would
+        incur.
+        """
+        if not records:
+            return []
+        with self._lock:
+            data = self._load_data()
+            ids = []
+            for record in records:
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                data[storage_id] = record_copy  # overwrite (upsert)
+                ids.append(storage_id)
+            self._save_data(data)
+            return ids
+
     def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         with self._lock:
@@ -1111,8 +1155,9 @@ class SyncFileDatabase(  # type: ignore[misc]
         """Stream records into file.
 
         Honors ``config.on_conflict``: INSERT uses the ``create_batch``
-        fast-path with a ``create`` per-record fallback; UPSERT/SKIP write
-        per-record via ``upsert``/``create``.
+        fast-path with a ``create`` per-record fallback; UPSERT uses the
+        ``upsert_batch`` fast-path with an ``upsert`` per-record fallback; SKIP
+        writes per-record via ``create``.
         """
         config = config or StreamConfig()
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
@@ -1120,6 +1165,7 @@ class SyncFileDatabase(  # type: ignore[misc]
             insert_batch_func=self.create_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return run_stream_write(
             records,

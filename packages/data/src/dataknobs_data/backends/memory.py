@@ -264,6 +264,25 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 ids.append(storage_id)
             return ids
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records under a single lock.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, versions are bumped per record, and ids are
+        returned in input order. Acquires the lock once for the whole batch.
+        """
+        if not records:
+            return []
+        async with self._lock:
+            ids = []
+            for record in records:
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                self._storage[storage_id] = record_copy  # overwrite (upsert)
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
+            return ids
+
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         async with self._lock:
@@ -563,6 +582,25 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             ids = []
             for record_copy, storage_id in prepared:
                 self._storage[storage_id] = record_copy
+                self._versions[storage_id] = self._next_version()
+                ids.append(storage_id)
+            return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records under a single lock.
+
+        The batch sibling of ``create_batch``, with upsert semantics: a
+        colliding id is overwritten (never raised), a caller-supplied
+        ``record.id`` is honored, versions are bumped per record, and ids are
+        returned in input order. Acquires the lock once for the whole batch.
+        """
+        if not records:
+            return []
+        with self._lock:
+            ids = []
+            for record in records:
+                storage_id = record.id if record.id else self._generate_id()
+                self._storage[storage_id] = record.copy(deep=True)  # overwrite
                 self._versions[storage_id] = self._next_version()
                 ids.append(storage_id)
             return ids

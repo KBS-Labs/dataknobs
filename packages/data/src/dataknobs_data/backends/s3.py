@@ -593,6 +593,7 @@ class SyncS3Database(  # type: ignore[misc]
             insert_batch_func=self._write_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
+            upsert_batch_func=self.upsert_batch,
         )
         return run_stream_write(
             records,

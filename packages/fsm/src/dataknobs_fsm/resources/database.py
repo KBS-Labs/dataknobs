@@ -656,22 +656,28 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
             ids = await db.create_batch([Record(dict(row)) for row in records])
             return {"affected_rows": len(ids)}
 
-        # Idempotent per-row upsert. The loop is not batch-atomic without the
-        # transaction capability, so "require" cannot be honored here.
+        # Idempotent batch upsert under the derived ids, via the ``upsert_batch``
+        # batch verb (best-effort throughput — one native bulk write where the
+        # backend has one, a per-row loop where it does not). The whole-batch
+        # upsert is still not all-or-nothing without connection-scoped isolation,
+        # so "require" cannot be honored here. Each derived id is stamped onto
+        # the record's ``storage_id`` (which ``upsert_batch`` honors and which
+        # takes priority over any ``id`` field in the row); a ``None`` derivation
+        # leaves the record to mint/resolve its own id, matching the prior
+        # per-row ``db.upsert(record)`` call.
         if atomicity == "require":
             raise CapabilityNotSupportedError(
                 "atomic idempotent batch commit", self
             )
-        affected = 0
+        batch: list[Record] = []
         for row in records:
             record_id = identity.derive(row)
             record = Record(dict(row))
             if record_id is not None:
-                await db.upsert(record_id, record)
-            else:
-                await db.upsert(record)
-            affected += 1
-        return {"affected_rows": affected}
+                record.storage_id = record_id
+            batch.append(record)
+        ids = await db.upsert_batch(batch)
+        return {"affected_rows": len(ids)}
 
     async def execute_query(
         self,

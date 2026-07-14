@@ -644,6 +644,30 @@ class AsyncDatabase(CapabilityMixin, ABC):
             ids.append(id)
         return ids
 
+    async def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in batch.
+
+        The batch sibling of :meth:`create_batch`. Each record is written with
+        upsert semantics: a caller-supplied ``record.id`` is honored (one is
+        minted only when absent), an id that already exists is **overwritten**
+        (never raised, never skipped), and the ids are returned in input order.
+
+        Unlike ``create_batch`` this carries no version check — a whole batch
+        cannot carry a single optimistic-concurrency token, so ``upsert_batch``
+        is always unconditional (batch CAS is a separate concern).
+
+        Args:
+            records: List of records to upsert
+
+        Returns:
+            List of upserted record IDs, in input order
+        """
+        ids = []
+        for record in records:
+            id = await self.upsert(record)
+            ids.append(id)
+        return ids
+
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records by ID.
 
@@ -1396,6 +1420,24 @@ class SyncDatabase(CapabilityMixin, ABC):
         ids = []
         for record in records:
             id = self.create(record)
+            ids.append(id)
+        return ids
+
+    def upsert_batch(self, records: list[Record]) -> list[str]:
+        """Insert-or-overwrite multiple records in batch.
+
+        The batch sibling of :meth:`create_batch`. Each record is written with
+        upsert semantics: a caller-supplied ``record.id`` is honored (one is
+        minted only when absent), an id that already exists is **overwritten**
+        (never raised, never skipped), and the ids are returned in input order.
+
+        Unlike ``create_batch`` this carries no version check — a whole batch
+        cannot carry a single optimistic-concurrency token, so ``upsert_batch``
+        is always unconditional (batch CAS is a separate concern).
+        """
+        ids = []
+        for record in records:
+            id = self.upsert(record)
             ids.append(id)
         return ids
 
