@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T21:05:34Z",
+  "timestamp": "2026-07-14T22:10:16Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/migrator-batched-write-verb-adoption",
-  "git_commit": "7ee6044c1156f7ee0a7d671f280a01de6ea432c0",
+  "git_commit": "c2c3c60adb11f27aed99529d251e0d5302b334ea",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
