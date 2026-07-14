@@ -94,12 +94,16 @@ Backend notes:
   (real AWS S3, recent LocalStack) — both a pre-existing key (412) and a
   concurrent conditional-write race (409) fail closed — and degrades to
   last-writer-wins on stores that ignore the header.
-- **`create_batch()` does not carry the create-if-absent contract.** It does
-  **not** fail closed on a colliding id, and the backends differ: memory and
-  file overwrite (last-writer-wins), while the SQL and Elasticsearch backends
-  assign a fresh id and ignore any `record.id` you set. Use single `create()`
-  in a loop for collision-safe inserts; reach for `create_batch()` only for
-  throughput when ids are known-unique.
+- **`create_batch()` collision semantics are not uniform across backends.** On
+  **memory, file, and S3** a colliding id — against an existing record or a
+  duplicate within the same batch — fails closed with `DuplicateRecordError` and
+  `record.id` is honored (S3 and the abstract-base default loop single
+  `create()`). On **SQLite, DuckDB, PostgreSQL, and Elasticsearch** the bulk
+  `create_batch()` mints a fresh id per record and ignores any `record.id` you
+  set, so a colliding id does not fail. For collision-safe, id-preserving
+  inserts on those backends, use single `create()` in a loop. (The *streaming*
+  INSERT path is a separate axis — it fails closed on **memory and file**, but
+  not on SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch.)
 
 #### Optimistic concurrency (conditional writes)
 

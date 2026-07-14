@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from ..database import AsyncDatabase, SyncDatabase, enforce_content_version
+from ..database import (
+    AsyncDatabase,
+    SyncDatabase,
+    enforce_content_version,
+    prepare_atomic_batch,
+)
 from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..records import Record
@@ -654,14 +659,24 @@ class AsyncFileDatabase(  # type: ignore[misc]
             return count
 
     async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written, and the record's
+        own id is honored (this path previously minted a fresh id and ignored
+        ``record.id``). The pre-scan runs before ``_save_data``, so the batch is
+        all-or-nothing and the streaming INSERT fast-path fails closed.
+        """
         async with self._lock:
             data = await self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
             ids = []
-            for record in records:
-                record_id = self._generate_id()
-                data[record_id] = record.copy(deep=True)
-                ids.append(record_id)
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
             await self._save_data(data)
             return ids
 
@@ -873,15 +888,6 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         _save_file_data(self.handler, self.filepath, self._file_lock, data)
 
-    def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
-        """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
-        # Use centralized method to prepare record
-        record_copy, storage_id = self._prepare_record_for_storage(record)
-
-        # Store the record
-        data[storage_id] = record_copy
-        return storage_id
-
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
         with self._lock:
@@ -1025,13 +1031,24 @@ class SyncFileDatabase(  # type: ignore[misc]
             return count
 
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently."""
+        """Create multiple records, failing closed on any colliding id.
+
+        Matches ``create``'s atomic-insert contract: a colliding id — against an
+        existing record or a duplicate within the same batch — raises
+        ``DuplicateRecordError`` before any record is written (this path
+        previously overwrote on collision). The pre-scan runs before
+        ``_save_data``, so the batch is all-or-nothing and the streaming INSERT
+        fast-path fails closed.
+        """
         with self._lock:
             data = self._load_data()
+            prepared = prepare_atomic_batch(
+                records, data, self._prepare_record_for_storage
+            )
             ids = []
-            for record in records:
-                record_id = self._do_set_data(data, record)
-                ids.append(record_id)
+            for record_copy, storage_id in prepared:
+                data[storage_id] = record_copy
+                ids.append(storage_id)
             self._save_data(data)
             return ids
 

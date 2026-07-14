@@ -151,19 +151,27 @@ class Migrator:
         def transform_stream(records: Iterator[Record]) -> Iterator[Record]:
             """Apply transformation to streaming records."""
             for record in records:
-                progress.processed += 1  # Track that we've processed this record
+                # Count `processed` exactly once per record, at the point its
+                # outcome is decided: a yield below (pass-through), record_skip
+                # (filtered), or record_failure (transform error). record_skip
+                # and record_failure both increment `processed`, so a
+                # pre-increment here double-counted filtered / errored records.
                 try:
                     if transform is not None:
                         if isinstance(transform, Transformer):
                             original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
+                                progress.processed += 1
                                 yield transformed
                             else:
                                 progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
-                            yield transform.apply(record)
+                            applied = transform.apply(record)
+                            progress.processed += 1
+                            yield applied
                     else:
+                        progress.processed += 1
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
@@ -286,19 +294,27 @@ class Migrator:
         async def transform_stream(records):
             """Apply transformation to async streaming records."""
             async for record in records:
-                progress.processed += 1  # Track that we've processed this record
+                # Count `processed` exactly once per record, at the point its
+                # outcome is decided: a yield below (pass-through), record_skip
+                # (filtered), or record_failure (transform error). record_skip
+                # and record_failure both increment `processed`, so a
+                # pre-increment here double-counted filtered / errored records.
                 try:
                     if transform is not None:
                         if isinstance(transform, Transformer):
                             original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
+                                progress.processed += 1
                                 yield transformed
                             else:
                                 progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
-                            yield transform.apply(record)
+                            applied = transform.apply(record)
+                            progress.processed += 1
+                            yield applied
                     else:
+                        progress.processed += 1
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):

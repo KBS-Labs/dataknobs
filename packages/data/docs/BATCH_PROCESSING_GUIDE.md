@@ -70,6 +70,15 @@ are written one at a time (the `"insert"` fast-path uses the backend's native
 batch write). An unknown policy value is rejected when the `StreamConfig` is
 constructed, rather than silently falling back to insert.
 
+Whether streaming `"insert"` fails closed on a colliding id depends on the
+backend's streaming batch write. It holds on the **memory and file** backends.
+It does **not** hold on the **SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch**
+backends: their streaming batch write mints a fresh id per record, so a
+streaming `"insert"` into one of those targets neither preserves the source id
+nor fails closed on a collision. Use `"upsert"` / `"skip"` for idempotent
+re-runs into those targets, or single `create()` for id-preserving,
+collision-safe inserts.
+
 ### Use BatchConfig When:
 
 - **DataFrame operations**: Working with pandas DataFrames

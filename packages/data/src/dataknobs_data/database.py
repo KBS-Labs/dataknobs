@@ -23,13 +23,13 @@ from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
-from .exceptions import ConcurrencyError
+from .exceptions import ConcurrencyError, DuplicateRecordError
 from .query import Query
 from .schema import DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator
 
     from .query_logic import ComplexQuery
     from .records import Record
@@ -111,6 +111,35 @@ def enforce_content_version(
     actual = None if current_record is None else hash_record_version(current_record)
     if actual != expected_version:
         raise version_conflict_error(id, expected_version, actual)
+
+
+def prepare_atomic_batch(
+    records: Iterable[Record],
+    existing: Container[str],
+    prepare: Callable[[Record], tuple[Record, str]],
+) -> list[tuple[Record, str]]:
+    """Pre-scan a batch for an all-or-nothing, fail-closed ``create_batch``.
+
+    Shared by the in-process backends (memory, file) whose ``create_batch``
+    honors ``create``'s atomic-insert contract. ``prepare`` maps each record to
+    its ``(record_to_store, storage_id)`` pair — typically
+    ``_prepare_record_for_storage`` — and ``existing`` is the backend's current
+    key container. ``DuplicateRecordError`` is raised *before this returns*, and
+    therefore before any caller write, if a storage id collides with an existing
+    key or with an earlier record in the same batch. The returned pairs can then
+    be written in order, so a collision aborts the whole batch cleanly and the
+    streaming INSERT fast-path can fail closed and retry per record (see
+    ``run_stream_write``).
+    """
+    prepared: list[tuple[Record, str]] = []
+    seen: set[str] = set()
+    for record in records:
+        record_to_store, storage_id = prepare(record)
+        if storage_id in existing or storage_id in seen:
+            raise DuplicateRecordError(storage_id)
+        seen.add(storage_id)
+        prepared.append((record_to_store, storage_id))
+    return prepared
 
 
 def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:

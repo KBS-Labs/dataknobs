@@ -117,6 +117,19 @@ conflict-aware bulk verb yet); the `"insert"` fast-path still uses the backend's
 native batch write. An unknown policy value is rejected when the `StreamConfig`
 is constructed, rather than silently falling back to insert.
 
+!!! warning "Streaming `insert` is not fail-closed on SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch"
+    Whether streaming `"insert"` fails closed on a colliding id depends on the
+    backend's streaming batch write. It fails closed (and preserves the source
+    id) on the batched `migrate()` path **everywhere**, and on the streaming
+    path for the **memory and file** backends. It does **not** hold for
+    **SQLite, DuckDB, PostgreSQL, S3, or Elasticsearch**: their streaming batch
+    write mints a fresh id per record, so a streaming `"insert"`
+    (`migrate_stream` / `migrate_async`) into one of those targets neither
+    preserves the source id nor fails closed on a collision — it writes a new
+    copy under a new id. For an idempotent re-run into those targets use
+    `"upsert"` or `"skip"`; for id-preserving, collision-safe inserts use the
+    batched `migrate()` path (which writes via single `create()`).
+
 ## Progress Tracking
 
 Every migrate method returns a `MigrationProgress`. Pass `on_progress` to

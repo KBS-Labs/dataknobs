@@ -10,6 +10,7 @@ from typing import Iterator
 from dataknobs_data.records import Record
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.streaming import ConflictPolicy, StreamConfig, StreamResult
 
@@ -705,20 +706,30 @@ class TestMigratorConflictPolicy:
         # The pre-existing target row is untouched.
         assert tgt.read("2").get_value("v") == "old"
 
-    def test_streaming_insert_overwrites_via_batch_fastpath(self):
-        """Pin the documented streaming fast-path asymmetry.
+    def test_streaming_insert_fails_closed_on_collision(self):
+        """Streaming INSERT fails closed on a colliding id, like batched migrate().
 
-        ``create_batch`` overwrites a colliding id instead of raising, so the
-        streaming INSERT fast-path does NOT fail closed the way batched
-        ``migrate()`` does. This is pre-existing behavior; the test guards that
-        the default policy did not accidentally change it.
+        Regression: memory ``create_batch`` previously overwrote a colliding id
+        instead of raising, so the streaming INSERT fast-path silently
+        overwrote the target — diverging from batched ``migrate()``, which fails
+        closed. ``create_batch`` now honors ``create``'s atomic-insert contract
+        (raises ``DuplicateRecordError`` before writing), so the streaming
+        fallback records the collision as a failure and leaves the target row
+        untouched.
         """
         src, tgt = MemoryDatabase(), MemoryDatabase()
         _seed(src, [1, 2, 3], "src")
         _seed(tgt, [2], "old")
-        progress = Migrator().migrate_stream(src, tgt)  # default INSERT
-        assert progress.failed == 0
-        assert tgt.read("2").get_value("v") == "src"  # overwritten by create_batch
+        # Continue past the failure (on_error → True) so it is recorded rather
+        # than aborting the run, matching the batched fail-closed test above.
+        progress = Migrator().migrate_stream(  # default INSERT
+            src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+        )
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        # The pre-existing target row is untouched — not overwritten.
+        assert tgt.read("2").get_value("v") == "old"
 
     def test_batched_upsert_overwrites(self):
         """UPSERT overwrites the target row and counts the id as a success."""
@@ -826,3 +837,152 @@ class TestMigratorConflictPolicy:
         assert ConflictPolicy("skip") is ConflictPolicy.SKIP
         with pytest.raises(ValueError):
             StreamConfig(on_conflict="nonsense")
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_insert_fails_closed_on_collision(self):
+        """Async streaming INSERT fails closed on a colliding id.
+
+        Covers the ``AsyncMemoryDatabase.create_batch`` atomic-insert fix,
+        mirroring the sync ``test_streaming_insert_fails_closed_on_collision``.
+        """
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        await _aseed(src, [1, 2, 3], "src")
+        await _aseed(tgt, [2], "old")
+        progress = await Migrator().migrate_async(  # default INSERT
+            src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+        )
+        assert progress.failed == 1
+        assert progress.succeeded == 2
+        assert progress.skipped == 0
+        assert (await tgt.read("2")).get_value("v") == "old"
+
+    def test_sqlite_streaming_policies_native_backend(self):
+        """SKIP/UPSERT policies thread through a native-SQL backend's stream_write.
+
+        The conflict-policy suite otherwise runs on the memory backend; this
+        covers a native-SQL backend (sqlite) end-to-end rather than relying only
+        on the type-level routing guarantee. For UPSERT/SKIP, sqlite's
+        ``stream_write`` routes per-record (``insert_batch_func=None``) via
+        ``upsert`` / ``create``, so the policy behaves identically to the memory
+        backend. The INSERT policy is a separate case — sqlite's ``stream_write``
+        INSERT branch uses the id-minting bulk ``create_batch`` path and is not
+        yet fail-closed; see
+        ``test_sqlite_streaming_insert_not_yet_fail_closed``.
+        """
+
+        def _pair() -> tuple[SyncSQLiteDatabase, SyncSQLiteDatabase]:
+            src = SyncSQLiteDatabase({"path": ":memory:"})
+            tgt = SyncSQLiteDatabase({"path": ":memory:"})
+            src.connect()
+            tgt.connect()
+            _seed(src, [1, 2, 3], "src")
+            _seed(tgt, [2], "old")
+            return src, tgt
+
+        # SKIP: colliding id skipped, old row kept, the rest migrated.
+        src, tgt = _pair()
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_conflict="skip")
+            )
+            assert progress.failed == 0
+            assert progress.skipped == 1
+            assert tgt.read("2").get_value("v") == "old"
+            assert tgt.read("1").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+        # UPSERT: colliding id overwritten to match source, no failures.
+        src, tgt = _pair()
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_conflict="upsert")
+            )
+            assert progress.failed == 0
+            assert tgt.read("2").get_value("v") == "src"
+        finally:
+            src.close()
+            tgt.close()
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "sqlite/duckdb streaming INSERT is not yet fail-closed: their "
+            "stream_write INSERT branch uses the id-minting create_batch bulk "
+            "path, not per-record create(). Goes GREEN when create_batch is "
+            "tightened to honor create()'s fail-closed contract on those "
+            "backends. See the data CHANGELOG 'known gap'."
+        ),
+    )
+    def test_sqlite_streaming_insert_not_yet_fail_closed(self):
+        """Part B acceptance test (currently RED): streaming INSERT into a
+        populated sqlite target should fail closed on the colliding id and
+        preserve the source id. Today sqlite streaming INSERT mints fresh ids via
+        the bulk ``create_batch`` path, so the collision is not detected."""
+        src = SyncSQLiteDatabase({"path": ":memory:"})
+        tgt = SyncSQLiteDatabase({"path": ":memory:"})
+        src.connect()
+        tgt.connect()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")
+        try:
+            progress = Migrator().migrate_stream(
+                src, tgt, config=StreamConfig(on_error=lambda e, r: True)
+            )
+            assert progress.failed == 1
+            assert progress.succeeded == 2
+            assert tgt.read("2").get_value("v") == "old"
+        finally:
+            src.close()
+            tgt.close()
+
+
+class _FilterEven(Transformer):
+    """Transformer that filters out odd-valued records (returns None → skip)."""
+
+    def transform(self, record):
+        result = super().transform(record)
+        if result and result.get_value("v") % 2 == 0:
+            return result
+        return None
+
+
+class TestMigrateStreamProcessedAccounting:
+    """A transformer-filtered record must be counted exactly once in
+    ``progress.processed`` on the streaming path.
+
+    Regression: ``transform_stream`` pre-incremented ``processed`` for every
+    source record, and ``record_skip`` / ``record_failure`` each increment
+    ``processed`` again — so a filtered (or transform-errored) record was
+    double-counted. Six source records with three filtered would report
+    ``processed == 9`` instead of ``6``.
+    """
+
+    def test_migrate_stream_counts_filtered_record_once(self):
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        # values 0..5 → three even (kept), three odd (filtered)
+        for i in range(6):
+            src.create(Record({"v": i}, id=str(i)))
+
+        progress = Migrator().migrate_stream(src, tgt, transform=_FilterEven())
+
+        assert progress.processed == 6  # each source record counted exactly once
+        assert progress.succeeded == 3
+        assert progress.skipped == 3
+        assert progress.failed == 0
+
+    @pytest.mark.asyncio
+    async def test_migrate_async_counts_filtered_record_once(self):
+        src, tgt = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        for i in range(6):
+            await src.create(Record({"v": i}, id=str(i)))
+
+        progress = await Migrator().migrate_async(
+            src, tgt, transform=_FilterEven()
+        )
+
+        assert progress.processed == 6
+        assert progress.succeeded == 3
+        assert progress.skipped == 3
+        assert progress.failed == 0
