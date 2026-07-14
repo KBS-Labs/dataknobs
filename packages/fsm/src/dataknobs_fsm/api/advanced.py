@@ -191,26 +191,6 @@ Advanced Use Cases:
     advanced.set_execution_strategy(PriorityTraversal())
     ```
 
-    **Transaction Management:**
-    Configure transactional execution with rollback:
-
-    ```python
-    from dataknobs_fsm.core.transactions import TransactionStrategy
-
-    # Configure transactions
-    advanced.configure_transactions(
-        strategy=TransactionStrategy.TWO_PHASE_COMMIT,
-        isolation_level='READ_COMMITTED'
-    )
-
-    # Execution will use transactions
-    try:
-        result = advanced.trace_execution_sync(data)
-    except Exception:
-        # Automatic rollback on error
-        pass
-    ```
-
     **Resource Monitoring:**
     Monitor resource acquisition and release:
 
@@ -308,7 +288,6 @@ from ..core.data_modes import DataHandler, DataHandlingMode
 from ..core.fsm import FSM
 from ..core.modes import ProcessingMode
 from ..core.state import StateInstance
-from ..core.transactions import TransactionManager, TransactionStrategy
 from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.common import TraversalStrategy
 from ..execution.context import ExecutionContext
@@ -341,9 +320,6 @@ class ExecutionHook:
     on_error: Callable | None = None
     on_resource_acquire: Callable | None = None
     on_resource_release: Callable | None = None
-    on_transaction_begin: Callable | None = None
-    on_transaction_commit: Callable | None = None
-    on_transaction_rollback: Callable | None = None
 
 
 @dataclass
@@ -416,7 +392,6 @@ class AdvancedFSM:
         # the async engine through the FSM's shared async→sync bridge.
         self._engine = self._async_engine
         self._resource_manager = ResourceManager()
-        self._transaction_manager = None
         self._history: ExecutionHistory | None = None
         self._storage: IHistoryStorage | None = None
         self._hooks = ExecutionHook()
@@ -440,19 +415,6 @@ class AdvancedFSM:
             handler: Data handler implementation
         """
         self._engine.data_handler = handler
-
-    def configure_transactions(
-        self,
-        strategy: TransactionStrategy,
-        **config: Any
-    ) -> None:
-        """Configure transaction management.
-        
-        Args:
-            strategy: Transaction strategy to use
-            **config: Strategy-specific configuration
-        """
-        self._transaction_manager = TransactionManager.create(strategy, **config)
 
     def register_resource(
         self,
@@ -637,10 +599,6 @@ class AdvancedFSM:
             data_mode=ProcessingMode.SINGLE,
             resource_manager=self._resource_manager
         )
-
-        # Set transaction manager if configured
-        if self._transaction_manager:
-            context.transaction_manager = self._transaction_manager  # type: ignore[unreachable]
 
         # Get the state instance for the hook
         state_instance = context.current_state_instance

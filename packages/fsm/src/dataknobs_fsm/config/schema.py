@@ -2,7 +2,6 @@
 
 This module defines the schema for FSM configuration files, including:
 - Data mode configuration
-- Transaction configuration
 - Resource definitions
 - Streaming configuration
 - FSM definition
@@ -11,6 +10,7 @@ This module defines the schema for FSM configuration files, including:
 - Arc definition
 """
 
+import logging
 from enum import Enum
 from typing import Any, Dict, List, Literal, Union
 
@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from dataknobs_fsm.core.arc import DataIsolationMode
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.core.transactions import TransactionStrategy
+
+logger = logging.getLogger(__name__)
 
 
 class ResourceType(str, Enum):
@@ -73,16 +74,6 @@ class DataModeConfig(BaseModel):
     copy_config: Dict[str, Any] = Field(default_factory=dict)
     reference_config: Dict[str, Any] = Field(default_factory=dict)
     direct_config: Dict[str, Any] = Field(default_factory=dict)
-
-
-class TransactionConfig(BaseModel):
-    """Configuration for transaction management."""
-
-    strategy: TransactionStrategy = TransactionStrategy.SINGLE
-    batch_size: int = Field(default=100, ge=1)
-    commit_triggers: List[str] = Field(default_factory=list)
-    rollback_on_error: bool = True
-    timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class StreamConfig(BaseModel):
@@ -218,8 +209,7 @@ class FSMConfig(BaseModel):
     
     # Data handling
     data_mode: DataModeConfig = Field(default_factory=DataModeConfig)
-    transaction: TransactionConfig = Field(default_factory=TransactionConfig)
-    
+
     # Resources
     resources: List[ResourceConfig] = Field(default_factory=list)
     
@@ -235,6 +225,27 @@ class FSMConfig(BaseModel):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
     
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_on_removed_transaction_key(cls, data: Any) -> Any:
+        """Warn when a configuration carries a removed ``transaction`` block.
+
+        The strategy-based transaction coordinator was removed; it configured an
+        in-memory coordinator that never drove database commit/rollback. A
+        leftover ``transaction:`` block is now ignored. Database atomicity is
+        provided by the AsyncDatabase.transaction() primitive, the
+        DatabaseTransaction function, and BatchCommit(atomicity="require").
+        """
+        if isinstance(data, dict) and "transaction" in data:
+            logger.warning(
+                "'transaction' configuration is no longer supported and will be "
+                "ignored; it configured an in-memory coordinator that never drove "
+                "database commit/rollback. Use the AsyncDatabase.transaction() "
+                "primitive, the DatabaseTransaction function, or "
+                "BatchCommit(atomicity='require') for database atomicity."
+            )
+        return data
+
     @model_validator(mode="after")
     def validate_fsm(self) -> "FSMConfig":
         """Validate FSM configuration consistency."""
@@ -307,18 +318,11 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
         "data_mode": {
             "default": DataHandlingMode.COPY,
         },
-        "transaction": {
-            "strategy": TransactionStrategy.BATCH,
-            "batch_size": 1000,
-        },
         "execution_strategy": ExecutionStrategy.RESOURCE_OPTIMIZED,
     },
     UseCaseTemplate.FILE_PROCESSING: {
         "data_mode": {
             "default": DataHandlingMode.REFERENCE,
-        },
-        "transaction": {
-            "strategy": TransactionStrategy.SINGLE,
         },
         "execution_strategy": ExecutionStrategy.STREAM_OPTIMIZED,
     },
@@ -326,17 +330,11 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
         "data_mode": {
             "default": DataHandlingMode.COPY,
         },
-        "transaction": {
-            "strategy": TransactionStrategy.MANUAL,
-        },
         "execution_strategy": ExecutionStrategy.DEPTH_FIRST,
     },
     UseCaseTemplate.LLM_WORKFLOW: {
         "data_mode": {
             "default": DataHandlingMode.COPY,
-        },
-        "transaction": {
-            "strategy": TransactionStrategy.SINGLE,
         },
         "execution_strategy": ExecutionStrategy.RESOURCE_OPTIMIZED,
     },
@@ -344,18 +342,11 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
         "data_mode": {
             "default": DataHandlingMode.DIRECT,
         },
-        "transaction": {
-            "strategy": TransactionStrategy.SINGLE,
-        },
         "execution_strategy": ExecutionStrategy.DEPTH_FIRST,
     },
     UseCaseTemplate.STREAM_PROCESSING: {
         "data_mode": {
             "default": DataHandlingMode.REFERENCE,
-        },
-        "transaction": {
-            "strategy": TransactionStrategy.BATCH,
-            "batch_size": 5000,
         },
         "execution_strategy": ExecutionStrategy.STREAM_OPTIMIZED,
     },

@@ -435,6 +435,13 @@ The FSM supports three distinct data operation modes, each optimized for differe
 
 ### Transaction Management
 
+> **Historical design note.** The strategy-based transaction coordinator below
+> was never wired to drive database commit/rollback and has since been removed.
+> Database atomicity is provided by the dataknobs-data transaction primitives
+> (`AsyncDatabase.transaction()`, the `DatabaseTransaction` function,
+> `BatchCommit(atomicity="require")`). The design snapshot is retained for
+> historical context only.
+
 Sophisticated transaction handling for data consistency:
 
 ```python

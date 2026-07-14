@@ -2,7 +2,7 @@
 
 This module provides the core FSM class that serves as the foundation for all
 dataknobs-fsm functionality. The FSM class manages state networks, function
-registries, data modes, transactions, and resources.
+registries, data modes, transaction modes, and resources.
 
 Architecture:
     The FSM class is the central orchestrator in the dataknobs-fsm architecture:
@@ -11,7 +11,8 @@ Architecture:
     - Network Management: Manages one or more state networks with transitions
     - Function Registry: Maintains registered functions for state operations
     - Data Mode Control: Configures how data flows through states (COPY/REFERENCE/DIRECT)
-    - Transaction Management: Coordinates transactional state changes
+    - Transaction Mode: Tracks logical (in-memory) transaction bookkeeping;
+      database atomicity is provided by the dataknobs-data transaction primitives
     - Resource Management: Tracks and manages resource requirements
     - Execution Engine: Creates and manages the single async execution engine
 
@@ -54,25 +55,16 @@ Processing Modes:
     - Best for: Large files, real-time data, memory-constrained environments
 
 Transaction Modes:
-    The FSM supports configurable transaction handling:
+    ``transaction_mode`` selects an in-memory *logical* transaction-bookkeeping
+    granularity on the execution context (NONE/PER_RECORD/PER_BATCH/PER_SESSION/
+    DISTRIBUTED). It tracks logical transaction boundaries only; it does not by
+    itself drive database commit/rollback. Database atomicity is provided by the
+    dataknobs-data transaction primitives — ``AsyncDatabase.transaction()``, the
+    ``DatabaseTransaction`` function, and ``BatchCommit(atomicity="require")``.
 
     **NONE (TransactionMode.NONE):**
-    - No transactional guarantees
-    - State changes are immediate and permanent
-    - Fastest performance
-    - Best for: Read-only operations, idempotent workflows
-
-    **OPTIMISTIC (TransactionMode.OPTIMISTIC):**
-    - Changes committed at workflow end
-    - Rollback on failure
-    - Moderate performance overhead
-    - Best for: Most production workflows
-
-    **PESSIMISTIC (TransactionMode.PESSIMISTIC):**
-    - Changes committed at each state
-    - Highest consistency guarantees
-    - Higher performance overhead
-    - Best for: Critical workflows, strict consistency requirements
+    - No logical transaction tracking
+    - Fastest; the default for read-only or idempotent workflows
 
 State Networks:
     An FSM can contain multiple state networks:
@@ -120,7 +112,7 @@ Resource Management:
     - Aggregated from all networks
     - Available via resource_requirements dict
     - Summary via get_resource_summary()
-    - Managers set via resource_manager/transaction_manager
+    - Managers set via resource_manager
 
 Execution Engine:
     Execution runs on a single asynchronous engine
@@ -214,9 +206,9 @@ class FSM:
 
         **Processing Configuration:**
         - data_mode: How data flows (SINGLE/BATCH/STREAM)
-        - transaction_mode: Transaction guarantees (NONE/OPTIMISTIC/PESSIMISTIC)
+        - transaction_mode: Logical transaction bookkeeping mode
+          (NONE/PER_RECORD/PER_BATCH/PER_SESSION/DISTRIBUTED)
         - resource_manager: Manages external resources
-        - transaction_manager: Coordinates transactions
 
         **Execution Engine:**
         - A single ``AsyncExecutionEngine``, created lazily via
@@ -228,7 +220,8 @@ class FSM:
     Attributes:
         name (str): Unique identifier for this FSM
         data_mode (ProcessingMode): Data processing mode (SINGLE/BATCH/STREAM)
-        transaction_mode (TransactionMode): Transaction handling (NONE/OPTIMISTIC/PESSIMISTIC)
+        transaction_mode (TransactionMode): Logical transaction bookkeeping mode
+            (NONE/PER_RECORD/PER_BATCH/PER_SESSION/DISTRIBUTED)
         description (str | None): Optional FSM description
         networks (Dict[str, StateNetwork]): State networks by name
         main_network_name (str | None): Name of the main network
@@ -240,7 +233,6 @@ class FSM:
         created_at (float | None): Creation timestamp
         updated_at (float | None): Last update timestamp
         resource_manager (Any | None): External resource manager
-        transaction_manager (Any | None): Transaction coordinator
 
     Design Patterns:
         **Separation of Concerns:**
@@ -311,10 +303,9 @@ class FSM:
         transaction_mode: TransactionMode = TransactionMode.NONE,
         description: str | None = None,
         resource_manager: Any | None = None,
-        transaction_manager: Any | None = None
     ):
         """Initialize FSM.
-        
+
         Args:
             name: Name of the FSM.
             data_mode: Data processing mode.
@@ -349,7 +340,6 @@ class FSM:
         
         # Execution support (from builder FSM wrapper)
         self.resource_manager = resource_manager
-        self.transaction_manager = transaction_manager
         self._async_engine: Any | None = None  # AsyncExecutionEngine
         self._sync_bridge: Any | None = None  # SyncLoopBridge for sync entry points
 
@@ -855,12 +845,10 @@ class FSM:
             transaction_mode=self.transaction_mode
         )
         
-        # Set resource and transaction managers if available
+        # Set resource manager if available
         if self.resource_manager:
             context.resource_manager = self.resource_manager
-        if self.transaction_manager:
-            context.transaction_manager = self.transaction_manager
-        
+
         # Set up context based on data mode
         if self.data_mode == ProcessingMode.BATCH:
             # For batch mode, treat input as batch data

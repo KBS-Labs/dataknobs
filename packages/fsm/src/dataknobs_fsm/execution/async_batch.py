@@ -19,7 +19,7 @@ class AsyncBatchExecutor:
     - Resource pooling
     - Progress reporting
     - Error recovery
-    - Transaction management
+    - Logical transaction-mode bookkeeping
     """
     
     def __init__(
@@ -37,7 +37,10 @@ class AsyncBatchExecutor:
             fsm: FSM to execute.
             parallelism: Maximum parallel executions.
             batch_size: Size of each batch.
-            enable_transactions: Enable transaction support.
+            enable_transactions: When True, sets PER_RECORD logical
+                transaction-mode bookkeeping on each item's context; this is
+                in-memory only and does not drive database commit/rollback.
+                Use the dataknobs-data transaction primitives for atomicity.
             progress_callback: Callback for progress updates.
             resource_manager: Resource manager threaded into each item's
                 context so state transforms can acquire their resources.
