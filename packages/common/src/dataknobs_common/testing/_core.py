@@ -190,6 +190,43 @@ def is_postgres_available(
         return False
 
 
+def is_elasticsearch_available(
+    host: str | None = None, port: int | None = None
+) -> bool:
+    """Check if the Elasticsearch service is available.
+
+    Reads ``ELASTICSEARCH_HOST`` and ``ELASTICSEARCH_PORT`` environment
+    variables when explicit arguments are not provided, falling back to
+    ``localhost:9200``.
+
+    Args:
+        host: Elasticsearch host (default: ``$ELASTICSEARCH_HOST`` or
+            ``localhost``)
+        port: Elasticsearch port (default: ``$ELASTICSEARCH_PORT`` or ``9200``)
+
+    Returns:
+        True if Elasticsearch is available, False otherwise
+    """
+    import os
+
+    host = (
+        host if host is not None else os.environ.get("ELASTICSEARCH_HOST", "localhost")
+    )
+    port = (
+        port if port is not None else int(os.environ.get("ELASTICSEARCH_PORT", "9200"))
+    )
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
 def get_localstack_endpoint(
     host: str | None = None, port: int | None = None
 ) -> str:
@@ -460,6 +497,11 @@ try:
         reason="PostgreSQL not available",
     )
 
+    requires_elasticsearch = pytest.mark.skipif(
+        not is_elasticsearch_available(),
+        reason="Elasticsearch not available",
+    )
+
     requires_localstack = pytest.mark.skipif(
         not is_localstack_available(),
         reason="LocalStack not available",
@@ -514,6 +556,7 @@ except ImportError:
     requires_chromadb = None  # type: ignore
     requires_redis = None  # type: ignore
     requires_postgres = None  # type: ignore
+    requires_elasticsearch = None  # type: ignore
     requires_real_postgres = None  # type: ignore
     requires_localstack = None  # type: ignore
     requires_bedrock = None  # type: ignore

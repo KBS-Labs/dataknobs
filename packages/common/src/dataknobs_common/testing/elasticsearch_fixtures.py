@@ -119,6 +119,152 @@ def wait_for_elasticsearch(
     return False
 
 
+#: Default staleness threshold (seconds) below which an index is considered
+#: potentially in-flight and is NOT swept. Overridable per-call and via the
+#: ``DK_ES_TEST_INDEX_MAX_AGE_SECONDS`` environment variable.
+_DEFAULT_MIN_AGE_SECONDS = 300
+
+
+def sweep_stale_test_indices(
+    host: str,
+    port: int,
+    *,
+    prefixes: tuple[str, ...] = ("test_",),
+    min_age_seconds: int | None = None,
+    now_ms: int | None = None,
+) -> list[str]:
+    """Delete stale dataknobs test indices to reclaim single-node shard budget.
+
+    dataknobs Elasticsearch integration tests create uniquely-suffixed
+    ``test_*`` indices that are deleted best-effort on fixture teardown. A run
+    killed mid-test (Ctrl-C, crash, timeout) never reaches teardown, so it
+    leaks its indices. Because the dev/CI cluster uses a persistent data
+    volume, leaked indices accumulate across runs; each holds a shard, and a
+    single-node cluster's ``cluster.max_shards_per_node`` ceiling (default
+    1000) eventually rejects all new index creation — reddening the whole ES
+    suite. This sweep runs once at session start to reclaim that residue.
+
+    Mechanism: list indices matching each prefix via
+    ``_cat/indices/<prefix>*`` (a *read* — the wildcard is not a destructive
+    op, so ``action.destructive_requires_name`` does not apply), then delete,
+    **by exact name**, each index whose ES ``creation.date`` (epoch millis) is
+    older than the age threshold. Deletion is always one ``DELETE /<index>``
+    per stale index; a wildcard ``DELETE`` is deliberately never issued
+    because ES rejects it under ``destructive_requires_name``.
+
+    Age-gating is the load-bearing safety property under pytest-xdist: session
+    fixtures run once per worker, so a blanket "delete all matching" would race
+    a concurrent worker's live index. An in-flight index is seconds old and is
+    never swept; accumulated residue is minutes-to-months old and always is.
+    The comparison uses a *local* ``now_ms`` (wall clock at sweep start)
+    against the cluster's ``creation.date``; dev/CI ES runs in Docker on the
+    same host as the test process, so host↔container clock skew is sub-second —
+    negligible against the minutes-scale default threshold.
+
+    Best-effort and non-fatal: any request / connection / parse error is
+    logged at WARNING and the function returns the indices deleted so far (or
+    an empty list). It never raises — a cleanup hiccup must not fail an
+    otherwise-green run.
+
+    Args:
+        host: Elasticsearch host.
+        port: Elasticsearch port.
+        prefixes: Index-name prefixes to sweep. Each is matched as
+            ``<prefix>*``. Defaults to the whole ``test_`` namespace; narrow it
+            for a shared (non-dataknobs-dedicated) cluster.
+        min_age_seconds: Minimum age, in seconds, for an index to be swept.
+            Defaults to ``$DK_ES_TEST_INDEX_MAX_AGE_SECONDS`` if set, else 300.
+        now_ms: Reference "now" in epoch millis (injectable for deterministic
+            tests). Defaults to ``int(time.time() * 1000)`` at call time.
+
+    Returns:
+        The list of deleted index names (empty on any failure or if nothing
+        was stale).
+    """
+    import requests
+    from dataknobs_utils.requests_utils import RequestHelper
+
+    if min_age_seconds is None:
+        min_age_seconds = int(
+            os.environ.get(
+                "DK_ES_TEST_INDEX_MAX_AGE_SECONDS",
+                str(_DEFAULT_MIN_AGE_SECONDS),
+            )
+        )
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    cutoff_ms = now_ms - min_age_seconds * 1000
+
+    helper = RequestHelper(host, port, timeout=5)
+    # Comma-joined wildcard patterns: "_cat/indices/test_*,other_*".
+    pattern = ",".join(f"{prefix}*" for prefix in prefixes)
+    deleted: list[str] = []
+
+    try:
+        response = helper.get(
+            f"_cat/indices/{pattern}",
+            params={"h": "index,creation.date", "format": "json"},
+        )
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        logger.warning(
+            "Could not list stale Elasticsearch test indices at %s:%s: %s",
+            host,
+            port,
+            exc,
+        )
+        return deleted
+
+    if not response.succeeded or not isinstance(response.json, list):
+        # No matching indices (404 on an empty pattern) or an unexpected shape;
+        # nothing to reclaim.
+        return deleted
+
+    for entry in response.json:
+        name = entry.get("index")
+        raw_created = entry.get("creation.date")
+        if not name or raw_created is None:
+            continue
+        try:
+            created_ms = int(raw_created)
+        except (TypeError, ValueError):
+            # Unparseable creation date — skip rather than guess its age.
+            logger.warning(
+                "Skipping Elasticsearch index %s: unparseable creation.date %r",
+                name,
+                raw_created,
+            )
+            continue
+        if created_ms > cutoff_ms:
+            # Younger than the threshold: possibly an in-flight index. Skip.
+            continue
+        try:
+            del_response = helper.delete(name)
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as exc:
+            logger.warning(
+                "Failed to delete stale Elasticsearch index %s: %s", name, exc
+            )
+            continue
+        if del_response.succeeded:
+            deleted.append(name)
+        else:
+            logger.warning(
+                "Delete of stale Elasticsearch index %s returned status %s",
+                name,
+                del_response.status,
+            )
+
+    if deleted:
+        logger.info(
+            "Swept %d stale Elasticsearch test index(es): %s",
+            len(deleted),
+            ", ".join(deleted),
+        )
+    return deleted
+
+
 try:
     import pytest
 
@@ -145,10 +291,21 @@ try:
     def ensure_elasticsearch_ready(
         elasticsearch_connection_params: dict[str, Any],
     ) -> None:
-        """Ensure Elasticsearch is reachable before integration tests run."""
+        """Ensure Elasticsearch is reachable before integration tests run.
+
+        After confirming the cluster is up, sweeps stale ``test_*`` indices
+        left by prior runs killed mid-test — reclaiming single-node shard
+        budget so accumulated residue can't exhaust it. The sweep is
+        age-gated and best-effort (see :func:`sweep_stale_test_indices`), so
+        it never touches an in-flight index nor fails an otherwise-green run.
+        """
         wait_for_elasticsearch(
             host=elasticsearch_connection_params["host"],
             port=elasticsearch_connection_params["port"],
+        )
+        sweep_stale_test_indices(
+            elasticsearch_connection_params["host"],
+            elasticsearch_connection_params["port"],
         )
 
     @pytest.fixture
