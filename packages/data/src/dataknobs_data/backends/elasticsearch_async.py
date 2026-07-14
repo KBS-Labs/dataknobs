@@ -312,7 +312,9 @@ class AsyncElasticsearchDatabase(
             if op.get("status") == 409:
                 raise DuplicateRecordError(op.get("_id"))
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records in batch, failing closed on a colliding id.
 
         Uses the bulk ``create`` op keyed on ``record.id`` (honoring a
@@ -320,6 +322,9 @@ class AsyncElasticsearchDatabase(
         a colliding id raises ``DuplicateRecordError`` (bulk 409); other per-item
         errors are reconciled via :meth:`_extract_bulk_index_ids`, so a record
         that fails to index is not reported as created.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored — Elasticsearch exposes no native transaction to join.
 
         Raises:
             DuplicateRecordError: a record collides with an existing id, or two
@@ -352,7 +357,9 @@ class AsyncElasticsearchDatabase(
         self._raise_on_bulk_conflict(response)
         return self._extract_bulk_index_ids(response, ids)
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records in batch using the bulk API.
 
         Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
@@ -363,7 +370,8 @@ class AsyncElasticsearchDatabase(
         differ only in op type (``index`` overwrites, ``create`` fails closed).
         Per-item errors are reconciled via
         :meth:`_extract_bulk_index_ids`, so an id whose write failed is dropped
-        rather than reported as written.
+        rather than reported as written. ``_tx`` is accepted for interface parity
+        and ignored (see :meth:`create_batch`).
         """
         self._check_connection()
 

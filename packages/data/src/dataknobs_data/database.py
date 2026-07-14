@@ -636,11 +636,19 @@ class AsyncDatabase(CapabilityMixin, ABC):
         # Return the created ID (might be different from what we provided).
         return created_id or id
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records in batch.
 
         Args:
             records: List of records to create
+            _tx: Internal. A native-transaction handle from :meth:`_transaction`,
+                threaded by a multi-kind buffered-transaction flush so the batch
+                joins the flush's single native transaction. ``None`` (the
+                default) opens the batch's own boundary as before. Ignored here
+                (the ABC default writes per-record); transactional backends act
+                on it.
 
         Returns:
             List of created record IDs
@@ -651,7 +659,9 @@ class AsyncDatabase(CapabilityMixin, ABC):
             ids.append(id)
         return ids
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records in batch.
 
         The batch sibling of :meth:`create_batch`. Each record is written with
@@ -665,6 +675,7 @@ class AsyncDatabase(CapabilityMixin, ABC):
 
         Args:
             records: List of records to upsert
+            _tx: Internal native-transaction handle (see :meth:`create_batch`).
 
         Returns:
             List of upserted record IDs, in input order
@@ -690,11 +701,14 @@ class AsyncDatabase(CapabilityMixin, ABC):
             records.append(record)
         return records
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
         """Delete multiple records by ID.
 
         Args:
             ids: List of record IDs
+            _tx: Internal native-transaction handle (see :meth:`create_batch`).
 
         Returns:
             List of deletion results
@@ -772,6 +786,34 @@ class AsyncDatabase(CapabilityMixin, ABC):
                 ...  # roll your own, or accept best-effort
         """
         return False
+
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[Any]:
+        """Source and scope one native transaction spanning a commit flush.
+
+        Yields an opaque, backend-specific handle to thread as ``_tx`` into the
+        write batch methods (``create_batch`` / ``upsert_batch`` /
+        ``delete_batch``), so a multi-kind
+        :class:`~dataknobs_data.transactions.BufferedTransaction` flush is
+        all-or-nothing: every coalesced batch runs inside this one transaction
+        and a mid-flush failure rolls the whole commit back.
+
+        The default yields ``None`` — no native transaction. Non-transactional
+        backends inherit it (the buffered-tx flush only enters here for a
+        multi-kind buffer on a backend reporting
+        :meth:`supports_transactions`). Transactional backends
+        (``sqlite_async`` / ``postgres`` / ``duckdb``) override it per their
+        connection model. Internal: the handle is threaded only through the
+        write batch methods and only for the synchronous commit flush.
+
+        Contract: a backend that reports :meth:`supports_transactions` as
+        ``True`` **must** override this to yield a real (non-``None``) handle.
+        The commit flush enforces it — a multi-kind flush that reaches this
+        default (``None`` handle) on a self-declared transactional backend fails
+        closed with :class:`~dataknobs_common.exceptions.OperationError` rather
+        than silently degrading to a non-atomic per-batch commit.
+        """
+        yield None
 
     async def begin_transaction(
         self, *, policy: str = "strict"

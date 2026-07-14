@@ -450,14 +450,17 @@ class DatabaseTransaction(ITransformFunction):
     ``commit`` persists nothing on any backend.
 
     Commit atomicity follows
-    :attr:`~dataknobs_data.BufferedTransaction.is_atomic`: a single same-kind
-    batch (all-create, all-upsert, or all-delete) is all-or-nothing on a
-    transactional backend, but a multi-kind buffer (e.g. create + upsert, or
-    create + delete) commits as a sequence of independent batches and can
-    partially persist on a mid-flush failure (see the ``BufferedTransaction``
-    docs). A ``commit`` reaching a state with no active handle (a missing or
-    failed prior ``begin``) is logged at WARNING and commits nothing rather than
-    reporting a phantom success; a handle-less ``rollback`` is a benign no-op.
+    :attr:`~dataknobs_data.BufferedTransaction.is_atomic`: on a transactional
+    backend the commit flush runs every coalesced batch inside one native
+    transaction, so a buffer of any composition — a single same-kind batch
+    (all-create, all-upsert, or all-delete) or a multi-kind buffer (e.g.
+    create + upsert, or create + delete) — is all-or-nothing, and a mid-flush
+    failure rolls the whole commit back (see the ``BufferedTransaction`` docs).
+    On a non-transactional backend a multi-kind buffer commits as a sequence of
+    independent batches and can partially persist. A ``commit`` reaching a state
+    with no active handle (a missing or failed prior ``begin``) is logged at
+    WARNING and commits nothing rather than reporting a phantom success; a
+    handle-less ``rollback`` is a benign no-op.
     """
 
     def __init__(

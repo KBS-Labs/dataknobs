@@ -9,14 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `AsyncDatabase.transaction()` now commits a batch of upserts atomically on
-  transactional backends: `BufferedTransaction.commit()` coalesces consecutive
-  staged upserts into a single `upsert_batch` call (mirroring the existing
-  `create_batch` / `delete_batch` coalescing) instead of flushing them
-  row-by-row, and `BufferedTransaction.is_atomic` reports `True` for an
-  all-upsert single-kind buffer accordingly. A buffer spanning more than one
-  operation kind (e.g. create + upsert) still commits as a sequence of
-  independent atomic batches and reports `is_atomic` `False`.
+- `AsyncDatabase.transaction()` / `begin_transaction()` now commit a buffered
+  transaction of **any** composition all-or-nothing on a transactional backend
+  (SQLite, PostgreSQL, DuckDB). `BufferedTransaction.commit()` coalesces
+  consecutive same-kind operations into a single `create_batch` / `upsert_batch`
+  / `delete_batch` call and runs every coalesced batch inside **one** native
+  transaction, so a commit is atomic whether the buffer is single-kind (all
+  creates, all upserts, or all deletes) or spans several kinds (e.g. mixed
+  create + delete, or create + upsert) — a mid-flush failure rolls the whole
+  commit back rather than partially persisting. `BufferedTransaction.is_atomic`
+  reports `True` for any composition on a transactional backend. Non-transactional
+  backends (memory/file/s3/elasticsearch) are unchanged — a multi-kind commit
+  there stays best-effort per batch and `is_atomic` is `False`.
 
 - `create()` is now a defined atomic insert across every backend: a colliding
   id raises `DuplicateRecordError` instead of silently overwriting the existing

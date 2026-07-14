@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-14T18:32:16Z",
+  "timestamp": "2026-07-14T20:34:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.11.28 (Homebrew 2026-07-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/transaction-doc-honesty",
-  "git_commit": "29d5c0d46e6064847634ef9dff632a42235e9a3b",
+  "git_branch": "sbk/cross-kind-atomic-commit",
+  "git_commit": "bcc5f8262644820b02c18ae281464da5cef511a2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

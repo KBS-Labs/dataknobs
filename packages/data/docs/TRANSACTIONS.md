@@ -16,54 +16,59 @@ A buffered transaction makes two promises:
 
 1. **Universal rollback.** Because every write is buffered, raising before
    commit persists nothing — on *any* backend, transactional or not.
-2. **Atomic commit of a single same-kind batch on transactional backends.** The
-   commit flush replays the buffer through the backend's atomic batch
-   primitives (`create_batch` / `upsert_batch` / `delete_batch`), coalescing
-   consecutive same-kind operations into a single batch call. When the staged
-   buffer reduces to *one* such call — all creates, all upserts, or all deletes
-   — that call is all-or-nothing on a backend whose batch operations run inside
-   a backend transaction (**SQLite, Postgres, DuckDB**).
+2. **Atomic commit on transactional backends — any composition.** The commit
+   flush replays the buffer through the backend's atomic batch primitives
+   (`create_batch` / `upsert_batch` / `delete_batch`), coalescing consecutive
+   same-kind operations into a single batch call. On a transactional backend
+   (**SQLite, Postgres, DuckDB**) the *whole* flush runs inside **one** native
+   transaction, so a commit is all-or-nothing regardless of composition — a
+   single same-kind batch (all creates, all upserts, or all deletes) **and** a
+   mixed buffer spanning several kinds (e.g. creates *and* deletes, or creates
+   *and* upserts) alike. A mid-flush failure rolls the whole commit back.
 
-### What is *not* all-or-nothing: mixed-kind buffers
+### Multi-kind buffers commit atomically on transactional backends
 
 A buffer spanning **more than one kind** (e.g. creates **and** deletes, or
-creates **and** upserts) commits as a **sequence of independent backend
-batches** — one coalesced call per same-kind run. If a later batch fails
-mid-flush, earlier batches have **already committed and stay persisted** — a
-partial commit, with no compensating rollback (the earlier writes are already
-durable). A single-kind buffer — all creates, all upserts, or all deletes —
-coalesces into one atomic batch and is all-or-nothing on a transactional
-backend.
+creates **and** upserts) commits inside the same single native transaction as a
+single-kind buffer: every coalesced batch runs on one pinned connection, so a
+mid-flush failure rolls the **whole** commit back — no partial persistence.
 
-Branch on **`is_atomic`** to know which case you have:
+On a **non-transactional** backend (`memory`, `file`, `s3`, `elasticsearch`)
+there is no native transaction to span the flush, so a multi-kind buffer commits
+as a **sequence of independent batches**: if a later batch fails mid-flush,
+earlier batches have already been applied and stay applied. Open the transaction
+with the default `policy="strict"` there to fail closed rather than assume an
+atomicity the backend cannot deliver.
+
+Branch on **`is_atomic`** to know whether a commit is all-or-nothing:
 
 ```python
 tx = await db.begin_transaction()
 await tx.create(Record({"name": "a"}))
-await tx.create(Record({"name": "b"}))
-assert tx.is_atomic            # single create_batch → all-or-nothing
 await tx.delete(other_id)
-assert not tx.is_atomic        # now create + delete → two independent batches
+assert tx.is_atomic            # transactional backend → whole commit atomic
 ```
 
-`is_atomic` is `True` only when the backend supports transactions **and** the
-currently staged ops reduce to a single coalesced same-kind batch. It is
-computed from the live buffer, so staging more writes can flip it — read it
-immediately before `commit()` when you need to rely on all-or-nothing across
-the whole commit. There is no public primitive that commits mixed kinds
-all-or-nothing today; for that guarantee, stage a single kind per transaction
-(each single-kind commit is atomic on a transactional backend).
+`is_atomic` is `True` whenever the backend supports transactions: it reflects
+the backend capability directly (any composition is atomic there) and is stable
+across staging. On a non-transactional backend it is `False`.
 
 It deliberately does **not** provide in-transaction isolation or
 read-your-writes: buffered writes are invisible to reads (`db.read`) until
 commit, and concurrent readers never observe a partially-applied transaction
-because nothing is written until the flush. Do **not** commit two buffered
-transactions concurrently against a single-connection backend (e.g. aiosqlite):
-the per-batch `BEGIN`/`COMMIT` boundaries the backend issues can interleave.
-Connection-scoped isolation / read-your-writes is not provided — the public API
-exposes no connection-scoped transaction beyond this buffered form. For a
-read-modify-write invariant use optimistic concurrency (`update` / `upsert` with
-`expected_version`) or serialize the conflicting work yourself.
+because nothing is written until the flush. On a single-connection backend
+(e.g. aiosqlite or duckdb) a multi-kind commit holds one open native
+transaction across several `await` boundaries (begin, then each coalesced
+batch, then commit); **no concurrent write of any kind** may run against that
+same instance during the flush — not just another buffered commit, but also a
+plain `db.create` / `db.upsert` / `db.delete` — because that write would issue
+its own `BEGIN` while the multi-kind transaction is already open and the
+boundaries would interleave. Serialize writes to a single-connection instance
+yourself if they can overlap. Connection-scoped isolation / read-your-writes is
+not provided — the public API exposes no connection-scoped transaction beyond
+this buffered form. For a read-modify-write invariant use optimistic
+concurrency (`update` / `upsert` with `expected_version`) or serialize the
+conflicting work yourself.
 
 ## `supports_transactions()`
 
@@ -76,11 +81,11 @@ else:
 ```
 
 Returns `True` for the transactional backends (`sqlite`, `postgres`, `duckdb`)
-and `False` for the rest (`memory`, `file`, `s3`, `elasticsearch`). It reports
-whether a **coalesced batch** in the commit flush is crash-safe atomic — not
-whether a transaction can be opened (the buffer-and-flush works on every
-backend), and not whether a *whole* mixed-kind commit is atomic (see
-`is_atomic` above for that).
+and `False` for the rest (`memory`, `file`, `s3`, `elasticsearch`). On a
+transactional backend the commit flush is crash-safe atomic for **any** buffer
+composition — single-kind or multi-kind alike. It reports the backend
+capability, not whether a transaction can be opened (the buffer-and-flush works
+on every backend); `is_atomic` reports the same thing for a given handle.
 
 ## Policy on non-transactional backends
 

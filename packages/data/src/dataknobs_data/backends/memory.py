@@ -6,7 +6,7 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -243,7 +243,9 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
             self._versions.clear()
             return count
 
-    async def create_batch(self, records: list[Record]) -> list[str]:
+    async def create_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Create multiple records, failing closed on any colliding id.
 
         Matches ``create``'s atomic-insert contract: a colliding id — against an
@@ -252,6 +254,9 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         all-or-nothing. This lets the streaming INSERT fast-path fail closed and
         retry cleanly per record (see ``run_stream_write``), matching the
         transactional SQL backends rather than silently overwriting.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored — memory has no native transaction to join.
         """
         async with self._lock:
             prepared = prepare_atomic_batch(
@@ -264,13 +269,17 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 ids.append(storage_id)
             return ids
 
-    async def upsert_batch(self, records: list[Record]) -> list[str]:
+    async def upsert_batch(
+        self, records: list[Record], *, _tx: Any = None
+    ) -> list[str]:
         """Insert-or-overwrite multiple records under a single lock.
 
         The batch sibling of ``create_batch``, with upsert semantics: a
         colliding id is overwritten (never raised), a caller-supplied
         ``record.id`` is honored, versions are bumped per record, and ids are
         returned in input order. Acquires the lock once for the whole batch.
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
         """
         if not records:
             return []
@@ -293,8 +302,14 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 results.append(self._prepare_record_from_storage(record, id))
             return results
 
-    async def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records efficiently."""
+    async def delete_batch(
+        self, ids: list[str], *, _tx: Any = None
+    ) -> list[bool]:
+        """Delete multiple records efficiently.
+
+        ``_tx`` is accepted for interface parity and ignored (see
+        :meth:`create_batch`).
+        """
         async with self._lock:
             results = []
             for id in ids:
