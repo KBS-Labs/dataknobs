@@ -4,10 +4,11 @@ Extended tests for migrator module to improve coverage.
 
 import pytest
 import asyncio
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
-from typing import Iterator
+from typing import Any
 
+from dataknobs_data.exceptions import OperationError
 from dataknobs_data.records import Record
+from dataknobs_data.database import SyncDatabase
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
@@ -23,6 +24,24 @@ from dataknobs_data.migration import (
     RenameField,
     MigrationProgress,
 )
+
+
+def _disable_batch_verbs(db):
+    """Force the migrator's per-record fallback for a white-box failure test.
+
+    The batched write path tries the target's native bulk verbs
+    (``create_batch`` / ``upsert_batch``) first. A test that simulates a write
+    failure by patching the per-record ``create`` / ``upsert`` must make the
+    bulk verb fail too, so the per-record fallback — the path it pins — is
+    actually reached. Memory ``create_batch`` writes straight to storage without
+    routing through ``create``, so patching ``create`` alone would be bypassed.
+    """
+
+    def _raise(records):
+        raise RuntimeError("batch verb disabled; exercise per-record fallback")
+
+    db.create_batch = _raise
+    db.upsert_batch = _raise
 
 
 class TestMigratorAdvanced:
@@ -87,9 +106,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         migrator = Migrator()
-        
+
         # Test should now raise since no error handler is provided
         with pytest.raises(ValueError, match="Database error"):
             progress = migrator.migrate(
@@ -119,7 +139,8 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         # Error handler that continues
         def error_handler(error, record):
             return True  # Continue processing
@@ -495,9 +516,10 @@ class TestMigratorAdvanced:
             return original_create(record)
         
         target.create = failing_create
-        
+        _disable_batch_verbs(target)  # exercise the per-record fallback
+
         progress = MigrationProgress().start()
-        
+
         # Test without error handler - should raise
         migrator = Migrator()
         with pytest.raises(ValueError, match="Cannot create bad record"):
@@ -520,6 +542,7 @@ class TestMigratorAdvanced:
             return original_create2(record)
 
         target2.create = failing_create2
+        _disable_batch_verbs(target2)  # exercise the per-record fallback
 
         progress2 = MigrationProgress().start()
 
@@ -1005,3 +1028,295 @@ class TestMigrateStreamProcessedAccounting:
         assert progress.succeeded == 3
         assert progress.skipped == 3
         assert progress.failed == 0
+
+
+class _CountingMemoryDatabase(MemoryDatabase):
+    """Real memory backend that tallies which write verbs the migrator invokes.
+
+    No mocks — a genuine ``SyncMemoryDatabase`` subclass whose only addition is a
+    per-verb call counter, so a test can prove the batched migrator rides the
+    native bulk verbs (``create_batch`` / ``upsert_batch``) instead of looping
+    per record.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.calls = {"create": 0, "upsert": 0, "create_batch": 0, "upsert_batch": 0}
+
+    def create(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["create"] += 1
+        return super().create(*args, **kwargs)
+
+    def upsert(self, *args: Any, **kwargs: Any) -> str:
+        self.calls["upsert"] += 1
+        return super().upsert(*args, **kwargs)
+
+    def create_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["create_batch"] += 1
+        return super().create_batch(*args, **kwargs)
+
+    def upsert_batch(self, *args: Any, **kwargs: Any) -> list[str]:
+        self.calls["upsert_batch"] += 1
+        return super().upsert_batch(*args, **kwargs)
+
+
+class TestMigratorBatchedWriteVerbs:
+    """The batched write path (``migrate`` → ``_write_batch``) rides the target's
+    native bulk verbs, matching the streaming path's throughput, with a graceful
+    per-record fallback that preserves per-id accounting and ``on_error``.
+
+    ``migrate_stream`` / ``migrate_parallel`` / ``migrate_async`` already ride the
+    bulk verbs through the streaming write path; only ``migrate`` used a
+    per-record loop before this. Pre-change these throughput assertions failed —
+    ``migrate(on_conflict=upsert)`` called ``upsert`` N times and ``upsert_batch``
+    zero.
+    """
+
+    def test_batched_insert_rides_create_batch(self):
+        """INSERT into an empty target issues one ``create_batch``, no per-record."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        progress = Migrator().migrate(src, tgt)  # default INSERT
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["create_batch"] == 1  # one bulk call for the batch
+        assert tgt.calls["create"] == 0        # no per-record fallback
+        assert tgt.read("3").get_value("v") == "src"
+
+    def test_batched_upsert_rides_upsert_batch(self):
+        """UPSERT issues one ``upsert_batch``, never per-record ``upsert``."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3, 4, 5], "src")
+        _seed(tgt, [2], "old")  # a colliding id; upsert overwrites it
+        progress = Migrator().migrate(src, tgt, on_conflict="upsert")
+        assert progress.succeeded == 5
+        assert progress.failed == 0
+        assert tgt.calls["upsert_batch"] == 1
+        assert tgt.calls["upsert"] == 0
+        assert tgt.read("2").get_value("v") == "src"  # overwritten
+
+    def test_batched_skip_stays_per_record(self):
+        """SKIP has no batch verb: writes per-record ``create``, never batches."""
+        src, tgt = MemoryDatabase(), _CountingMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        progress = Migrator().migrate(src, tgt, on_conflict="skip")
+        assert progress.succeeded == 3
+        assert tgt.calls["create"] == 3
+        assert tgt.calls["create_batch"] == 0  # SKIP never batches
+
+    def test_batch_failure_falls_back_to_per_record_attribution(self):
+        """When the bulk verb fails, the per-record fallback attributes each id
+        and fires ``on_error`` per failing record — identical to per-record writes.
+        """
+        src, tgt = MemoryDatabase(), MemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _disable_batch_verbs(tgt)  # force the per-record fallback
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        seen: list[str] = []
+        progress = Migrator().migrate(
+            src, tgt, on_error=lambda _e, r: seen.append(r.id) or True
+        )
+        assert progress.succeeded == 2  # ids 1, 3
+        assert progress.failed == 1     # id 2
+        assert seen == ["2"]            # on_error fired for the failing id
+        assert any(e["record_id"] == "2" for e in progress.errors)
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+        assert tgt.read("2") is None
+
+    def test_batch_failure_no_handler_raises_immediately(self):
+        """Fail-fast preserved: a per-record failure with no handler re-raises.
+
+        The batch's remaining records are not written.
+        """
+        tgt = MemoryDatabase()
+        _disable_batch_verbs(tgt)
+
+        original_create = tgt.create
+
+        def failing_create(record):
+            if record.id == "2":
+                raise ValueError("cannot create 2")
+            return original_create(record)
+
+        tgt.create = failing_create
+
+        # Explicit order so the record after the failing one is unambiguous.
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(ValueError, match="cannot create 2"):
+            Migrator()._write_batch(tgt, batch, progress)
+
+        assert progress.succeeded == 1   # id 1 written before the failure
+        assert progress.failed == 1      # id 2
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3") is None     # record after the failure not written
+
+
+class _NonAtomicBulkMemoryDatabase(MemoryDatabase):
+    """Real memory backend modeling a NON-ATOMIC bulk create (S3 / Elasticsearch).
+
+    ``create_batch`` writes the non-colliding records one at a time and raises
+    ``DuplicateRecordError`` on the first collision — leaving the earlier writes
+    durably applied, exactly as Elasticsearch's per-item bulk API (and the ABC
+    per-record ``create_batch`` loop that S3 inherits) does. Because that bulk
+    verb is not atomic on raise, ``_insert_batch_atomic()`` returns ``False`` so
+    the migrator must route INSERT per-record rather than through the bulk verb
+    (whose partial writes the fallback would re-attempt and mis-count).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.create_batch_calls = 0
+
+    def _insert_batch_atomic(self) -> bool:
+        return False
+
+    def create_batch(self, records):
+        self.create_batch_calls += 1
+        ids = []
+        for record in records:
+            # Per-record: writes each until a collision raises, leaving the
+            # already-written records applied (non-atomic).
+            ids.append(self.create(record))
+        return ids
+
+
+class _ShortCreateBatchMemoryDatabase(MemoryDatabase):
+    """create_batch that confirms fewer ids than it was given (partial success
+    without raising) — the shortfall contract ``MigrationProgressAccountant``
+    guards. Advertises atomic so the migrator uses the bulk verb.
+    """
+
+    def _insert_batch_atomic(self) -> bool:
+        return True
+
+    def create_batch(self, records):
+        written = super().create_batch(records)  # memory writes all, returns all
+        return written[:-1]  # report one fewer id → shortfall of 1
+
+
+class TestMigratorNonAtomicBulkRouting:
+    """migrate() INSERT must not ride a non-atomic bulk create verb.
+
+    Regression guard: the batched write path passes ``target.create_batch`` as
+    the INSERT fast-path only when it is atomic on raise
+    (``_insert_batch_atomic()``). On a backend whose bulk create leaves partial
+    writes on a collision (S3, Elasticsearch), riding it would let the
+    per-record fallback re-write those rows and count them as spurious duplicate
+    failures. Before this guard, ``migrate()`` called ``target.create_batch``
+    unconditionally and these assertions failed.
+    """
+
+    def test_insert_non_atomic_bulk_routes_per_record_for_correct_attribution(self):
+        src, tgt = MemoryDatabase(), _NonAtomicBulkMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+        _seed(tgt, [2], "old")  # id 2 collides with an existing target row
+
+        seen: list[str | None] = []
+        # on_error → True keeps going past the collision so attribution across
+        # the whole batch is observable (INSERT with no handler fails fast).
+        progress = Migrator().migrate(
+            src, tgt, on_error=lambda _e, r: seen.append(r.id if r else None) or True
+        )
+
+        assert progress.succeeded == 2  # ids 1 and 3 genuinely written
+        assert progress.failed == 1     # only id 2 collided
+        assert tgt.create_batch_calls == 0  # the non-atomic bulk verb was NOT used
+        assert seen == ["2"]            # exactly the collider failed, once
+        assert tgt.read("1").get_value("v") == "src"
+        assert tgt.read("3").get_value("v") == "src"
+        assert tgt.read("2").get_value("v") == "old"  # collider left untouched
+        assert [e["record_id"] for e in progress.errors] == ["2"]
+
+    def test_insert_batch_atomic_flag_partitions_backends(self):
+        """Each sync backend reports the correct atomicity of its bulk create.
+
+        Atomic bulk create → override to ``True`` (migrator uses the fast-path);
+        a non-atomic bulk create (S3 base loop, Elasticsearch bulk API) inherits
+        the fail-safe ``False`` default so migrate() routes it per-record.
+        """
+        from dataknobs_data.backends.file import SyncFileDatabase
+        from dataknobs_data.backends.postgres import SyncPostgresDatabase
+        from dataknobs_data.backends.s3 import SyncS3Database
+        from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        base = SyncDatabase._insert_batch_atomic
+        # The ABC default is fail-safe False (its create_batch is a per-record
+        # loop): a backend is treated as non-atomic until it proves otherwise.
+        assert base(MemoryDatabase()) is False
+
+        # Atomic bulk create → overridden to True.
+        for cls in (
+            MemoryDatabase,
+            SyncSQLiteDatabase,
+            SyncPostgresDatabase,
+            SyncDuckDBDatabase,
+            SyncFileDatabase,
+        ):
+            assert cls._insert_batch_atomic is not base
+        assert MemoryDatabase()._insert_batch_atomic() is True
+
+        # Non-atomic bulk create → inherit the fail-safe False default.
+        for cls in (SyncS3Database, SyncElasticsearchDatabase):
+            assert cls._insert_batch_atomic is base
+
+
+class TestMigratorBatchShortfall:
+    """MigrationProgressAccountant.on_batch_success shortfall contract.
+
+    When a bulk verb confirms fewer ids than it was given (partial success
+    without raising), the accountant records the missing count as failures (one
+    aggregate error, not one per record) and offers a single aggregate error to
+    ``on_error`` on the same stop/continue contract as a per-record failure.
+    """
+
+    def test_shortfall_records_single_aggregate_failure_and_continues(self):
+        src, tgt = MemoryDatabase(), _ShortCreateBatchMemoryDatabase()
+        _seed(src, [1, 2, 3], "src")
+
+        seen: list[tuple[str, str | None]] = []
+
+        def handler(exc, record):
+            seen.append((str(exc), record.id if record is not None else None))
+            return True  # continue
+
+        progress = Migrator().migrate(src, tgt, on_error=handler)
+
+        assert progress.succeeded == 2  # 2 ids confirmed
+        assert progress.failed == 1     # shortfall of 1 counted as failed
+        assert progress.processed == 3  # count invariant preserved
+        # on_error offered exactly one aggregate error, with record=None.
+        assert len(seen) == 1
+        assert "confirmed 2 of 3 records" in seen[0][0]
+        assert seen[0][1] is None
+        # A single aggregate error entry (not one per missing record).
+        assert len(progress.errors) == 1
+        assert progress.errors[0]["record_id"] is None
+        assert progress.errors[0]["count"] == 1
+
+    def test_shortfall_no_handler_raises(self):
+        tgt = _ShortCreateBatchMemoryDatabase()
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(OperationError, match="confirmed 2 of 3 records"):
+            Migrator()._write_batch(tgt, batch, progress)
+        assert progress.failed == 1  # shortfall recorded before the raise
+
+    def test_shortfall_handler_veto_raises(self):
+        tgt = _ShortCreateBatchMemoryDatabase()
+        batch = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
+        progress = MigrationProgress().start()
+        with pytest.raises(OperationError, match="confirmed 2 of 3 records"):
+            Migrator()._write_batch(
+                tgt, batch, progress, on_error=lambda _e, _r: False
+            )

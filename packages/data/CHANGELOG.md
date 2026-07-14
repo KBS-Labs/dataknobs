@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `Migrator`'s batched write path (`migrate()`) now writes each batch
+  through the target's native bulk verbs — `create_batch` for `insert`
+  (fail-closed on a colliding id) and `upsert_batch` for `upsert` — with a
+  graceful per-record fallback that preserves per-id progress accounting and
+  `on_error` semantics when a batch write fails. This matches the throughput of
+  the streaming write path (`migrate_stream()` / `migrate_parallel()` /
+  `migrate_async()`), which already rode the bulk verbs, so a from-empty
+  `insert` or a `make-target-match-source` `upsert` migration issues one bulk
+  call per batch instead of a round trip per record. The `insert` bulk
+  fast-path is used only where `create_batch` is atomic on a collision (memory,
+  SQLite, PostgreSQL, DuckDB, file); on a backend whose bulk create is
+  non-atomic (Elasticsearch's per-item bulk API, the S3 per-record loop),
+  `insert` routes per-record — mirroring what those backends' own `stream_write`
+  already does — because riding the bulk verb there would let the per-record
+  fallback re-write the rows a failed bulk call had already durably written and
+  count them as spurious duplicate failures. The `skip` policy still writes per
+  record (a whole-batch verb cannot skip one duplicate while inserting the
+  rest). Conflict-policy behavior and `MigrationProgress` accounting are
+  identical to the prior per-record path on every backend.
+
 - `AsyncDatabase.transaction()` / `begin_transaction()` now commit a buffered
   transaction of **any** composition all-or-nothing on a transactional backend
   (SQLite, PostgreSQL, DuckDB). `BufferedTransaction.commit()` coalesces

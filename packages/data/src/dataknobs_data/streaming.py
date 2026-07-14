@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -43,7 +43,11 @@ class StreamConfig(StructuredConfig):
     batch_size: int = 1000
     prefetch: int = 2  # Number of batches to prefetch
     timeout: float | None = None
-    on_error: Callable[[Exception, Record], bool] | None = None  # Return True to continue
+    # Return True to continue. ``record`` is the failing record, or ``None`` for
+    # an aggregate batch shortfall (a bulk verb that confirmed fewer ids than it
+    # was given — see ``StreamResultAccountant.on_batch_success``), where no
+    # single record maps to the error.
+    on_error: Callable[[Exception, Record | None], bool] | None = None
     on_conflict: ConflictPolicy = ConflictPolicy.INSERT
 
     def __post_init__(self):
@@ -118,53 +122,219 @@ class StreamResult:
         )
 
 
-def _account_batch_shortfall(
-    result: StreamResult,
-    batch: list[Record],
-    written: int,
-    config: StreamConfig,
-    on_quit_signal: Callable[[], None] | None,
-) -> bool:
-    """Record a partial-batch failure when the batch verb wrote fewer than all.
+def build_shortfall_error(written: int, total: int) -> OperationError:
+    """Build the aggregate error for a bulk write that confirmed fewer ids.
 
-    A batch write func returns the ids it actually wrote. Most backends are
-    all-or-nothing (they raise on any failure, caught by the caller's per-record
-    fallback), but a bulk backend can partially succeed — Elasticsearch's bulk
-    API reports per-item errors, so its ``create_batch`` / ``upsert_batch``
-    return only the ids that succeeded. Without this accounting the unconfirmed
-    records would silently vanish (``successful < total_processed``, ``failed``
-    unchanged). Counting the shortfall as failed keeps the invariant
-    ``total_processed == successful + failed + skipped`` honest.
-
-    The individual failing records are not available at this layer (the bulk
-    verb reports only the count of confirmed ids), so the shortfall is routed
-    through ``config.on_error`` once as an aggregate ``OperationError`` with a
-    ``None`` record. This keeps the batch path on the same stop/continue
-    contract as the per-record fallback below: a configured handler decides
-    (return ``False`` to abort), and with no handler the stream quits on the
-    first failing batch, exactly as a single per-record failure would. Without
-    this, a caller's ``on_error`` veto would be silently unreachable for a bulk
-    partial failure.
-
-    Returns:
-        True to continue processing, False to quit streaming.
+    A batch verb that returns fewer ids than it was handed partially succeeded;
+    the individual failing records cannot be recovered from the confirmed-id
+    count alone, so both :class:`BatchWriteAccountant` implementations route a
+    single aggregate :class:`OperationError` describing the shortfall through
+    their stop/continue contract. Shared so the message and the shortfall
+    arithmetic cannot drift between the streaming and migrator sinks.
     """
-    shortfall = len(batch) - written
-    if shortfall <= 0:
-        return True
-    result.failed += shortfall
-    error = OperationError(
-        f"batch write confirmed {written} of {len(batch)} records; "
+    shortfall = total - written
+    return OperationError(
+        f"batch write confirmed {written} of {total} records; "
         f"{shortfall} failed to write"
     )
-    result.add_error(None, error)
-    if config.on_error and config.on_error(error, None):
-        # Handler explicitly opted to keep streaming.
-        return True
-    # No handler (fail-stop default) or handler vetoed — quit the stream.
-    if on_quit_signal:
-        on_quit_signal()
-    return False
+
+
+class BatchWriteAccountant(Protocol):
+    """Sink for the outcomes of a batch-first-with-per-record-fallback write.
+
+    :func:`drive_batch_with_fallback` reports every outcome here; the concrete
+    accountant owns BOTH the accounting (which counters/records to bump) AND the
+    stop mechanism. A method returning ``False`` stops the drive loop gracefully
+    (the streaming path signals a quit that way); raising stops it hard (the
+    migration path re-raises to abort immediately). Decoupling the loop from any
+    one result/config type lets the same batch-first-fallback decision serve
+    both the streaming writer and the batched migrator without duplication.
+    """
+
+    def on_batch_start(self) -> None:
+        """Called once per drive invocation, before the batch verb is attempted."""
+
+    def on_batch_success(self, batch: list[Record], written_ids: list[str]) -> bool:
+        """Account a (possibly partial) successful batch write.
+
+        ``written_ids`` are the ids the batch verb confirmed. A bulk backend
+        that partially succeeds (e.g. Elasticsearch per-item errors) confirms
+        fewer ids than ``len(batch)``; the shortfall is the accountant's to
+        record as failed. Return ``False`` (or raise) to stop.
+        """
+
+    def on_record_success(self, record: Record) -> None:
+        """Account one record written on the per-record fallback path."""
+
+    def on_record_skip(self, record: Record) -> None:
+        """Account one record left untouched under skip-on-duplicate."""
+
+    def on_record_failure(
+        self, record: Record | None, error: Exception, local_index: int
+    ) -> bool:
+        """Account one per-record failure; return ``False`` (or raise) to stop.
+
+        ``local_index`` is the record's position within ``batch`` (0-based), for
+        accountants that compute a global record index.
+        """
+
+
+class StreamResultAccountant:
+    """:class:`BatchWriteAccountant` that tallies into a :class:`StreamResult`.
+
+    Byte-for-byte reproduces the streaming write path's accounting: the
+    partial-batch shortfall folds into :meth:`on_batch_success` (a bulk verb that
+    confirms fewer ids than the batch counts the shortfall as failed and routes
+    one aggregate ``OperationError`` through ``config.on_error``), and the
+    per-record fallback records each id with its global index
+    (``batch_index * batch_size + local_index``). Stop = return ``False`` and
+    fire the optional quit signal, exactly as the per-record path did.
+    """
+
+    def __init__(
+        self,
+        result: StreamResult,
+        config: StreamConfig,
+        on_quit_signal: Callable[[], None] | None = None,
+        batch_index: int = 0,
+    ) -> None:
+        self._result = result
+        self._config = config
+        self._on_quit_signal = on_quit_signal
+        self._batch_index = batch_index
+
+    def on_batch_start(self) -> None:
+        self._result.total_batches += 1
+
+    def on_batch_success(self, batch: list[Record], written_ids: list[str]) -> bool:
+        written = len(written_ids)
+        self._result.successful += written
+        self._result.total_processed += len(batch)
+        shortfall = len(batch) - written
+        if shortfall <= 0:
+            return True
+        # A bulk backend confirmed fewer ids than the batch. The individual
+        # failing records are not available here (the verb reports only the
+        # confirmed count), so route the shortfall through ``on_error`` once as
+        # an aggregate error, on the same stop/continue contract as a per-record
+        # failure — keeping ``total_processed == successful + failed + skipped``.
+        self._result.failed += shortfall
+        error = build_shortfall_error(written, len(batch))
+        self._result.add_error(None, error)
+        if self._config.on_error and self._config.on_error(error, None):
+            return True
+        if self._on_quit_signal:
+            self._on_quit_signal()
+        return False
+
+    def on_record_success(self, record: Record) -> None:
+        self._result.total_processed += 1
+        self._result.successful += 1
+
+    def on_record_skip(self, record: Record) -> None:
+        self._result.total_processed += 1
+        self._result.skipped += 1
+
+    def on_record_failure(
+        self, record: Record | None, error: Exception, local_index: int
+    ) -> bool:
+        self._result.total_processed += 1
+        self._result.failed += 1
+        record_id = record.id if record is not None and hasattr(record, "id") else None
+        record_index = self._batch_index * self._config.batch_size + local_index
+        self._result.add_error(record_id, error, record_index)
+        if self._config.on_error:
+            if not self._config.on_error(error, record):
+                if self._on_quit_signal:
+                    self._on_quit_signal()
+                return False
+            return True
+        # No error handler — quit on first error, matching the batch path.
+        if self._on_quit_signal:
+            self._on_quit_signal()
+        return False
+
+
+def drive_batch_with_fallback(
+    batch: list[Record],
+    batch_write_func: Callable[[list[Record]], list[str]] | None,
+    single_write_func: Callable[[Record], Any],
+    accountant: BatchWriteAccountant,
+    *,
+    skip_on_duplicate: bool = False,
+) -> bool:
+    """Write a batch, falling back to per-record writes for error attribution.
+
+    Attempts the native batch verb first (when ``batch_write_func`` is not
+    ``None``); on any batch-level failure, retries each record individually so a
+    failing record is isolated from the successful ones. Every outcome is
+    reported to ``accountant``, which owns the accounting and the stop mechanism
+    (return ``False`` — or raise — to stop). This is the single shared loop both
+    the streaming writer (via :class:`StreamResultAccountant`) and the batched
+    migrator drive, so the batch-first-fallback decision exists once.
+
+    Returns:
+        True to continue processing, False to stop.
+    """
+    accountant.on_batch_start()
+    if batch_write_func is not None:
+        try:
+            written_ids = batch_write_func(batch)
+        except Exception:
+            # Batch failed — fall through to the per-record path below.
+            pass
+        else:
+            return accountant.on_batch_success(batch, written_ids)
+
+    for i, record in enumerate(batch):
+        try:
+            single_write_func(record)
+        except Exception as error:
+            if skip_on_duplicate and isinstance(error, DuplicateRecordError):
+                accountant.on_record_skip(record)
+                continue
+            if not accountant.on_record_failure(record, error, i):
+                return False
+        else:
+            accountant.on_record_success(record)
+    return True
+
+
+async def async_drive_batch_with_fallback(
+    batch: list[Record],
+    batch_write_func: Callable[[list[Record]], Any] | None,  # awaitable -> list[str]
+    single_write_func: Callable[[Record], Any],  # awaitable
+    accountant: BatchWriteAccountant,
+    *,
+    skip_on_duplicate: bool = False,
+) -> bool:
+    """Async counterpart of :func:`drive_batch_with_fallback`.
+
+    The write funcs are awaited; the accountant methods stay synchronous, so a
+    single accountant type serves both the sync and async drives.
+    """
+    accountant.on_batch_start()
+    if batch_write_func is not None:
+        try:
+            written_ids = await batch_write_func(batch)
+        except Exception:
+            # Batch failed — fall through to the per-record path below.
+            pass
+        else:
+            return accountant.on_batch_success(batch, written_ids)
+
+    for i, record in enumerate(batch):
+        try:
+            await single_write_func(record)
+        except Exception as error:
+            if skip_on_duplicate and isinstance(error, DuplicateRecordError):
+                accountant.on_record_skip(record)
+                continue
+            if not accountant.on_record_failure(record, error, i):
+                return False
+        else:
+            accountant.on_record_success(record)
+    return True
 
 
 def process_batch_with_fallback(
@@ -178,11 +348,12 @@ def process_batch_with_fallback(
     *,
     skip_on_duplicate: bool = False,
 ) -> bool:
-    """Process a batch with graceful fallback to individual record writes.
+    """Write a batch into a :class:`StreamResult`, with per-record fallback.
 
-    When a batch operation fails, this function retries each record individually
-    to identify which specific records are causing the failure, allowing
-    successful records to be processed while only failing the problematic ones.
+    A thin :class:`StreamResult`-typed adapter over
+    :func:`drive_batch_with_fallback`: it builds a :class:`StreamResultAccountant`
+    for ``(result, config, on_quit_signal, batch_index)`` and drives the shared
+    batch-first-with-per-record-fallback loop.
 
     Args:
         batch: List of records to process
@@ -205,54 +376,14 @@ def process_batch_with_fallback(
     Returns:
         True to continue processing, False to quit streaming
     """
-    if batch_create_func is not None:
-        try:
-            # Try batch creation first
-            ids = batch_create_func(batch)
-            written = len(ids)
-            result.successful += written
-            result.total_processed += len(batch)
-            result.total_batches += 1
-            return _account_batch_shortfall(
-                result, batch, written, config, on_quit_signal
-            )
-        except Exception:
-            # Batch failed, fall back to per-record writes below.
-            pass
-
-    # Per-record path: either the policy has no batch verb, or the batch failed.
-    result.total_batches += 1
-    for i, record in enumerate(batch):
-        result.total_processed += 1
-        record_index = batch_index * config.batch_size + i
-        try:
-            single_create_func(record)
-            result.successful += 1
-        except Exception as record_error:
-            if skip_on_duplicate and isinstance(record_error, DuplicateRecordError):
-                # Idempotent top-up: leave the existing row, count a skip.
-                result.skipped += 1
-                continue
-            # This specific record failed
-            result.failed += 1
-            # Safely get record ID if available
-            record_id = record.id if record and hasattr(record, 'id') else None
-            result.add_error(record_id, record_error, record_index)
-
-            if config.on_error:
-                # Call error handler
-                if not config.on_error(record_error, record):
-                    # Handler returned False, quit streaming
-                    if on_quit_signal:
-                        on_quit_signal()
-                    return False
-            else:
-                # No error handler, quit on first error
-                if on_quit_signal:
-                    on_quit_signal()
-                return False
-
-    return True
+    accountant = StreamResultAccountant(result, config, on_quit_signal, batch_index)
+    return drive_batch_with_fallback(
+        batch,
+        batch_create_func,
+        single_create_func,
+        accountant,
+        skip_on_duplicate=skip_on_duplicate,
+    )
 
 
 async def async_process_batch_with_fallback(
@@ -266,79 +397,23 @@ async def async_process_batch_with_fallback(
     *,
     skip_on_duplicate: bool = False,
 ) -> bool:
-    """Async version of process_batch_with_fallback.
+    """Async version of :func:`process_batch_with_fallback`.
 
-    When a batch operation fails, this function retries each record individually
-    to identify which specific records are causing the failure, allowing
-    successful records to be processed while only failing the problematic ones.
-
-    Args:
-        batch: List of records to process
-        batch_create_func: Async function to write a batch of records, or
-            ``None`` to skip the batch attempt and write every record
-            individually. The ``SKIP`` policy always passes ``None``;
-            ``INSERT`` and ``UPSERT`` pass their native bulk verb when the
-            backend has one, else ``None``.
-        single_create_func: Async function to write a single record
-        result: StreamResult to update with statistics
-        config: Stream configuration
-        on_quit_signal: Optional callback when quitting is signaled
-        batch_index: Index of this batch (for computing global record indices)
-        skip_on_duplicate: When True, a per-record ``DuplicateRecordError`` is
-            counted as a skip (``result.skipped``) and processing continues,
-            rather than counting a failure and quitting (``ConflictPolicy.SKIP``).
+    A thin :class:`StreamResult`-typed adapter over
+    :func:`async_drive_batch_with_fallback`; the write funcs are awaited while
+    the shared :class:`StreamResultAccountant` accounting stays synchronous.
 
     Returns:
         True to continue processing, False to quit streaming
     """
-    if batch_create_func is not None:
-        try:
-            # Try batch creation first
-            ids = await batch_create_func(batch)
-            written = len(ids)
-            result.successful += written
-            result.total_processed += len(batch)
-            result.total_batches += 1
-            return _account_batch_shortfall(
-                result, batch, written, config, on_quit_signal
-            )
-        except Exception:
-            # Batch failed, fall back to per-record writes below.
-            pass
-
-    # Per-record path: either the policy has no batch verb, or the batch failed.
-    result.total_batches += 1
-    for i, record in enumerate(batch):
-        result.total_processed += 1
-        record_index = batch_index * config.batch_size + i
-        try:
-            await single_create_func(record)
-            result.successful += 1
-        except Exception as record_error:
-            if skip_on_duplicate and isinstance(record_error, DuplicateRecordError):
-                # Idempotent top-up: leave the existing row, count a skip.
-                result.skipped += 1
-                continue
-            # This specific record failed
-            result.failed += 1
-            # Safely get record ID if available
-            record_id = record.id if record and hasattr(record, 'id') else None
-            result.add_error(record_id, record_error, record_index)
-
-            if config.on_error:
-                # Call error handler
-                if not config.on_error(record_error, record):
-                    # Handler returned False, quit streaming
-                    if on_quit_signal:
-                        on_quit_signal()
-                    return False
-            else:
-                # No error handler, quit on first error
-                if on_quit_signal:
-                    on_quit_signal()
-                return False
-
-    return True
+    accountant = StreamResultAccountant(result, config, on_quit_signal, batch_index)
+    return await async_drive_batch_with_fallback(
+        batch,
+        batch_create_func,
+        single_create_func,
+        accountant,
+        skip_on_duplicate=skip_on_duplicate,
+    )
 
 
 def resolve_conflict_write(

@@ -539,9 +539,18 @@ class TestErrorHandlingAcrossBackends:
             if record.get_value("type") == "special":
                 raise ValueError("Cannot store special type")
             return original_create(record)
-        
+
         target.create = failing_create
-        
+
+        # The batched write path tries the native ``create_batch`` verb first;
+        # disable the bulk verbs so the per-record ``create`` fallback — and its
+        # injected "special" failures — is exercised (the path this test pins).
+        def no_batch(records):
+            raise RuntimeError("batch verb disabled; exercise per-record fallback")
+
+        target.create_batch = no_batch
+        target.upsert_batch = no_batch
+
         # Error handler that continues
         def error_handler(error, record):
             return True

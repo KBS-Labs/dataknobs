@@ -588,6 +588,12 @@ class SyncPostgresDatabase(
 
         return count
 
+    def _insert_batch_atomic(self) -> bool:
+        # create_batch is a single multi-value INSERT: the whole statement
+        # commits or aborts as a unit, so a colliding id writes nothing and the
+        # migrator's INSERT bulk fast-path is safe.
+        return True
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
         
